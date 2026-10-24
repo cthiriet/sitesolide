@@ -78,9 +78,9 @@ StateDirectoryMode=0700
 NoNewPrivileges=true
 CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH
 
-# The whole system read-only, except /etc/sitesolide, subdirectories included
-# (<slug>-secrets/, owned by root: the steward creates and renames there by the
-# rights of the owner, without one capability more), and its own directories.
+# The whole system read-only, except /etc/sitesolide, the stores' folders
+# included (owned by root: the steward creates and renames there by the rights
+# of the owner, without one capability more), and its own directories.
 #
 # Two reads are added without any directive, and that is intended:
 #   - /etc/caddy/sites, to tell whether the block in service of a site carries

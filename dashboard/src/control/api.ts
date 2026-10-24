@@ -21,25 +21,19 @@
  * to people inside the company's domains or to one of those domains, and
  * removes Can open entries.
  *
- * **So are secrets and restarts.** A token with the `secrets` permission
- * lists its projects' files and variable names, and sets and removes the
- * variables of `<slug>.env`; any token that deploys a project restarts it.
- * The dashboard refuses early a malformed body alone, so that a value it
- * cannot read never travels further; the token, its person's role, its
- * project, its flag and the file are the steward's to judge, which journals
- * its refusals within the token's hourly bound. The dashboard builds every
- * answer from the fields it knows: a steward's answer is never relayed as it
- * stands, nor a value ever sent back, logged or recorded in dashboard.db.
- *
- * **And a project's store.** The same token lists its project's store,
- * sets and removes names in it, has a value drawn on the machine, and sets
- * and removes its files, `restart` asked or not, as for its secrets. Every
- * answer is built from the fields known here, and a token's view of the
- * store is a Developer's whatever the steward sends: no file size, no
- * `covered`, no previous version, never `reveal`, `restore` nor `migrate`.
- * A value set, a value drawn and a file's content never come back: neither
- * in an answer, nor in a refusal's message, nor anywhere this process
- * writes.
+ * **So are restarts and a project's store.** Any token that deploys a
+ * project restarts it. A token with the `secrets` permission lists its
+ * project's store, sets and removes names in it, has a value drawn on the
+ * machine, and sets and removes its files, `restart` asked or not. The
+ * dashboard refuses early a malformed body alone, so that a value it cannot
+ * read never travels further; the token, its person's role, its project and
+ * its flag are the steward's to judge, which journals its refusals within
+ * the token's hourly bound. Every answer is built from the fields known
+ * here, and a token's view of the store is a Developer's whatever the
+ * steward sends: no file size, no previous version, never `reveal` nor
+ * `restore`. A value set, a value drawn and a file's content never come
+ * back: neither in an answer, nor in a refusal's message, nor anywhere this
+ * process writes, nor recorded in dashboard.db.
  *
  * Nothing here logs a bearer, and no response carries one.
  */
@@ -67,17 +61,12 @@ import {
   type Identity,
   type InstallerResult,
   type ProjectAccess,
-  type ProjectSecrets,
   type ProjectStatus,
   type RestartOutcome,
   type ScheduleStatus,
-  type SecretsChangeResponse,
-  type StewardSecretsChange,
-  type TokenFileView,
 } from "./protocol";
 import { readFileContent, readFileName, readGenerate, readSecretsChange, withheldOf } from "./secrets";
 import type {
-  LegacyFileView,
   StoreApiChangeResponse,
   StoreChangeResponse,
   StoreFileView,
@@ -116,8 +105,6 @@ export type ApiRoutes = {
   projectAccess: (req: Request, slug: string) => Promise<Response>;
   putProjectAccess: (req: Request, slug: string) => Promise<Response>;
   removeProjectAccess: (req: Request, slug: string) => Promise<Response>;
-  projectSecrets: (req: Request, slug: string) => Promise<Response>;
-  changeProjectSecrets: (req: Request, slug: string, file: string) => Promise<Response>;
   restartProject: (req: Request, slug: string) => Promise<Response>;
   projectStore: (req: Request, slug: string) => Promise<Response>;
   changeProjectStore: (req: Request, slug: string) => Promise<Response>;
@@ -202,50 +189,6 @@ function serviceOf(value: unknown): ServiceView | null {
   return { unit: value.unit, state: value.state, subState: value.subState, startedAt: typeof value.startedAt === "number" ? value.startedAt : null };
 }
 
-/**
- * A file as a token reads it, from the fields known alone: write-only
- * whatever the steward says, no value, no size, no previous version.
- */
-function tokenFile(value: unknown): TokenFileView | null {
-  if (!isObject(value)) return null;
-  const { name, kind, state, reason, expected, modifiedAt } = value;
-  const variables = strings(value.variables);
-  const passwords = strings(value.passwords);
-  if (typeof name !== "string" || (kind !== "variables" && kind !== "content") || (state !== "managed" && state !== "absent" && state !== "unmanaged")) return null;
-  if (typeof expected !== "string" || variables === null || passwords === null) return null;
-  return {
-    name,
-    kind,
-    state,
-    reason: typeof reason === "string" ? reason : null,
-    expected,
-    readable: false,
-    variables,
-    passwords,
-    bytes: null,
-    modifiedAt: typeof modifiedAt === "number" ? modifiedAt : null,
-    previous: false,
-    restartPending: value.restartPending === true,
-    writable: value.writable === true,
-  };
-}
-
-function projectSecretsOf(value: unknown): ProjectSecrets | null {
-  if (!isObject(value) || typeof value.slug !== "string" || !Array.isArray(value.files)) return null;
-  const files = value.files.map(tokenFile);
-  if (files.some((file) => file === null)) return null;
-  return { slug: value.slug, service: serviceOf(value.service), files: files as TokenFileView[] };
-}
-
-function changeOf(body: Record<string, unknown>): StewardSecretsChange | null {
-  const file = tokenFile(body.file);
-  const set = strings(body.set);
-  const removed = strings(body.removed);
-  const absent = strings(body.absent);
-  if (file === null || set === null || removed === null || absent === null || typeof body.created !== "boolean") return null;
-  return { file, created: body.created, set, removed, absent };
-}
-
 const VERDICTS: readonly string[] = ["active", "looping", "failure", "scheduled"];
 
 function verdictOf(value: unknown): Verdict | null {
@@ -262,10 +205,8 @@ const oneOf = <T extends string>(value: unknown, allowed: readonly T[]): value i
 
 function storeVariableOf(value: unknown): StoreVariableView | null {
   if (!isObject(value)) return null;
-  const shadows = strings(value.shadows);
-  if (typeof value.name !== "string" || !oneOf(value.source, ["store", "legacy", "none"] as const) || !isStringOrNull(value.file) || shadows === null) return null;
-  if (typeof value.declared !== "boolean") return null;
-  return { name: value.name, source: value.source, file: value.file, shadows, declared: value.declared };
+  if (typeof value.name !== "string" || !oneOf(value.source, ["store", "none"] as const) || typeof value.declared !== "boolean") return null;
+  return { name: value.name, source: value.source, declared: value.declared };
 }
 
 /** A file of the store as a token reads it: its size is the owner's alone, whatever the steward says. */
@@ -274,15 +215,6 @@ function storeFileOf(value: unknown): StoreFileView | null {
   if (typeof value.name !== "string" || !oneOf(value.state, ["set", "missing", "unmanaged"] as const) || typeof value.declared !== "boolean") return null;
   if (!isStringOrNull(value.reason) || !isNumberOrNull(value.modifiedAt)) return null;
   return { name: value.name, state: value.state, declared: value.declared, reason: value.reason, bytes: null, modifiedAt: value.modifiedAt, restartPending: value.restartPending === true };
-}
-
-/** A legacy file as a token reads it: whether the store covers it is the owner's alone to know, whatever the steward says. */
-function legacyFileOf(value: unknown): LegacyFileView | null {
-  if (!isObject(value)) return null;
-  const variables = strings(value.variables);
-  if (typeof value.name !== "string" || !oneOf(value.state, ["managed", "absent", "unmanaged"] as const) || !isStringOrNull(value.reason) || variables === null) return null;
-  if (typeof value.read !== "boolean" || typeof value.leftover !== "boolean") return null;
-  return { name: value.name, state: value.state, reason: value.reason, variables, read: value.read, leftover: value.leftover, covered: null };
 }
 
 /** Every entry read, or null when one does not. */
@@ -295,19 +227,18 @@ function listOf<T>(value: unknown, read: (one: unknown) => T | null): T[] | null
 /**
  * A project's store as a token reads it, from the fields known alone: a
  * Developer's view whatever the steward sends, its writes as the steward
- * says, never a reveal, a restore nor a migration, which are the owner's and
- * an Admin's in the dashboard. Null when it does not read.
+ * says, never a reveal nor a restore, which are the owner's and an Admin's
+ * in the dashboard. Null when it does not read.
  */
 export function storeViewOf(value: unknown): StoreView | null {
   if (!isObject(value)) return null;
   const variables = listOf(value.variables, storeVariableOf);
   const files = listOf(value.files, storeFileOf);
-  const legacy = listOf(value.legacy, legacyFileOf);
   const missing = strings(value.missing);
   const build = strings(value.build);
   const visible = listOf(value.public, (one) => (isObject(one) && typeof one.name === "string" && typeof one.value === "string" ? { name: one.name, value: one.value } : null));
   if (typeof value.slug !== "string" || typeof value.exists !== "boolean" || !oneOf(value.state, ["managed", "absent", "unmanaged"] as const) || !isStringOrNull(value.reason)) return null;
-  if (variables === null || files === null || legacy === null || missing === null || build === null || visible === null) return null;
+  if (variables === null || files === null || missing === null || build === null || visible === null) return null;
   if (!(value.unitReadsStore === null || typeof value.unitReadsStore === "boolean") || !isNumberOrNull(value.modifiedAt)) return null;
   const may = isObject(value.may) ? value.may : {};
   return {
@@ -318,14 +249,13 @@ export function storeViewOf(value: unknown): StoreView | null {
     variables,
     missing,
     files,
-    legacy,
     build,
     public: visible,
     unitReadsStore: value.unitReadsStore,
     modifiedAt: value.modifiedAt,
     restartPending: value.restartPending === true,
     previous: false,
-    may: { write: may.write === true, reveal: false, restore: false, migrate: false },
+    may: { write: may.write === true, reveal: false, restore: false },
   };
 }
 
@@ -796,54 +726,7 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
     putProjectAccess: (req, slug) => change(req, slug, true),
     removeProjectAccess: (req, slug) => change(req, slug, false),
 
-    /**
-     * The project's secret files and variable names: never a value, a size
-     * nor a previous version. Neither the project nor the flag is judged
-     * here: the identity is narrowed to its person's roles, and a person
-     * lowered since would read "unknown project" instead of the steward's
-     * refusal naming their role, which the steward journals.
-     */
-    async projectSecrets(req, slug) {
-      const auth = await authenticated(req);
-      if (auth instanceof Response) return auth;
-      const reached = await reach(() => steward.secretsList(auth.bearer, slug), [auth.bearer]);
-      if (reached.kind !== "received" || reached.status !== 200) return relayedWork(reached);
-      const secrets = projectSecretsOf(reached.body.secrets);
-      return secrets === null ? unreadable() : json({ secrets });
-    },
-
-    /**
-     * Variables of `<slug>.env` set and removed in one write, all or nothing,
-     * the file created when its manifest declares it; then, with `restart`,
-     * the service restarted, whose refusal leaves the write's status as it
-     * is. The body is judged here first, every name's shape and every value,
-     * so that a malformed one never reaches the machine; the rest, the file
-     * included, is the steward's (`projectSecrets`).
-     */
-    async changeProjectSecrets(req, slug, file) {
-      const auth = await authenticated(req);
-      if (auth instanceof Response) return auth;
-      const { bearer } = auth;
-      const body = await readJson(req, MAX_SECRETS_BODY_BYTES);
-      if (body === "too-large") return failure("too-large", `a change of secrets is ${MAX_SECRETS_BODY_BYTES / 1024} KiB at most: split it`);
-      if (body === null) return failure("invalid", 'send a JSON object: { "set": { "NAME": "value" }, "remove": ["NAME"], "restart": true }, each field optional');
-      // Its names are not repeated: a value sent in a field's place would be.
-      if (Object.keys(body).some((key) => key !== "set" && key !== "remove" && key !== "restart")) return failure("invalid", "unexpected field: send set, remove and restart alone");
-      if (body.restart !== undefined && typeof body.restart !== "boolean") return failure("invalid", "restart must be true or false");
-      const change = readSecretsChange(body.set, body.remove);
-      if ("refusal" in change) return failure("invalid", change.refusal);
-      const values = change.set.map(([, value]) => value);
-      // Object.fromEntries defines each name as the object's own: `__proto__` stays a variable.
-      const reached = await reach(() => steward.secretsChange({ bearer, slug, file, set: Object.fromEntries(change.set), remove: change.remove }), [bearer]);
-      if (reached.kind !== "received" || (reached.status !== 200 && reached.status !== 201)) return relayedWork(reached, values);
-      const changed = changeOf(reached.body);
-      if (changed === null) return unreadable();
-      const restart = body.restart === true ? await restartOf(bearer, slug) : null;
-      const answer: SecretsChangeResponse = { ...changed, restart };
-      return json(answer, reached.status);
-    },
-
-    /** The project's service restarted and observed: 200 with its verdict, even when it did not come back. The steward judges the rest (`projectSecrets`). */
+    /** The project's service restarted and observed: 200 with its verdict, even when it did not come back. The steward judges the rest. */
     async restartProject(req, slug) {
       const auth = await authenticated(req);
       if (auth instanceof Response) return auth;
@@ -854,10 +737,10 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
     },
 
     /**
-     * The project's store: its names and where each comes from, what is
-     * missing, its files and its build secrets, never a value, a size nor
-     * what covers what. The project, the flag, and a slug the machine does
-     * not carry yet are the steward's to judge (`projectSecrets`).
+     * The project's store: its names and whether each is set, what is
+     * missing, its files and its build secrets, never a value nor a size.
+     * The project, the flag, and a slug the machine does not carry yet are
+     * the steward's to judge.
      */
     async projectStore(req, slug) {
       const auth = await authenticated(req);
@@ -888,7 +771,7 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
       if (Object.keys(body).some((key) => key !== "set" && key !== "remove" && key !== "restart")) return failure("invalid", "unexpected field: send set, remove and restart alone");
       const restart = restartAsked(body);
       if (restart instanceof Response) return restart;
-      const change = readSecretsChange(body.set, body.remove, true);
+      const change = readSecretsChange(body.set, body.remove);
       if ("refusal" in change) return failure("invalid", change.refusal);
       const values = change.set.map(([, value]) => value);
       // Object.fromEntries defines each name as the object's own: `__proto__` stays a variable.
@@ -967,7 +850,7 @@ const MAX_IDLE_S = 255;
 export const STEWARD_IDLE_S = Math.min(MAX_IDLE_S, Math.ceil(DEFAULT_TIMEOUTS.longMs / 1000) + 5);
 
 /**
- * A change of secrets with `restart`: the write, then the restart, two calls
+ * A change of a store with `restart`: the write, then the restart, two calls
  * in a row, each up to the long delay. With one call's delay, a connection
  * would be cut once the write was made and before the restart's verdict, and
  * the client would read a failure for a change the machine had made.
@@ -1009,21 +892,11 @@ export function storeRoutes(api: Pick<ApiRoutes, "projectStore" | "changeProject
 }
 
 /**
- * A token's secrets and restart, as dashboard/server.ts mounts them: each
- * route with the idle delay its steward calls need, which the tests mount as
- * they stand.
+ * A token's restart, as dashboard/server.ts mounts it: with the idle delay
+ * its steward call needs, which the tests mount as it stands.
  */
-export function secretsRoutes(api: Pick<ApiRoutes, "projectSecrets" | "changeProjectSecrets" | "restartProject">) {
+export function restartRoutes(api: Pick<ApiRoutes, "restartProject">) {
   return {
-    "/api/v1/projects/:slug/secrets": {
-      GET: (req: Bun.BunRequest<"/api/v1/projects/:slug/secrets">) => api.projectSecrets(req, req.params.slug),
-    },
-    "/api/v1/projects/:slug/secrets/:file": {
-      PATCH: (req: Bun.BunRequest<"/api/v1/projects/:slug/secrets/:file">, server: Timed) => {
-        server.timeout(req, SECRETS_CHANGE_IDLE_S);
-        return api.changeProjectSecrets(req, req.params.slug, req.params.file);
-      },
-    },
     "/api/v1/projects/:slug/restart": {
       POST: (req: Bun.BunRequest<"/api/v1/projects/:slug/restart">, server: Timed) => {
         server.timeout(req, STEWARD_IDLE_S);

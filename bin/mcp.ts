@@ -239,7 +239,7 @@ export const TOOLS: ToolDefinition[] = [
     name: "secrets",
     title: "A project's secrets",
     description:
-      "The names a deployed project's services find in their environment, where each value comes from (the project's store on the server, or a legacy file), which declared names are missing, " +
+      "The names a deployed project's services find in their environment, from the project's store on the server, which declared names are missing, " +
       "its files read whole (at $CREDENTIALS_DIRECTORY/files_<name>), and the build secrets kept by whoever deploys. Read-only, and never a value: no tool reads one back. " +
       "Read it after a deploy whose result lists missingSecrets, and before secrets_generate.",
     inputSchema: { type: "object", properties: { folder: FOLDER }, required: ["folder"], additionalProperties: false },

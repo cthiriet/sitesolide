@@ -23,27 +23,16 @@ function Code({ children }: { children: string }) {
 }
 
 /**
- * What unlocking means, for whoever is signed in. Only the owner reads a value
- * back: a Developer and an Admin set, generate and remove, and see names alone.
+ * One line: when a change applies, and, for a Developer or an Admin, that no
+ * value comes back to them. How to unlock is the lock's to say.
  */
-function Intro({ slug, store }: { slug: string; store: boolean }) {
-  const { identity, sso } = useData()
+function Intro({ slug }: { slug: string }) {
+  const { identity } = useData()
   const role = roleOn(identity, slug)
-  const provider = sso.providerName ?? "your identity provider"
-  const reads = store ? "Its services read these values when they start" : `${slug} reads these files when it starts`
-  if (role === "developer" || role === "admin") {
-    return (
-      <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
-        As {role === "admin" ? "an Admin" : "a Developer"} on {slug}, you set, generate and remove its values, and never
-        read one back: only the owner of the server does. {reads}. To change one, unlock by signing in again with{" "}
-        {provider}; a change reaches {slug} only after a restart.
-      </p>
-    )
-  }
+  const hidden = role === "developer" || role === "admin" ? " Only the owner of the server reads a value back." : ""
   return (
     <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
-      {reads}. Values stay hidden: unlock with the dashboard password to change one, or to reveal one for thirty
-      seconds, which nobody but you can do. A change reaches {slug} only after a restart.
+      {slug} reads these when it starts: a change applies after a restart.{hidden}
     </p>
   )
 }
@@ -69,7 +58,7 @@ function Content({ slug }: { slug: string }) {
 
   return (
     <>
-      {(project === null || shown) && <Intro slug={slug} store={store !== null} />}
+      {(project === null || shown) && <Intro slug={slug} />}
 
       {actions.unlockNotice !== null && <Banner tone="error">{actions.unlockNotice}</Banner>}
       {actions.lockError !== "" && <Banner tone="error">Couldn't lock secrets. {actions.lockError}</Banner>}
@@ -109,10 +98,10 @@ function Content({ slug }: { slug: string }) {
           >
             {problem === UNREACHABLE ? (
               person ? (
-                "The rest of the dashboard works, but no file can be read or changed until it answers. If it lasts, tell the owner of the server."
+                "The rest of the dashboard works, but no secret can be read or changed until it answers. If it lasts, tell the owner of the server."
               ) : (
                 <>
-                  The rest of the dashboard works, but no file can be read or changed until it answers. Check{" "}
+                  The rest of the dashboard works, but no secret can be read or changed until it answers. Check{" "}
                   <code className="font-mono text-xs">systemctl status sitesolide-steward</code> on the server.
                 </>
               )
@@ -125,7 +114,7 @@ function Content({ slug }: { slug: string }) {
 
       {projects !== null && (project === null || !shown) && (
         <Panel>
-          <EmptyState icon={FileText} title={`${slug} has no secret files`}>
+          <EmptyState icon={FileText} title={`${slug} has no secrets`}>
             {project === null ? (
               <>The server doesn't list {slug}. A site is listed once it is deployed.</>
             ) : site?.type === "static" ? (
@@ -149,8 +138,7 @@ function Content({ slug }: { slug: string }) {
       )}
 
       {project !== null && store === null && project.files.length > 0 && (
-        // No store listed: the dashboard and the portal, whose files stay flat, a static site, or a store the
-        // steward could not read, which its journal names.
+        // No store: the dashboard and the portal, whose own files are listed instead.
         <FilesPanel key={project.slug} project={project} />
       )}
 
@@ -162,8 +150,8 @@ function Content({ slug }: { slug: string }) {
 /**
  * A site's secrets, under `/site/secrets/?s=<slug>`: the lock in the header,
  * its service and what is wrong, then its store (variables, what is missing,
- * files, the build's names, the public values, the legacy files) or, for a
- * project with none, each file and its actions; then its activity. No value
+ * files, the build's names, the public values) or, for the dashboard and the
+ * portal, each of their own files and its actions; then its activity. No value
  * at all, but the one the owner reveals.
  */
 export function SecretsSection({ slug }: { slug: string }) {

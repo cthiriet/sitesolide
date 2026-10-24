@@ -1,23 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import {
-  MAX_CONTENT_BYTES,
   HASH_ONLY,
   HASH_FILE_SETTINGS,
   MAX_FILE_BYTES,
   MIN_PASSWORD,
   PASSWORD_VARIABLE,
+  PLATFORM_FILES,
+  ROOT_FILES,
+  EXPECTED_MODE,
   expectedText,
-  candidates,
   pathUnder,
   siteAccount,
   isSiteFolder,
   isPassword,
-  kindOf,
-  expectedMode,
-  readContent,
   readSites,
-  isAllowedMode,
   folderReason,
   outsideHashReason,
   unmanagedReason,
@@ -26,11 +23,8 @@ import {
   outsideHashRefusal,
   nameRefusal,
   restoreRefusal,
-  checkContent,
   checkFile,
   checkSite,
-  isStoreForm,
-  tokenFileRefusal,
   type Expected,
   type Declaration,
   type FolderInfo,
@@ -40,12 +34,6 @@ import {
 } from "../src/secrets/scope";
 import { IDENTITY_VARIABLES } from "../borrowed/sharing";
 import { LANDING_FOLDER } from "../src/config";
-
-/**
- * A fake key's header, split so that a secret scanner reading this file does
- * not take it for a leaked one. At runtime it is whole.
- */
-const KEY_HEADER = "-----BEGIN OPENSSH " + "PRIVATE KEY-----";
 
 const SECRETS = "/etc/sitesolide";
 const charOf = (code: number) => String.fromCharCode(code);
@@ -76,350 +64,116 @@ describe("the sites", () => {
 
   test("every site directory is listed, static, manifest-less or app, with no exclusion at all", () => {
     const sites = sitesFrom([
-      { folder: "cms", manifest: manifest("cms", ["cms.env"]) },
-      { folder: "dashboard", manifest: manifest("dashboard", ["dashboard.env"]) },
-      { folder: "portal", manifest: manifest("portal", ["portal.env"]) },
-      { folder: "builder", manifest: manifest("builder", ["builder.env"]) },
+      { folder: "cms", manifest: manifest("cms", ["API_KEY"]) },
+      { folder: "dashboard", manifest: manifest("dashboard", undefined) },
+      { folder: "portal", manifest: manifest("portal", undefined) },
       { folder: "kanban", manifest: JSON.stringify({ slug: "kanban", publicDir: "public" }) },
       { folder: "test-zone.invalid", manifest: null },
       { folder: "landing", manifest: null },
       { folder: "Pas-un-slug", manifest: null },
     ]);
-    expect([...sites.keys()]).toEqual(["builder", "cms", "dashboard", "kanban", "portal", "test-zone.invalid"]);
+    expect([...sites.keys()]).toEqual(["cms", "dashboard", "kanban", "portal", "test-zone.invalid"]);
     expect(sites.get("kanban")).toMatchObject({ isStatic: true, files: [] });
     expect(sites.get("test-zone.invalid")).toMatchObject({ isStatic: false, manifest: null, files: [] });
-    expect(filesOf(sites, "dashboard")).toEqual(["dashboard.env"]);
-    expect(filesOf(sites, "portal")).toEqual(["portal.env"]);
-    expect(filesOf(sites, "builder")).toEqual(["builder.env"]);
+    expect(sites.get("cms")).toMatchObject({ isStatic: false, files: [] });
   });
 
-  test("the machine's own files are the dashboard's alone, whatever site their name prefixes", () => {
-    // A project the owner deployed over SSH under the name dashboard-backup,
-    // a cloned repository's, took the backups' keys and passphrase into its
-    // Secrets section by the prefix alone, declared or not: its Admins read
-    // and rewrote them there.
-    for (const slug of ["dashboard-backup", "dashboard-monitor"]) {
-      for (const declared of [[], [`${slug}.env`]]) {
-        const sites = sitesFrom(
-          [
-            { folder: "dashboard", manifest: manifest("dashboard", ["dashboard.env"]) },
-            { folder: slug, manifest: manifest(slug, declared) },
-          ],
-          ["dashboard.env", "dashboard-monitor.env", "dashboard-backup.env"],
-        );
-        expect({ slug, declared, files: filesOf(sites, slug) }).toEqual({ slug, declared, files: [] });
-        expect(filesOf(sites, "dashboard").sort()).toEqual(["dashboard-backup.env", "dashboard-monitor.env", "dashboard.env"]);
-      }
-    }
-  });
-
-  test("a manifest that is unreadable or names another slug declares nothing, but the site stays", () => {
+  test("a manifest that is unreadable or names another slug is kept as read, and the site stays", () => {
     const sites = sitesFrom([
       { folder: "cms", manifest: "{not json" },
-      { folder: "calendar", manifest: manifest("other", ["calendar.env"]) },
+      { folder: "calendar", manifest: manifest("other", ["API_KEY"]) },
     ]);
     expect(sites.get("cms")).toMatchObject({ manifest: null, files: [], isStatic: false });
     expect(sites.get("calendar")?.manifest?.slug).toBe("other");
     expect(filesOf(sites, "calendar")).toEqual([]);
   });
 
-  test("a static site declares no secrets: no unit would read them", () => {
-    const sites = sitesFrom([{ folder: "showcase", manifest: JSON.stringify({ slug: "showcase", publicDir: "public", secrets: ["showcase.env"] }) }]);
-    expect(filesOf(sites, "showcase")).toEqual([]);
-  });
-
-  test("a manifest declares only flat environment files, under its own prefix", () => {
-    const sites = sitesFrom([
-      {
-        folder: "cms",
-        manifest: manifest("cms", ["cms.env", "cms.env", "cms-webhook.env", "ses.env", "cms-ssh", "cms-secrets/x.env", "../cms.env", 42]),
-      },
-    ]);
-    expect(filesOf(sites, "cms")).toEqual(["cms.env", "cms-webhook.env"]);
-  });
-
   test("a manifest that no longer passes validate() is still read if it is readable", () => {
-    const sites = sitesFrom([{ folder: "cms", manifest: manifest("cms", ["cms.env"], { unknownKey: true }) }]);
-    expect(filesOf(sites, "cms")).toEqual(["cms.env"]);
+    const sites = sitesFrom([{ folder: "cms", manifest: manifest("cms", undefined, { memory: "lots" }) }]);
+    expect(sites.get("cms")?.manifest?.slug).toBe("cms");
   });
 });
 
-describe("attaching a name to a site", () => {
-  const folders = ["cms", "cms-tool", "builder", "test-zone.invalid", "calendar"];
-
-  test("<slug>.env, <slug>-*, <slug>-secrets/<name>", () => {
-    expect(candidates("cms.env", folders)).toEqual(["cms"]);
-    expect(candidates("builder-ssh", folders)).toEqual(["builder"]);
-    expect(candidates("builder-ssh.pub", folders)).toEqual(["builder"]);
-    expect(candidates("builder-secrets/registry", folders)).toEqual(["builder"]);
-    expect(candidates("cms-tool.env", folders)).toEqual(["cms", "cms-tool"]);
-  });
-
-  test("landing-* goes to the landing's directory, and to it alone", () => {
-    expect(candidates("landing-mail.env", folders)).toEqual(["test-zone.invalid"]);
-    expect(candidates("landing.env", folders)).toEqual(["test-zone.invalid"]);
-    expect(candidates("landing-mail.env", [...folders, "landing"])).toEqual(["test-zone.invalid"]);
-    expect(candidates("landing-mail.env", ["cms"])).toEqual([]);
-  });
-
-  test("the trap names designate no site", () => {
-    for (const name of ["cms.prod.env", "cmsx.env", "cms", "other-cms.env", "test-zone.invalid.env", "cloudflare.env", "builder-secrets", "secrets/registry"]) {
-      const found = candidates(name, folders);
-      if (name === "builder-secrets") expect(found).toEqual(["builder"]);
-      else expect(found).toEqual([]);
-    }
-    // A subdirectory attaches only by its exact name.
-    expect(candidates("builder-other/registry", folders)).toEqual([]);
-    expect(candidates("cms-tool-secrets/x", folders)).toEqual(["cms-tool"]);
-  });
-
-  test("declared by a single manifest among two prefixes: to that one", () => {
-    const sites = sitesFrom([
-      { folder: "cms", manifest: manifest("cms", ["cms.env", "cms-tool.env"]) },
-      { folder: "cms-tool", manifest: manifest("cms-tool", []) },
-    ]);
-    expect(filesOf(sites, "cms")).toEqual(["cms.env", "cms-tool.env"]);
-    expect(filesOf(sites, "cms-tool")).toEqual([]);
-  });
-
-  test("declared by two manifests: to neither", () => {
-    const sites = sitesFrom([
-      { folder: "cms", manifest: manifest("cms", ["cms.env", "cms-tool.env"]) },
-      { folder: "cms-tool", manifest: manifest("cms-tool", ["cms-tool.env"]) },
-      { folder: "library", manifest: manifest("library", ["library.env"]) },
-    ]);
-    expect(filesOf(sites, "cms")).toEqual(["cms.env"]);
-    expect(filesOf(sites, "cms-tool")).toEqual([]);
-    expect(filesOf(sites, "library")).toEqual(["library.env"]);
-  });
-
-  test("present but declared by no manifest, between two prefixes: to the most specific site", () => {
-    const both = sitesFrom(
-      [
-        { folder: "cms", manifest: manifest("cms", ["cms.env"]) },
-        { folder: "cms-tool", manifest: manifest("cms-tool", ["cms-tool-main.env"]) },
-      ],
-      ["cms-tool.env"],
-    );
-    expect(filesOf(both, "cms-tool")).toEqual(["cms-tool-main.env", "cms-tool.env"]);
-    expect(filesOf(both, "cms")).toEqual(["cms.env"]);
-
-    // Without the more specific site, the name goes to the one it still carries.
-    const alone = sitesFrom([{ folder: "cms", manifest: manifest("cms", ["cms.env"]) }], ["cms-tool.env"]);
-    expect(filesOf(alone, "cms")).toEqual(["cms.env", "cms-tool.env"]);
-  });
-
-  test("a site that does not exist under /srv/sites receives nothing", () => {
-    const sites = sitesFrom([{ folder: "cms", manifest: manifest("cms", ["cms.env"]) }], ["builder-ssh"]);
-    expect([...sites.values()].flatMap((site) => site.files.map((file) => file.name))).toEqual(["cms.env"]);
-  });
-});
-
-describe("a store-form site claims no flat file (spec §6.13)", () => {
-  const leftoversOf = (sites: Map<string, Site>, folder: string) => sites.get(folder)?.leftovers.map((file) => file.name) ?? [];
-
-  test("the form of each site: legacy, names, none, and none without a conforming manifest", () => {
-    const sites = sitesFrom([
-      { folder: "nis2", manifest: manifest("nis2", ["nis2-ses.env"]) },
-      { folder: "shop", manifest: manifest("shop", ["API_KEY"]) },
-      { folder: "engine", manifest: manifest("engine", { runtime: ["A"], files: ["gcp.json"] }) },
-      { folder: "courses", manifest: manifest("courses", undefined) },
-      { folder: "other", manifest: manifest("someone", ["other.env"]) },
-      { folder: "test-zone.invalid", manifest: null },
-    ]);
-    expect([...sites.values()].map((site) => [site.folder, site.form, isStoreForm(site)])).toEqual([
-      ["courses", "none", true],
-      ["engine", "names", true],
-      ["nis2", "legacy", false],
-      ["other", "none", false],
-      ["shop", "names", true],
-      ["test-zone.invalid", "none", false],
-    ]);
-  });
-
-  test("a names-form manifest declares no flat file named after its variables, and its prefix's files are leftovers, never its files", () => {
-    for (const secrets of [["SHOP_TOKEN", "API_KEY"], { runtime: ["SHOP_TOKEN"], files: ["shop.env"] }, [], undefined]) {
-      const sites = sitesFrom([{ folder: "shop", manifest: manifest("shop", secrets) }], ["shop.env", "shop-mail.env", "SHOP_TOKEN"]);
-      expect({ secrets, files: filesOf(sites, "shop"), leftovers: leftoversOf(sites, "shop") }).toEqual({ secrets, files: [], leftovers: ["shop.env", "shop-mail.env"] });
-      // Never writable: checkFile finds nothing to write.
-      expect("refusal" in checkFile(sites.get("shop")!, "shop.env", SECRETS)).toBe(true);
-    }
-  });
-
-  test("nis2-ses, a new store-form project, beside nis2 that still declares nis2-ses.env: the file stays nis2's", () => {
-    const present = ["nis2-ses.env", "nis2-stripe.env"];
-    const before = sitesFrom(
-      [
-        { folder: "nis2", manifest: manifest("nis2", ["nis2-ses.env", "nis2-stripe.env"]) },
-        { folder: "nis2-ses", manifest: manifest("nis2-ses", ["API_KEY"]) },
-      ],
-      present,
-    );
-    expect(filesOf(before, "nis2")).toEqual(["nis2-ses.env", "nis2-stripe.env"]);
-    expect(filesOf(before, "nis2-ses")).toEqual([]);
-    expect(leftoversOf(before, "nis2-ses")).toEqual([]);
-    // Still writable by nis2, never by nis2-ses.
-    expect("declaration" in checkFile(before.get("nis2")!, "nis2-ses.env", SECRETS)).toBe(true);
-    expect("refusal" in checkFile(before.get("nis2-ses")!, "nis2-ses.env", SECRETS)).toBe(true);
-
-    // nis2 moves to names: nis2-ses.env is now nis2-ses's leftover, by the
-    // longest prefix, and nis2-stripe.env nis2's; neither is anybody's file.
-    const after = sitesFrom(
-      [
-        { folder: "nis2", manifest: manifest("nis2", ["STRIPE_SECRET_KEY"]) },
-        { folder: "nis2-ses", manifest: manifest("nis2-ses", ["API_KEY"]) },
-      ],
-      present,
-    );
-    expect([filesOf(after, "nis2"), filesOf(after, "nis2-ses")]).toEqual([[], []]);
-    expect(leftoversOf(after, "nis2-ses")).toEqual(["nis2-ses.env"]);
-    expect(leftoversOf(after, "nis2")).toEqual(["nis2-stripe.env"]);
-    // A leftover is expected under its new owner's account: the old one's file does not pass as managed.
-    expect(after.get("nis2-ses")!.leftovers[0]!.expected.owner).toBe("site-nis2-ses");
-    expect("refusal" in checkFile(after.get("nis2-ses")!, "nis2-ses.env", SECRETS)).toBe(true);
-  });
-
-  test("legacy-form, storeless, static and manifest-less sites keep today's attachment exactly", () => {
-    const sites = sitesFrom(
-      [
-        { folder: "cms", manifest: manifest("cms", ["cms.env"]) },
-        { folder: "dashboard", manifest: manifest("dashboard", undefined) },
-        { folder: "showcase", manifest: JSON.stringify({ slug: "showcase", publicDir: "public" }) },
-        { folder: "test-zone.invalid", manifest: null },
-      ],
-      ["cms.env", "cms-old.env", "dashboard.env", "dashboard-backup.env", "showcase-key", "landing-mail.env"],
-    );
-    expect(filesOf(sites, "cms")).toEqual(["cms.env", "cms-old.env"]);
-    // The dashboard has no store, whatever its manifest says: its hash and the machine's files stay its files.
-    expect(filesOf(sites, "dashboard").sort()).toEqual(["dashboard-backup.env", "dashboard.env"]);
-    expect(filesOf(sites, "showcase")).toEqual(["showcase-key"]);
-    expect(filesOf(sites, "test-zone.invalid")).toEqual(["landing-mail.env"]);
-    for (const site of sites.values()) expect([site.folder, site.leftovers]).toEqual([site.folder, []]);
-  });
-
-  test("an old token route on a store-form project points to the CLI that replaced it", () => {
-    const sites = sitesFrom([{ folder: "shop", manifest: manifest("shop", ["API_KEY"]) }], ["shop.env"]);
-    expect(tokenFileRefusal(sites.get("shop")!, "shop.env")).toEqual({
-      error: "out-of-scope",
-      message: "this project keeps its variables in its store: update your sitesolide CLI, then sitesolide secrets set NAME",
-    });
-    const legacy = sitesFrom([{ folder: "shop", manifest: manifest("shop", ["shop.env"]) }], ["shop.env"]);
-    expect(tokenFileRefusal(legacy.get("shop")!, "shop.env")).toBeNull();
-  });
-});
-
-describe("what a file is expected to be", () => {
+describe("the platform's own files (PLATFORM_FILES)", () => {
   const entries = [
-    { folder: "builder", manifest: manifest("builder", ["builder.env"]) },
-    { folder: "dashboard", manifest: manifest("dashboard", ["dashboard.env"]) },
+    { folder: "dashboard", manifest: manifest("dashboard", undefined) },
+    { folder: "portal", manifest: manifest("portal", undefined) },
+    { folder: "cms", manifest: manifest("cms", ["API_KEY"]) },
     { folder: "test-zone.invalid", manifest: null },
-    { folder: "cms", manifest: manifest("cms", ["cms.env"]) },
   ];
 
-  test("owner, mode, kind and readability follow from the name and the site", () => {
-    const sites = sitesFrom(entries, [
-      "builder.env",
-      "builder-ssh",
-      "builder-ssh.pub",
-      "builder-secrets/registry",
-      "dashboard.env",
-      "landing-mail.env",
+  test("the dashboard's three and the portal's one, the dashboard's root's", () => {
+    expect(PLATFORM_FILES).toEqual({ dashboard: ROOT_FILES, portal: ["portal.env"] });
+    expect(ROOT_FILES).toEqual(["dashboard.env", "dashboard-monitor.env", "dashboard-backup.env"]);
+    expect(EXPECTED_MODE).toBe(0o600);
+  });
+
+  test("<slug>.env is listed whether present or not: the unit reads it", () => {
+    const sites = sitesFrom(entries, []);
+    expect(filesOf(sites, "dashboard")).toEqual(["dashboard.env"]);
+    expect(filesOf(sites, "portal")).toEqual(["portal.env"]);
+  });
+
+  test("the monitor's and the backups' files are listed once present, in the table's order", () => {
+    expect(filesOf(sitesFrom(entries, ["dashboard-backup.env"]), "dashboard")).toEqual(["dashboard.env", "dashboard-backup.env"]);
+    expect(filesOf(sitesFrom(entries, ["dashboard-backup.env", "dashboard-monitor.env", "dashboard.env"]), "dashboard")).toEqual(ROOT_FILES);
+  });
+
+  test("no other site lists a file, whatever its manifest declares or its name prefixes", () => {
+    // Before the store, a project's flat files attached to it by its
+    // manifest or by their name: neither attaches anything any more.
+    const sites = sitesFrom(
+      [
+        ...entries,
+        { folder: "builder", manifest: null },
+        { folder: "nis2", manifest: manifest("nis2", ["nis2.env", "nis2-ses.env"]) },
+        { folder: "dashboard-backup", manifest: manifest("dashboard-backup", ["dashboard-backup.env"]) },
+      ],
+      ["cms.env", "cms-webhook.env", "builder-ssh", "nis2.env", "nis2-ses.env", "landing-ses.env", "dashboard-backup.env", "stray.env"],
+    );
+    for (const folder of ["cms", "builder", "nis2", "dashboard-backup", "test-zone.invalid"]) expect({ folder, files: filesOf(sites, folder) }).toEqual({ folder, files: [] });
+    expect(filesOf(sites, "dashboard")).toEqual(["dashboard.env", "dashboard-backup.env"]);
+  });
+
+  test("owner, mode and passwords follow from the table", () => {
+    const sites = sitesFrom(entries, ["dashboard-monitor.env", "dashboard-backup.env"]);
+    expect(sites.get("dashboard")!.files.map((file) => [file.name, expectedText(file.expected), file.passwords])).toEqual([
+      ["dashboard.env", "root:root 0600", ["PASSWORD_HASH"]],
+      ["dashboard-monitor.env", "root:root 0600", ["PASSWORD_HASH"]],
+      ["dashboard-backup.env", "root:root 0600", ["PASSWORD_HASH"]],
     ]);
-    const builder = sites.get("builder")!.files;
-    expect(builder.map((f) => [f.name, f.kind, expectedText(f.expected), f.readable])).toEqual([
-      ["builder.env", "variables", "site-builder:site-builder 0600", true],
-      ["builder-ssh", "content", "site-builder:site-builder 0400", false],
-      ["builder-ssh.pub", "content", "site-builder:site-builder 0444", true],
-      ["builder-secrets/registry", "content", "site-builder:site-builder 0400", false],
-    ]);
-    expect(sites.get("dashboard")!.files[0]).toMatchObject({ expected: { owner: "root", group: "root", mode: 0o600 } });
-    expect(sites.get("test-zone.invalid")!.files[0]).toMatchObject({ name: "landing-mail.env", expected: { owner: "site-landing" } });
-    // Declared by its manifest and not present yet: the same expectation.
-    expect(expectedText(sites.get("cms")!.files[0]!.expected)).toBe("site-cms:site-cms 0600");
+    expect(sites.get("portal")!.files.map((file) => [file.name, expectedText(file.expected)])).toEqual([["portal.env", "site-portal:site-portal 0600"]]);
   });
 
-  test("the monitor's alerting belongs to the dashboard's site, and to root like its hash", () => {
-    // Present on the machine, declared by no manifest: managed once there, a
-    // variables file, readable from an unlocked session, never site-dashboard's.
-    const sites = sitesFrom(entries, ["dashboard.env", "dashboard-monitor.env"]);
-    const monitor = sites.get("dashboard")!.files.find((file) => file.name === "dashboard-monitor.env");
-    expect(monitor).toMatchObject({ kind: "variables", readable: true, expected: { owner: "root", group: "root", mode: 0o600 } });
-    expect(expectedText(monitor!.expected)).toBe("root:root 0600");
-    // A site's own file with a similar name stays its own.
-    const builder = sitesFrom(entries, ["builder-monitor.env"]).get("builder")!.files.find((file) => file.name === "builder-monitor.env");
-    expect(expectedText(builder!.expected)).toBe("site-builder:site-builder 0600");
+  test("a site of the table's name that is no directory of /srv/sites lists nothing", () => {
+    const sites = sitesFrom([{ folder: "cms", manifest: manifest("cms", ["API_KEY"]) }], ["dashboard.env", "portal.env"]);
+    expect([...sites.values()].flatMap((site) => site.files)).toEqual([]);
   });
-
-  test("the mode follows from the name alone", () => {
-    // A registry used to say these line by line, and said nothing else.
-    expect(expectedMode("cms.env")).toBe(0o600);
-    expect(expectedMode("builder-ssh")).toBe(0o400);
-    expect(expectedMode("builder-ssh.pub")).toBe(0o444);
-    expect(expectedMode("builder-secrets/registry")).toBe(0o400);
-  });
-
-  test("a present name no site carries, hidden, or too deep, is nobody's", () => {
-    const sites = sitesFrom(entries, ["cloudflare.env", "other.env", "cms-a/b/c", "cms-secrets/.cache", "../passwd"]);
-    expect([...sites.values()].flatMap((site) => site.files.map((file) => file.name)).sort()).toEqual([
-      "builder.env",
-      "cms.env",
-      "dashboard.env",
-    ]);
-  });
-
-  test("the admitted modes", () => {
-    expect(isAllowedMode(0o600, "variables")).toBe(true);
-    expect(isAllowedMode(0o400, "variables")).toBe(true);
-    expect(isAllowedMode(0o640, "variables")).toBe(false);
-    expect(isAllowedMode(0o444, "content")).toBe(true);
-    expect(isAllowedMode(0o440, "content")).toBe(true);
-    for (const mode of [0o644 | 0o020, 0o602, 0o700, 0o4400, 0o1600, 0o000, 0o200]) expect(isAllowedMode(mode, "content")).toBe(false);
-  });
-
 });
 
-describe("kind, readability and passwords", () => {
-  test("the kind follows the extension", () => {
-    expect(kindOf("cms.env")).toBe("variables");
-    expect(kindOf("builder-secrets/x.env")).toBe("variables");
-    expect(kindOf("builder-ssh")).toBe("content");
-    expect(kindOf("builder-ssh.pub")).toBe("content");
-    expect(kindOf("cms.env.bak")).toBe("content");
-  });
-
-  /** The dashboard, the portal, a site, and a builder content file. */
+describe("passwords", () => {
+  /** The dashboard's hash file, its monitor's, and the portal's. */
   function declarations() {
     const sites = sitesFrom(
       [
-        { folder: "dashboard", manifest: manifest("dashboard", ["dashboard.env"]) },
-        { folder: "portal", manifest: manifest("portal", ["portal.env"]) },
-        { folder: "calendar", manifest: manifest("calendar", ["calendar.env"]) },
-        // A service made by hand, with no manifest: its files attach by their prefix.
-        { folder: "builder", manifest: null },
+        { folder: "dashboard", manifest: manifest("dashboard", undefined) },
+        { folder: "portal", manifest: manifest("portal", undefined) },
       ],
-      ["dashboard.env", "builder-ssh"],
+      ["dashboard.env", "dashboard-monitor.env"],
     );
-    return {
-      dashboard: sites.get("dashboard")!.files[0]!,
-      portal: sites.get("portal")!.files[0]!,
-      calendar: sites.get("calendar")!.files[0]!,
-      key: sites.get("builder")!.files[0]!,
-    };
+    const [dashboard, monitor] = sites.get("dashboard")!.files;
+    return { dashboard: dashboard!, monitor: monitor!, portal: sites.get("portal")!.files[0]! };
   }
 
-  test("PASSWORD_HASH is a password in every environment file, and nowhere else", () => {
+  test("PASSWORD_HASH is a password in every platform file", () => {
     expect(PASSWORD_VARIABLE).toBe("PASSWORD_HASH");
-    const { dashboard, portal, calendar, key } = declarations();
-    for (const declaration of [dashboard, portal, calendar]) {
+    const { dashboard, monitor, portal } = declarations();
+    for (const declaration of [dashboard, monitor, portal]) {
       expect(declaration.passwords).toEqual(["PASSWORD_HASH"]);
       expect(isPassword(declaration, "PASSWORD_HASH")).toBe(true);
       expect(isPassword(declaration, "password_hash")).toBe(false);
       expect(isPassword(declaration, "TOKEN")).toBe(false);
     }
-    // A content file is handled as one block: it has no variable.
-    expect(key.name).toBe("builder-ssh");
-    expect(key.passwords).toEqual([]);
-    expect(isPassword(key, "PASSWORD_HASH")).toBe(false);
   });
 
   test("hash only: the dashboard and the portal carry nothing other than PASSWORD_HASH", () => {
@@ -436,8 +190,8 @@ describe("kind, readability and passwords", () => {
       // PASSWORD_HASH itself is refused elsewhere, as a password.
       expect(outsideHashRefusal(name, "PASSWORD_HASH")).toBeNull();
     }
-    expect(outsideHashRefusal("calendar.env", "STEWARD_SOCKET")).toBeNull();
-    expect(outsideHashRefusal("cms.env", "OTHER")).toBeNull();
+    expect(outsideHashRefusal("dashboard-monitor.env", "STEWARD_SOCKET")).toBeNull();
+    expect(outsideHashRefusal("dashboard-backup.env", "OTHER")).toBeNull();
   });
 
   test("the portal's sign-in settings, by name, in portal.env and nowhere else that is hash only", () => {
@@ -460,18 +214,17 @@ describe("kind, readability and passwords", () => {
     );
     const many = outsideHashReason("portal.env", ["A", "PASSWORD_HASH", "B", "C", "D", "E"], path)!;
     expect(many).toContain("(A, B, C and 2 more)");
-    expect(outsideHashReason("calendar.env", ["PASSWORD_HASH", "TOKEN"], path)).toBeNull();
+    expect(outsideHashReason("dashboard-monitor.env", ["PASSWORD_HASH", "TOKEN"], path)).toBeNull();
   });
 
   test("restoring: never the dashboard nor the portal, never a version carrying a password", () => {
-    const { dashboard, portal, calendar, key } = declarations();
+    const { dashboard, monitor, portal } = declarations();
     const refusal: Refusal = { error: "out-of-scope", message: "a password is only changed with Change password" };
     expect(restoreRefusal(dashboard, [])).toEqual(refusal);
     expect(restoreRefusal(portal, [])).toEqual(refusal);
-    expect(restoreRefusal(calendar, ["TOKEN", "PASSWORD_HASH"])).toEqual(refusal);
-    expect(restoreRefusal(calendar, ["TOKEN"])).toBeNull();
-    expect(restoreRefusal(calendar, [])).toBeNull();
-    expect(restoreRefusal(key, [])).toBeNull();
+    expect(restoreRefusal(monitor, ["TOKEN", "PASSWORD_HASH"])).toEqual(refusal);
+    expect(restoreRefusal(monitor, ["TOKEN"])).toBeNull();
+    expect(restoreRefusal(monitor, [])).toBeNull();
   });
 
   test("a new password chosen by hand", () => {
@@ -484,84 +237,83 @@ describe("kind, readability and passwords", () => {
 });
 
 describe("file name", () => {
-  const cms = sitesFrom(
-    [{ folder: "cms", manifest: manifest("cms", ["cms.env", "cms-webhook.env"]) }],
-    ["cms-secrets/key"],
-  ).get("cms")!;
+  const dashboard = sitesFrom([{ folder: "dashboard", manifest: manifest("dashboard", undefined) }], ["dashboard-monitor.env"]).get("dashboard")!;
 
-  test("declared and well formed names pass", () => {
-    for (const name of ["cms.env", "cms-webhook.env", "cms-secrets/key"]) {
-      const verdict = checkFile(cms, name, SECRETS);
+  test("listed and well formed names pass", () => {
+    for (const name of ["dashboard.env", "dashboard-monitor.env"]) {
+      const verdict = checkFile(dashboard, name, SECRETS);
       expect("path" in verdict && verdict.path).toBe(`${SECRETS}/${name}`);
     }
   });
 
-  test("traversals, separators, null bytes and hidden names are out of scope", () => {
+  test("traversals, separators, folders, null bytes and hidden names are out of scope", () => {
     const traps = [
-      "../cms.env",
-      "cms.env/..",
+      "../dashboard.env",
+      "dashboard.env/..",
       "..",
       ".",
       "",
       "/etc/passwd",
-      "cms/../../etc/shadow.env",
-      "cms..env",
-      "cms.env\0",
-      "cms\\..\\x.env",
-      "..%2fcms.env",
-      "%2e%2e/cms.env",
-      ".cms.env",
-      "cms.env ",
-      "cms*.env",
-      "cms?.env",
-      "cms[1].env",
-      "cms-secrets/../cms.env",
-      "cms-secrets/./key",
-      "cms-secrets/.key",
-      "cms-secrets//key",
-      "cms-secrets/",
-      "/cms-secrets/key",
-      "cms-secrets/a/b",
-      "cms-other/key",
-      "secrets/key",
-      `cms${charOf(0xff0e)}${charOf(0xff0e)}env`,
-      `cms-cafe${charOf(0x301)}.env`,
-      `cms-caf${charOf(0xe9)}.env`,
+      "dashboard/../../etc/shadow.env",
+      "dashboard..env",
+      "dashboard.env\0",
+      "dashboard\\..\\x.env",
+      "..%2fdashboard.env",
+      "%2e%2e/dashboard.env",
+      ".dashboard.env",
+      "dashboard.env ",
+      "dashboard*.env",
+      "dashboard?.env",
+      "dashboard[1].env",
+      "keys/dashboard.key",
+      "keys/../dashboard.env",
+      "projects/cms/env",
+      `dashboard${charOf(0xff0e)}${charOf(0xff0e)}env`,
+      `dashboard-cafe${charOf(0x301)}.env`,
+      `dashboard-caf${charOf(0xe9)}.env`,
       "x".repeat(200) + ".env",
     ];
     for (const name of traps) {
-      const verdict = checkFile(cms, name, SECRETS);
-      expect("refusal" in verdict && verdict.refusal.error).toBe("out-of-scope");
+      const verdict = checkFile(dashboard, name, SECRETS);
+      expect({ name, error: "refusal" in verdict && verdict.refusal.error }).toEqual({ name, error: "out-of-scope" });
     }
   });
 
-  test("a well formed but undeclared name is refused", () => {
-    const verdict = checkFile(cms, "cms-other.env", SECRETS);
-    expect("refusal" in verdict && verdict.refusal.message).toBe("cms-other.env is not declared in the sitesolide.json of cms");
+  test("a name with a folder is refused as such: every platform file is flat", () => {
+    for (const name of ["keys/dashboard.key", "projects/cms/env", "a/b"]) {
+      expect(nameRefusal(name)).toEqual({ error: "out-of-scope", message: "a flat file name, with no folder" });
+    }
+  });
+
+  test("a well formed name the site does not list is refused", () => {
+    const verdict = checkFile(dashboard, "dashboard-backup.env", SECRETS);
+    expect("refusal" in verdict && verdict.refusal.message).toBe("dashboard-backup.env is not one of the platform's files that dashboard lists");
+    const other = checkFile(dashboard, "cms.env", SECRETS);
+    expect("refusal" in other && other.refusal.error).toBe("out-of-scope");
   });
 
   test("what is not a string is invalid, not out of scope", () => {
-    for (const name of [undefined, null, 42, ["cms.env"], { name: "cms.env" }]) {
+    for (const name of [undefined, null, 42, ["dashboard.env"], { name: "dashboard.env" }]) {
       expect(nameRefusal(name)?.error).toBe("invalid");
     }
   });
 
   test("a refusal never throws", () => {
-    for (const name of [undefined, Symbol("x"), `${charOf(0xd800)}.env`, `cms.${charOf(0xd800)}.env`, `cms-secrets/${charOf(0xd800)}`]) {
+    for (const name of [undefined, Symbol("x"), `${charOf(0xd800)}.env`, `dashboard.${charOf(0xd800)}.env`, `keys/${charOf(0xd800)}`]) {
       expect(() => nameRefusal(name)).not.toThrow();
     }
   });
 });
 
 describe("resolved path", () => {
-  test("at one or two levels exactly, never above", () => {
-    expect(pathUnder(SECRETS, "cms.env")).toBe("/etc/sitesolide/cms.env");
-    expect(pathUnder(`${SECRETS}/`, "cms.env")).toBe("/etc/sitesolide/cms.env");
-    expect(pathUnder(SECRETS, "builder-secrets/registry")).toBe("/etc/sitesolide/builder-secrets/registry");
+  test("one level exactly, never above nor below", () => {
+    expect(pathUnder(SECRETS, "portal.env")).toBe("/etc/sitesolide/portal.env");
+    expect(pathUnder(`${SECRETS}/`, "portal.env")).toBe("/etc/sitesolide/portal.env");
+    expect(pathUnder(SECRETS, "keys/registry")).toBeNull();
     expect(pathUnder(SECRETS, "..")).toBeNull();
     expect(pathUnder(SECRETS, ".")).toBeNull();
     expect(pathUnder(SECRETS, "")).toBeNull();
-    expect(pathUnder(SECRETS, "../sitesolide/cms.env")).toBeNull();
+    expect(pathUnder(SECRETS, "../sitesolide/portal.env")).toBeNull();
     expect(pathUnder(SECRETS, "../passwd")).toBeNull();
     expect(pathUnder(SECRETS, "a/b/c")).toBeNull();
     expect(pathUnder(SECRETS, "a/../b")).toBeNull();
@@ -571,7 +323,7 @@ describe("resolved path", () => {
 
 describe("requested site", () => {
   const sites = sitesFrom([
-    { folder: "cms", manifest: manifest("cms", ["cms.env"]) },
+    { folder: "cms", manifest: manifest("cms", ["API_KEY"]) },
     { folder: "test-zone.invalid", manifest: null },
   ]);
 
@@ -618,15 +370,6 @@ describe("the state of a file that is present: exact owner and mode", () => {
     }
   });
 
-  test("a private key expected at 0400 and a public key at 0444", () => {
-    const privateMode: Expected = { owner: "site-builder", group: "site-builder", mode: 0o400 };
-    expect(judge({ ...healthy, mode: 0o400 }, account, privateMode)).toBeNull();
-    expect(judge({ ...healthy, mode: 0o600 }, account, privateMode)).toContain("sudo chmod 400");
-    const publicMode: Expected = { ...privateMode, mode: 0o444 };
-    expect(judge({ ...healthy, mode: 0o444 }, account, publicMode)).toBeNull();
-    expect(judge({ ...healthy, mode: 0o644 }, account, publicMode)).toContain("sudo chmod 444");
-  });
-
   test("root expected: the command says so", () => {
     const aRoot: Expected = { owner: "root", group: "root", mode: 0o600 };
     expect(judge({ ...healthy, uid: 1001 }, { uid: 0, gid: 0 }, aRoot)).toContain("sudo chown root:root");
@@ -637,9 +380,9 @@ describe("the state of a file that is present: exact owner and mode", () => {
   });
 });
 
-describe("subdirectory", () => {
+describe("a store's folder", () => {
   const healthy: FolderInfo = { link: false, folder: true, uid: 0, mode: 0o755 };
-  const path = "/etc/sitesolide/builder-secrets";
+  const path = "/etc/sitesolide/projects/cms";
 
   test("a real directory, owned by root, closed to writes by others", () => {
     expect(folderReason(healthy, 0, path)).toBeNull();
@@ -653,31 +396,6 @@ describe("subdirectory", () => {
     expect(folderReason({ ...healthy, uid: 998 }, 0, path)).toBe(`${path} is owned by uid 998, not root: sudo chown root:root ${path}`);
     expect(folderReason({ ...healthy, mode: 0o775 }, 0, path)).toContain("sudo chmod go-w");
     expect(folderReason({ ...healthy, mode: 0o757 }, 0, path)).toContain("writable by other accounts");
-  });
-});
-
-describe("content", () => {
-  const encoder = new TextEncoder();
-
-  test("a UTF-8 text reads back identical, byte order mark and Windows line ending included", () => {
-    const text = `${charOf(0xfeff)}${KEY_HEADER}\r\nabc\n`;
-    const parsed = readContent(encoder.encode(text));
-    expect("text" in parsed && encoder.encode(parsed.text)).toEqual(encoder.encode(text));
-  });
-
-  test("invalid UTF-8 or null byte: unmanaged", () => {
-    expect(readContent(new Uint8Array([0x41, 0xff]))).toEqual({ reason: "not valid UTF-8 text" });
-    expect(readContent(new Uint8Array([0x41, 0x00, 0x42]))).toEqual({ reason: "contains a null byte" });
-  });
-
-  test("a submitted content: well formed, no null byte, 64 KiB at most in bytes", () => {
-    expect(checkContent("")).toBeNull();
-    expect(checkContent("a".repeat(MAX_CONTENT_BYTES))).toBeNull();
-    expect(checkContent("a".repeat(MAX_CONTENT_BYTES + 1))).toContain("64 KiB");
-    // Two bytes per character: the bound counts bytes, not characters.
-    expect(checkContent(charOf(0xe9).repeat(MAX_CONTENT_BYTES / 2 + 1))).toContain("64 KiB");
-    expect(checkContent("a\0b")).toContain("null byte");
-    expect(checkContent(`key${charOf(0xdc00)}`)).toContain("Unicode");
   });
 });
 
@@ -703,21 +421,22 @@ describe("previous version", () => {
 /**
  * A secrets directory confronted with the sites it serves.
  *
- * Every file present has to land on a site with the expectation that follows
- * from its name, and a file no site carries must land on none. It is the rule
- * that decides what the steward agrees to write. The cases that count: an app
- * project, a showcase with no secret, the dashboard owned by root, the landing
- * that has no manifest, and a file that belongs to no project.
+ * Every platform file present has to land on its site with the expectation
+ * the table gives, and any other file must land on none: what is not the
+ * platform's is not the dashboard's to write. The cases that count: an app
+ * project with a store, a showcase with no secret, the dashboard owned by
+ * root, the portal, the landing that has no manifest, a file the landing's
+ * old service still reads, and a file that belongs to no project.
  */
 describe("a secrets directory against the sites it serves", () => {
-  const PRESENT = ["blog.env", "dashboard.env", "landing-mail.env", "portal.env", "stray.env"];
+  const PRESENT = ["blog.env", "dashboard.env", "dashboard-monitor.env", "landing-ses.env", "portal.env", "stray.env"];
   const staticManifest = (slug: string) => JSON.stringify({ slug, publicDir: "public" });
   const sites = sitesFrom(
     [
-      { folder: "blog", manifest: manifest("blog", ["blog.env"]) },
+      { folder: "blog", manifest: manifest("blog", ["API_KEY"]) },
       { folder: "shop", manifest: staticManifest("shop") },
-      { folder: "dashboard", manifest: manifest("dashboard", ["dashboard.env"]) },
-      { folder: "portal", manifest: manifest("portal", ["portal.env"]) },
+      { folder: "dashboard", manifest: manifest("dashboard", undefined) },
+      { folder: "portal", manifest: manifest("portal", undefined) },
       // The landing serves the bare domain: its directory carries the zone's
       // name, and it has no manifest.
       { folder: LANDING_FOLDER, manifest: null },
@@ -728,9 +447,8 @@ describe("a secrets directory against the sites it serves", () => {
   for (const site of sites.values()) for (const file of site.files) managed.set(file.name, { site: site.folder, file });
 
   const EXPECTED: [string, string][] = [
-    ["blog.env", "site-blog:site-blog 0600"],
     ["dashboard.env", "root:root 0600"],
-    ["landing-mail.env", "site-landing:site-landing 0600"],
+    ["dashboard-monitor.env", "root:root 0600"],
     ["portal.env", "site-portal:site-portal 0600"],
   ];
   for (const [name, expected] of EXPECTED) {
@@ -740,16 +458,17 @@ describe("a secrets directory against the sites it serves", () => {
   }
 
   test("every file lands where it should", () => {
-    // A `landing-` prefix goes to the zone's directory, which has no manifest.
-    expect(managed.get("landing-mail.env")?.site).toBe(LANDING_FOLDER);
     expect(managed.get("dashboard.env")?.site).toBe("dashboard");
-    expect(managed.get("blog.env")?.site).toBe("blog");
+    expect(managed.get("dashboard-monitor.env")?.site).toBe("dashboard");
     // The portal carries nothing but its hash: another variable would
     // change what its service does.
     expect(managed.get("portal.env")?.file.passwords).toEqual(["PASSWORD_HASH"]);
+    // A project keeps its secrets in its store: its name prefixes nothing here.
+    expect(managed.has("blog.env")).toBe(false);
+    // A file a hand-made service reads is the owner's to look after by hand.
+    expect(managed.has("landing-ses.env")).toBe(false);
     // What belongs to no site is not the dashboard's.
     expect(managed.has("stray.env")).toBe(false);
-    // A showcase with no secret carries no file.
-    expect([...managed.values()].some((entry) => entry.site === "shop")).toBe(false);
+    expect([...managed.keys()].sort()).toEqual(["dashboard-monitor.env", "dashboard.env", "portal.env"]);
   });
 });

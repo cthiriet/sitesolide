@@ -149,7 +149,6 @@ export function useRevealedValue(unlocked: boolean) {
  */
 export function VariableRow({
   name,
-  readable,
   unlocked,
   read,
   onUnlock,
@@ -157,8 +156,6 @@ export function VariableRow({
   onRemove,
 }: {
   name: string
-  /** False in a write-only file: no reveal and no copy, the value is never read back. */
-  readable: boolean
   unlocked: boolean
   read: () => Promise<ReadResult>
   onUnlock: () => void
@@ -260,8 +257,6 @@ export function VariableRow({
             </code>
             {remainingMs !== null && <span className="text-xs text-muted-foreground tabular-nums">{hideCountdown(remainingMs)}</span>}
           </div>
-        ) : !readable ? (
-          <span className="block truncate text-sm text-muted-foreground">Write-only</span>
         ) : (
           <span className="block truncate font-mono text-sm tracking-widest text-muted-foreground">
             <span aria-hidden="true">••••••••••••</span>
@@ -271,51 +266,47 @@ export function VariableRow({
       </div>
 
       <div className="col-start-2 row-start-1 flex items-center justify-end @xl/file:col-start-3">
-        {readable && (
-          <>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              title={!unlocked ? lockedTitle : value !== null ? "Hide value" : `Show for ${seconds} seconds`}
-              aria-label={
-                !unlocked ? `Show ${name}, unlock first` : value !== null ? `Hide ${name}` : `Show ${name} for ${seconds} seconds`
-              }
-              aria-busy={reading === "reveal" || undefined}
-              disabled={reading === "copied"}
-              onClick={() => void toggle()}
-              className={ICON_BUTTON}
-            >
-              {reading === "reveal" ? (
-                <LoaderCircle className="motion-safe:animate-spin" />
-              ) : value !== null ? (
-                <EyeOff />
-              ) : (
-                <Eye />
-              )}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              title={!unlocked ? lockedTitle : "Copy value"}
-              aria-label={unlocked ? `Copy ${name}` : `Copy ${name}, unlock first`}
-              aria-busy={reading === "copied" || undefined}
-              disabled={reading === "reveal"}
-              onClick={() => void copy()}
-              className={ICON_BUTTON}
-            >
-              {reading === "copied" ? (
-                <LoaderCircle className="motion-safe:animate-spin" />
-              ) : copied ? (
-                <Check className="text-ok-text" />
-              ) : (
-                <Copy />
-              )}
-            </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          title={!unlocked ? lockedTitle : value !== null ? "Hide value" : `Show for ${seconds} seconds`}
+          aria-label={
+            !unlocked ? `Show ${name}, unlock first` : value !== null ? `Hide ${name}` : `Show ${name} for ${seconds} seconds`
+          }
+          aria-busy={reading === "reveal" || undefined}
+          disabled={reading === "copied"}
+          onClick={() => void toggle()}
+          className={ICON_BUTTON}
+        >
+          {reading === "reveal" ? (
+            <LoaderCircle className="motion-safe:animate-spin" />
+          ) : value !== null ? (
+            <EyeOff />
+          ) : (
+            <Eye />
+          )}
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          title={!unlocked ? lockedTitle : "Copy value"}
+          aria-label={unlocked ? `Copy ${name}` : `Copy ${name}, unlock first`}
+          aria-busy={reading === "copied" || undefined}
+          disabled={reading === "reveal"}
+          onClick={() => void copy()}
+          className={ICON_BUTTON}
+        >
+          {reading === "copied" ? (
+            <LoaderCircle className="motion-safe:animate-spin" />
+          ) : copied ? (
+            <Check className="text-ok-text" />
+          ) : (
+            <Copy />
+          )}
+        </Button>
 
-            {/* Reading on one side, writing on the other: the rule separates them. */}
-            <span aria-hidden="true" className="mx-1.5 hidden h-4 w-px bg-border @xl/file:block" />
-          </>
-        )}
+        {/* Reading on one side, writing on the other: the rule separates them. */}
+        <span aria-hidden="true" className="mx-1.5 hidden h-4 w-px bg-border @xl/file:block" />
 
         <Button
           variant="ghost"

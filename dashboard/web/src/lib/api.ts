@@ -3,14 +3,12 @@
  * SameSite=Strict, and nothing here addresses another host.
  */
 import type {
-  ContentRequest,
   FileRequest,
   PasswordRequest,
   SetRequest,
   ProjectRequest,
   VariableRequest,
   Reading,
-  ContentResponse,
   DashboardUnlockResponse,
   FileResponse,
   LogResponse,
@@ -35,9 +33,7 @@ import type {
   PersonResponse,
   GenerateFormat,
   StoreChangeResponse,
-  StoreMigrateResponse,
   StoreRestoreResponse,
-  StoreRetireResponse,
   StoreRevealResponse,
 } from "./types"
 
@@ -208,16 +204,6 @@ export function restoreSecretFile({ slug, file }: WithoutToken<FileRequest>) {
   return sendSecrets<FileResponse>("POST", "/restore", { slug, file })
 }
 
-/** A file's contents read in one go, only if it is readable: the steward refuses otherwise. */
-export function readSecretContent({ slug, file }: WithoutToken<FileRequest>) {
-  return sendSecrets<ContentResponse>("POST", "/content", { slug, file })
-}
-
-/** The whole contents, in the body: the old one is never read back to replace it. */
-export function replaceSecretContent({ slug, file, content }: WithoutToken<ContentRequest>) {
-  return sendSecrets<FileResponse>("PUT", "/content", { slug, file, content })
-}
-
 /**
  * The dashboard password, retyped, and the new one, or null so that the steward
  * draws it. Both in the body; the answer carries the drawn password, which the
@@ -283,16 +269,6 @@ export function restoreStore({ slug, dryRun }: { slug: string; dryRun: boolean }
 /** The owner's alone: a person's dashboard has no such route, and the steward refuses anyone else. */
 export function revealStoreValue({ slug, name }: { slug: string; name: string }) {
   return sendSecrets<StoreRevealResponse>("POST", "/store/value", { slug, name })
-}
-
-/** The owner's alone. With `dryRun`, the merge as it would go, written nowhere. */
-export function migrateStore({ slug, dryRun }: { slug: string; dryRun: boolean }) {
-  return sendSecrets<StoreMigrateResponse>("POST", "/store/migrate", { slug, ...(dryRun ? { dryRun: true } : {}) })
-}
-
-/** The owner's alone: deletes the legacy files the store covers, each kept as its previous version first. */
-export function retireLegacyFiles({ slug, files }: { slug: string; files: string[] }) {
-  return sendSecrets<StoreRetireResponse>("POST", "/store/retire", { slug, files: [...files] })
 }
 
 /**

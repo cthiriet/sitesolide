@@ -410,7 +410,7 @@ export function CreateTokenDialog({
                 </Choice>
                 {/* Never disabled: every project offered to a person's token is one where they may change secrets. */}
                 <Choice checked={effective.secrets === true} onChange={(next) => setScope({ ...scope, secrets: next })} title="Manage secrets">
-                  Lists each project's secret files and variable names, sets and removes the variables of its .env. Never reads a value back.
+                  Lists each project's secret names, and sets, generates and removes its variables and files on the server. Never reads a value back.
                 </Choice>
               </div>
             </fieldset>

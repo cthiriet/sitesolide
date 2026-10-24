@@ -284,9 +284,8 @@ export type Site = {
   deployed: number | null;
   /**
    * What the deployed manifest says its services read, names only, never a
-   * value, which does not come in here: for the old form, the legacy files'
-   * names (`crm.env`); otherwise the runtime variables' names, then the
-   * store's files'. Build secrets are not among them: no service reads them.
+   * value, which does not come in here: the runtime variables' names, then
+   * the store's files'. Build secrets are not among them: no service reads them.
    * Empty when the manifest declares nothing a service reads, or is unreadable.
    */
   secrets: string[];
@@ -639,13 +638,12 @@ function readPortal(manifest: Manifest | null, fragment: string | undefined): Po
 }
 
 /**
- * The names `Site.secrets` carries: the legacy files of an old-form manifest,
- * otherwise its runtime variables then its files. Read tolerantly, as every
- * deployed manifest is (`secretsOf` never throws).
+ * The names `Site.secrets` carries: its runtime variables then its files.
+ * Read tolerantly, as every deployed manifest is (`secretsOf` never throws).
  */
 export function declaredSecrets(manifest: Manifest): string[] {
   const declaration = secretsOf(manifest);
-  return declaration.form === "legacy" ? declaration.legacy : [...declaration.runtime, ...declaration.files];
+  return [...declaration.runtime, ...declaration.files];
 }
 
 /** The complete snapshot, sites sorted by slug and discrepancies sorted by severity. */

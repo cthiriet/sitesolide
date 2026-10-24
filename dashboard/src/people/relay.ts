@@ -23,10 +23,9 @@
  * **A project's store** answers at the owner's addresses too, its writes
  * relayed to the steward's `/people/store/*` routes, which judge each by role
  * (a Developer and an Admin write, an Admin restores). Reading a value back
- * is the owner's alone: there is no such route here, nor merging or
- * retiring the old files, and server.ts answers a person 403 on them. A
- * value set and a file's content are never sent back, whatever the steward
- * answers.
+ * is the owner's alone, and so are the platform's own files: there is no
+ * such route here, and server.ts answers a person 403 on them. A value set
+ * and a file's content are never sent back, whatever the steward answers.
  *
  * **A person's own tokens** answer at the Tokens page's addresses too: their
  * tokens alone, minted under their unlock within their roles, revoked
@@ -70,13 +69,6 @@ export type MemberRelay = {
   secretsLog: Handler;
   unlock: Handler;
   lock: Handler;
-  readValue: Handler;
-  setVariable: Handler;
-  removeVariable: Handler;
-  createFile: Handler;
-  restoreFile: Handler;
-  readContent: Handler;
-  replaceContent: Handler;
   togglePortal: Handler;
   setStoreVariable: Handler;
   removeStoreVariables: Handler;
@@ -262,13 +254,6 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
       return new Response(null, { status: 204, headers: NO_STORE });
     },
 
-    readValue: withToken(fields(["slug", "file", "variable"] as const), "POST", "/people/secrets/value", { long: true }),
-    setVariable: withToken(fields(["slug", "file", "variable", "value"] as const), "PUT", "/people/secrets/variable", { long: true }),
-    removeVariable: withToken(fields(["slug", "file", "variable"] as const), "DELETE", "/people/secrets/variable", { long: true }),
-    createFile: withToken(fields(["slug", "file"] as const), "POST", "/people/secrets/file", { long: true }),
-    restoreFile: withToken(fields(["slug", "file"] as const), "POST", "/people/secrets/restore", { long: true }),
-    readContent: withToken(fields(["slug", "file"] as const), "POST", "/people/secrets/content", { long: true }),
-    replaceContent: withToken(fields(["slug", "file", "content"] as const), "PUT", "/people/secrets/content", { long: true, max: MAX_CONTENT_BODY_BYTES }),
     togglePortal: withToken(extractPortal, "POST", "/people/portal", { long: true }),
     setStoreVariable: withToken(STORE_EXTRACTIONS.set, "PUT", "/people/store/variable", { long: true, withheld: STORE_WITHHELD.set }),
     removeStoreVariables: withToken(STORE_EXTRACTIONS.remove, "DELETE", "/people/store/variable", { long: true }),

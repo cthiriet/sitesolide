@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { knownManifests } from "./manifests";
 import { compareDirectives, sameDirectives } from "../cli/comparison";
-import { hasStore, isApp, legacySecretFiles, readManifest, servicesOf, validate, type Manifest } from "../cli/manifest";
+import { hasStore, isApp, readManifest, servicesOf, validate, type Manifest } from "../cli/manifest";
 import { STORE_UNIT_LINES_AFTER, storeCredentials, storeEnvironmentFile } from "../cli/store";
 import {
   projectPaths,
@@ -13,6 +13,8 @@ import {
   generateUnit,
   generateUnits,
   isTimerUnit,
+  platformFile,
+  readPresenceAnswer,
   readUnitAnswer,
   MARKER_ABSENT,
   MARKER_PRESENT,
@@ -142,20 +144,30 @@ describe("secrets", () => {
     expect(generateUnit(APP)).toInclude("InaccessiblePaths=-/etc/sitesolide");
   });
 
-  test("with a file of the old form, the file is loaded, the store after it, and the folder closed all the same", () => {
+  test("with names, the store alone is loaded, and the folder closed all the same", () => {
     // PID 1 reads EnvironmentFile before the walls go up (bench Q3): the
-    // folder no longer has to stay visible to a project that reads a file.
-    const unit = generateUnit({ ...APP, secrets: ["budget.env"] });
-    expect(unit).toInclude("\nEnvironmentFile=-/etc/sitesolide/budget.env\nEnvironmentFile=-/etc/sitesolide/projects/budget/env\n");
+    // folder stays closed to a project that reads its store.
+    const unit = generateUnit({ ...APP, secrets: ["API_KEY"] });
+    expect(unit.split("\n").filter((line) => line.startsWith("EnvironmentFile="))).toEqual(["EnvironmentFile=-/etc/sitesolide/projects/budget/env"]);
     expect(unit).toInclude("\nInaccessiblePaths=-/etc/sitesolide\n");
   });
 
-  test("the dash of EnvironmentFile is kept, on a flat file as on the store", () => {
+  test("the dashboard and the portal read their own flat file, which no manifest names, the folder left visible", () => {
+    for (const slug of ["dashboard", "portal"]) {
+      const unit = generateUnit({ ...APP, slug });
+      expect(platformFile(slug)).toBe(`/etc/sitesolide/${slug}.env`);
+      expect(unit.split("\n").filter((line) => line.startsWith("EnvironmentFile="))).toEqual([`EnvironmentFile=-/etc/sitesolide/${slug}.env`]);
+      expect(unit).not.toMatch(/^(InaccessiblePaths|LoadCredential|ProtectProc)=/m);
+    }
+  });
+
+  test("the dash of EnvironmentFile is kept, on the store as on a platform file", () => {
     // Without it, a missing file makes the start fail and Restart=always makes
     // it loop. deploy warns of a missing variable instead, and an app that
     // cannot do without it stops at its start, which the stability check says.
-    const unit = generateUnit({ ...APP, secrets: ["budget.env"] });
-    for (const line of unit.split("\n").filter((line) => line.startsWith("EnvironmentFile="))) expect(line).toStartWith("EnvironmentFile=-/");
+    for (const manifest of [{ ...APP, secrets: ["API_KEY"] }, { ...APP, slug: "portal" }] as Manifest[]) {
+      for (const line of generateUnit(manifest).split("\n").filter((line) => line.startsWith("EnvironmentFile="))) expect(line).toStartWith("EnvironmentFile=-/");
+    }
   });
 });
 
@@ -167,7 +179,6 @@ describe("secrets", () => {
 const START = "/usr/local/bin/bun run server.ts";
 const SYNTHETIC: Record<string, Manifest> = {
   none: { slug: "shop", start: START, port: 3022, env: { PUBLIC_URL: "https://{slug}.{zone}" } },
-  legacy: { slug: "mail", start: START, port: 3023, network: "outbound", secrets: ["mail-ses.env", "mail-stripe.env"] },
   names: { slug: "cart", start: START, port: 3024, secrets: ["ADMIN_TOKEN", "STRIPE_SECRET_KEY"] },
   long: {
     slug: "engine",
@@ -185,7 +196,7 @@ const SYNTHETIC: Record<string, Manifest> = {
       api: { start: "/srv/sites/lab/app/api", port: 3051, routes: ["/api/*"] },
       worker: { start: "/srv/sites/lab/app/worker", internal: true },
     },
-    secrets: ["lab.env"],
+    secrets: ["LAB_TOKEN"],
   },
   scheduled: {
     slug: "news",
@@ -204,12 +215,12 @@ const SYNTHETIC: Record<string, Manifest> = {
     },
     secrets: { files: ["report.key"] },
   },
-  dashboard: { slug: "dashboard", start: START, port: 3005, network: "outbound", env: { SITESOLIDE_ZONE: "{zone}" }, secrets: ["dashboard.env"] },
-  portal: { slug: "portal", start: START, port: 3006, secrets: ["portal.env"] },
+  dashboard: { slug: "dashboard", start: START, port: 3005, network: "outbound", env: { SITESOLIDE_ZONE: "{zone}" } },
+  portal: { slug: "portal", start: START, port: 3006 },
   static: { slug: "blog", build: "bun run build", publicDir: "dist", env: { PUBLIC_SITE_URL: "https://{slug}.{zone}" }, secrets: { build: ["CMS_TOKEN"] } },
 } as Record<string, Manifest>;
 
-const WITH_STORE = ["none", "legacy", "names", "long", "multi", "scheduled", "anchored"];
+const WITH_STORE = ["none", "names", "long", "multi", "scheduled", "anchored"];
 const STORELESS = ["dashboard", "portal"];
 const placeholdersOf = (manifest: Manifest) => ({ slug: manifest.slug, zone: "test-zone.invalid", contact: "" });
 const unitsOf = (name: string) => generateUnits(SYNTHETIC[name]!, placeholdersOf(SYNTHETIC[name]!));
@@ -226,7 +237,7 @@ describe("the project's store, in every service unit", () => {
     for (const [name, manifest] of Object.entries(SYNTHETIC)) expect({ name, errors: validate(manifest, "test-zone.invalid") }).toEqual({ name, errors: [] });
   });
 
-  test.each(WITH_STORE)("%s: each service carries the four lines once, the store's env file after the old form's", (name) => {
+  test.each(WITH_STORE)("%s: each service carries the four lines once, the store's env file the only one", (name) => {
     const slug = SYNTHETIC[name]!.slug;
     const services = serviceUnitsOf(name);
     expect(services.length).toBeGreaterThan(0);
@@ -241,10 +252,8 @@ describe("the project's store, in every service unit", () => {
       ]) {
         expect({ unit, line, count: once(line) }).toEqual({ unit, line, count: 1 });
       }
-      // The old form's files first, in the manifest's order, the store last:
-      // systemd lets a later EnvironmentFile win (I4).
       const files = lines.filter((line) => line.startsWith("EnvironmentFile="));
-      expect(files).toEqual([...legacySecretFiles(SYNTHETIC[name]!).map((file) => `EnvironmentFile=-/etc/sitesolide/${file}`), `EnvironmentFile=-/etc/sitesolide/projects/${slug}/env`]);
+      expect(files).toEqual([`EnvironmentFile=-/etc/sitesolide/projects/${slug}/env`]);
       expect(lines.filter((line) => line.startsWith("LoadCredential"))).toEqual([`LoadCredential=files:/etc/sitesolide/projects/${slug}/files`]);
     }
   });
@@ -297,11 +306,15 @@ describe("the project's store, in every service unit", () => {
     }
   });
 
-  test("the platform's own dashboard and portal, as deployed, read no store", () => {
+  test("the platform's own dashboard and portal, as deployed, read no store, and their own file though their manifests name none", () => {
     const storeless = knownManifests().filter((known) => known.slug === "dashboard" || known.slug === "portal");
     expect(storeless.map((manifest) => manifest.slug).toSorted()).toEqual(["dashboard", "portal"]);
     for (const manifest of storeless) {
-      for (const { text } of generateUnits(manifest, placeholdersOf(manifest))) expect(text).not.toMatch(/\/projects\/|^(LoadCredential|ProtectProc)=/m);
+      expect(manifest.secrets).toBeUndefined();
+      for (const { text } of generateUnits(manifest, placeholdersOf(manifest))) {
+        expect(text).not.toMatch(/\/projects\/|^(LoadCredential|ProtectProc|InaccessiblePaths)=/m);
+        expect(text).toInclude(`\nEnvironmentFile=-/etc/sitesolide/${manifest.slug}.env\n`);
+      }
     }
   });
 
@@ -338,16 +351,15 @@ describe("the project's store, in every service unit", () => {
  */
 const FINGERPRINTS_07: Record<string, Record<string, string>> = {
   none: { shop: "f4afd1acc3c4365c2d29d5f2df76f6599a6f268e0afefea95c487dcec454bb8c" },
-  legacy: { mail: "e8dead339dfed7f8f3e148632db6957daf3d4ea351907f215dc8cc902f6ba2ef" },
   names: { cart: "d9b80c6ccdb6e88fe2410f5f9b790cf1f703728b0c028e6398916259f5b2491a" },
   long: {
     engine: "5340dc2c4d30549615200a19c8e688d0eee430a172d54096ad57dff2a13eb59e",
     "engine.postgres": "f929641b5597418610cfbe38f317a0b9c4de7a3be4f8c963ff64542c6a36682c",
   },
   multi: {
-    lab: "de823e571f413d68340c4a63f696b44515c8c83f94a368de12f31e4699e0872d",
-    "lab.api": "251d694fafa6ba127a3b9822dabfc340356bad7686b0290b2ad75705b95ebdd8",
-    "lab.worker": "4896392ca0dd5cbdfc9509ebf318845d951b1eadc85e046c10ed29ce9cf9e654",
+    lab: "6b6723674b26ec39d8c2c1d3bc5c5f6174aa7cdbc5e2f0c773389f5bf067b183",
+    "lab.api": "f448b5e63e9db429d1394eb4fa0147e7a29c8e3dd3e9039fbaded80ce0f169ea",
+    "lab.worker": "dcc8b7f837a377833149bf6666107c9b09de7b36ab65e1b950a959ec61c7ceb2",
   },
   scheduled: {
     news: "77663103623921967dd4907048539932267fd99eeefafaf0f67a11af39e02a6d",
@@ -366,84 +378,6 @@ const FINGERPRINTS_07: Record<string, Record<string, string>> = {
   portal: { portal: "8889d093cd3908cbdcc3df5c132980021cd047b33243d9e4c87183ef0b332de0" },
   static: {},
 };
-
-/** The 0.7 unit of `legacy` above, as main generated it: a flat file read, and /etc/sitesolide left visible. */
-const MAIL_07 = `# Service of project mail, generated by bin/sitesolide.ts from its
-# sitesolide.json. Do not edit by hand: the next deployment overwrites it.
-#
-# Isolation: dedicated user with no shell, system mounted read only,
-# writing allowed in the project's data folder alone. A compromised
-# project can read neither the landing nor the other sites.
-
-[Unit]
-Description=Project mail
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=site-mail
-Group=site-mail
-WorkingDirectory=/srv/sites/mail/app
-
-Environment=PORT=3023
-Environment=DATA_DIR=/srv/sites/mail/data
-Environment=PUBLIC_DIR=/srv/sites/mail/public
-EnvironmentFile=-/etc/sitesolide/mail-ses.env
-EnvironmentFile=-/etc/sitesolide/mail-stripe.env
-
-ExecStart=/usr/local/bin/bun run server.ts
-Restart=always
-RestartSec=2
-
-# What the service writes belongs to it alone.
-UMask=0077
-
-# Confinement
-NoNewPrivileges=true
-PrivateTmp=true
-PrivateDevices=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/srv/sites/mail/data
-
-# /srv is replaced by an empty mount, then only this project's folders
-# are exposed again in it: the service cannot read the landing nor the
-# other sites, even if their Unix permissions allowed it.
-TemporaryFileSystem=/srv:ro
-BindReadOnlyPaths=/srv/sites/mail/app
-BindReadOnlyPaths=/srv/sites/mail/public
-BindPaths=/srv/sites/mail/data
-
-# This project reads its own file in /etc/sitesolide: InaccessiblePaths
-# is not laid here, or systemd could not hand the file to it.
-
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-RestrictNamespaces=true
-RestrictSUIDSGID=true
-RestrictRealtime=true
-LockPersonality=true
-# The system calls of a service, and none that changes the machine: no
-# mount, module, reboot, swap, clock or tracing. Any other fails with EPERM.
-SystemCallArchitectures=native
-SystemCallFilter=@system-service
-SystemCallErrorNumber=EPERM
-MemoryMax=256M
-
-# network: outbound. This project reaches an outside API; the network
-# confinement is lifted, everything else holds.
-
-# Listens on its own port, and on none of the machine's others.
-SocketBindAllow=tcp:3023
-SocketBindDeny=2019
-SocketBindDeny=3000-3099
-SocketBindDeny=3128-3129
-
-[Install]
-WantedBy=multi-user.target
-`;
 
 /** The 0.7 unit of `none` above: no secret, /etc/sitesolide closed. */
 const SHOP_07 = `# Service of project shop, generated by bin/sitesolide.ts from its
@@ -538,21 +472,14 @@ WantedBy=multi-user.target
 `;
 
 describe("the units 0.7 laid, replaced without --force", () => {
-  test("the inline units are what the fingerprints say: captured from main, not from this generator", () => {
-    expect(sha256(MAIL_07)).toBe(FINGERPRINTS_07.legacy!.mail!);
+  test("the inline unit is what the fingerprints say: captured from main, not from this generator", () => {
     expect(sha256(SHOP_07)).toBe(FINGERPRINTS_07.none!.shop!);
   });
 
-  test("a unit 0.7 laid is installed against this release's, with and without a flat file", () => {
-    const [mail] = unitsOf("legacy");
+  test("a unit 0.7 laid is installed against this release's", () => {
     const [shop] = unitsOf("none");
-    expect(decideUnit({ installed: MAIL_07, generated: mail!.text, replace: false })).toBe("install");
     expect(decideUnit({ installed: SHOP_07, generated: shop!.text, replace: false })).toBe("install");
     // What 0.7 lacks and this release adds, directive by directive.
-    expect(compareDirectives(MAIL_07, mail!.text)).toEqual({
-      lost: [],
-      added: ["EnvironmentFile=-/etc/sitesolide/projects/mail/env", "LoadCredential=files:/etc/sitesolide/projects/mail/files", "InaccessiblePaths=-/etc/sitesolide", "ProtectProc=invisible"],
-    });
     expect(compareDirectives(SHOP_07, shop!.text)).toEqual({
       lost: [],
       added: ["EnvironmentFile=-/etc/sitesolide/projects/shop/env", "LoadCredential=files:/etc/sitesolide/projects/shop/files", "ProtectProc=invisible"],
@@ -576,21 +503,19 @@ describe("the units 0.7 laid, replaced without --force", () => {
   });
 
   test("a unit 0.7 laid and edited by hand since still stops the deployment", () => {
-    const [mail] = unitsOf("legacy");
     const [shop] = unitsOf("none");
-    expect(decideUnit({ installed: `${MAIL_07}LimitNOFILE=4096\n`, generated: mail!.text, replace: false })).toBe("diverged");
+    expect(decideUnit({ installed: `${SHOP_07}LimitNOFILE=4096\n`, generated: shop!.text, replace: false })).toBe("diverged");
     expect(decideUnit({ installed: SHOP_07.replace("PrivateDevices=true\n", ""), generated: shop!.text, replace: false })).toBe("diverged");
-    // Its flat file dropped by hand, or one added, is no release's either.
-    expect(decideUnit({ installed: MAIL_07.replace("EnvironmentFile=-/etc/sitesolide/mail-stripe.env\n", ""), generated: mail!.text, replace: false })).toBe("diverged");
+    // A flat file added by hand is no release's either.
     expect(decideUnit({ installed: SHOP_07.replace("Environment=PUBLIC_URL", "EnvironmentFile=-/etc/sitesolide/other.env\nEnvironment=PUBLIC_URL"), generated: shop!.text, replace: false })).toBe("diverged");
-    expect(decideUnit({ installed: `${MAIL_07}LimitNOFILE=4096\n`, generated: mail!.text, replace: true })).toBe("install");
+    expect(decideUnit({ installed: `${SHOP_07}LimitNOFILE=4096\n`, generated: shop!.text, replace: true })).toBe("install");
   });
 
   test("a unit of this release with one of the store's lines taken off by hand is no release's", () => {
-    const [mail] = unitsOf("legacy");
-    for (const line of ["ProtectProc=invisible", "LoadCredential=files:/etc/sitesolide/projects/mail/files", "EnvironmentFile=-/etc/sitesolide/projects/mail/env", "InaccessiblePaths=-/etc/sitesolide"]) {
-      const edited = mail!.text.replace(`${line}\n`, "");
-      expect({ line, action: decideUnit({ installed: edited, generated: mail!.text, replace: false }) }).toEqual({ line, action: "diverged" });
+    const [shop] = unitsOf("none");
+    for (const line of ["ProtectProc=invisible", "LoadCredential=files:/etc/sitesolide/projects/shop/files", "EnvironmentFile=-/etc/sitesolide/projects/shop/env", "InaccessiblePaths=-/etc/sitesolide"]) {
+      const edited = shop!.text.replace(`${line}\n`, "");
+      expect({ line, action: decideUnit({ installed: edited, generated: shop!.text, replace: false }) }).toEqual({ line, action: "diverged" });
     }
   });
 
@@ -601,8 +526,8 @@ describe("the units 0.7 laid, replaced without --force", () => {
   });
 
   test("the generations, newest first, the two of before the store last", () => {
-    const [mail] = unitsOf("legacy");
-    const text = mail!.text;
+    const [shop] = unitsOf("none");
+    const text = shop!.text;
     const generations = earlierGenerations(text);
     expect(generations).toEqual([
       withoutStoreLines(text),
@@ -611,13 +536,13 @@ describe("the units 0.7 laid, replaced without --force", () => {
       withoutSyscallLines(text),
       withoutBindLines(withoutSyscallLines(text)),
     ]);
-    expect(generations[0]).toBe(MAIL_07);
+    expect(generations[0]).toBe(SHOP_07);
   });
 
   test("withoutStoreLines takes off the store's lines and nothing else, and once", () => {
-    const [mail] = unitsOf("legacy");
     const [shop] = unitsOf("none");
-    for (const text of [mail!.text, shop!.text]) {
+    const [cart] = unitsOf("names");
+    for (const text of [shop!.text, cart!.text]) {
       const before = withoutStoreLines(text);
       expect(before).not.toMatch(/projects\/|LoadCredential|ProtectProc|PID 1/);
       expect(withoutStoreLines(before)).toBe(before);
@@ -625,10 +550,10 @@ describe("the units 0.7 laid, replaced without --force", () => {
     // A text of another making loses those directives alone, its comments kept.
     const handWritten = "[Service]\n# mine\nEnvironmentFile=-/etc/sitesolide/projects/x/env\nLoadCredential=files:/etc/sitesolide/projects/x/files\nLoadCredential=key:/etc/ssl/key.pem\nProtectProc=invisible\nInaccessiblePaths=-/etc/sitesolide\n";
     expect(withoutStoreLines(handWritten)).toBe("[Service]\n# mine\nLoadCredential=key:/etc/ssl/key.pem\nInaccessiblePaths=-/etc/sitesolide\n");
-    // With a flat file still read, InaccessiblePaths goes too: 0.7 laid it only without one.
-    expect(withoutStoreLines(`${handWritten}EnvironmentFile=-/etc/sitesolide/x.env\n`)).toBe("[Service]\n# mine\nLoadCredential=key:/etc/ssl/key.pem\nEnvironmentFile=-/etc/sitesolide/x.env\n");
-    // A file under a folder of the old form is not a flat one.
-    expect(withoutStoreLines(`${handWritten}EnvironmentFile=-/etc/sitesolide/x-secrets/y.env\n`)).toInclude("InaccessiblePaths=-/etc/sitesolide\n");
+    // A flat file is none of the store's lines: kept, and InaccessiblePaths with it.
+    expect(withoutStoreLines(`${handWritten}EnvironmentFile=-/etc/sitesolide/x.env\n`)).toBe(
+      "[Service]\n# mine\nLoadCredential=key:/etc/ssl/key.pem\nInaccessiblePaths=-/etc/sitesolide\nEnvironmentFile=-/etc/sitesolide/x.env\n",
+    );
   });
 });
 
@@ -681,18 +606,19 @@ describe("what a manifest can no longer write into its unit", () => {
   test("what validate() refuses is never written, even past validate()", () => {
     // The second barrier, for a manifest that reached the generator without
     // the validation: a start run as root, a variable set past the rules on
-    // names, a directive added after a secret's name or a description.
+    // names, a directive added after a description.
     for (const manifest of [
       { ...APP, start: "+/bin/sh -c id" },
       { ...APP, start: "!/bin/sh -c id" },
       { ...APP, start: "/bin/app\nUser=root" },
       { ...APP, env: { NODE_ENV: "x DATA_DIR=/srv/sites/other/data" } },
-      { ...APP, secrets: ["budget.env\nExecStartPre=+/bin/sh -c id"] },
       { ...APP, description: "notes\\" },
       { slug: "budget", services: { web: { start: "/bin/web", port: 3040 }, api: { start: "+/bin/api", port: 3041, routes: ["/api/*"] } } },
     ] as Manifest[]) {
       expect(() => generateUnits(manifest)).toThrow("never written into a unit");
     }
+    // A runtime secret's name is never written into a unit, whatever it holds: no directive can follow it.
+    expect(generateUnit({ ...APP, secrets: ["BUDGET\nExecStartPre=+/bin/sh -c id"] })).toBe(generateUnit(APP));
   });
 });
 
@@ -783,6 +709,51 @@ describe("what the machine answers about its unit", () => {
     // The marker comes first rather than in place of an empty output,
     // precisely for this case.
     expect(readUnitAnswer(`${MARKER_PRESENT}\n`)).toEqual({ kind: "present", content: "" });
+  });
+});
+
+/** The answer of a presence test, `test -f` printing one marker or the other: the loopback's project set reads it. */
+describe("what the machine answers about a file's presence", () => {
+  test("the absence marker is recognised", () => {
+    expect(readPresenceAnswer(`${MARKER_ABSENT}\n`)).toEqual({ kind: "absent" });
+  });
+
+  test("the presence marker is recognised", () => {
+    expect(readPresenceAnswer(`${MARKER_PRESENT}\n`)).toEqual({ kind: "present" });
+    expect(readPresenceAnswer(`  ${MARKER_PRESENT}  `)).toEqual({ kind: "present" });
+  });
+
+  test("an empty output is never an absence", () => {
+    // An ssh that does not go through, a refused sudo: the output is empty,
+    // and confusing it with "the file is not there" would act on a file that
+    // is there.
+    expect(readPresenceAnswer("")).toEqual({ kind: "unreadable" });
+    expect(readPresenceAnswer("\n  \n")).toEqual({ kind: "unreadable" });
+  });
+
+  test("a message from the remote shell is neither an absence nor a presence", () => {
+    expect(readPresenceAnswer("sudo: a password is required")).toEqual({ kind: "unreadable" });
+    expect(readPresenceAnswer("permission denied")).toEqual({ kind: "unreadable" });
+  });
+
+  test("a well formed fingerprint no longer counts as presence", () => {
+    // Only the presence is asked for: a fingerprint comes from a command other
+    // than the one that was run, and concluding from it would be guessing.
+    expect(readPresenceAnswer("a".repeat(64))).toEqual({ kind: "unreadable" });
+    expect(readPresenceAnswer(`${"0123456789abcdef".repeat(4)}\n`)).toEqual({ kind: "unreadable" });
+  });
+
+  test("a marker surrounded by anything else is not recognised", () => {
+    // Two markers at once, or a marker followed by content, say that another
+    // command has spoken: nothing lets us know which one to believe.
+    expect(readPresenceAnswer(`${MARKER_PRESENT}\n${MARKER_ABSENT}\n`)).toEqual({ kind: "unreadable" });
+    expect(readPresenceAnswer(`${MARKER_PRESENT}\nKEY=value\n`)).toEqual({ kind: "unreadable" });
+    expect(readPresenceAnswer(`welcome\n${MARKER_ABSENT}`)).toEqual({ kind: "unreadable" });
+  });
+
+  test("case matters", () => {
+    expect(readPresenceAnswer(MARKER_PRESENT.toLowerCase())).toEqual({ kind: "unreadable" });
+    expect(readPresenceAnswer(MARKER_ABSENT.toLowerCase())).toEqual({ kind: "unreadable" });
   });
 });
 
@@ -1078,9 +1049,9 @@ describe("the units of servers, as they were before workers existed", () => {
   const FINGERPRINTS: Record<string, Record<string, string>> = {
     "bun-mixed": { "sample-bun": "add7fdc8d713e6954cf1e1456d63ff2a5a97b8f49c80149a9eac2a450900ca46" },
     "multi-service": {
-      "sample-lab": "6a9b54567d9bebc3fd3db56dcdd8c4ae5604e3613f6f8f26ba3b54abadae9786",
-      "sample-lab.api": "fc6ce37f51ecccbcc4b4e26ac891a10bbbc96d9d4fef00e736990dfc405cc9ee",
-      "sample-lab.worker": "faca45fbdecdeecdf51d9d6c608bab2972966ecd14abbc294188dbc9435a6aef",
+      "sample-lab": "a3eac0c787b7c006295f29c9b3e1d99db391c9ec6b9151198420de0d6edbd5ae",
+      "sample-lab.api": "529c0e4723a91a1d3fc9bffe995137c952b3f1365c73672c0c7da4d175df2b9b",
+      "sample-lab.worker": "c947061bb3e5f317d3f9e0edd9091ae9a50fcf88862956999786fec1f5477322",
     },
   };
 
@@ -1097,9 +1068,9 @@ describe("the units of servers, as they were before workers existed", () => {
   const FINGERPRINTS_06: Record<string, Record<string, string>> = {
     "bun-mixed": { "sample-bun": "a313ca46ef19bc85bcc16e984acd26825319a4e7a9ce8e1b0d3aaed22e231490" },
     "multi-service": {
-      "sample-lab": "f8803f356470b6d7f6dddebca9f3f3d1d9a4b89d4db39e00093a92ce7fe0cfef",
-      "sample-lab.api": "e2d055b78c3c2723734bc3a51fc0ef4077a0fd41a8bbcc212dedc30f83cffce0",
-      "sample-lab.worker": "e77575a31050a4656084c79771fb7b7bf0e980306fd1e95c5475700cdd34033f",
+      "sample-lab": "5205297be4bfa99e54ec4738d3828eb0183df5f261ac70a09d9697713b429d98",
+      "sample-lab.api": "c9907201e77ace7c31c7bac1742a480b26e0198b896bd35b967a96a05e9dcfa0",
+      "sample-lab.worker": "813baac49673f6450fdf067e2d53e3c7887f80adeefe2581c200e1c8c287fdc7",
     },
   };
 
@@ -1197,7 +1168,7 @@ describe("the system calls a service may make", () => {
     for (const manifest of [
       { ...APP, network: "outbound" },
       { ...APP, egress: ["api.example.com"] },
-      { ...APP, secrets: ["budget.env"] },
+      { ...APP, secrets: ["API_KEY"] },
     ] as Manifest[]) {
       for (const line of FILTER) expect(generateUnit(manifest)).toInclude(`\n${line}\n`);
     }
@@ -1250,12 +1221,12 @@ describe("the system calls a service may make", () => {
 
 describe("a unit the previous manifest generated is the generator's own", () => {
   const PLACES = { slug: "sitemedic", zone: "test-zone.invalid", contact: "" };
-  const LEGACY: Manifest = { slug: "sitemedic", start: "/usr/local/bin/bun run server.ts", port: 3040, secrets: ["sitemedic-ses.env", "sitemedic-stripe.env"] };
-  const NAMES: Manifest = { ...LEGACY, secrets: ["AWS_ACCESS_KEY_ID", "STRIPE_SECRET_KEY"] };
+  const NAMES: Manifest = { slug: "sitemedic", start: "/usr/local/bin/bun run server.ts", port: 3040, secrets: ["AWS_ACCESS_KEY_ID", "STRIPE_SECRET_KEY"] };
+  const PREVIOUS: Manifest = { ...NAMES, port: 3039, memory: "512M" };
   const unitOf = (manifest: Manifest) => generateUnits(manifest, PLACES)[0]!.text;
 
-  test("M5: the unit of the old form's manifest, by this release or 0.7, is replaced by the names manifest's without --force", () => {
-    const previous = unitOf(LEGACY);
+  test("M5: the previous manifest's unit, by this release or 0.7, is replaced by the new manifest's without --force", () => {
+    const previous = unitOf(PREVIOUS);
     const generated = unitOf(NAMES);
     // What the platform laid at the previous deployment: this release's unit, or 0.7's.
     for (const installed of [previous, ...earlierGenerations(previous)]) {
@@ -1271,7 +1242,7 @@ describe("a unit the previous manifest generated is the generator's own", () => 
   });
 
   test("a unit edited by hand is kept still, the previous manifest's or not; none on the machine decides as before", () => {
-    const previous = unitOf(LEGACY);
+    const previous = unitOf(PREVIOUS);
     const generated = unitOf(NAMES);
     expect(decideUnit({ installed: `${previous}LimitNOFILE=4096\n`, generated, replace: false, previous })).toBe("diverged");
     expect(decideUnit({ installed: previous.replace("PrivateDevices=true\n", ""), generated, replace: false, previous })).toBe("diverged");
@@ -1281,25 +1252,19 @@ describe("a unit the previous manifest generated is the generator's own", () => 
     expect(decideUnit({ installed: generated, generated, replace: false, previous })).toBe("present");
   });
 
-  test("a hand edit that only repeats or reorders the files read stays: it decides which value wins", () => {
-    const previous = unitOf(LEGACY);
-    const generated = unitOf({ ...LEGACY, port: 3041 });
+  test("a hand edit that only repeats the store's file stays: the order of what a unit reads is no release's", () => {
+    const previous = unitOf(PREVIOUS);
+    const generated = unitOf(NAMES);
     const files = previous.split("\n").filter((line) => line.startsWith("EnvironmentFile="));
-    expect(files.length).toBeGreaterThan(2);
+    expect(files).toEqual(["EnvironmentFile=-/etc/sitesolide/projects/sitemedic/env"]);
     const lines = previous.split("\n");
-    // The first file named again last, so that its values win over the second's.
-    const repeated = [...lines.slice(0, lines.lastIndexOf(files.at(-1)!) + 1), files[0]!, ...lines.slice(lines.lastIndexOf(files.at(-1)!) + 1)].join("\n");
-    // The two legacy files swapped.
-    const swapped = lines.map((line) => (line === files[0] ? files[1]! : line === files[1] ? files[0]! : line)).join("\n");
-    for (const installed of [repeated, swapped]) {
-      expect(installed).not.toBe(previous);
-      expect(decideUnit({ installed, generated, replace: false, previous })).toBe("diverged");
-      expect(decideUnit({ installed, generated, replace: true, previous })).toBe("install");
-      // As a release before the store wrote it, edited the same way: kept too.
-      expect(decideUnit({ installed: withoutStoreLines(installed), generated: previous, replace: false })).toBe("diverged");
-      // The same manifest: kept as it is, nothing replaced.
-      expect(decideUnit({ installed, generated: previous, replace: false })).toBe("present");
-    }
+    // The store's file named once more, after itself.
+    const repeated = [...lines.slice(0, lines.indexOf(files[0]!) + 1), files[0]!, ...lines.slice(lines.indexOf(files[0]!) + 1)].join("\n");
+    expect(repeated).not.toBe(previous);
+    expect(decideUnit({ installed: repeated, generated, replace: false, previous })).toBe("diverged");
+    expect(decideUnit({ installed: repeated, generated, replace: true, previous })).toBe("install");
+    // The same manifest: kept as it is, nothing replaced.
+    expect(decideUnit({ installed: repeated, generated: previous, replace: false })).toBe("present");
     // Untouched, it is still the generator's own.
     expect(decideUnit({ installed: previous, generated, replace: false, previous })).toBe("install");
     expect(decideUnit({ installed: withoutStoreLines(previous), generated: previous, replace: false })).toBe("install");

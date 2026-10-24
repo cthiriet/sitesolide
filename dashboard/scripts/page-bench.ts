@@ -18,15 +18,17 @@
  *   `courier`, a worker beside two scheduled services whose hourly one's
  *   last run failed, and `reports`, whose every service is scheduled;
  * - a fake steward on a Unix socket, which follows `src/secrets/protocol.ts`
- *   and the real one's guard rails: every deployed site and its portal,
- *   variable files, one out of management, one missing, one pending restart,
- *   builder's files read as one block (private key and registry token
- *   write-only, with no size, public key readable), every `PASSWORD_HASH`
- *   (builder.env's included) that changes only through `/password` and is never
- *   restored, `dashboard.env` and `portal.env` which carry nothing but their
- *   hash, one log per site, lines written by tokens through the control API
- *   among them, for the Tokens page's Token activity, and an unlocking by the
- *   same password;
+ *   and the real one's guard rails: every deployed site and its portal, the
+ *   platform's own files alone, the dashboard's and the portal's, one of them
+ *   out of management and one pending restart, `dashboard.env` and
+ *   `portal.env` which carry nothing but their `PASSWORD_HASH`, which changes
+ *   only through `/password` and is never restored, one log per site, lines
+ *   written by tokens through the control API among them, for the Tokens
+ *   page's Token activity, and an unlocking by the same password; each app's
+ *   store, listed by the real `storeView` from its manifest: every declared
+ *   name set but the last, which shows as missing, one the manifest no
+ *   longer declares, and builder's declared file present (`storeOf`). The
+ *   store's writes are not simulated;
  * - a simulated gatekeeper behind `/portal`, which takes six seconds: it
  *   restricts `wheels` or `bookshop` and makes them public again, always
  *   fails on `photos` and restores, refuses `roster` because Caddy's
@@ -91,6 +93,8 @@ import type { GeneralAccess, GeneralView } from "../src/access/protocol";
 import { generateCode } from "../borrowed/locks";
 import { lockHeldMessage } from "../src/gatekeeper/transaction";
 import { HASH_ONLY, PASSWORD_VARIABLE, MIN_PASSWORD } from "../src/secrets/scope";
+import { storeMay, storeView } from "../src/secrets/store";
+import { hasStore, secretsOf, type Manifest } from "../borrowed/manifest";
 import { INTERRUPTED_TRANSACTION_REASON } from "../src/secrets/portal";
 import {
   EMPTY_CONNECTORS,
@@ -194,7 +198,7 @@ const FOLDERS: FakeFolder[] = [
       port: 3040,
       portal: true,
       portalExempt: ["/api/webhooks/*"],
-      secrets: ["calendar.env", "calendar-webhook.env"],
+      secrets: ["MAIL_AUTH_TOKEN", "SMTP_PASSWORD", "WEBHOOK_SECRET"],
     },
     unit: { memory: 61 * MB, peak: 88 * MB, limit: 256 * MB, sinceMs: 3 * DAY, cpu: 2.6 },
     bytes: 22 * MB,
@@ -243,7 +247,7 @@ const FOLDERS: FakeFolder[] = [
       start: "bun run server.ts",
       port: 3043,
       portal: true,
-      secrets: ["cms.env"],
+      secrets: ["CMS_TOKEN", "DATABASE_KEY"],
     },
     unit: { memory: 198 * MB, peak: 221 * MB, limit: 256 * MB, sinceMs: 20 * HOUR, cpu: 5.1 },
     bytes: 48 * MB,
@@ -258,7 +262,6 @@ const FOLDERS: FakeFolder[] = [
       start: "bun run server.ts",
       port: 3022,
       memory: "128M",
-      secrets: ["dashboard.env"],
     },
     unit: { memory: 41 * MB, peak: 97 * MB, limit: 128 * MB, sinceMs: 5 * HOUR, cpu: 0.3 },
     bytes: 3 * MB,
@@ -272,7 +275,7 @@ const FOLDERS: FakeFolder[] = [
       start: "bun run server.ts",
       port: 3041,
       memory: "512M",
-      secrets: ["builder.env"],
+      secrets: { runtime: ["GITHUB_TOKEN", "NPM_TOKEN"], files: ["registry.json"] },
     },
     unit: { memory: 143 * MB, peak: 301 * MB, limit: 512 * MB, sinceMs: 9 * DAY, cpu: 3.4 },
     bytes: 186 * MB,
@@ -286,7 +289,7 @@ const FOLDERS: FakeFolder[] = [
       start: "bun run server.ts",
       port: 3044,
       portal: true,
-      secrets: ["library.env"],
+      secrets: ["LIBRARY_KEY"],
     },
     unit: { memory: 37 * MB, peak: 52 * MB, limit: 256 * MB, sinceMs: 6 * DAY, cpu: 0.8 },
     bytes: 12 * MB,
@@ -308,7 +311,6 @@ const FOLDERS: FakeFolder[] = [
       description: "Sign-in in front of the restricted sites",
       start: "bun run server.ts",
       port: 3026,
-      secrets: ["portal.env"],
     },
     unit: { memory: 29 * MB, peak: 64 * MB, limit: 128 * MB, sinceMs: 4 * DAY, cpu: 0.2 },
     bytes: 4 * MB,
@@ -351,7 +353,7 @@ const FOLDERS: FakeFolder[] = [
         digest: { start: "bun run digest.ts", schedule: "Mon..Fri 08:00", timeout: "15m" },
         cleanup: { start: "bun run cleanup.ts", schedule: "hourly" },
       },
-      secrets: ["courier.env"],
+      secrets: ["QUEUE_URL", "SMTP_PASSWORD"],
     },
     unit: { memory: 52 * MB, peak: 58 * MB, limit: 256 * MB, sinceMs: 4 * DAY, cpu: 0.4 },
     units: {
@@ -390,7 +392,7 @@ const FOLDERS: FakeFolder[] = [
       description: "Staff roster",
       start: "bun run server.ts",
       port: 3045,
-      secrets: ["roster.env"],
+      secrets: ["MAIL_KEY"],
       // Restricted in sitesolide.json, not in the live block: general access in disagreement.
       ...(SHOWCASE ? {} : { portal: true }),
     },
@@ -709,16 +711,13 @@ const stateTimer = process.env.BENCH_STALE === "1" ? null : setInterval(() => vo
 
 type FakeFile = {
   name: string;
-  kind: "variables" | "content";
   state: "managed" | "absent" | "unmanaged";
   reason: string | null;
   expected: string;
-  readable: boolean;
   variables: Map<string, string>;
   passwords: string[];
-  content: string;
   modifiedAt: number | null;
-  previous: { variables: Map<string, string>; content: string } | null;
+  previous: { variables: Map<string, string> } | null;
   wait: boolean;
 };
 
@@ -732,17 +731,15 @@ type FakeProject = {
   reason: string | null;
 };
 
-function file(slug: string, partial: Partial<FakeFile> & { name: string }): FakeFile {
-  const account = slug === "example.com" ? "site-landing" : `site-${slug}`;
+/** One of the platform's files: the dashboard's are root's, the portal's its site's. */
+function file(slug: "dashboard" | "portal", partial: Partial<FakeFile> & { name: string }): FakeFile {
+  const account = slug === "dashboard" ? "root" : `site-${slug}`;
   return {
-    kind: "variables",
     state: "managed",
     reason: null,
     expected: `${account}:${account} 0600`,
-    readable: true,
     variables: new Map(),
     passwords: [],
-    content: "",
     modifiedAt: start - 3 * DAY,
     previous: null,
     wait: false,
@@ -750,91 +747,28 @@ function file(slug: string, partial: Partial<FakeFile> & { name: string }): Fake
   };
 }
 
-const FAKE_PRIVATE_KEY = [
-  // Split so that a secret scanner reading this file does not take a fake
-  // key for a leaked one: at runtime the header is whole.
-  "-----BEGIN OPENSSH " + "PRIVATE KEY-----",
-  "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW",
-  "QyNTUxOQAAACBwYWdlLWJlbmNoLWZha2Uta2V5LW5vdC1hLXJlYWwta2V5LWF0LWFsbAAA",
-  "-----END OPENSSH PRIVATE KEY-----",
-  "",
-].join("\n");
-
-/** Each site's files; a site missing from here has none. */
+/** The platform's own files, as the real steward lists them (PLATFORM_FILES); every other site has none. */
 const FILES: Record<string, FakeFile[]> = {
-  calendar: [
-    file("calendar", {
-      name: "calendar.env",
-      variables: new Map([
-        ["MAIL_ACCOUNT_ID", "bench-fake-account-id"],
-        ["MAIL_AUTH_TOKEN", "bench-fake-auth-token"],
-        ["SMTP_PASSWORD", "bench-smtp-password"],
-      ]),
-      modifiedAt: start - 4 * DAY,
-    }),
-    file("calendar", { name: "calendar-webhook.env", state: "absent", modifiedAt: null }),
-  ],
-  cms: [
-    file("cms", {
-      name: "cms.env",
-      variables: new Map([
-        ["CMS_TOKEN", "tok_bench_7f3a9c2e1b8d4f6a0e5c"],
-        ["DATABASE_KEY", "bench_db_key_0123456789abcdef"],
-      ]),
-      modifiedAt: start - 35 * MINUTE,
-      previous: { variables: new Map([["CMS_TOKEN", "tok_bench_old"]]), content: "" },
-      wait: true,
-    }),
-  ],
   dashboard: [
     file("dashboard", {
       name: "dashboard.env",
-      expected: "root:root 0600",
       variables: new Map([[PASSWORD_VARIABLE, hash]]),
       passwords: [PASSWORD_VARIABLE],
       modifiedAt: start - 12 * DAY,
     }),
-  ],
-  builder: [
-    file("builder", {
-      name: "builder.env",
+    file("dashboard", {
+      name: "dashboard-monitor.env",
       variables: new Map([
-        ["GITHUB_TOKEN", "fake_github_token_bench"],
-        ["NPM_TOKEN", "fake_npm_token_bench"],
-        // The hash of its own password: as everywhere, Change password only.
-        [PASSWORD_VARIABLE, otherHash],
+        ["HEARTBEAT_URL", "https://hc-ping.example.com/bench-fake-check"],
+        ["ALERT_WEBHOOK_URL", "https://ntfy.example.com/bench-fake-topic"],
+        ["ALERT_WEBHOOK_FORMAT", "text"],
       ]),
-      passwords: [PASSWORD_VARIABLE],
-      modifiedAt: start - 9 * DAY,
+      modifiedAt: start - 35 * MINUTE,
+      previous: { variables: new Map([["HEARTBEAT_URL", "https://hc-ping.example.com/bench-old-check"]]) },
+      wait: true,
     }),
-    file("builder", {
-      name: "builder-ssh",
-      kind: "content",
-      expected: "site-builder:site-builder 0400",
-      readable: false,
-      content: FAKE_PRIVATE_KEY,
-      modifiedAt: start - 40 * DAY,
-    }),
-    file("builder", {
-      name: "builder-ssh.pub",
-      kind: "content",
-      expected: "site-builder:site-builder 0444",
-      content: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHBhZ2UtYmVuY2gtZmFrZS1rZXktaGVyZS14eA builder@sitesolide\n",
-      modifiedAt: start - 40 * DAY,
-    }),
-    file("builder", {
-      name: "builder-secrets/registry",
-      kind: "content",
-      expected: "site-builder:site-builder 0400",
-      readable: false,
-      content: "bench-fake-registry-token\n",
-      modifiedAt: start - 6 * DAY,
-      previous: { variables: new Map(), content: "bench-old-token\n" },
-    }),
-  ],
-  library: [
-    file("library", {
-      name: "library.env",
+    file("dashboard", {
+      name: "dashboard-backup.env",
       state: "unmanaged",
       reason: "Line 2 starts with export, which systemd reads but the steward doesn't rewrite.",
       modifiedAt: start - 12 * DAY,
@@ -849,43 +783,13 @@ const FILES: Record<string, FakeFile[]> = {
       modifiedAt: start - 30 * DAY,
     }),
   ],
-  roster: [
-    file("roster", {
-      name: "roster.env",
-      variables: new Map([["MAIL_KEY", "mk_bench00000000"]]),
-      modifiedAt: start - 26 * MINUTE,
-      previous: { variables: new Map([["MAIL_KEY", "mk_benchold"]]), content: "" },
-    }),
-  ],
-  courier: [
-    file("courier", {
-      name: "courier.env",
-      variables: new Map([
-        ["QUEUE_URL", "redis://bench-fake-queue"],
-        ["SMTP_PASSWORD", "bench-courier-smtp"],
-      ]),
-      modifiedAt: start - 4 * DAY,
-    }),
-  ],
-  "example.com": [
-    file("example.com", {
-      name: "landing-mail.env",
-      variables: new Map([
-        ["AWS_ACCESS_KEY_ID", "FAKEBENCHACCESSKEYID"],
-        ["AWS_SECRET_ACCESS_KEY", "bench/secret/key/ses/0000000000000000"],
-        ["AWS_REGION", "us-east-1"],
-      ]),
-      modifiedAt: start - 12 * DAY,
-    }),
-  ],
 };
 
 if (SHOWCASE) {
   for (const files of Object.values(FILES)) {
     for (const f of files) {
       if (f.state !== "managed") Object.assign(f, { state: "managed", reason: null, modifiedAt: start - 5 * DAY });
-      if (f.name === "calendar-webhook.env") f.variables = new Map([["WEBHOOK_SECRET", "bench-fake-webhook-secret"]]);
-      if (f.name === "library.env") f.variables = new Map([["LIBRARY_KEY", "bench-fake-library-key"]]);
+      if (f.name === "dashboard-backup.env") f.variables = new Map([["BACKUP_S3_BUCKET", "bench-fake-bucket"]]);
       f.wait = false;
     }
   }
@@ -898,9 +802,8 @@ if (SHOWCASE) {
  * changes its door there, so that the wait and the success can be watched on
  * `wheels`; a site on its own domain takes no code, in the real words.
  */
-const UNTOUCHABLE: Record<string, string> = Object.fromEntries(
-  ["portal", "dashboard", "example.com"].map((slug) => [slug, fixedRefusal(slug, null) ?? "the portal of this site cannot be changed"]),
-);
+const PLATFORM = ["portal", "dashboard", "example.com"];
+const UNTOUCHABLE: Record<string, string> = Object.fromEntries(PLATFORM.map((slug) => [slug, fixedRefusal(slug, null) ?? "the portal of this site cannot be changed"]));
 
 /**
  * An interrupted action whose backup has remained: the real steward offers
@@ -949,20 +852,20 @@ type LogRow = {
 
 const log: LogRow[] = [
   { a: start - 4 * DAY, operation: "unlock", result: "ok", slug: null, file: null, variable: null, detail: null },
-  { a: start - 4 * DAY + MINUTE, operation: "set", result: "ok", slug: "calendar", file: "calendar.env", variable: "SMTP_PASSWORD", detail: null },
-  { a: start - 6 * DAY, operation: "replace", result: "ok", slug: "builder", file: "builder-secrets/registry", variable: null, detail: null },
+  { a: start - 4 * DAY + MINUTE, operation: "set", result: "ok", slug: "calendar", file: "store", variable: "SMTP_PASSWORD", detail: null },
+  { a: start - 6 * DAY, operation: "replace", result: "ok", slug: "builder", file: "store/registry.json", variable: null, detail: null },
   { a: start - 40 * MINUTE, operation: "unlock", result: "rejects", slug: null, file: null, variable: null, detail: "refused" },
   { a: start - 38 * MINUTE, operation: "unlock", result: "ok", slug: null, file: null, variable: null, detail: null },
-  { a: start - 35 * MINUTE, operation: "set", result: "ok", slug: "cms", file: "cms.env", variable: "CMS_TOKEN", detail: null },
-  { a: start - 26 * MINUTE, operation: "set", result: "ok", slug: "roster", file: "roster.env", variable: "MAIL_KEY", detail: null },
+  { a: start - 35 * MINUTE, operation: "set", result: "ok", slug: "dashboard", file: "dashboard-monitor.env", variable: "HEARTBEAT_URL", detail: null },
+  { a: start - 26 * MINUTE, operation: "set", result: "ok", slug: "roster", file: "store", variable: "MAIL_KEY", detail: null },
   { a: start - 25 * MINUTE, operation: "restart", result: "ok", slug: "roster", file: null, variable: null, detail: "looping" },
-  { a: start - 24 * MINUTE, operation: "set", result: "rejects", slug: "roster", file: "roster.env", variable: null, detail: "invalid" },
+  { a: start - 24 * MINUTE, operation: "set", result: "rejects", slug: "roster", file: "store", variable: null, detail: "invalid" },
   // The action whose backup remained on `library`: the gatekeeper wrote nothing of its result.
   { a: start - 3 * HOUR, operation: "portal", result: "failure", slug: "library", file: null, variable: null, detail: "off, failed" },
   // What tokens did through the control API, for the Tokens page's Token activity: the
-  // owner's Release agent, which may manage secrets, set a variable of calendar.env and
+  // owner's Release agent, which may manage secrets, set a variable of calendar's store and
   // restarted calendar; alice-ci, which may not, was refused on cms.
-  { a: start - 2 * HOUR, operation: "set", result: "ok", actor: "token:0f1e2d3c4b5a", member: null, slug: "calendar", file: "calendar.env", variable: "API_KEY", detail: null },
+  { a: start - 2 * HOUR, operation: "set", result: "ok", actor: "token:0f1e2d3c4b5a", member: null, slug: "calendar", file: "store", variable: "API_KEY", detail: null },
   { a: start - 2 * HOUR + MINUTE, operation: "restart", result: "ok", actor: "token:0f1e2d3c4b5a", member: null, slug: "calendar", file: null, variable: null, detail: "active, active/running, 0 restarts" },
   { a: start - 90 * MINUTE, operation: "set", result: "rejects", actor: "token:a11ce0c1ab12", member: "alice@example.com", slug: "cms", file: null, variable: null, detail: "no secrets permission" },
 ];
@@ -998,15 +901,11 @@ function fileView(f: FakeFile) {
   const managed = f.state === "managed";
   return {
     name: f.name,
-    kind: f.kind,
     state: f.state,
     reason: f.reason,
     expected: f.expected,
-    readable: f.readable,
-    variables: managed && f.kind === "variables" ? [...f.variables.keys()] : [],
+    variables: managed ? [...f.variables.keys()] : [],
     passwords: managed ? f.passwords.filter((name) => f.variables.has(name)) : [],
-    // The size of a write-only file does not come out: a key's says its algorithm.
-    bytes: managed && f.kind === "content" && f.readable ? new TextEncoder().encode(f.content).byteLength : null,
     modifiedAt: f.modifiedAt,
     previous: f.previous !== null && !carriesPassword(f),
     restartPending: f.wait,
@@ -1032,6 +931,35 @@ function generalView(folder: FakeFolder): GeneralView {
   return { access, modifiable: open, reason: open ? null : stop, choices };
 }
 
+/**
+ * An app's store as the real steward lists it to the owner: every name its
+ * manifest declares set but the last, which the page shows as missing, a name
+ * the manifest no longer declares, and every declared file present. Null for
+ * a static site, the dashboard and the portal.
+ */
+function storeOf(p: FakeProject) {
+  const manifest = (FOLDERS.find((folder) => folder.slug === p.slug)?.manifest ?? null) as Manifest | null;
+  if (manifest === null || manifest.slug !== p.slug || !hasStore(manifest)) return null;
+  const { runtime, files } = secretsOf(manifest);
+  const values = new Map([...runtime.slice(0, -1), "OLD_WEBHOOK_SECRET"].map((name) => [name, "bench"]));
+  const changed = start - 3 * DAY;
+  return storeView({
+    slug: p.slug,
+    manifest,
+    store: {
+      exists: true,
+      refusal: null,
+      env: { kind: "managed", values, modifiedAt: changed },
+      files: files.map((name) => ({ name, kind: "managed" as const, size: 2318, modifiedAt: changed })),
+      previous: true,
+    },
+    unitReadsStore: p.service !== null,
+    startedUs: p.service?.startedAt == null ? null : p.service.startedAt * 1000,
+    may: storeMay({ kind: "owner", restore: true }),
+    owner: true,
+  });
+}
+
 function projectView(p: FakeProject) {
   // The name `unitOf` of src/state.ts returns, without `.service`, like the real steward.
   const unit = p.slug === "example.com" ? "sitesolide-landing" : p.slug;
@@ -1040,6 +968,7 @@ function projectView(p: FakeProject) {
     service: p.service === null ? null : { unit, ...p.service },
     files: p.files.map(fileView),
     portal: { ...portalOf(p.slug), modifiable: p.modifiable, reason: p.reason },
+    store: storeOf(p),
   };
 }
 
@@ -1102,7 +1031,7 @@ async function writeTo(
 }
 
 function keepPrevious(f: FakeFile) {
-  f.previous = { variables: new Map(f.variables), content: f.content };
+  f.previous = { variables: new Map(f.variables) };
 }
 
 /** A drawn password, of four readable groups, with no ambiguous character. */
@@ -1336,17 +1265,12 @@ function memberAction(power: Power, operation: (req: Request) => Response | Prom
   };
 }
 
-/** A member's projects in the Secrets section, write-only to a Developer. */
+/** A member's projects in the Secrets section: never the platform's, whose files are the owner's alone. */
 async function memberProjects(req: Request): Promise<Response> {
   const body = await readBody(req);
   const principal = await memberRoutes.authorize(body.session, null);
   if (principal instanceof Response) return principal;
-  const projects = PROJECTS.filter((p) => may(principal.roles[p.slug] ?? null, "secrets.list")).map((p) => {
-    const view = projectView(p);
-    return may(principal.roles[p.slug] ?? null, "secrets.read")
-      ? view
-      : { ...view, files: view.files.map((file: Record<string, unknown>) => ({ ...file, readable: false, previous: false, bytes: null })) };
-  });
+  const projects = PROJECTS.filter((p) => !PLATFORM.includes(p.slug) && may(principal.roles[p.slug] ?? null, "secrets.list")).map(projectView);
   return Response.json({ projects, until: await memberRoutes.unlockedUntil(body.session) });
 }
 
@@ -1365,11 +1289,6 @@ const steward =
             const owner = (path: string, method: string) => async (req: Request) =>
               fetch(`http://steward${path}`, { unix: socket, method, headers: { "Content-Type": "application/json" }, body: await req.text() });
             return {
-              "/people/secrets/value": { POST: memberAction("secrets.read", owner("/value", "POST")) },
-              "/people/secrets/variable": { PUT: memberAction("secrets.write", owner("/variable", "PUT")), DELETE: memberAction("secrets.write", owner("/variable", "DELETE")) },
-              "/people/secrets/file": { POST: memberAction("secrets.write", owner("/file", "POST")) },
-              "/people/secrets/restore": { POST: memberAction("secrets.restore", owner("/restore", "POST")) },
-              "/people/secrets/content": { POST: memberAction("secrets.read", owner("/content", "POST")), PUT: memberAction("secrets.write", owner("/content", "PUT")) },
               "/people/portal": { POST: memberAction("general", owner("/portal", "POST")) },
               "/people/general": { POST: memberAction("general", owner("/general", "POST")) },
             };
@@ -1514,9 +1433,6 @@ const steward =
               const place = locate(requested);
               if (place instanceof Response) return place;
               const name = text(requested.variable);
-              if (place.file.kind !== "variables") {
-                return refusal(400, "invalid", `${place.file.name} is managed as a whole, replace its content instead`);
-              }
               if (name === PASSWORD_VARIABLE) {
                 return refusal(403, "out-of-scope", `${name} is never read back, change it with Change password`);
               }
@@ -1530,7 +1446,7 @@ const steward =
           "/variable": {
             PUT: (req) =>
               writeTo(req, "set", ({ file: f }, requested) => {
-                if (f.state !== "managed" || f.kind !== "variables") return refusal(409, "unmanaged", "This file is not managed.");
+                if (f.state !== "managed") return refusal(409, "unmanaged", "This file is not managed.");
                 const name = text(requested.variable);
                 const value = text(requested.value);
                 if (name === PASSWORD_VARIABLE) {
@@ -1577,36 +1493,9 @@ const steward =
                 // Before anything else: restoring would make valid again the password just changed.
                 if (carriesPassword(f)) return refusal(403, "out-of-scope", "a password is only changed with Change password");
                 if (f.previous === null) return refusal(404, "not-found", `no previous version of ${f.name}`);
-                const current = { variables: f.variables, content: f.content };
+                const current = { variables: f.variables };
                 f.variables = f.previous.variables;
-                f.content = f.previous.content;
                 f.previous = current;
-                return null;
-              }),
-          },
-          "/content": {
-            POST: async (req) => {
-              const requested = await readBody(req);
-              if (!isValidToken(requested)) return refusal(401, "locked", "Locked.");
-              const place = locate(requested);
-              if (place instanceof Response) return place;
-              const f = place.file;
-              if (f.kind !== "content") return refusal(400, "invalid", `${f.name} is an environment file, change its variables instead`);
-              if (!f.readable) return refusal(403, "out-of-scope", `${f.name} is write-only, it can be replaced but never read back`);
-              if (f.state !== "managed") return refusal(409, "unmanaged", "This file is not managed.");
-              record({ operation: "read", result: "ok", slug: place.project.slug, file: f.name, variable: null, detail: null });
-              await Bun.sleep(250);
-              return Response.json({ content: f.content });
-            },
-            PUT: (req) =>
-              writeTo(req, "replace", ({ file: f }, requested) => {
-                if (f.kind !== "content") return refusal(400, "invalid", `${f.name} holds variables, not a single content.`);
-                if (f.state !== "managed") return refusal(409, "unmanaged", "This file is not managed.");
-                const content = text(requested.content);
-                if (new TextEncoder().encode(content).byteLength > 64 * 1024) return refusal(400, "invalid", "Up to 64 KB.");
-                if (content.includes("\0")) return refusal(400, "invalid", "A null byte can't be written.");
-                keepPrevious(f);
-                f.content = content;
                 return null;
               }),
           },
@@ -1618,7 +1507,7 @@ const steward =
               if (place instanceof Response) return place;
               const { project, file: f } = place;
               const name = text(requested.variable);
-              if (f.kind !== "variables" || name !== PASSWORD_VARIABLE) {
+              if (name !== PASSWORD_VARIABLE) {
                 return refusal(403, "out-of-scope", `only ${PASSWORD_VARIABLE} changes here`);
               }
               const chosen = typeof requested.newPassword === "string" ? requested.newPassword : null;
@@ -2131,7 +2020,6 @@ function serveFile(url: URL): Response {
 
 /** The routes of the contract that the relay might not carry yet, and the fields they relay. */
 const NEW_ROUTES: Record<string, { methods: string[]; fields: string[] }> = {
-  "/api/secrets/content": { methods: ["POST", "PUT"], fields: ["slug", "file", "content"] },
   "/api/secrets/password": { methods: ["POST"], fields: ["slug", "file", "variable", "dashboardPassword", "newPassword"] },
   "/api/secrets/portal": { methods: ["POST"], fields: ["slug", "active", "confirmation"] },
 };

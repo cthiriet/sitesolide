@@ -10,10 +10,7 @@
  */
 import type { Machine } from "../gatekeeper/machine";
 import type { LoopbackState, UnitFacts, UnitStanding } from "../../borrowed/services";
-import type { ProjectEntry } from "../secrets/scope";
-import type { SecretFile } from "./claims";
 import type { ExtractOutcome } from "./extract";
-import type { LegacyRead } from "../control/policy";
 
 export type Execution = { code: number; output: string };
 
@@ -49,22 +46,6 @@ export type Host = {
   /** Where this host's systemd reads the units it lays: /etc/systemd/system. */
   unitsFolder: string;
   /**
-   * A secret file of /etc/sitesolide, read without following a link: absent,
-   * a plain file and the uid that owns it, or anything else. Its content is
-   * never read.
-   */
-  secretFile: (name: string) => Promise<SecretFile>;
-  /**
-   * What the steward attaches a secret file to a site with
-   * (src/secrets/scope.ts, `readSites`): every directory of /srv/sites with
-   * its manifest, null when it has none, and the names in /etc/sitesolide,
-   * those of a `<slug>-secrets` folder included. Throws when either cannot
-   * be listed.
-   */
-  secretScope: () => Promise<{ projects: ProjectEntry[]; present: string[] }>;
-  /** The uid of `site-<slug>`, null while the account does not exist. */
-  accountUid: (slug: string) => Promise<number | null>;
-  /**
    * The schedules systemd does not read as a time, asked of
    * `systemd-analyze calendar` one by one, in the order given; null when it
    * could not be asked. A read: nothing is written.
@@ -79,15 +60,6 @@ export type Host = {
    * the log with its reason, never a line of it.
    */
   storeNames: (slug: string) => Promise<{ variables: string[]; files: string[] } | null>;
-  /**
-   * The legacy files the project's installed units read with
-   * `EnvironmentFile=`, flat under /etc/sitesolide, the store's own env left
-   * out: each absent, managed with its variables' names, or unmanaged (not a
-   * plain file, too big, or not read back); then the `declared` flat files
-   * no unit reads yet, `read` false. Never a value. Throws when a unit
-   * cannot be read.
-   */
-  legacyReadByUnits: (slug: string, declared?: readonly string[]) => Promise<LegacyRead[]>;
   /** The tokens' claims (src/control/claims.ts), as the steward wrote them: null when there is no file. Throws when it is there but unreadable. */
   readClaims: () => Promise<string | null>;
 

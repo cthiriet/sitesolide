@@ -21,9 +21,9 @@
 # and the walls are systemd's, which no container here has, and
 # dashboard/src/backup/README.md lists the commands that check them on a
 # machine. Everything else runs as the project's account, site-proof, never
-# as root: PostgreSQL, the run and the restore. The secret file the unit
-# would read is stood for by the run's environment, which a child inherits
-# with no isolation.
+# as root: PostgreSQL, the run and the restore. The store the unit would
+# read is stood for by the run's environment, which a child inherits with no
+# isolation.
 #
 # The container is stopped and removed by its own id, whatever happens.
 set -euo pipefail
@@ -119,7 +119,7 @@ cat > "$WORK/sitesolide.json" <<'MANIFEST'
       "backup": { "folder": "postgres", "command": "/bin/sh /srv/sites/proof/app/postgres-backup.sh" }
     }
   },
-  "secrets": ["proof.env"]
+  "secrets": ["POSTGRES_PASSWORD"]
 }
 MANIFEST
 

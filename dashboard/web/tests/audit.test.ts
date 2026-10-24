@@ -171,14 +171,15 @@ describe("a row in words", () => {
 
   test("the steward: what was done, or tried, and how it ended", () => {
     const steward = (action: string, detail: Record<string, unknown>, target: string | null = "cms") => auditWords(row({ source: "steward", actor: "owner", action, target, detail }))
-    expect(steward("secrets.set", { result: "ok", file: "cms.env", variable: "SMTP_PASSWORD" })).toEqual({ summary: "Set SMTP_PASSWORD", note: null, tone: "neutral" })
+    expect(steward("secrets.set", { result: "ok", file: "store", variable: "SMTP_PASSWORD" })).toEqual({ summary: "Set SMTP_PASSWORD", note: null, tone: "neutral" })
     expect(steward("secrets.unlock", { result: "ok" }, null)).toEqual({ summary: "Unlocked changes", note: null, tone: "neutral" })
     expect(steward("secrets.unlock", { result: "rejects", note: "wrong password" }, null)).toEqual({ summary: "Tried to unlock changes", note: "Refused: wrong password", tone: "attention" })
-    expect(steward("secrets.replace", { result: "ok", file: "builder-secrets/registry" }).summary).toBe("Replaced builder-secrets/registry")
-    // A project's store: a value drawn on the server, legacy files merged into it and retired, never a value.
+    expect(steward("secrets.replace", { result: "ok", file: "store/gcp.json" }).summary).toBe("Replaced gcp.json")
+    // A project's store: a value drawn on the server, never a value. A merge and a retire are rows written
+    // before projects kept their secrets in their store alone, still read.
     expect(steward("secrets.generate", { result: "ok", file: "store", variable: "SESSION_SECRET" }).summary).toBe("Generated SESSION_SECRET")
     expect(steward("secrets.migrate", { result: "ok", file: "store", note: "2 merged from a.env, b.env" })).toEqual({
-      summary: "Merged the legacy files into the store",
+      summary: "Merged the flat files into the store",
       note: "2 merged from a.env, b.env",
       tone: "neutral",
     })
@@ -285,16 +286,16 @@ describe("what a token did through the steward, in words", () => {
   const byToken = (action: string, detail: Record<string, unknown>, member: string | null = "alice@example.com") =>
     row({ id: "steward:1.0", source: "steward", actor: "token:a11ce0c1ab12", action, target: "cms", site: "cms", detail: member === null ? detail : { ...detail, member } })
 
-  test("a secret set, removed, a file created, a restart: the same words as the owner's own", () => {
-    expect(auditWords(byToken("secrets.set", { result: "ok", file: "cms.env", variable: "API_KEY" }))).toEqual({ summary: "Set API_KEY", note: null, tone: "neutral" })
-    expect(auditWords(byToken("secrets.remove", { result: "ok", file: "cms.env", variable: "OLD_KEY" })).summary).toBe("Removed OLD_KEY")
-    expect(auditWords(byToken("secrets.create", { result: "ok", file: "cms.env" })).summary).toBe("Created cms.env")
+  test("a secret set, removed, the store created, a restart: the same words as the owner's own", () => {
+    expect(auditWords(byToken("secrets.set", { result: "ok", file: "store", variable: "API_KEY" }))).toEqual({ summary: "Set API_KEY", note: null, tone: "neutral" })
+    expect(auditWords(byToken("secrets.remove", { result: "ok", file: "store", variable: "OLD_KEY" })).summary).toBe("Removed OLD_KEY")
+    expect(auditWords(byToken("secrets.create", { result: "ok", file: "store" })).summary).toBe("Created store")
     expect(auditWords(byToken("service.restart", { result: "ok", note: "active, active/running, 0 restarts" })).summary).toBe("Restarted")
     expect(auditWords(byToken("service.restart", { result: "failure", note: "looping" }))).toEqual({ summary: "Tried to restart", note: "Failed: crash loop", tone: "error" })
   })
 
   test("a refusal says what was tried and why, never a name the steward did not accept", () => {
-    expect(auditWords(byToken("secrets.set", { result: "rejects", file: "cms.env", note: "no secrets permission" }))).toEqual({
+    expect(auditWords(byToken("secrets.set", { result: "rejects", file: "store", note: "no secrets permission" }))).toEqual({
       summary: "Tried to set",
       note: "Refused: no secrets permission",
       tone: "attention",

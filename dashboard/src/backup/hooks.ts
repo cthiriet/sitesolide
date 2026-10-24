@@ -14,9 +14,9 @@
  * project's account, in the walls of its service: the same identity, the
  * same `app/`, `public/` and `data/`, the same working directory, its
  * service's environment as the unit sets it (bin/cli/unit.ts), its secrets
- * read by PID 1 from `/etc/sitesolide`, never on a command line: the old
- * form's flat files, then the project's store, its variables and its files,
- * the latter at `${CREDENTIALS_DIRECTORY}/files_<name>`, when its service's
+ * read by PID 1 from the project's store, never on a command line: its
+ * variables and its files, the latter at
+ * `${CREDENTIALS_DIRECTORY}/files_<name>`, when its service's
  * installed unit reads the store (unitStoreLines), and the loopback alone,
  * to reach its service on its port. The machine's loopback
  * rule lets a project's account reach its own ports and nobody else's
@@ -56,16 +56,14 @@ import {
   isValidEnvName,
   isValidEnvValue,
   isValidMemory,
-  isValidSecretName,
   isValidServiceName,
   isValidSlug,
-  legacySecretFiles,
   servicesOf,
   type ServiceView,
 } from "../../borrowed/manifest";
 import { CREDENTIALS_EXIT_STATUS, credentialsFailure, slugHasStore, storeCredentials, storeEnvironmentFile } from "../../borrowed/store";
 import { HOOK_EXIT } from "./child";
-import { declaredVariables, secretPath, treeVariables, unitFileName } from "../../borrowed/unit";
+import { declaredVariables, treeVariables, unitFileName } from "../../borrowed/unit";
 import { label } from "../secrets/scope";
 import type { BackupConfig } from "./config";
 import type { LiveFolder } from "./copy";
@@ -113,9 +111,6 @@ export function projectHooks(project: Project, stagingPath: string): { hooks: Ho
   const invalid = (service: ServiceView) => ({
     error: `${commandOf(service)} in sitesolide.json is not valid: fix it and deploy again, see docs/manifest.md`,
   });
-  for (const secret of legacySecretFiles(manifest)) {
-    if (!isValidSecretName(secret)) return { error: "a secret file named in its sitesolide.json is not valid: fix it and deploy again" };
-  }
   const hooks: Hook[] = [];
   for (const service of declared) {
     // The service's name becomes a folder's name, which the hook mode
@@ -211,8 +206,8 @@ export function hookJob(config: BackupConfig, project: Project, hook: Hook, time
   const manifest = project.manifest!;
   const root = join(config.sitesDir, project.folder);
   const placeholders = { slug: manifest.slug, zone: config.zone, contact: config.contact };
-  // dashboard and portal keep their flat file alone, as their unit does; any
-  // other project, what its service's unit reads of its store.
+  // dashboard and portal have no store, and their hooks read none; any other
+  // project, what its service's unit reads of its store.
   const store: StoreLines = hasStore(manifest)
     ? unitStoreLines(installedUnit(config.unitsFolder, hook.service.unit), manifest.slug)
     : { environmentFiles: [], credentials: [] };
@@ -234,10 +229,9 @@ export function hookJob(config: BackupConfig, project: Project, hook: Hook, time
     loopback: true,
     // BACKUP_DIR last, over any `env` of that name: the folder is the component's.
     environment: [...treeVariables(manifest, hook.service, config.sitesDir), ...declaredVariables(hook.service, placeholders), ["BACKUP_DIR", hook.backupDir]],
-    // As in the unit: the old form's files, then the store, which wins on a
-    // name both hold; the dash on each, a file not written yet leaving its
-    // variables unset, and the command saying what it misses.
-    environmentFiles: [...legacySecretFiles(manifest).map((secret) => `-${secretPath(secret)}`), ...store.environmentFiles],
+    // As in the unit: the store, with its dash, an env not written yet
+    // leaving its variables unset, and the command saying what it misses.
+    environmentFiles: store.environmentFiles,
     // The store's files, which its service reads at
     // $CREDENTIALS_DIRECTORY/files_<name>, when its unit loads them: the
     // folder is laid with that unit, missing it fails the command with 243.

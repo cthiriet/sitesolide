@@ -27,7 +27,7 @@ relays to a component that judges for itself what it accepts:
   may deploy through the control API, by the same steward: see
   [Access by token](#access-by-token);
 - **the secrets of every deployed project** in `/etc/sitesolide`, each app's
-  store and the flat files of before, and the restart of its service, the
+  store and the platform's own files, and the restart of its service, the
   *Secrets* section. The steward, a root daemon, decides, and reads a value
   back to the owner alone; a token with *Manage secrets* sets, generates and
   removes any name of its project's store through the control API, never
@@ -253,10 +253,12 @@ line the release the machine was last upgraded to. Its design rules, tokens, pri
 
 **The machine is the source of truth.** `/etc/sitesolide` is the production
 vault: each app's store, `projects/<slug>/`, holds the variables and the
-files its services receive at start, and the flat files of before still sit
-beside the stores, read before them, until each project migrates. The
-dashboard manages both for **every deployed project**, and the steward reads
-a value back to the owner alone. No copy waits on the workstation: see
+files its services receive at start, and the platform's own files sit flat
+beside the stores: the dashboard's and the portal's password hashes, the
+monitor's alerting, the backups' bucket. The dashboard manages the stores for
+**every deployed project**, and the platform's files from the dashboard's and
+the portal's own *Secrets*, and the steward reads a value back to the owner
+alone. No copy waits on the workstation: see
 [../docs/secrets.md](../docs/secrets.md).
 
 ### What the page shows
@@ -267,9 +269,8 @@ project does not read the store yet: deploy or refresh it. Then the declared
 names the store holds no value for, each with *Set* and *Generate*, and the
 declared files it lacks, each with *Upload*; then:
 
-- **Variables**: each name, where its value in force comes from, the store,
-  a legacy file, or nowhere yet, the legacy files it overrides, and whether
-  the manifest declares it; *Set*, a write-only dialog where the value is
+- **Variables**: each name, whether the store holds a value for it, and
+  whether the manifest declares it; *Set*, a write-only dialog where the value is
   typed and never pre-filled, *Generate*, its format and size, *Replace* over
   a name already set, confirmed since the old value stops working at the
   next restart, and *Remove*, the steward's refusal shown as it words it;
@@ -280,31 +281,24 @@ declared files it lacks, each with *Upload*; then:
   no action: the machine never holds them;
 - **Public, from the repository**: `env` as written in `sitesolide.json`,
   read only;
-- **Legacy files**, while any remains: what each holds, by name, whether a
-  unit reads it or it is left over; for the owner, whether the store covers
-  it, *Merge into the store*, a dry run first, and *Retire*. Until a project
-  migrates, its legacy variables stay editable as before;
 - *Restore previous version*, for the owner and the Admins, a dry run first
   that lists the names which would appear and disappear.
 
 **Only the owner, unlocked, has *Reveal***, the value shown for thirty
-seconds; nobody else has a control that reads one. The dashboard, the
-portal and the landing, which keep their flat files, show each of them as
-before: the expected owner and mode, and the states *Restart pending*,
-*Unmanaged*, *Missing* and *Write-only*. Then that site's activity. Changing
-site or section unmounts the rows, and with them any revealed value.
-**Without unlocking, no values, and no change.** After *Unlock changes* and
-retyping the password, for ten minutes, the owner may also:
+seconds; nobody else has a control that reads one. The dashboard and the
+portal, which keep their own files flat, show each of them: the expected
+owner and mode, and the states *Restart pending*, *Unmanaged* and *Missing*.
+Then that site's activity. Changing site or section unmounts the rows, and
+with them any revealed value. **Without unlocking, no values, and no
+change.** After *Unlock changes* and retyping the password, for ten minutes,
+the owner may also:
 
-- from a flat variables file, show a value for thirty seconds, copy it, set or
-  remove a variable; *Generate* in its dialog draws 32 bytes in base64url for
-  a token the site issues itself;
-- from a file read whole, show its contents if it is readable, replace it;
+- from one of these files, show a value for thirty seconds, copy it, set or
+  remove a variable; *Generate* in its dialog draws 32 bytes in base64url;
 - on a `PASSWORD_HASH`, *Change password*, and nothing else;
-- create a declared flat file that is missing, empty and with no previous
-  version: one the steward kept under that name from an earlier file is
-  dropped first, since a site created again under a removed one's name may
-  be given its uid back;
+- create one of them that is missing, empty and with no previous version:
+  one the steward kept under that name from an earlier file is dropped
+  first;
 - restore the previous version of a file, when the steward accepts;
 - restart the service and read the verdict; *Save & restart* chains the write
   and the restart.
@@ -330,7 +324,7 @@ steward.js         root, hardened sitesolide-steward.service
    |-- lists  /etc/sitesolide                            the files present, by name
    |-- reads  /etc/sitesolide/dashboard.env              the hash, root:root 0600
    |-- writes /etc/sitesolide/projects/<slug>/           each app's store: env, files/<name>
-   |-- writes /etc/sitesolide/<file>                     atomic write, the flat files of before
+   |-- writes /etc/sitesolide/<file>                     atomic write, the platform's own files
    |-- keeps  /var/lib/sitesolide-steward/precedents/    the previous version, projects/<slug>/ for a store
    |-- writes /var/lib/sitesolide-steward/journal.jsonl  with no values at all
    |-- writes /var/lib/sitesolide-steward/access-log.jsonl  the changes of access, kept 180 days
@@ -417,34 +411,25 @@ comment.
 
 A project is a directory under `/srv/sites`, static or app, the landing
 included. The steward re-reads the manifests on every request, and brings
-three sources together:
+two sources together:
 
 - **an app's store**, `/etc/sitesolide/projects/<slug>/`, for every app but
-  the dashboard and the portal, whatever its manifest's form: see [A
-  project's store](#a-projects-store);
-- **the manifest's `secrets` in the form of before**, file names: flat
-  environment files the generated unit reads with `EnvironmentFile=` before
-  the store, creatable before they exist;
-- **the files present in `/etc/sitesolide`** that carry a site's name, for what
-  no manifest declares, the landing's or a hand-made service's: managed once
-  present, never created from here. A project whose manifest lists names
-  claims none of them: a file its name would attach is listed as a
-  leftover, to be retired, never written.
+  the dashboard and the portal: see [A project's store](#a-projects-store);
+- **the platform's own files**, flat in `/etc/sitesolide`, attached by a
+  fixed table and never by a name or a manifest: `dashboard.env`, and
+  `dashboard-monitor.env` and `dashboard-backup.env` once present, to the
+  dashboard; `portal.env` to the portal. The dashboard's and the portal's
+  units read their `<slug>.env` without their manifests declaring it.
 
-The machine's own files, `dashboard.env`, `dashboard-monitor.env` and
-`dashboard-backup.env`, attach to the dashboard alone, never to a site their
-name happens to start with: a project deployed over SSH as `dashboard-backup`
-took the backups' keys and passphrase into its own *Secrets*, where its
-Admins read and rewrote them. Either way the owner is `site-<slug>`, root for
-`dashboard.env`, the monitor's `dashboard-monitor.env` and the backups'
-`dashboard-backup.env` alone, and the mode follows from the name: `0600` for an environment file, `0400` for a file
-read whole, `0444` for a `.pub`. A file that does not match is listed as
-unmanaged, with the command that repairs it.
+No other file of `/etc/sitesolide` is any site's: one a hand-made service
+reads stays on the machine, listed nowhere and never written. The owner of
+`dashboard.env`, `dashboard-monitor.env` and `dashboard-backup.env` is root,
+that of `portal.env` is `site-portal`, and the mode is `0600`. A file that
+does not match is listed as unmanaged, with the command that repairs it.
 
 ### A project's store
 
-Every app but the dashboard and the portal has one, whatever its manifest's
-form: the variables its services receive at start, and the files they read
+Every app but the dashboard and the portal has one: the variables its services receive at start, and the files they read
 whole. The manifest lists names under `secrets`, `secrets.files` and
 `secrets.build`; the user's side of it is in
 [../docs/secrets.md](../docs/secrets.md).
@@ -452,23 +437,18 @@ whole. The manifest lists names under `secrets`, `secrets.files` and
 ```
 /etc/sitesolide/projects/                     root:root 0700
 /etc/sitesolide/projects/<slug>/              root:root 0700
-/etc/sitesolide/projects/<slug>/env           root:root 0600   EnvironmentFile=, read last: it wins
+/etc/sitesolide/projects/<slug>/env           root:root 0600   EnvironmentFile=
 /etc/sitesolide/projects/<slug>/files/        root:root 0700   LoadCredential=files:..., always there
 /etc/sitesolide/projects/<slug>/files/<name>  root:root 0600   $CREDENTIALS_DIRECTORY/files_<name>
 /var/lib/sitesolide-steward/precedents/projects/<slug>/   the previous env and files, one each
 ```
 
-- **Root's alone.** PID 1 reads `env` with `EnvironmentFile=`, after any flat
-  file of before, and hands the files over with `LoadCredential=`, a private
+- **Root's alone.** PID 1 reads `env` with `EnvironmentFile=`, and hands the files over with `LoadCredential=`, a private
   copy owned by the service's account, `0400`; every service sees
   `/etc/sitesolide` as a folder it can neither list nor read
   (`InaccessiblePaths=`). No `site-<slug>` account is needed to hold a store,
   so the owner, or a token that may create the project, fills one before the
   first deployment.
-- **Disjoint from every flat file by construction.** `projects` is a folder
-  that does not end in `-secrets`: no name of before, flat or
-  `<slug>-secrets/<name>`, designates anything under it, and neither the
-  listing nor the installer's attachment reads the store as such files.
 - **`files/` is always there** while a unit of the project may start: a
   missing folder fails every start with 243/CREDENTIALS, logged by systemd as
   "Protocol error". `sitesolide deploy`, `sitesolide refresh` and the
@@ -501,24 +481,23 @@ whole. The manifest lists names under `secrets`, `secrets.files` and
 | read a value back | **yes** | no | no | no | no |
 | set, generate, remove a variable; set or remove a file | yes | yes | yes, unlocked | yes, unlocked | yes |
 | restore the previous variables | yes | yes | yes, unlocked | no | no |
-| merge flat files into the store, retire them | yes | yes | no | no | no |
 | the store of a slug not deployed | yes | yes | no | no | when it may create the slug |
 
 A Viewer, a token without *Manage secrets*, a static site and the platform's
-projects get none of it; the dashboard and the portal keep their flat files
-and the routes of before. An owner's token without `public` writes the store
-of a project restricted on the machine, as before, or of one it is creating.
+projects get none of it; the dashboard and the portal keep their own files,
+managed through the routes of the platform's files. An owner's token without
+`public` writes the store of a project restricted on the machine, as before,
+or of one it is creating.
 
 | Socket | Routes |
 |---|---|
-| dashboard's, the owner's | `GET /store?slug=`; `PUT` and `DELETE /store/variable`, `PATCH /store`, `POST /store/generate`, `PUT` and `DELETE /store/file`, `POST /store/restore`, `/store/migrate`, `/store/retire`, each with `token`, the owner's live unlock; `POST /store/value`, the only route on the machine that returns a value |
+| dashboard's, the owner's | `GET /store?slug=`; `PUT` and `DELETE /store/variable`, `PATCH /store`, `POST /store/generate`, `PUT` and `DELETE /store/file`, `POST /store/restore`, each with `token`, the owner's live unlock; `POST /store/value`, the only route on the machine that returns a value |
 | dashboard's, a person's | `PUT` and `DELETE /people/store/variable`, `POST /people/store/generate`, `PUT` and `DELETE /people/store/file`, `POST /people/store/restore`, each with `session` and their unlock's `token`; the listing comes with `/people/secrets/projects` |
 | dashboard's, a token's | `POST /control/store/list`, `PATCH /control/store`, `POST /control/store/generate`, `PUT` and `DELETE /control/store/file`, each with `bearer`, judged by the control routes then handed over in the process: see [Secrets by token](#secrets-by-token) |
 | owner's, over SSH | `GET /store?slug=`, the same writes as the dashboard's without `token`, and `POST /restart { slug }`: `sitesolide secrets` and its `--restart`, the body on curl's standard input; never `/store/value` |
 
 The page reaches them at `/api/secrets/store/variable`, `/generate`, `/file`,
-`/restore`, `/value` and, the owner's alone, `/migrate` and `/retire`: the
-owner's calls with the token the dashboard holds, a person's through
+`/restore` and `/value`: the owner's calls with the token the dashboard holds, a person's through
 src/people/relay.ts; `/value` has no road for a person. Each checks the
 origin and the session, and `reach` refuses an answer that would copy the
 token or a value of the request, a set's `value` and a file's `content`. The
@@ -543,30 +522,14 @@ surface's own authentication and the role:
    when it has a variable name's shape.
 4. **The values**, never quoted: one line, no null byte, valid Unicode with no
    noncharacter, 8 KiB.
-5. **S1, a removal**: a name a flat file of the project holds, declared, read
-   by a unit or left over, may not leave the store, since that file's value
-   would come back at the next start, nor while such a file cannot be read to
-   tell: `invalid`, naming the file and saying to retire it first. The owner
-   alone, on the dashboard or over SSH, who reads every value anyway, may
-   remove a name every flat file holding it carries with the store's very
-   value: nothing in force changes, which is what going back after a merge
-   does. For anyone else the answer never depends on a value, which would
-   tell whoever writes the store whether a guess equals a flat file's
-   (src/secrets/store.ts, `removalRefusal`).
-6. **S1', a restore or a batch**: a restore whose previous version lacks such
-   a name, and a batch that removes one, are judged the same way, the
-   owner's exception included (`restoreRemovalRefusal`).
-7. **S2, a write of before**: setting, through the routes of before, a name
-   the store holds is refused, since the store overrides that file: change it
-   there.
-8. **The files**: the name's shape, the content base64 decoded strictly, the
+5. **The files**: the name's shape, the content base64 decoded strictly, the
    bounds after the write and systemd's budget; a file there that is a link
    or not a regular file is `unmanaged`. A file the manifest does not declare
    may be written, ahead of the commit that will: every unit loads the whole
    folder, and the listing says `declared: false`.
-9. **The size**: `env` 256 KiB after the write, every line far under the
+6. **The size**: `env` 256 KiB after the write, every line far under the
    131,072 bytes that fail a start with 203/EXEC.
-10. **The folders**: removing a file unlinks it alone.
+7. **The folders**: removing a file unlinks it alone.
 
 All or nothing: every name and value of a request is judged before anything
 is created or written, under the steward's lock, where the requester is
@@ -575,57 +538,26 @@ asked again; a write that made the store answers `created`.
 - **Generate** draws 32 random bytes by default, 16 to 64, written in hex or
   base64url, both bare in the file. It answers the name in `generated`; the
   value is never returned, journaled or logged, and only the owner may reveal
-  it later. Without `replace`, a name the store, or a flat file the service
-  reads, already sets is `already-present`.
+  it later. Without `replace`, a name the store already sets is
+  `already-present`.
 - **Reveal**, `POST /store/value`, takes the owner's live unlock token and
   nothing else: no person's route, no token's, no SSH. Journaled `read`, with
   the name. The dashboard passes the value as the answer and logs nothing.
-- **Migrate**, the owner's, merges a project's flat files into its store
-  without anyone seeing a value, and never restarts. Only once every
-  installed unit of the project reads the store, `out-of-scope` otherwise,
-  "deploy or refresh <slug> first"; from the files the deployed manifest
-  declares or a unit reads, in the units' order, never a leftover, which no
-  unit reads. A source not `site-<slug>`'s, not `0600` or that does not
-  parse refuses the whole migration, and so does one carrying
-  `PASSWORD_HASH` or a name the store refuses. Two files giving a name
-  different values is a conflict, naming the name and the files, never a
-  value: a dry run lists it in `conflicts`, and a run is refused whole, 409
-  `unmanaged`, the same lists in its answer. Against the store, a name is `merged`,
-  `already` there with the same value, or `overridden`, the store keeping its
-  own, the one in effect. `dryRun` writes nothing; a run writes `env` once,
-  its previous version kept, journaled `migrate`, and running it again writes
-  nothing. The flat files are not touched.
-- **Retire**, the owner's, deletes a flat file once the store makes it
-  useless: attached to the project, a leftover included, flat, not the
-  machine's own nor a hash file; `site-<slug>`'s, `0600`, parsed; covered,
-  every assignment in the store with the same value, an empty file covered;
-  every installed unit of the project reading the store; and, unless the file
-  is empty or the project all scheduled, the main service active and started
-  since the store's `env` was last written: its values loaded, and holding.
-  The file is kept as its previous version, its owner kept, so that the owner
-  can put it back by hand, then unlinked, the folder synced; journaled
-  `retire`. A file that fails one comes back in `kept`, with its reason.
 - **Restore** swaps `env` and its previous version, the owner's or an
   Admin's; `dryRun` answers the names that would appear and disappear, for
-  the dialog. Refused when either version does not parse, carries
-  `PASSWORD_HASH`, or by S1'.
+  the dialog. Refused when either version does not parse, or carries
+  `PASSWORD_HASH`.
 - **The listing** is built by a pure function from the deployed manifest,
-  the store's names and files, the flat files and leftovers, the installed
-  units and the service's start: each variable with its `source`, `store`,
-  `legacy`, the last flat file read that holds it, or `none`, the files it
-  `shadows`, and `declared`; `missing`, the declared names with no value; the
-  files, `set`, `missing`, an empty one included with the reason `empty`, or
-  `unmanaged`; the flat files, `read`, `leftover`,
-  and `covered` to the owner alone, since someone who writes the store could
-  otherwise test a guess against a flat file's value, set, look, repeat; the
+  the store's names and files, the installed units and the service's start:
+  each variable with its `source`, `store` or `none`, and `declared`;
+  `missing`, the declared names with no value; the files, `set`, `missing`,
+  an empty one included with the reason `empty`, or `unmanaged`; the
   build's names and `env` as written; `unitReadsStore`, `restartPending`,
   `previous` and `may`. A file's size goes to the owner alone, and nothing
   else gives one.
 - **The journal**: `set` and `remove` of a variable, `create` when the store
   is made, `replace` and `remove` of a file, `restore`, `read` for a reveal,
-  `generate`, its format in the detail, `migrate`, how many names from which
-  files in the detail, or `conflicts` for one refused, and `retire`, the
-  flat file's name in `file`; otherwise `file` reads `store` for `env` and
+  `generate`, its format in the detail; `file` reads `store` for `env` and
   `store/<name>` for a file, `variable` the name; never a value, nor its
   length.
 - **The restart verdict** counts the store as a file the unit reads: a store
@@ -633,31 +565,11 @@ asked again; a write that made the store answers `created`.
   socket's `POST /restart` restarts as a person's restart does, without the
   check that the unit reads a managed file.
 
-**A project that lists names claims no flat file.** The attachment of a
-present, undeclared flat file to the most specific site whose name it
-carries stays for the projects in the form of before and those without a
-manifest; a project that lists names declares no flat file, and one its name
-would attach goes to its `leftovers`, which only the listing and retire
-read: never written, never created, never migrated. Without that rule a new
-project `nis2-ses` would be handed `nis2-ses.env` the day `nis2` stopped
-declaring it; the installer's claims, reading declared files alone, give a
-store-form deployment none.
-
-**The routes of before** keep their rules, with three changes: Admin no
-longer reads a value back, `/people/secrets/value` and
-`/people/secrets/content` refusing everyone and the listing showing every
-file write-only; S2 on every write of before; and the token's
-`PATCH /control/secrets` answers a project that lists names `out-of-scope`,
-"this project keeps its variables in its store: update your sitesolide CLI,
-then sitesolide secrets set NAME". They go in the release that stops reading
-the form of before.
-
 ### Three guard rails
 
 | Rule | Files | Why |
 |---|---|---|
-| **the owner alone reads back** | every value of a store, every flat file | an Admin, a Developer, a token, an agent or a command over SSH reads none: a value set is a value nobody else sees again, and what anyone else needs back, they set anew |
-| **write-only**: replaced, never read back, size not shown | files read whole and closed to other accounts | a private key never comes back to the screen, and its size would already give away its algorithm |
+| **the owner alone reads back** | every value of a store, of the platform's files | an Admin, a Developer, a token, an agent or a command over SSH reads none: a value set is a value nobody else sees again, and what anyone else needs back, they set anew |
 | **Change password only**: never read, never set by hand, never restored, the old one erased | any `PASSWORD_HASH`, in any file | a hash is cracked offline, and restoring would revalidate the password you changed because it had leaked |
 | **hash only**: no other variable | `dashboard.env`, `portal.env` | one more variable there would change what the service does, not a secret. `portal.env` also takes the portal's sign-in settings, `OIDC_*`, named one by one in `portal/src/sharing.ts` |
 
@@ -763,7 +675,7 @@ below it:
 |---|---|---|
 | **Can open** (`visitor`) | opens the site when its general access is restricted, and sees nothing in the dashboard | none |
 | **Viewer** | also sees the project in the dashboard: its state, audience and activity | none |
-| **Developer** | also restarts its service; lists its secret names, files and metadata; sets, generates, replaces and removes a variable of its store, sets and removes a file of it, writes the flat files of before as it did, and never reads a value back; deploys it with a token of their own, which may also restart it and, minted with *Manage secrets*, set, generate and remove any name of its store | to write, to mint a token; none for a token's change, minting it took one |
+| **Developer** | also restarts its service; lists its secret names, files and metadata; sets, generates, replaces and removes a variable of its store, sets and removes a file of it, and never reads a value back; deploys it with a token of their own, which may also restart it and, minted with *Manage secrets*, set, generate and remove any name of its store | to write, to mint a token; none for a token's change, minting it took one |
 | **Admin** | everything of the project but reading a secret back, the owner's alone: what a Developer does, restores its store's or a file's previous version, chooses its general access, Public, Restricted or Anyone with the code, reads its code and draws a new one, gives and takes away access to it, a role at most their own, lists and restores its backups; a token of theirs may also deploy it in the open, declare a domain and reach outside hosts | to write, restore, make a site public, give it a code or a new one, give a role above Can open or password access, mint a token |
 
 Who may hold which role is the steward's to decide, alone
@@ -1100,7 +1012,7 @@ carries.
 
 - **A person reads nothing back**, an Admin no more than a Developer: the
   owner alone holds `secrets.read`. The listing hides every value and size
-  from them, `covered` included, a write answers with names only, and a read
+  from them, a write answers with names only, and a read
   is refused by role before any file is opened, the refusal journaled with
   their role. A project's store is theirs through `/people/store/*`, judged
   by the same code as the owner's, handed the person as `who`.
@@ -1324,12 +1236,11 @@ reading, giving Can open, removing, is what the owner's session allows.
 | dashboard's | `POST /people/unlock` `{ session, assertion }` | a person's unlock, from a forced sign-in's assertion |
 | dashboard's | `POST /people/lock` `{ session, token }` | locks it |
 | dashboard's | `PUT` and `DELETE /people/store/variable`, `POST /people/store/generate`, `PUT` and `DELETE /people/store/file`, `POST /people/store/restore` | a person's work on their project's store, `{ session, token, slug, ... }`, under their unlock; restore an Admin's; no route reads a value, see [A project's store](#a-projects-store) |
-| dashboard's | `POST /people/secrets/projects`, `/people/secrets/value`, `/variable`, `/file`, `/restore`, `/content`, `/people/general`, `/people/portal`, `/people/backups/restore` | a person's work on their projects, see src/people/actions.ts; each project's `store` comes with `/people/secrets/projects`; `/value` and `/content` refuse everyone; `/people/general` `{ session, token?, slug, access, renew?, confirmation }` asks the unlock for all but Restricted; `/people/portal`, the route before the code, still answers |
+| dashboard's | `POST /people/secrets/projects`, `/people/general`, `/people/portal`, `/people/backups/restore` | a person's work on their projects, see src/people/actions.ts; each project's `store` comes with `/people/secrets/projects`; `/people/general` `{ session, token?, slug, access, renew?, confirmation }` asks the unlock for all but Restricted; `/people/portal`, the route before the code, still answers |
 | owner's | `POST /general` `{ slug, access, renew? }` | root's general access, `sitesolide lock` and `unlock`: no unlock, no retyping, the owner's bound over SSH, journaled under `owner`; the code in the answer |
 | dashboard's | `POST /general` `{ token?, slug, access, renew?, confirmation }`, `POST /portal` | the owner's session's general access; `/portal`, `{ active }`, the route before the code, still answers in its shape |
 | dashboard's | `POST /control/access/list` `{ bearer, slug }`, `PUT` and `DELETE /control/access` `{ bearer, slug, who, role? }` | a token's, see [Access by token](#access-by-token) |
 | dashboard's | `POST /control/store/list` `{ bearer, slug }`, `PATCH /control/store` `{ bearer, slug, set, remove }`, `POST /control/store/generate`, `PUT` and `DELETE /control/store/file`, `POST /control/restart` `{ bearer, slug }` | a token's, see [Secrets by token](#secrets-by-token) |
-| dashboard's | `POST /control/secrets/list` `{ bearer, slug }`, `PATCH /control/secrets` `{ bearer, slug, file, set, remove }` | a token's, the routes of before the store: `<slug>.env` of a project in the form of before, `out-of-scope` for one that lists names |
 | dashboard's | `GET /tokens/list`, `POST /tokens/create` `{ token, label, holder, expiresAt, scope }`, `POST /tokens/revoke` | the owner's: every token, one made for themselves (`holder: owner`) or for a person of People, minted within that person's roles |
 | dashboard's | `POST /tokens/person/list`, `/tokens/person/create`, `/tokens/person/revoke` | a person's own tokens, see [A person's own tokens](#a-persons-own-tokens) |
 | owner's | `DELETE /tokens/project` `{ slug }` | a project removed: the name its token owned free again, and its people with access dropped, once the machine no longer carries it; a token creates that name again only once the machine keeps none of its snapshots nor its connector grants |
@@ -1368,7 +1279,7 @@ the owner's. A token's restart is the same code, journaled under
 | A person above their roles | The steward refuses the scope before the token exists, every reason journaled; and should the registry move after, it narrows the token at every use and the installer at its start. |
 | A stolen session cookie | Half a day at most, within that person's roles, and without their unlock, which needs a forced sign-in at the provider: what writes a secret, makes a site public, restores or raises someone above Can open stays closed. Removing them closes it at the next request. |
 | A stolen unlock token | Useless alone: it is valid only with the session it was granted to, for its person, ten minutes, and the dashboard never sends it to a browser. |
-| A person reading a secret back | Refused by the steward before any file is opened, an Admin as a Developer: the listing and every answer show names and metadata only, never a value, a size, `covered` or a previous version's content, and no route for a person reads one. What they write still reaches the service, which may expose it: the role trusts them with the project's behaviour, not with reading its keys back. |
+| A person reading a secret back | Refused by the steward before any file is opened, an Admin as a Developer: the listing and every answer show names and metadata only, never a value, a size or a previous version's content, and no route for a person reads one. What they write still reaches the service, which may expose it: the role trusts them with the project's behaviour, not with reading its keys back. |
 | An Admin reaching further | One project, their own: the steward refuses another project, the platform's projects, the files it keeps for root, a password hash, a domain outside the company's, and a role above their own; a role they give lands on their project alone. |
 | Someone outside the company | Can open alone, with password access: a password of their own, for one site, until its expiry, kept as a SHA-256 by the registry and the portal; they never sign in to the dashboard. |
 | A registry that does not read | Nothing is guessed: every person is refused, and the journal and every answer say why, until the owner repairs it. A projection that does not read opens nothing but the owner's password and the admin emails. |
@@ -1780,7 +1691,7 @@ installer.js       root, one-shot, one project: the pipeline of `sitesolide depl
 |---|---|---|---|
 | The CLI | the holder | the project's folder, the token | nothing on the machine directly |
 | `server.ts` | `site-dashboard` | its database, the snapshot | `data/control/<id>/bundle.tar.gz`, `deployments` and `audit` in `dashboard.db` |
-| The steward | root, the socket | `team.json`, the installer's results, the journal | `team.json`, `installs/<slug>.json`, and for a token that manages secrets its project's store, `/etc/sitesolide/projects/<slug>/`, or `/etc/sitesolide/<slug>.env` through the route of before |
+| The steward | root, the socket | `team.json`, the installer's results, the journal | `team.json`, `installs/<slug>.json`, and for a token that manages secrets its project's store, `/etc/sitesolide/projects/<slug>/` |
 | The installer | root, one-shot | the request, the staged archive's descriptor, the manifests | `/srv/sites/<slug>`, its units, its block, `/etc/passwd` through `useradd`, and `userdel` for a new project it refused |
 | The extractor | `site-<slug>`, transient unit | the archive on stdin | the staging directory, nothing else |
 | `install` | `site-<slug>`, transient unit | the staged `app/` | the staged `app/`, mounted at its final path |
@@ -1907,10 +1818,7 @@ earlier by the steward and the dashboard: see
   needs the public permission; a static site cannot be restricted yet, so a
   token without it cannot deploy one.
 - **Secrets**: names, judged as names, which the service reads from its own
-  project's store; in the form of before, `<slug>.env` and no other file. The
-  unit hands a declared file to the service through `EnvironmentFile=`, read
-  as root: a manifest naming `dashboard.env` or another project's file would
-  read it. A store-form manifest names no file, and claims none.
+  project's store, whose folder the slug names: a manifest names no file.
 - **No `lock`**: the preview lock is the owner's, and the installer keeps the
   one the machine carries.
 - **Outbound network**: `network: outbound`, and `egress` with it, which
@@ -2007,10 +1915,7 @@ under them: `GET /api/v1/projects/<slug>/store`, `PATCH
 /api/v1/projects/<slug>/store` with `{ set, remove, restart }`, `POST
 /api/v1/projects/<slug>/store/generate`, `PUT` and `DELETE
 /api/v1/projects/<slug>/store/files/<name>`, and `POST
-/api/v1/projects/<slug>/restart`. The routes of before, `GET
-/api/v1/projects/<slug>/secrets` and `PATCH
-/api/v1/projects/<slug>/secrets/<slug>.env`, stay for a CLI from before the
-store, on a project in the form of before. The holder's side is in
+/api/v1/projects/<slug>/restart`. The holder's side is in
 [docs/access.md](../docs/access.md#secrets-with-a-token).
 
 ```
@@ -2034,13 +1939,11 @@ the fields it knows; the steward judges and writes, and journals its
 refusals. The dashboard leaves to it a token without the flag and a project
 its narrowed identity no longer names: refused early, none of those would
 reach the journal, and a person lowered to Viewer would read "no project"
-instead of the refusal naming their role. In order, for the route of before
-and the store's alike unless said:
+instead of the refusal naming their role. In order:
 
 1. **The body.** `set` is an object read with `Object.entries` into pairs,
    never assigned into one, `"__proto__"` being a valid variable name;
-   `remove` a list; each optional, `{}` alone creating the file, or the
-   store. Generate takes a `name`, `format`, `bytes` and `replace`; a file,
+   `remove` a list; each optional, `{}` alone creating the store. Generate takes a `name`, `format`, `bytes` and `replace`; a file,
    its `content` in base64. Every name's
    shape and every value (`checkValue`: one line, no null byte, valid
    Unicode with no noncharacter, 8 KiB) are judged before the token is: fifty names at most, none
@@ -2078,19 +1981,14 @@ and the store's alike unless said:
    site with public exempted paths, or one whose protected block is not in
    place.
    It still lists and restarts. A person's token answers to the role instead.
-7. **The file**, on the route of before: `<slug>.env` alone, any other
-   refused, its name never quoted nor journaled, a value pasted in its place
-   would stay; a project that lists names refused there, saying to update
-   the CLI. The store's routes name no file to judge, a store file's name
-   having its own shape.
-8. **A restart** is refused `busy` while `sitesolide-installer@<slug>` runs,
+7. **A restart** is refused `busy` while `sitesolide-installer@<slug>` runs,
    which restarts the service at its end, and while the same token's
    previous restart is under way.
-9. **The hourly bounds**, per token and in memory, a restart of the steward
+8. **The hourly bounds**, per token and in memory, a restart of the steward
    forgetting them: 120 for changes, a name set or removed costing one, a
    generated value one, a file of the store one, a request one at least, `{}`
    included, and a file or a store it created one more; 30
-   restarts; 60 refusals, charged by 3, 5, 6 and 7 before the line is
+   restarts; 60 refusals, charged by 3, 5 and 6 before the line is
    written, and by the token's changes of access
    ([Access by token](#access-by-token)). Past any of them, `too-many-attempts` with `wait`, and a refusal
    past its bound journaled no more. A change and a restart are counted
@@ -2100,32 +1998,16 @@ and the store's alike unless said:
    push its last hour out by itself. Its refusals spend its own bound, never
    the people's per minute, which one token would otherwise fill for
    everyone.
-10. **Once its turn has come**, under the secrets' lock for a change, in the
+9. **Once its turn has come**, under the secrets' lock for a change, in the
     project's own turn for a restart, the bearer, the registry and
     `team.json` are read anew, without counting a use, and 3 to 6 judged
-    again, and for a restart the installer of 8: a token revoked, a person lowered, or a
+    again, and for a restart the installer of 7: a token revoked, a person lowered, or a
     deployment started while the request waited, and nothing is written or
     restarted; a restart refused then is journaled, `busy` or `no longer
     allowed`.
-11. **The write**, to the store, by the rules of [A project's
+10. **The write**, to the store, by the rules of [A project's
     store](#a-projects-store), handed the token's identity and whether it is
-    creating the project (src/secrets/store-api.ts, `StoreForToken`). On the
-    route of before (src/secrets/steward.ts, `changeVariablesTask`): the
-    platform's projects and the files kept for root refused
-    (`machineRefusal`, an owner's token now included); the deployed manifest
-    an app's that declares `<slug>.env` (src/secrets/scope.ts,
-    `tokenFileRefusal`): present but undeclared, refused, absent and
-    undeclared, never created, a refusal judged after the hourly bound, so it
-    spends the request's cost; every name against the unit's own variables,
-    the reserved ones and `PASSWORD_HASH`, all before anything is written;
-    `<slug>.env` created when missing, unless the request only removes,
-    `not-found` then; a file in a form the steward does not rewrite refused
-    `unmanaged`, 409, untouched; the change applied, the 256 KiB cap
-    measured, one write keeping the previous version, one journal line per
-    name. A `<slug>.env` created here starts with no previous version, what
-    the steward kept under that name dropped first (`createFresh`). A set is always written and journaled, whether the value changed
-    or not; a name to remove that the file lacks comes back in `absent`,
-    nothing journaled.
+    creating the project (src/secrets/store-api.ts, `StoreForToken`).
 
 **A token's restart never takes the secrets' lock.** It waits for the
 restarts of the same project alone (`tokenRestartTurn`): `reset-failed`, a
@@ -2137,8 +2019,7 @@ replaced whole by a rename, and the service starts on one version or the
 other. A person's restart and the owner's keep their place under the lock.
 
 **Every token reads what a Developer reads**, an Admin's own and the owner's
-included: no value, no size, no previous version, `covered` null, and
-`writable` on a declared `<slug>.env` alone. The dashboard withholds a steward's message that
+included: no value, no size, no previous version. The dashboard withholds a steward's message that
 would quote a value sent, records nothing in `dashboard.db`, and never logs
 the body. **No unlock**: minting the token took it, and *Manage secrets* is
 the opt-in. *Token activity*, on *Tokens*, reads the steward's journal for
@@ -2164,13 +2045,13 @@ run `sitesolide upgrade`; its queue of writes full, or a restart's turn, a
 | Threat | What stops it |
 |---|---|
 | A stolen token | Its scope: the projects granted and its own, private sites unless allowed. Every deployment is in the audit with the token's id and email. A domain it declares, never switched on: the machine's `active` stands. Of access, Can open alone, to the company's people and domains, never password access for someone outside them, and the removal of Can open entries, every change in the steward's journal under `token:<id>`, its refused ones within its 60 refusals an hour, what it lets in stopping at half the access log. It restarts the projects it deploys, 30 times an hour at most, one at a time, never holding the secrets' lock. Revoking takes one click and no password; an expiry ends it anyway. |
-| A stolen token with *Manage secrets* | An accepted risk, the permission being the opt-in, and bounded: it writes without an unlock, but never reads a value, a size or a previous version back, nor learns whether a value it sets equals one a flat file holds; any name of its projects' stores and their files, never `PASSWORD_HASH`, a variable the unit sets, a reserved one (`LD_PRELOAD`, `HTTPS_PROXY`), a name whose removal would bring a flat file's value back, another project's store or a platform project's; on the route of before, `<slug>.env` alone, declared by the deployed manifest; an owner's token without `public` only on a project restricted on the machine that it could deploy as it stands; 120 changes an hour. Every change is a line of the steward's journal under `token:<id>`, on *Token activity*, and the store keeps its previous version, which the owner or an Admin restores. Its refusals are journaled too, 60 an hour, then refused `too-many-attempts` unjournaled: one token writes 210 lines an hour at most, and the journal keeps its latest 500 at least, so a stolen token cannot push its last hour out by itself. *Token activity* reads the latest 250 lines, a short while on a busy machine; the project's *Activity* goes further back. The 256 KiB cap and the files' bounds tell it roughly how much the store holds, nothing of its values. The default expiry stays 90 days. |
+| A stolen token with *Manage secrets* | An accepted risk, the permission being the opt-in, and bounded: it writes without an unlock, but never reads a value, a size or a previous version back; any name of its projects' stores and their files, never `PASSWORD_HASH`, a variable the unit sets, a reserved one (`LD_PRELOAD`, `HTTPS_PROXY`), another project's store or a platform project's; an owner's token without `public` only on a project restricted on the machine that it could deploy as it stands; 120 changes an hour. Every change is a line of the steward's journal under `token:<id>`, on *Token activity*, and the store keeps its previous version, which the owner or an Admin restores. Its refusals are journaled too, 60 an hour, then refused `too-many-attempts` unjournaled: one token writes 210 lines an hour at most, and the journal keeps its latest 500 at least, so a stolen token cannot push its last hour out by itself. *Token activity* reads the latest 250 lines, a short while on a busy machine; the project's *Activity* goes further back. The 256 KiB cap and the files' bounds tell it roughly how much the store holds, nothing of its values. The default expiry stays 90 days. |
 | A malicious archive | Read by the project's account in a confined unit, never by root; links, devices, `..`, absolute paths and duplicates refused, data and entries capped while reading; nothing served changes until the whole archive extracted. |
-| A malicious manifest | Re-validated on the machine with the CLI's `validate()`, then the scope; the unit and block are generated from it by the same generators as over SSH. Every string that lands in a block or a unit is judged for it: header values with no `"`, `\`, `{`, `}`, `$` or backtick, since Caddy fills `{$NAME}` and `{env.NAME}` from its own environment, the Cloudflare token included; routes and exemptions that are plain paths; a `start` with no `+`, `!` or other prefix systemd reads, `+` and `!` meaning root; environment values with no space or quote, which would set a second variable; secret names that are variable names or plain file names; a `%` escaped. The generators refuse the same again rather than write it, the slug, a service's name and its memory included, which name or bound the unit and the block themselves: a newline there would add a directive PID 1 obeys as root, `User=root` the worst of them. Unknown keys refused, secrets limited to its own store, or its own file in the form of before, memory capped. |
+| A malicious manifest | Re-validated on the machine with the CLI's `validate()`, then the scope; the unit and block are generated from it by the same generators as over SSH. Every string that lands in a block or a unit is judged for it: header values with no `"`, `\`, `{`, `}`, `$` or backtick, since Caddy fills `{$NAME}` and `{env.NAME}` from its own environment, the Cloudflare token included; routes and exemptions that are plain paths; a `start` with no `+`, `!` or other prefix systemd reads, `+` and `!` meaning root; environment values with no space or quote, which would set a second variable; secret names that are variable names; a `%` escaped. The generators refuse the same again rather than write it, the slug, a service's name and its memory included, which name or bound the unit and the block themselves: a newline there would add a directive PID 1 obeys as root, `User=root` the worst of them. Unknown keys refused, secrets limited to its own store, memory capped. |
 | Path traversal | The tar reader's refusals, the extraction's `O_EXCL` and `O_NOFOLLOW`, the unit that sees only the staging directory; on root's side, slugs and deployment ids checked against their shape before they enter a path. |
 | Resource exhaustion | Upload counted while it streams (Bun's own cap does not hold for a chunked body), 100 MiB; extraction 512 MiB, 20,000 entries, 256 MiB of memory, five minutes; `install` 1G and fifteen minutes; three deployments running at a time on the machine, claimed when the archive arrives, one per project; three waiting for their archive per token, the newest replacing the oldest, and none of them counted against the machine; an archive that does not arrive in fifteen minutes expires. |
-| A token reaching another project | The slug decision on the steward, again on the installer; secrets limited to its own project's store, whose folder the slug names, or `<slug>.env` in the form of before; `install` runs without the loopback, where the other projects listen, and the extraction without any network. |
-| A token naming its project after a file not its own | The unit reads every declared file as root, whoever owns it, and the slug names the file: `dashboard-backup` would read the backups' keys, `cms-smtp` cms's own `cms-smtp.env`. The installer refuses, before anything is written, `secret-taken`, a file kept for root, a declared file there that is not a plain file of `site-<slug>`, one there before that account exists, and any file another site holds that the new project would take by its name, declared or not (src/installer/claims.ts, the attachment of src/secrets/scope.ts); it checks the declared files again right before the restart. The steward refuses a new slug starting with a platform project's name and a dash, `dashboard-*`, `reserved`, keeping those names free for the files the platform lays later. A project that lists names declares no flat file and claims none: its values are in its own store, under a folder the slug names. |
+| A token reaching another project | The slug decision on the steward, again on the installer; secrets limited to its own project's store, whose folder the slug names; `install` runs without the loopback, where the other projects listen, and the extraction without any network. |
+| A token naming its project after a platform project | The steward refuses a new slug starting with a platform project's name and a dash, `dashboard-*`, `reserved`, keeping those names free for what the platform lays later. A manifest names no file: a project's values are in its own store, under a folder the slug names. |
 | A token reusing a removed project's name | The snapshots and the connector grants are keyed by the slug, and outlive `sitesolide remove`: the steward refuses a token creating a slug the backups' index or the grants still name, `reserved`, and an index or grants that do not read refuse the creation too. The owner's deployment over SSH is not asked. See [What a token's project may not do](#what-a-tokens-project-may-not-do). |
 | A replayed request | The installer refuses a request older than ten minutes or for another slug, and writes nothing for it. |
 | A compromised dashboard | It sees the bearers that pass and can use them within their scope, a person's within the person's roles, and read deployment logs; it cannot mint a token without the password or a person's own unlock, nor deploy without one, nor hand root a file it could not read, nor name a token as the actor of a change of access it made itself: the steward journals the token it judged. It sees the values a token's change of secrets carries as it relays them, as it sees the code that token deploys, which runs with those values anyway: no escalation beyond the token. It reads none back: the steward answers names alone. |
@@ -2362,7 +2243,7 @@ sitesolide upgrade                  # 1. the steward, the dashboard, the install
    steward, with the three routes and the hourly bounds; the dashboard, with
    the API's routes, *Manage secrets* in the *New token* dialog and *Token
    activity* reading the journal; the installer, which named a missing
-   `<slug>.env` with `sitesolide secrets set` and stopped (since the store,
+   secret with `sitesolide secrets set` and stopped (since the store,
    a missing secret never stops a deployment: see "Upgrading: the store of
    secrets"). Should the versions meet otherwise, the
    dashboard deployed alone or the steward's step failed, a new dashboard
@@ -2370,8 +2251,8 @@ sitesolide upgrade                  # 1. the steward, the dashboard, the install
    a token with the box ticked: "The server's steward predates this
    permission: run sitesolide upgrade." An old dashboard in front of the new
    steward offers none of the routes, which the CLI says as `not-available`.
-   Check, with a token minted with *Manage secrets* for a project that
-   declares `<slug>.env` and whose restart costs nothing, from a workstation
+   Check, with a token minted with *Manage secrets* for a project whose
+   restart costs nothing, from a workstation
    with no server: `sitesolide secrets` lists its names; `openssl rand -hex
    16 | sitesolide secrets set UPGRADE_CHECK --stdin` sets one, which the
    project's *Activity* and *Token activity* show under the token; then
@@ -2381,8 +2262,8 @@ sitesolide upgrade                  # 1. the steward, the dashboard, the install
 
 **Rolling back**: `sitesolide upgrade` with the previous binary. The
 previous steward ignores the new key and knows no secrets route, which the
-previous dashboard does not offer either; the values tokens set stay in the
-files, and their lines in the journal.
+previous dashboard does not offer either; the values tokens set stay on the
+machine, and their lines in the journal.
 
 ### Upgrading: the store of secrets
 
@@ -2392,20 +2273,16 @@ no longer reads a value back, from the moment the steward is upgraded.
 both sockets, then the dashboard, with its page and the API's routes, and
 the installer, which lays the store's folders before a project's units; then
 the CLI. Nothing changes in a project until it is deployed again or
-refreshed: its units then read its flat files, then its store, empty at
-first, and hide `/etc/sitesolide`, the service getting the same environment
-as before. Each unit in service is replaced without `--force`, since it
-equals what the previous release generated. The owner then merges each
-project's flat files into its store, restarts it, retires the files, and the
-project's repository lists names instead: the order, one project at a time,
-is in [docs/upgrading.md](../docs/upgrading.md) and
-[docs/migration.md](../docs/migration.md).
+refreshed: its units then read its store and hide `/etc/sitesolide`. Each
+unit in service is replaced without `--force`, since it equals what the
+previous release generated. A project that still read files of
+`/etc/sitesolide` moves to its store before the release that stops reading
+them: [docs/upgrading.md](../docs/upgrading.md).
 
 Should the versions meet otherwise: a new CLI facing an older steward warns
 that it cannot tell which secrets are set, and deploys; an older CLI, or an
 older installer, refuses a manifest that lists names before anything is
-pushed; the token's route of before answers a project that lists names with
-the message to update the CLI.
+pushed.
 
 ## Deployment, in this order
 
@@ -2468,7 +2345,6 @@ ordinary `sitesolide deploy`. The steward's and the gatekeeper's do not:
 | `backup.ts`, `src/backup/` (but its steward routes), `infra/backup/`, the ports `bin/cli/unit.ts` denies a service (`DENIED_BINDS`, which a backup command's unit carries) | `bin/deploy-backup.sh install` |
 | `src/backup/routes.ts`, `src/backup/reader.ts`, which `src/control/system.ts` reads too | `bin/deploy-steward.sh` |
 | `src/backup/database.ts`, which both embed | `bin/deploy-backup.sh install` and `bin/deploy-steward.sh` |
-| `src/secrets/scope.ts`, which the installer embeds too, to judge whose a secret file is (src/installer/claims.ts) | `bin/deploy-steward.sh` and `bin/deploy-installer.sh` |
 | anything else | `sitesolide deploy` |
 
 When the CLI's block generator changes the blocks it writes, as it did when its
@@ -2534,9 +2410,8 @@ What is covered: the state judgement and every discrepancy it reports,
 workers and scheduled services included, the collector reading every unit a
 manifest generates by name against a fake `systemctl`, the session and its
 rate limiting, the password draw against a fixed byte sequence,
-the secrets scope and its guard rails, the machine's own files the
-dashboard's alone whatever site their name prefixes, a store-form project
-beside one of before claiming none of its flat files, a value with a Unicode
+the secrets scope and its guard rails, the platform's own files the
+dashboard's and the portal's alone whatever site their name prefixes, a value with a Unicode
 noncharacter refused, a created file with no previous version even when its
 account got an earlier site's uid back, the steward's protocol on a real
 Unix socket, the gatekeeper's transaction including its rollbacks, the locks'
@@ -2551,14 +2426,13 @@ block carrying the headers on every path (tests/server-audit-framing.test.ts);
 the portal's answer to root cut short past its bound
 (tests/people-audit-portal.test.ts).
 
-For the store (tests/secrets-store.test.ts, tests/secrets-migrate.test.ts and
+For the store (tests/secrets-store.test.ts and
 tests/secrets-steward.test.ts): every route on a throwaway tree, the role
 table cell by cell, a value set through every write never appearing in an
 answer, a journal line or the console but `/store/value` with the owner's
-token, `covered` and sizes absent for anyone else, S1, S1' and S2, generate's
-encodings and `already-present`, migrate's conflicts, `overridden` and a
-second run writing nothing, retire's rules each failing alone, a link at each
-of the three folders refusing every write, and no route removing `files/`.
+token, sizes absent for anyone else, generate's encodings and
+`already-present`, a link at each of the three folders refusing every
+write, and no route removing `files/`.
 
 For the control API: the tokens and every scope decision; the tar reader
 against hand-made malicious archives (traversal, links of both kinds, devices,
@@ -2645,12 +2519,11 @@ then removed (tests/people-flow.test.ts).
 
 For secrets by token (tests/control-secrets.test.ts): the real steward and
 the real control steward wired as `steward.ts` wires them, on a throwaway
-tree, `systemctl` simulated: an owner's token listing names alone, writable
-on `<slug>.env` alone; a change set, replaced and removed in one write, one
+tree, `systemctl` simulated: an owner's token listing names alone; a change set, replaced and removed in one write, one
 previous version, each name journaled under `token:<id>`, the value searched
 for and found nowhere, the answer, the journal, the access log, the previous
-version's name, the console; `__proto__` set as a variable; a declared file
-created, `{}` alone included, an undeclared one never; the permission
+version's name, the console; `__proto__` set as a variable; the store
+created by `{}` alone; the permission
 missing, another project, the platform's, a person lowered to Viewer, a
 token revoked or a person lowered while the change waited; every refused
 name, value, file and size refusing the whole change; `unmanaged`; `absent`;
@@ -2668,7 +2541,7 @@ before. Then the API in front of that real steward: a person lowered to
 Viewer reading the refusal naming their role, journaled, and the routes'
 idle delays as server.ts mounts them. Then the API on a real port against a
 simulated steward: the known fields alone, the body judged before the
-steward is asked, the token's reach, flag and file left to it, a restart
+steward is asked, the token's reach and flag left to it, a restart
 after the write, the steward's refusals in the API's codes, a 503 `busy` for
 a write and a restart, an older steward `not-available`, and a value never
 in the answer, `dashboard.db` or the console. Through the real `server.ts`
@@ -2677,14 +2550,7 @@ sets with a restart, and is refused by role once lowered. The CLI's side,
 `sitesolide secrets` and `restart` with a token, a value never taken from the
 command line nor printed, is bin/tests/cli-remote.test.ts.
 
-For the secret files a token's project reads (tests/installer-pipeline.test.ts):
-a new project named `dashboard-backup` or `dashboard-monitor` declaring its
-file, there or not, the dashboard deployed or not; `cms-smtp` taking cms's
-`cms-smtp.env`, declared or not, there or not; a declared file there before
-its account, another account's, or a link; each refused `secret-taken`
-before any account, tree or unit; names that take nothing deployed; a file
-that stopped being the project's while it deployed, the service not
-restarted. The steward's refusal of a new `dashboard-*` slug is in
+The steward's refusal of a new `dashboard-*` slug is in
 tests/control-policy.test.ts.
 
 For the audit: each source's rows in the shared shape, bounded, and garbage

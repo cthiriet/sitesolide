@@ -155,7 +155,7 @@ describe("a site's indicators", () => {
       service: secretService({ state: "failed", subState: "failed" }),
       files: [
         secretFile({ restartPending: true }),
-        secretFile({ name: "cms-smtp.env", state: "absent", variables: [] }),
+        secretFile({ name: "dashboard-monitor.env", state: "absent", variables: [] }),
       ],
     })
     expect(siteIndicators({ ...empty, project }).secrets).toEqual({ count: 2, tone: "error", label: "missing, restart pending" })

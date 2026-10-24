@@ -6,7 +6,6 @@ import type {
   LogEntry,
   Discrepancy,
   FileView,
-  LegacyFileView,
   PortalView,
   ProjectView,
   StoreFileView,
@@ -103,17 +102,15 @@ export function discrepancy(severity: Discrepancy["severity"], slug: string | nu
   return { slug, severity, message }
 }
 
+/** One of the platform's own files, the portal's by default: the only flat files the steward lists. */
 export function secretFile(partial: Partial<FileView> = {}): FileView {
   return {
-    name: "cms.env",
-    kind: "variables",
+    name: "portal.env",
     state: "managed",
     reason: null,
-    expected: "site-cms:site-cms 0600",
-    readable: true,
-    variables: ["CMS_TOKEN"],
+    expected: "site-portal:site-portal 0600",
+    variables: ["OIDC_CLIENT_SECRET"],
     passwords: [],
-    bytes: null,
     modifiedAt: 1_800_000_000_000,
     previous: false,
     restartPending: false,
@@ -122,15 +119,16 @@ export function secretFile(partial: Partial<FileView> = {}): FileView {
 }
 
 export function secretService(partial: Partial<ServiceView> = {}): ServiceView {
-  return { unit: "cms.service", state: "active", subState: "running", startedAt: null, ...partial }
+  return { unit: "portal.service", state: "active", subState: "running", startedAt: null, ...partial }
 }
 
 export function portalView(partial: Partial<PortalView> = {}): PortalView {
   return { requested: false, installed: false, modifiable: true, reason: null, ...partial }
 }
 
+/** The portal, which has no store and lists its own file; a project with a store passes `store` and no `files`. */
 export function secretProject(partial: Partial<ProjectView> = {}): ProjectView {
-  return { slug: "cms", service: secretService(), files: [secretFile()], portal: portalView(), store: null, ...partial }
+  return { slug: "portal", service: secretService(), files: [secretFile()], portal: portalView(), store: null, ...partial }
 }
 
 /** A project's store as the steward lists it to the owner: managed, read by its unit, nothing pending. */
@@ -143,28 +141,23 @@ export function storeView(partial: Partial<StoreView> = {}): StoreView {
     variables: [],
     missing: [],
     files: [],
-    legacy: [],
     build: [],
     public: [],
     unitReadsStore: true,
     modifiedAt: 1_800_000_000_000,
     restartPending: false,
     previous: false,
-    may: { write: true, reveal: true, restore: true, migrate: true },
+    may: { write: true, reveal: true, restore: true },
     ...partial,
   }
 }
 
 export function storeVariable(partial: Partial<StoreVariableView> = {}): StoreVariableView {
-  return { name: "ADMIN_TOKEN", source: "store", file: null, shadows: [], declared: true, ...partial }
+  return { name: "ADMIN_TOKEN", source: "store", declared: true, ...partial }
 }
 
 export function storeFile(partial: Partial<StoreFileView> = {}): StoreFileView {
   return { name: "gcp.json", state: "set", declared: true, reason: null, bytes: 2_300, modifiedAt: 1_800_000_000_000, restartPending: false, ...partial }
-}
-
-export function legacyFile(partial: Partial<LegacyFileView> = {}): LegacyFileView {
-  return { name: "cms.env", state: "managed", reason: null, variables: ["CMS_TOKEN"], read: true, leftover: false, covered: true, ...partial }
 }
 
 export function logEntry(partial: Partial<LogEntry> = {}): LogEntry {
@@ -175,7 +168,7 @@ export function logEntry(partial: Partial<LogEntry> = {}): LogEntry {
     actor: "owner",
     member: null,
     slug: "cms",
-    file: "cms.env",
+    file: "store",
     variable: "CMS_TOKEN",
     detail: null,
     ...partial,

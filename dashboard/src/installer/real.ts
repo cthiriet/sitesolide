@@ -57,10 +57,8 @@ import { GENERATOR_MARK, MARKER_DONE, readCurrentPairs, readStability } from "..
 import { isTimerUnit, systemdRunArguments, systemUser, unitArgument, unitFileName, type ProjectRun } from "../../borrowed/unit";
 import { zoneNamesScript } from "../../borrowed/zone-names";
 import { BUNDLE_NAME, DEPLOYMENT_ID_SHAPE, MAX_BUNDLE_BYTES } from "../control/protocol";
-import { SUBFOLDER_SUFFIX, type ProjectEntry } from "../secrets/scope";
 import type { ExtractOutcome } from "./extract";
 import type { Execution, Host, Part, Standing } from "./host";
-import type { LegacyRead } from "../control/policy";
 
 /**
  * One program run as the project's account, and the `systemd-run` line that
@@ -125,9 +123,6 @@ export type HostConfig = {
 
 /** Entries a staged tree may hold once `install` has run: node_modules counts tens of thousands. */
 export const MAX_TREE_ENTRIES = 500_000;
-
-/** A secret's name as the steward lists them: a flat file, or one of a `<slug>-secrets` folder. */
-const SECRET_NAME = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)?$/;
 
 const STAGING = ".incoming";
 const ASIDE = ".previous-";
@@ -372,42 +367,6 @@ export function createHost(config: HostConfig): Host {
       }
     },
 
-    async secretFile(name) {
-      // A name of another shape is never looked up: it reads as something
-      // else, which refuses, rather than as absent, which would let it pass.
-      if (!SECRET_NAME.test(name) || name.split("/").some((part) => part.startsWith("."))) return { kind: "other" };
-      try {
-        const stat = lstatSync(join(config.secretsFolder, name));
-        return stat.isFile() ? { kind: "file", uid: stat.uid } : { kind: "other" };
-      } catch (error) {
-        return code(error) === "ENOENT" ? { kind: "absent" } : { kind: "other" };
-      }
-    },
-
-    async secretScope() {
-      const projects: ProjectEntry[] = [];
-      // withFileTypes does not follow links, as the steward lists them.
-      for (const entry of readdirSync(config.sitesDir, { withFileTypes: true })) {
-        if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
-        const examination = readBounded(join(config.sitesDir, entry.name, "sitesolide.json"), 256 * 1024);
-        projects.push({ folder: entry.name, manifest: examination.kind === "present" && examination.bytes !== null ? decoder.decode(examination.bytes) : null });
-      }
-      const present: string[] = [];
-      for (const entry of readdirSync(config.secretsFolder, { withFileTypes: true })) {
-        if (entry.name.startsWith(".")) continue;
-        if (entry.isFile()) present.push(entry.name);
-        if (!entry.isDirectory() || !entry.name.endsWith(SUBFOLDER_SUFFIX)) continue;
-        for (const inner of readdirSync(join(config.secretsFolder, entry.name), { withFileTypes: true })) {
-          if (!inner.name.startsWith(".") && inner.isFile()) present.push(`${entry.name}/${inner.name}`);
-        }
-      }
-      return { projects, present: present.sort() };
-    },
-
-    async accountUid(slug) {
-      return account(systemUser(slug))?.uid ?? null;
-    },
-
     async ensureAccount(slug) {
       const name = systemUser(slug);
       if (account(name) !== null) return "present";
@@ -437,35 +396,6 @@ export function createHost(config: HostConfig): Host {
       if (owner !== null && (created || lstatSync(data).uid === 0)) chownSync(data, owner.uid, owner.gid);
       chmodSync(data, 0o750);
       return existed ? "present" : "created";
-    },
-
-    async legacyReadByUnits(slug, declared = []) {
-      if (!isValidSlug(slug)) throw new Error("invalid slug");
-      const units = [slug, ...(await this.generatedUnits(slug))];
-      const names: string[] = [];
-      const prefix = `${config.secretsFolder}/`;
-      for (const unit of units) {
-        const text = await this.readUnit(unit);
-        if (text === null) continue;
-        for (const { path } of unitEnvironment(text).files) {
-          if (!path.startsWith(prefix)) continue;
-          const name = path.slice(prefix.length);
-          // The store's own env is no legacy file; neither is a path that climbs.
-          if (name.startsWith("projects/") || name.split("/").some((part) => part === "" || part === "." || part === "..")) continue;
-          if (!names.includes(name)) names.push(name);
-        }
-      }
-      const read: LegacyRead[] = [];
-      const examine = (name: string, byUnit: boolean) => {
-        const examination = readBounded(join(config.secretsFolder, name), MAX_STORE_ENV_BYTES);
-        if (examination.kind === "absent") return read.push({ name, state: "absent", variables: [], read: byUnit });
-        const parsed = examination.bytes === null ? null : parseEnvBytes(examination.bytes);
-        read.push(parsed === null || !parsed.ok ? { name, state: "unmanaged", variables: [], read: byUnit } : { name, state: "managed", variables: keys(parsed.document), read: byUnit });
-      };
-      for (const name of names) examine(name, true);
-      // The flat files the new manifest declares that no unit reads yet: what they hold is supplied too.
-      for (const name of declared) if (!names.includes(name) && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) examine(name, false);
-      return read;
     },
 
     async readClaims() {

@@ -396,8 +396,7 @@ the right: "3 of 13 sites, issues first".
 `autoComplete="off"`, `data-1p-ignore`; a textarea, which cannot be, is masked
 with `[-webkit-text-security:disc]` plus *Show*. A revealed value lasts thirty
 seconds and is masked again on locking, tab hidden, page left, site or section
-changed. A write-only file offers neither *Reveal* nor *Copy* and says so; a
-password variable offers only *Change password*. A drawn password is shown once,
+changed. A password variable offers only *Change password*. A drawn password is shown once,
 with its copy button; closing its dialog without having copied it takes two
 gestures, the first one warning.
 
@@ -429,7 +428,7 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | People | People, May create projects, Let someone create projects, Allow, Unlock to allow, Remove from every project, Remove expired, Domains; Every site, as admin: set on the server in OIDC_ADMIN_EMAILS | Members, Invite |
 | Tokens | Tokens, New token, Unlock to create, Create token, Name, Whose token, Mine, For someone in People, Projects it may deploy, New projects, Permissions, Manage secrets, Needed by cms, Expires; Made by you, Made by you for alice@example.com, Made by alice@example.com, Made by the owner for you; Can create projects, Can deploy public sites, Can declare a domain, Can use outbound network, Can manage secrets, Can create projects (paused: no longer allowed), Can manage secrets (paused: no project to deploy now); calendar (Admin), cms (paused: Viewer now); Revoke, Revoke token, Active, Expired, Revoked, Copy message, Recent deployments, Token activity, All activity | Team, API key, Yours, Their own, Public sites allowed, Restricted sites only, Write secrets, Secrets access |
 | The lock | Unlock changes, Lock, Changes unlocked, 9 min left; in its dialog, Unlock, Sign in again; in Activity, Unlocked changes, Locked changes | Unlock the secrets, Locked |
-| Secrets | Restart pending, Unmanaged, Missing, Write-only, Restart service, Restore previous, Add variable, Create file, Replace, Reveal; a store's: Variables, Files, Server, Legacy file cms.env, Not set, Overrides cms.env, Declared, Not declared, Empty, Set, Generate, Type a value, Generate on the server, Upload, Upload file, Remove, Restore previous version, Build, kept by whoever deploys, Public, from the repository, Legacy files, Merge into the store, Retire, No longer declared, Covered by the store | Vault, Decrypt, Edit file, Rotate, Secret store, Environment |
+| Secrets | Restart pending, Unmanaged, Missing, Restart service, Restore previous, Add variable, Create file, Reveal; a store's: Variables, Files, Server, Not set, Declared, Not declared, Empty, Set, Generate, Type a value, Generate on the server, Upload, Upload file, Replace, Remove, Restore previous version, Build, kept by whoever deploys, Public, from the repository | Vault, Decrypt, Edit file, Rotate, Secret store, Environment |
 | Passwords | Change password, Dashboard password, Generate a strong one, Set my own, New password, Copy password | Set hash, Regenerate |
 | Backups | Snapshot, Scheduled, Before restore, Server, Offsite only, Restore, Restoring..., Restored, Offsite copy, Show all | Backup file, Revert, Rollback, Recover |
 | Activity | Event, Actor, Action, Target, Source, Site or host, From, To, Details, Load older, Export, CSV, JSON lines, Clear filters, Access changes; a source is Read, Latest 50, Can't read, Needs updating, Not installed; an actor is Owner, The server, Someone, alice@example.com (token), Example Accounting (password access) | Log entry, Audit trail, Download, Reset |
@@ -579,9 +578,9 @@ first, one line each on when it is needed: *Deploy public sites*, *Use
 outbound network*, *Declare a domain*, the three of a person's only when
 they are an Admin of every project chosen, the note saying so, "Public
 sites, outbound network and a domain only when you are an Admin of every
-project chosen."; and *Manage secrets*, "Lists each project's secret files
-and variable names, sets and removes the variables of its .env. Never reads
-a value back.", never greyed for a person, a Developer changing a project's
+project chosen."; and *Manage secrets*, "Lists each project's secret names,
+and sets, generates and removes its variables and files on the server. Never
+reads a value back.", never greyed for a person, a Developer changing a project's
 secrets already, and sent only when ticked, so that a steward from before
 it still mints the rest; ticked against one, the dialog says "The server's
 steward predates this permission: run sitesolide upgrade." One a project
@@ -652,40 +651,32 @@ the dashboard password again to change secrets, general access, roles,
 password access, tokens and restores for 10 minutes."; a person's: "Sign in
 again with Google to change secrets, general access, roles, password access,
 tokens and restores for 10 minutes. Only what your roles allow." The
-**Files** panel: the service
-and *Restart service*, what is wrong, then each file. A variables file lists its
-variables; a password variable offers only *Change password*. A file read whole
-states its size and offers *Replace*, and *Reveal* if it is readable. Then
-**Activity**, that site's operations. Restarting the dashboard itself gives the
+dashboard and the portal, which have no store, show their own files, the
+owner's alone, in the **Files** panel: the service and *Restart service*, what
+is wrong, then each file and its variables; a password variable offers only
+*Change password*. Then **Activity**, that site's operations. Restarting the dashboard itself gives the
 *Restarting* verdict: the dialog waits out the cut, reconnects by itself, then
 asks you to unlock again.
 
 A project with a store, every app but the dashboard and the portal, shows it
-instead of the files alone, in one column (`components/secrets-store.tsx`):
+in one column (`components/secrets-store.tsx`):
 **Variables**, its service and *Restart service* in the header with *Restore
 previous version* for the owner and an Admin, then what needs attention, the
 names and files `sitesolide.json` declares and the server lacks, flagged
 first in red with *Set*, *Generate* or *Upload* each, then one row per
-variable: its name, where its value comes from (*Server*, *Legacy file
-cms.env*), the legacy files it overrides, *Declared* or *Not declared*, and
+variable: its name, *Server* or *Not set*, *Declared* or *Not declared*, and
 *Set*, *Generate* and *Remove* by the steward's `may`; *Add variable* at the
 foot. A value is typed into *Set*'s dialog, never prefilled, or drawn on the
 server by *Generate*, format and size chosen, never shown; over a value in
 force, *Generate* reads *Replace* and says the old one stops working at the
-next restart. Only the owner has *Reveal* and *Copy* on a row, the thirty
-seconds of a legacy row: an Admin and a Developer read no value back, and the
-intro says so. **Files**: each file, *Set*, *Missing*, *Empty* (on the server
+next restart. Only the owner has *Reveal* and *Copy* on a row, for thirty
+seconds: an Admin and a Developer read no value back, and the intro says so. **Files**: each file, *Set*, *Missing*, *Empty* (on the server
 with nothing in it, which a service reads as missing) or *Unmanaged*, its size
 to the owner alone, and the path every service reads it at,
 `$CREDENTIALS_DIRECTORY/files_<name>`, with its copy button; *Upload* reads a
 file in the browser and sends it base64. **Build, kept by whoever deploys**
 and **Public, from the repository** list names, and the public values, for
-reference, with no action. **Legacy files**, while there are any: each file
-as above, editable by the routes of before, with whether a unit reads it,
-whether it is still declared, and to the owner whether the store covers it,
-*Retire* once it does; *Merge into the store*, the owner's, opens on a dry run
-that names what it would merge and any conflict, never a value. A unit that
-does not read the store yet says, as attention, to deploy or refresh the
+reference, with no action. A unit that does not read the store yet says, as attention, to deploy or refresh the
 project. The Overview's **Secrets** sums a store up in rows, its variables
 counted set and not set, its files by name, never a variable's name.
 
@@ -884,8 +875,7 @@ screenshots of the bench, in light and in dark:
 - the home page, Activity, People and Tokens; the five sections of a site,
   the Overview of a service in a restart loop and of a locked static site,
   of `courier` and of `reports`,
-  the Secrets of a site with a write-only file and a subdirectory, and of the
-  dashboard itself;
+  the Secrets of a site with a store, and of the dashboard itself;
 - at 1440 px, at 1024 px with the sidebar expanded, and at 390 px;
 - the collapsed sidebar, the switcher open, sign-in, an expired session, Secrets
   unlocked, the new token dialog;

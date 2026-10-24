@@ -14,23 +14,12 @@ import {
   GENERATE_SIZES,
   changeSummary,
   credentialPath,
-  declaredText,
   encodeBase64,
   generatedLength,
   generatedSummary,
   isEmptyFile,
-  legacyLabels,
-  legacyLine,
-  legacyOffer,
-  mayMerge,
-  migrationFrom,
   missingLabel,
-  overridesText,
-  readMigration,
-  readRetire,
   restoreSummary,
-  retiredReason,
-  sourceBadge,
   storeFileOffer,
   storeFileState,
   storeFileSummary,
@@ -39,6 +28,7 @@ import {
   storePending,
   storeVariableOffer,
   withStore,
+  UNDECLARED,
 } from "../src/lib/store"
 import {
   PENDING_LABEL,
@@ -54,16 +44,16 @@ import {
   sortProjects,
 } from "../src/lib/secrets"
 import type { StoreMay } from "../src/lib/types"
-import { legacyFile, logEntry, secretFile, secretProject, secretService, storeFile, storeVariable, storeView } from "./factory"
+import { logEntry, secretFile, secretProject, secretService, storeFile, storeVariable, storeView } from "./factory"
 
 const NOW = 1_800_000_000_000
 const HOUR = 3600_000
 
 /** What `may` the steward hands each viewer of a store (spec 6.3): the page offers by it, never by who it thinks is signed in. */
-const OWNER: StoreMay = { write: true, reveal: true, restore: true, migrate: true }
-const ADMIN: StoreMay = { write: true, reveal: false, restore: true, migrate: false }
-const DEVELOPER: StoreMay = { write: true, reveal: false, restore: false, migrate: false }
-const READER: StoreMay = { write: false, reveal: false, restore: false, migrate: false }
+const OWNER: StoreMay = { write: true, reveal: true, restore: true }
+const ADMIN: StoreMay = { write: true, reveal: false, restore: true }
+const DEVELOPER: StoreMay = { write: true, reveal: false, restore: false }
+const READER: StoreMay = { write: false, reveal: false, restore: false }
 
 describe("a project as it arrives", () => {
   test("an older steward's project, with no store, or a store the page cannot read, reads as one with none", () => {
@@ -71,6 +61,9 @@ describe("a project as it arrives", () => {
     expect(withStore(bare as never).store).toBeNull()
     expect(withStore(secretProject({ store: null })).store).toBeNull()
     expect(withStore(secretProject({ store: { slug: "cms" } as never })).store).toBeNull()
+    // A steward from before this page may still list legacy files: the store reads all the same.
+    const older = { ...storeView(), legacy: [] } as never
+    expect(withStore(secretProject({ store: older })).store).toBe(older)
   })
 
   test("a store the steward sends is kept as it is", () => {
@@ -97,19 +90,8 @@ describe("the path a service reads a file at", () => {
 })
 
 describe("a variable's row", () => {
-  test("the source's badge: Server, the legacy file it comes from, or Not set, the only one in red", () => {
-    expect(sourceBadge({ source: "store", file: null })).toEqual({ text: "Server", tone: "neutral" })
-    expect(sourceBadge({ source: "legacy", file: "nis2-ses.env" })).toEqual({ text: "Legacy file nis2-ses.env", tone: "neutral" })
-    expect(sourceBadge({ source: "legacy", file: null })).toEqual({ text: "Legacy file", tone: "neutral" })
-    expect(sourceBadge({ source: "none", file: null })).toEqual({ text: "Not set", tone: "error" })
-  })
-
-  test("the legacy files it overrides, by name, and whether the manifest declares it", () => {
-    expect(overridesText({ shadows: [] })).toBeNull()
-    expect(overridesText({ shadows: ["a.env"] })).toBe("Overrides a.env")
-    expect(overridesText({ shadows: ["a.env", "b.env", "c.env"] })).toBe("Overrides a.env, b.env and c.env")
-    expect(declaredText(true)).toBe("Declared")
-    expect(declaredText(false)).toBe("Not declared")
+  test("a name sitesolide.json does not declare is said, and nothing more", () => {
+    expect(UNDECLARED).toBe("Not in sitesolide.json")
   })
 
   /** I8: only the owner reads a value back. Admin and Developer write, and see no reveal. */
@@ -117,17 +99,14 @@ describe("a variable's row", () => {
     const held = storeVariable({ source: "store" })
     expect(storeVariableOffer(storeView({ may: OWNER }), held).reveal).toBe(true)
     for (const may of [ADMIN, DEVELOPER, READER]) expect(storeVariableOffer(storeView({ may }), held).reveal).toBe(false)
-    expect(storeVariableOffer(storeView({ may: OWNER }), storeVariable({ source: "legacy", file: "cms.env" })).reveal).toBe(false)
     expect(storeVariableOffer(storeView({ may: OWNER }), storeVariable({ source: "none" })).reveal).toBe(false)
   })
 
   test("set and generate to whoever may write; remove only what the store holds; nothing on a store the server does not manage", () => {
     const held = storeVariable({ source: "store" })
-    const legacy = storeVariable({ source: "legacy", file: "cms.env" })
     const unset = storeVariable({ source: "none" })
     for (const may of [OWNER, ADMIN, DEVELOPER]) {
       expect(storeVariableOffer(storeView({ may }), held)).toMatchObject({ set: true, generate: true, remove: true })
-      expect(storeVariableOffer(storeView({ may }), legacy)).toMatchObject({ set: true, generate: true, remove: false })
       expect(storeVariableOffer(storeView({ may }), unset)).toMatchObject({ set: true, generate: true, remove: false })
     }
     expect(storeVariableOffer(storeView({ may: READER }), held)).toEqual({ set: false, generate: false, replaces: true, remove: false, reveal: false })
@@ -135,10 +114,9 @@ describe("a variable's row", () => {
     expect(storeVariableOffer(unmanaged, held)).toMatchObject({ set: false, generate: false, remove: false })
   })
 
-  test("generating over a value in force replaces it, the store's or a legacy file's", () => {
+  test("generating over a value the store holds replaces it", () => {
     const store = storeView()
     expect(storeVariableOffer(store, storeVariable({ source: "store" })).replaces).toBe(true)
-    expect(storeVariableOffer(store, storeVariable({ source: "legacy", file: "cms.env" })).replaces).toBe(true)
     expect(storeVariableOffer(store, storeVariable({ source: "none" })).replaces).toBe(false)
   })
 })
@@ -175,8 +153,8 @@ describe("a file of the store", () => {
     expect(storeFileOffer(storeView({ may: READER }), storeFile())).toEqual({ upload: false, remove: false })
   })
 
-  test("its state in a word and a tone; an empty file says so, and is no error when nothing declares it", () => {
-    expect(storeFileState({ state: "set", reason: null, declared: true })).toEqual({ text: "Set", tone: "neutral" })
+  test("its state in a word and a tone, none when set; an empty file says so, and is no error when nothing declares it", () => {
+    expect(storeFileState({ state: "set", reason: null, declared: true })).toBeNull()
     expect(storeFileState({ state: "missing", reason: null, declared: true })).toEqual({ text: "Missing", tone: "error" })
     expect(storeFileState({ state: "missing", reason: "empty", declared: true })).toEqual({ text: "Empty", tone: "error" })
     expect(storeFileState({ state: "missing", reason: "empty", declared: false })).toEqual({ text: "Empty", tone: "attention" })
@@ -204,53 +182,6 @@ describe("a file of the store", () => {
   })
 })
 
-describe("the legacy files", () => {
-  test("how each stands, in words; covered only when the steward says it, to the owner", () => {
-    expect(legacyLabels(legacyFile({ covered: true }))).toEqual(["read by the service", "covered by the store"])
-    expect(legacyLabels(legacyFile({ covered: false, read: false }))).toEqual(["not read by the service", "not covered by the store"])
-    expect(legacyLabels(legacyFile({ covered: null, leftover: true, read: false }))).toEqual(["no longer declared"])
-    expect(legacyLabels(legacyFile({ covered: null, state: "absent" }))).toEqual(["not on the server", "read by the service"])
-    expect(legacyLine(legacyFile({ covered: true }))).toBe("Read by the service, covered by the store")
-    expect(legacyLine(legacyFile({ covered: null, leftover: true }))).toBe("No longer declared")
-  })
-
-  test("Retire is the owner's alone, enabled once covered, with why not otherwise", () => {
-    expect(legacyOffer(storeView({ may: ADMIN }), legacyFile())).toBeNull()
-    expect(legacyOffer(storeView({ may: OWNER }), legacyFile())).toEqual({ retire: true, reason: null })
-    expect(legacyOffer(storeView({ may: OWNER }), legacyFile({ covered: false }))?.retire).toBe(false)
-    expect(legacyOffer(storeView({ may: OWNER }), legacyFile({ covered: false }))?.reason).toContain("merge into the store first")
-    expect(legacyOffer(storeView({ may: OWNER, unitReadsStore: false }), legacyFile())?.reason).toContain("deploy or refresh")
-    expect(legacyOffer(storeView({ may: OWNER }), legacyFile({ state: "absent" }))?.retire).toBe(false)
-    expect(legacyOffer(storeView({ may: OWNER }), legacyFile({ state: "unmanaged", reason: "owned by uid 0" }))).toEqual({ retire: false, reason: "owned by uid 0" })
-  })
-
-  test("a file Retire deleted is said retired, with where its copy is kept; one absent for no such reason is not on the server", () => {
-    const copy = "/var/lib/sitesolide-steward/precedents/projects/cms/legacy/cms.env"
-    const reason = `retired: a copy is kept at ${copy}; to put it back, sudo cp -p ${copy} /etc/sitesolide/cms.env, then sitesolide refresh cms`
-    const retired = legacyFile({ state: "absent", reason, variables: [], covered: null })
-    expect(retiredReason(retired)).toBe(reason)
-    expect(legacyLine(retired)).toBe("Retired, read by the service")
-    expect(legacyOffer(storeView({ may: OWNER }), retired)).toEqual({
-      retire: false,
-      reason: `Retired: a copy is kept at ${copy}; to put it back, sudo cp -p ${copy} /etc/sitesolide/cms.env, then sitesolide refresh cms.`,
-    })
-    // Only to the owner, as every reason beside Retire.
-    expect(legacyOffer(storeView({ may: ADMIN }), retired)).toBeNull()
-    const absent = legacyFile({ state: "absent", reason: null, covered: null })
-    expect(retiredReason(absent)).toBeNull()
-    expect(legacyLine(absent)).toBe("Not on the server, read by the service")
-    expect(legacyOffer(storeView({ may: OWNER }), absent)?.reason).toBe("Not on the server: nothing to retire.")
-    expect(retiredReason(legacyFile({ state: "unmanaged", reason: "retired: not ours" }))).toBeNull()
-  })
-
-  test("Merge into the store: the owner's, while a declared or read legacy file is left", () => {
-    expect(mayMerge(storeView({ may: OWNER, legacy: [legacyFile()] }))).toBe(true)
-    expect(mayMerge(storeView({ may: OWNER, legacy: [legacyFile({ leftover: true })] }))).toBe(false)
-    expect(mayMerge(storeView({ may: OWNER, legacy: [] }))).toBe(false)
-    expect(mayMerge(storeView({ may: ADMIN, legacy: [legacyFile()] }))).toBe(false)
-  })
-})
-
 describe("the restart a change waits for", () => {
   const started = NOW - 2 * HOUR
 
@@ -268,31 +199,32 @@ describe("the restart a change waits for", () => {
     expect(storePending(storeView({ restartPending: true, files, modifiedAt: NOW - HOUR }), started)).toEqual({ variables: true, files: ["gcp.json"] })
   })
 
-  test("a project's pending changes: the legacy files, then the store's files, and its variables", () => {
+  test("a project's pending changes: the store's files, and its variables", () => {
     const project = secretProject({
+      slug: "cms",
       service: secretService({ startedAt: started }),
-      files: [secretFile({ name: "cms.env", restartPending: true })],
+      files: [],
       store: storeView({ restartPending: true, modifiedAt: NOW - HOUR, files: [storeFile({ name: "tls.key", restartPending: true })] }),
     })
-    expect(pendingFiles(project)).toEqual(["cms.env", "tls.key"])
+    expect(pendingFiles(project)).toEqual(["tls.key"])
     expect(pendingVariables(project)).toBe(true)
-    expect(pendingPhrase(["cms.env", "tls.key"], true)).toBe("the variables on the server, cms.env and tls.key")
+    expect(pendingPhrase(["gcp.json", "tls.key"], true)).toBe("the variables on the server, gcp.json and tls.key")
     expect(pendingPhrase([], true)).toBe("the variables on the server")
-    expect(pendingPhrase(["cms.env"], false)).toBe("cms.env")
+    expect(pendingPhrase(["portal.env"], false)).toBe("portal.env")
     expect(pendingPhrase([], false)).toBe("")
   })
 })
 
 describe("what is wrong in a project with a store", () => {
-  test("declared and not set is an error, before the legacy files' own", () => {
+  test("declared and not set is an error", () => {
     const project = secretProject({
+      slug: "cms",
       service: secretService({ startedAt: NOW - HOUR }),
-      files: [secretFile({ name: "cms-api.env", state: "absent", variables: [] })],
+      files: [],
       store: storeView({ missing: ["ADMIN_TOKEN"], files: [storeFile({ name: "tls.key", state: "missing" })] }),
     })
     expect(projectProblems(project, NOW)).toEqual([
       { key: "missing", tone: "error", label: "2 not set", names: ["ADMIN_TOKEN"], files: ["tls.key"] },
-      { key: "absent", tone: "error", label: "Missing", file: "cms-api.env" },
     ])
   })
 
@@ -323,19 +255,25 @@ describe("what is wrong in a project with a store", () => {
 })
 
 describe("the sites table", () => {
-  test("knows the store's variable names, once each, and its pending restart; never a value", () => {
+  test("knows the store's variable names, and its pending restart; never a value", () => {
     const project = secretProject({
-      files: [secretFile({ variables: ["CMS_TOKEN"] })],
+      slug: "cms",
+      files: [],
       store: storeView({ variables: [storeVariable({ name: "CMS_TOKEN" }), storeVariable({ name: "ADMIN_TOKEN" })], restartPending: true }),
     })
     expect(secretsBySite([project]).get("cms")).toEqual({ variables: ["CMS_TOKEN", "ADMIN_TOKEN"], restartPending: true })
+  })
+
+  test("knows a platform file's variable names too, once each", () => {
+    const portal = secretProject({ files: [secretFile({ variables: ["OIDC_CLIENT_SECRET", "OIDC_CLIENT_SECRET"] })] })
+    expect(secretsBySite([portal]).get("portal")).toEqual({ variables: ["OIDC_CLIENT_SECRET"], restartPending: false })
   })
 })
 
 describe("the Overview's rows", () => {
   test("variables counted by whether they hold a value, files by name; no variable name", () => {
     const store = storeView({
-      variables: [storeVariable({ name: "A" }), storeVariable({ name: "B", source: "legacy", file: "cms.env" }), storeVariable({ name: "C", source: "none" })],
+      variables: [storeVariable({ name: "A" }), storeVariable({ name: "B" }), storeVariable({ name: "C", source: "none" })],
       missing: ["C"],
       files: [storeFile({ name: "gcp.json" }), storeFile({ name: "tls.key", state: "missing" })],
     })
@@ -345,7 +283,7 @@ describe("the Overview's rows", () => {
       { label: "2 files", detail: "gcp.json, tls.key", state: { text: "Missing", tone: "error" } },
     ])
     expect(JSON.stringify(rows)).not.toContain('"A"')
-    expect(storeOverview(storeView({ variables: [storeVariable()] }))).toEqual([{ label: "1 variable", detail: "All set, on the server", state: null }])
+    expect(storeOverview(storeView({ variables: [storeVariable()] }))).toEqual([{ label: "1 variable", detail: "All set", state: null }])
     expect(storeOverview(storeView())).toEqual([])
   })
 })
@@ -390,54 +328,6 @@ describe("what an answer says", () => {
     expect(restoreSummary({ appeared: ["OLD"], disappeared: ["NEW"] })).toEqual({ appeared: ["OLD"], disappeared: ["NEW"], empty: false })
     expect(restoreSummary({ appeared: [], disappeared: [] }).empty).toBe(true)
   })
-
-  test("a merge, dry or done: names and files only, conflicts as the CLI words them", () => {
-    const answer = {
-      sources: ["a.env", "b.env"],
-      merged: ["A", "B"],
-      already: ["C"],
-      overridden: ["D"],
-      conflicts: [],
-      skipped: [{ file: "c.env", reason: "not on the server" }],
-      written: false,
-    }
-    expect(readMigration(answer, true)).toEqual({
-      lines: [
-        { label: "From", names: ["a.env", "b.env"] },
-        { label: "Would merge", names: ["A", "B"] },
-        { label: "Already in the store, same value", names: ["C"] },
-        { label: "The store keeps its own value", names: ["D"] },
-      ],
-      conflicts: [],
-      skipped: ["c.env: not on the server"],
-      merge: true,
-      nothing: false,
-    })
-    expect(readMigration(answer, false).lines[1]).toEqual({ label: "Merged", names: ["A", "B"] })
-    expect(readMigration(answer, false).merge).toBe(false)
-    const conflicted = readMigration({ ...answer, conflicts: [{ name: "AWS_ACCESS_KEY_ID", files: ["a.env", "b.env"] }] }, true)
-    expect(conflicted.conflicts).toEqual(["AWS_ACCESS_KEY_ID: in a.env and b.env, with different values"])
-    expect(conflicted.merge).toBe(false)
-    expect(readMigration({ ...answer, merged: [] }, true)).toMatchObject({ merge: false, nothing: true })
-  })
-
-  test("a merge's answer read tolerantly: a refusal listing conflicts alone, or nothing to read", () => {
-    expect(migrationFrom({ error: "invalid", message: "conflicts", conflicts: [{ name: "A", files: ["a.env", "b.env"] }] }, true)).toMatchObject({
-      conflicts: ["A: in a.env and b.env, with different values"],
-      merge: false,
-      lines: [],
-    })
-    expect(migrationFrom({ error: "out-of-scope", message: "deploy or refresh first" }, true)).toBeNull()
-    expect(migrationFrom(null, true)).toBeNull()
-    expect(migrationFrom({ merged: ["A", 3], conflicts: [{ files: [] }, "x"] }, true)).toMatchObject({ lines: [{ label: "Would merge", names: ["A"] }], conflicts: [] })
-  })
-
-  test("a retire: what went, and what stayed with the steward's reason", () => {
-    expect(readRetire({ retired: ["a.env"], kept: [{ file: "b.env", reason: "a value differs" }] })).toEqual({
-      retired: ["a.env"],
-      kept: ["b.env: a value differs"],
-    })
-  })
 })
 
 describe("the log of a store", () => {
@@ -457,7 +347,7 @@ describe("the log of a store", () => {
     expect(operationParts(logEntry({ operation: "remove", file: "store", variable: "A" }))).toEqual({ verb: "Remove", object: "A", kind: "variable" })
   })
 
-  test("a merge names its project and says what it brought; a retire names its file", () => {
+  test("a merge and a retire, rows written before projects kept their secrets in their store alone, still read", () => {
     const merged = logEntry({ operation: "migrate", file: "store", variable: null, detail: "2 merged from a.env, b.env" })
     expect(operationParts(merged)).toEqual({ verb: "Merge into the store", object: "cms", kind: "project" })
     expect(operationOutcome(merged)).toEqual({ tone: "ok", text: "2 merged from a.env, b.env" })

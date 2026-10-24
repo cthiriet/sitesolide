@@ -1,13 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
-  PREVIOUS_DIR,
   isValidConfirmation,
   removalSteps,
   removalActions,
   leftToDo,
   ownershipReleaseCommand,
   readOwnershipRelease,
-  removableSecrets,
   type RemovalStep,
   type ProjectToRemove,
 } from "../cli/removal";
@@ -26,7 +24,6 @@ import { storeRemovalActions } from "../cli/store";
 const project = (overrides: Partial<ProjectToRemove> = {}): ProjectToRemove => ({
   slug: "sample",
   isApplication: true,
-  secrets: [],
   ...overrides,
 });
 
@@ -92,21 +89,14 @@ describe("removalActions", () => {
     ]);
   });
 
-  test("every declared secret is removed, at its path under /etc/sitesolide", () => {
-    const actions = removalActions(project({ secrets: ["sample.env", "sample-ses.env"] }));
-    const commands = actions.map((g) => g.command);
-    expect(commands).toContain("sudo rm -f /etc/sitesolide/sample.env");
-    expect(commands).toContain("sudo rm -f /etc/sitesolide/sample-ses.env");
-  });
-
-  test("no declared file, no flat file touched in /etc/sitesolide: the project's store alone", () => {
+  test("no flat file touched in /etc/sitesolide: the project's store alone", () => {
     const actions = removalActions(project());
     expect(actions.filter((g) => g.command.includes("/etc/sitesolide")).map((g) => g.command)).toEqual(["sudo rm -rf /etc/sitesolide/projects/sample"]);
     expect(actions.filter((g) => g.command.includes("sitesolide-steward")).map((g) => g.command)).toEqual(["sudo rm -rf /var/lib/sitesolide-steward/precedents/projects/sample"]);
   });
 
   test("the project's store and its previous versions go after the served folder, before the account, whatever the manifest says", () => {
-    for (const shape of [project(), project({ secrets: ["sample.env", "sample-ses.env"] }), project({ isApplication: false })]) {
+    for (const shape of [project(), project({ units: ["sample", "sample.worker"] }), project({ isApplication: false })]) {
       const commands = removalActions(shape).map((g) => g.command);
       const folder = commands.indexOf("sudo rm -rf /srv/sites/sample");
       const store = commands.indexOf("sudo rm -rf /etc/sitesolide/projects/sample");
@@ -145,41 +135,12 @@ describe("removalActions", () => {
     expect(() => removalActions(project({ slug: 42 as unknown as string }))).toThrow("not a project's slug");
   });
 
-  test("the previous version of each secret goes with it", () => {
-    // Left behind, it would wait in the dashboard for the next project of the
-    // same name, with its predecessor's key.
-    const commands = removalActions(project({ secrets: ["sample.env", "sample-ses.env"] })).map((g) => g.command);
-    expect(PREVIOUS_DIR).toBe("/var/lib/sitesolide-steward/precedents");
-    expect(commands).toContain("sudo rm -f /var/lib/sitesolide-steward/precedents/sample.env");
-    expect(commands).toContain("sudo rm -f /var/lib/sitesolide-steward/precedents/sample-ses.env");
-    expect(commands.some((c) => /rm -rf? \/var\/lib\/sitesolide-steward\/precedents\/?$/.test(c))).toBe(false);
-  });
-
-  test("the flat files a project left behind when it moved to its store go with it, each with its previous version, before the store", () => {
-    const commands = removalActions(project({ secrets: ["sample.env"], leftovers: ["sample-ses.env", "sample.env", "sample-ses.env"] })).map((g) => g.command);
-    // Each once, a name the manifest names too included.
-    expect(commands.filter((c) => c === "sudo rm -f /etc/sitesolide/sample-ses.env")).toHaveLength(1);
-    expect(commands.filter((c) => c === "sudo rm -f /etc/sitesolide/sample.env")).toHaveLength(1);
-    expect(commands).toContain("sudo rm -f /var/lib/sitesolide-steward/precedents/sample-ses.env");
-    const leftover = commands.indexOf("sudo rm -f /etc/sitesolide/sample-ses.env");
-    expect(leftover).toBeGreaterThan(commands.indexOf("sudo rm -rf /srv/sites/sample"));
-    expect(leftover).toBeLessThan(commands.indexOf("sudo rm -rf /etc/sitesolide/projects/sample"));
-    // None given, none touched: the actions are those of before.
-    expect(removalActions(project({ leftovers: [] }))).toEqual(removalActions(project()));
-  });
-
-  test("a leftover that is not a flat file's name is refused before a single command is built", () => {
-    for (const name of ["", "..", "../etc/shadow", "a/b.env", "projects", "sample-secrets/x.env", "sample.env;reboot", "-sample.env", "SAMPLE_KEY"]) {
-      expect(() => removalActions(project({ leftovers: [name] }))).toThrow("not a secret file's name");
-    }
-  });
-
   test("everything is taken up again without error after a failure halfway", () => {
     // An interrupted removal must be able to go to the end: a service already
     // stopped, a file already gone, an account already deleted are not
     // errors. Without that, the retry fails on its first step and leaves the
     // rest in place.
-    for (const { command } of removalActions(project({ secrets: ["sample.env"] }))) {
+    for (const { command } of removalActions(project())) {
       const tolerant =
         command.includes("|| true") || command.includes("rm -f") || command.includes("rm -rf");
       expect(tolerant).toBe(true);
@@ -206,16 +167,16 @@ describe("removalSteps", () => {
   test("an open site gives back its block first, before its service and its files", () => {
     // A block in front of a stopped service would answer 502 for as long as
     // the rest takes.
-    const steps = read(removalSteps(project({ secrets: ["sample.env"] }), { block: true, isProtected: false }));
+    const steps = read(removalSteps(project(), { block: true, isProtected: false }));
     expect(steps[0]).toBe("BLOCK");
-    expect(steps.slice(1)).toEqual(removalActions(project({ secrets: ["sample.env"] })).map((g) => g.command));
+    expect(steps.slice(1)).toEqual(removalActions(project()).map((g) => g.command));
   });
 
   test("behind the portal, the service and public/ go before the block", () => {
     // Once the block is gone, *.test-zone.invalid serves
     // /srv/sites/<slug>/public to everyone: during deploy-caddy.sh's check,
     // and forever if the command stops there.
-    const steps = read(removalSteps(project({ secrets: ["sample.env"] }), { block: true, isProtected: true }));
+    const steps = read(removalSteps(project(), { block: true, isProtected: true }));
     const service = indexIn(steps, "systemctl disable --now sample");
     const publicDir = steps.indexOf("sudo rm -rf /srv/sites/sample/public");
     const block = steps.indexOf("BLOCK");
@@ -228,14 +189,13 @@ describe("removalSteps", () => {
     // The manifest tells a restarted removal that a block laid from the
     // dashboard is still to be removed; the data does not go on a failure of
     // the block.
-    const steps = read(removalSteps(project({ secrets: ["sample.env"] }), { block: true, isProtected: true }));
+    const steps = read(removalSteps(project(), { block: true, isProtected: true }));
     const block = steps.indexOf("BLOCK");
     expect(steps.indexOf("sudo rm -rf /srv/sites/sample")).toBeGreaterThan(block);
-    expect(indexIn(steps, "/etc/sitesolide/sample.env")).toBeGreaterThan(block);
     expect(indexIn(steps, "userdel")).toBe(steps.length - 1);
     // Nothing is lost nor done twice by changing the order.
     expect(steps.filter((step) => step !== "BLOCK").toSorted()).toEqual(
-      [...removalActions(project({ secrets: ["sample.env"] })).map((g) => g.command), "sudo rm -rf /srv/sites/sample/public"].toSorted(),
+      [...removalActions(project()).map((g) => g.command), "sudo rm -rf /srv/sites/sample/public"].toSorted(),
     );
   });
 
@@ -251,7 +211,7 @@ describe("removalSteps", () => {
   });
 
   test("behind the portal, the store goes after the block, with the data, and before the account", () => {
-    const steps = read(removalSteps(project({ secrets: ["sample.env"] }), { block: true, isProtected: true }));
+    const steps = read(removalSteps(project(), { block: true, isProtected: true }));
     const block = steps.indexOf("BLOCK");
     const store = steps.indexOf("sudo rm -rf /etc/sitesolide/projects/sample");
     expect(store).toBeGreaterThan(block);
@@ -316,23 +276,5 @@ describe("the token that created it", () => {
     expect(readOwnershipRelease(ok({ error: "busy", message: "shop is still on the machine" }, 409))).toEqual({ kind: "failed", reason: "shop is still on the machine" });
     expect(readOwnershipRelease({ code: 255, output: "", error: "ssh: connect" })).toEqual({ kind: "failed", reason: "ssh: connect" });
     expect(readOwnershipRelease({ code: 0, output: "garbage", error: "" }).kind).toBe("failed");
-  });
-});
-
-describe("the secret files a removal deletes", () => {
-  test("only the project's own: the machine's and another site's are kept, and said", () => {
-    const chosen = removableSecrets("shop", ["shop.env", "shop-smtp.env", "dashboard.env", "dashboard-backup.env", "cms.env", "shop-admin.env"], ["shop", "cms", "shop-admin"]);
-    expect(chosen.removed).toEqual(["shop.env", "shop-smtp.env"]);
-    expect(chosen.kept).toEqual([
-      "kept: dashboard.env belongs to the machine, root's, and no project reads it",
-      "kept: dashboard-backup.env belongs to the machine, root's, and no project reads it",
-      "kept: cms.env is not named after shop: a project reads shop.env and shop-<name> files alone",
-      "kept: shop-admin.env belongs to shop-admin, deployed on the machine",
-    ]);
-    // A file named after the project that another account owns stays too.
-    const owned = removableSecrets("shop", ["shop.env", "shop-mail.env"], [], new Map([["shop-mail.env", { kind: "file", owner: "site-shopkeeper" } as const]]));
-    expect(owned).toEqual({ removed: ["shop.env"], kept: ["kept: /etc/sitesolide/shop-mail.env is already on the machine and belongs to site-shopkeeper, not site-shop: a project reads its own files alone"] });
-    const commands = removalActions(project({ slug: "shop", secrets: chosen.removed })).map((action) => action.command);
-    expect(commands.filter((command) => command.includes("/etc/sitesolide/"))).toEqual(["sudo rm -f /etc/sitesolide/shop.env", "sudo rm -f /etc/sitesolide/shop-smtp.env", "sudo rm -rf /etc/sitesolide/projects/shop"]);
   });
 });

@@ -12,11 +12,10 @@
  */
 
 import { OWNER_SOCKET, readCurlAnswer } from "./access";
-import { isLegacySecretName, isValidSlug } from "./manifest";
-import { ownerRefusal, secretFileRefusal, type SecretOwner } from "./secrets";
+import { isValidSlug } from "./manifest";
 import { removeUnitsCommand } from "./services";
 import { storeRemovalActions } from "./store";
-import { secretPath, projectPaths, systemUser } from "./unit";
+import { projectPaths, systemUser } from "./unit";
 
 /**
  * The order is the deployment's in reverse, and it is no more negotiable than
@@ -37,13 +36,6 @@ import { secretPath, projectPaths, systemUser } from "./unit";
  * would inherit on the same UID.
  */
 /**
- * Where the dashboard's steward keeps the previous version of each secret it
- * rewrites: `STATE_FOLDER` from dashboard/steward.ts, followed by
- * `precedents/`. Copied out here, the CLI importing nothing from the dashboard.
- */
-export const PREVIOUS_DIR = "/var/lib/sitesolide-steward/precedents";
-
-/**
  * What a removal costs, said before it starts. It touches no backup: the
  * snapshots the machine took, when it takes any, stay in both repositories
  * (dashboard/src/backup/README.md, a name a removed project left behind), and
@@ -62,16 +54,6 @@ export type Action = {
 export type ProjectToRemove = {
   slug: string;
   isApplication: boolean;
-  /** The manifest's flat files of the old form, each at /etc/sitesolide/<name>: legacySecretFiles, those removableSecrets keeps. */
-  secrets: readonly string[];
-  /**
-   * Flat files of the old form the manifest no longer names but the machine
-   * still attaches to the project by its name, a project that moved to its
-   * store and never retired them: deleted with it, each with its previous
-   * version, so that a project created again under this name inherits none.
-   * Judged by removableSecrets as `secrets` are, by the caller.
-   */
-  leftovers?: readonly string[];
   /**
    * The project's units as unitNames in unit.ts names them, the main one
    * first: without `.service`, a timer with its `.timer`; the slug alone for
@@ -120,40 +102,6 @@ export function removalActions(project: ProjectToRemove): Action[] {
     command: `sudo rm -rf ${paths.root}`,
   });
 
-  for (const secret of project.secrets) {
-    actions.push({
-      title: `remove the secret ${secret}`,
-      command: `sudo rm -f ${secretPath(secret)}`,
-    });
-    // Its previous version goes with it. Left behind, a project recreated under
-    // the same name would find in the dashboard a key of its predecessor to
-    // restore. The uid does not tell them apart: useradd hands the freed one
-    // to the next account it makes. The steward drops a name's previous
-    // version when it creates the file (createFresh), which covers a file
-    // this list does not name; nothing justifies keeping it here either.
-    actions.push({
-      title: `remove the previous version of ${secret} kept by the dashboard`,
-      command: `sudo rm -f ${PREVIOUS_DIR}/${secret}`,
-    });
-  }
-
-  // The flat files the project left behind when it moved to its store: no
-  // unit reads them any more, and nothing but this removal deletes them.
-  // Each name is a flat file's, checked again here since a path is built
-  // from it; one the manifest names too is deleted once.
-  for (const leftover of new Set(project.leftovers ?? [])) {
-    if (!isLegacySecretName(leftover)) throw new Error("not a secret file's name: nothing is removed for it");
-    if (project.secrets.includes(leftover)) continue;
-    actions.push({
-      title: `remove ${leftover}, which the project no longer declares`,
-      command: `sudo rm -f ${secretPath(leftover)}`,
-    });
-    actions.push({
-      title: `remove the previous version of ${leftover} kept by the dashboard`,
-      command: `sudo rm -f ${PREVIOUS_DIR}/${leftover}`,
-    });
-  }
-
   // The project's store of secrets and the previous versions the dashboard
   // keeps of it, whatever the manifest says, a static site's included: the
   // dashboard may hold a store for a slug before its first deployment. The
@@ -171,35 +119,6 @@ export function removalActions(project: ProjectToRemove): Action[] {
   }
 
   return actions;
-}
-
-/**
- * The secret files a removal deletes, and those it keeps, each with why.
- *
- * The list is the manifest's in the folder the command runs from, which is
- * whatever text that folder holds now: a clone's that named `dashboard.env`,
- * `dashboard-backup.env` or another site's `cms.env` had root delete the
- * dashboard's password, the backups' keys or cms's secrets, and their
- * previous versions with them. Only a file that is this project's by the
- * rule `deploy` keeps to, secretFileRefusal in secrets.ts, is deleted; the
- * others are kept, and said. `labels` are the sites deployed on the machine,
- * `owners` who owns each file there, a file another account owns being kept
- * whatever its name: see ownerRefusal.
- */
-export function removableSecrets(
-  slug: string,
-  declared: readonly string[],
-  labels: readonly string[],
-  owners: ReadonlyMap<string, SecretOwner> = new Map(),
-): { removed: string[]; kept: string[] } {
-  const removed: string[] = [];
-  const kept: string[] = [];
-  for (const name of declared) {
-    const refusal = secretFileRefusal(slug, name, labels) ?? ownerRefusal(slug, name, owners.get(name) ?? { kind: "absent" });
-    if (refusal === null) removed.push(name);
-    else kept.push(`kept: ${refusal}`);
-  }
-  return { removed, kept };
 }
 
 export type RemovalStep =

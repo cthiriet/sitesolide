@@ -634,7 +634,7 @@ describe("a backup command's unit", () => {
     slug: "vault",
     publicDir: "public",
     env: { PUBLIC_URL: "https://{slug}.{zone}", RATIO: "100%" },
-    secrets: ["vault.env"],
+    secrets: ["VAULT_KEY"],
     services: {
       web: { start: "/usr/local/bin/bun run web.ts", port: 3040 },
       db: { start: "/bin/sh /srv/sites/vault/app/postgres.sh", port: 3041, internal: true, memory: "512M", backup: { folder: "db", command: "/bin/sh /srv/sites/vault/app/backup.sh" } },
@@ -721,9 +721,9 @@ describe("a backup command's unit", () => {
     expect(given).toContain("RATIO=100%");
   });
 
-  test("its secrets are read by PID 1 from the files its service reads, the store last, never put on the command line", () => {
+  test("its secrets are read by PID 1 from its store, as its service reads it, never put on the command line", () => {
     const files = lines.filter((line) => line.startsWith("EnvironmentFile="));
-    expect(files).toEqual(["EnvironmentFile=-/etc/sitesolide/vault.env", "EnvironmentFile=-/etc/sitesolide/projects/vault/env"]);
+    expect(files).toEqual(["EnvironmentFile=-/etc/sitesolide/projects/vault/env"]);
     expect(properties.filter((property) => property.startsWith("EnvironmentFile="))).toEqual(files);
     // Its files as its service loads them, each at $CREDENTIALS_DIRECTORY/files_<name>.
     const credentials = lines.filter((line) => line.startsWith("LoadCredential="));
@@ -779,7 +779,7 @@ describe("a worker's backup command", () => {
 
 /**
  * A backup command gets its project's store as its service does: the store's
- * env file after the old form's, the files folder by LoadCredential=, and the
+ * env file by EnvironmentFile=, the files folder by LoadCredential=, and the
  * processes of other accounts hidden. Measured on the runner's own line on
  * systemd 257 (the store's bench, Q8): CREDENTIALS_DIRECTORY set, the files
  * read, and a missing folder failing systemd-run with 243.
@@ -815,12 +815,6 @@ describe("a backup command and its project's store", () => {
     }
   });
 
-  test("the old form: its files in the manifest's order, then the store, which wins on a name both hold", () => {
-    const job = jobOf({ slug: "vault", port: 3041, start: "/bin/sh db.sh", backup, secrets: ["vault-ses.env", "vault.env"] } as Manifest);
-    expect(job.environmentFiles).toEqual(["-/etc/sitesolide/vault-ses.env", "-/etc/sitesolide/vault.env", "-/etc/sitesolide/projects/vault/env"]);
-    expect(job.credentials).toEqual(["files:/etc/sitesolide/projects/vault/files"]);
-  });
-
   test("a service whose unit 0.7 laid reads no store: its command gets none either, its files/ folder perhaps not laid yet", () => {
     // Between the dashboard's upgrade and the project's next deployment. Given
     // LoadCredential= from the manifest, a folder not laid yet failed every
@@ -831,10 +825,6 @@ describe("a backup command and its project's store", () => {
       expect(job.credentials).toEqual([]);
       expect(propertiesOf(job).some((property) => property.startsWith("LoadCredential=") || property.includes("/projects/"))).toBe(false);
     }
-    // The old form keeps its flat files, as its service does.
-    const legacy = jobOf({ slug: "vault", port: 3041, start: "/bin/sh db.sh", backup, secrets: ["vault-ses.env", "vault.env"] } as Manifest, "0.7");
-    expect(legacy.environmentFiles).toEqual(["-/etc/sitesolide/vault-ses.env", "-/etc/sitesolide/vault.env"]);
-    expect(legacy.credentials).toEqual([]);
   });
 
   test("its own service's unit decides, not the project's main one", () => {
@@ -933,10 +923,10 @@ describe("a backup command and its project's store", () => {
     expect(after.outcome).toEqual({ ok: false, error: credentialsFailure("the backup command", "vault"), cause: null });
   });
 
-  test("dashboard and portal keep their flat file alone, with no store line (I10)", () => {
+  test("dashboard and portal have no store: no store line (I10)", () => {
     for (const slug of ["dashboard", "portal"]) {
-      const job = jobOf({ slug, port: 3041, start: "/bin/sh db.sh", backup, secrets: [`${slug}.env`] } as Manifest);
-      expect(job.environmentFiles).toEqual([`-/etc/sitesolide/${slug}.env`]);
+      const job = jobOf({ slug, port: 3041, start: "/bin/sh db.sh", backup } as Manifest);
+      expect(job.environmentFiles).toEqual([]);
       expect(job.credentials).toEqual([]);
       expect(propertiesOf(job).some((property) => property.startsWith("LoadCredential=") || property.includes("/projects/"))).toBe(false);
     }

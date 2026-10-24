@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import {
   createToken,
   generateStoreVariable,
-  migrateStore,
   putAccess,
   readAccess,
   readPeople,
@@ -13,7 +12,6 @@ import {
   removeStoreVariables,
   restartService,
   restoreStore,
-  retireLegacyFiles,
   revealStoreValue,
   revokeToken,
   setCreate,
@@ -110,9 +108,6 @@ describe("a project's store", () => {
     await restoreStore({ slug: "shop", dryRun: true })
     await restoreStore({ slug: "shop", dryRun: false })
     await revealStoreValue({ slug: "shop", name: "STRIPE_SECRET_KEY" })
-    await migrateStore({ slug: "shop", dryRun: true })
-    await migrateStore({ slug: "shop", dryRun: false })
-    await retireLegacyFiles({ slug: "shop", files: ["shop-stripe.env"] })
     expect(requests).toEqual([
       'PUT /api/secrets/store/variable {"slug":"shop","name":"STRIPE_SECRET_KEY","value":"typed-by-hand"} same-origin',
       'DELETE /api/secrets/store/variable {"slug":"shop","names":["OLD_KEY"]} same-origin',
@@ -123,9 +118,6 @@ describe("a project's store", () => {
       'POST /api/secrets/store/restore {"slug":"shop","dryRun":true} same-origin',
       'POST /api/secrets/store/restore {"slug":"shop"} same-origin',
       'POST /api/secrets/store/value {"slug":"shop","name":"STRIPE_SECRET_KEY"} same-origin',
-      'POST /api/secrets/store/migrate {"slug":"shop","dryRun":true} same-origin',
-      'POST /api/secrets/store/migrate {"slug":"shop"} same-origin',
-      'POST /api/secrets/store/retire {"slug":"shop","files":["shop-stripe.env"]} same-origin',
     ])
   })
 

@@ -53,44 +53,37 @@ type Received = { method: string; path: string; authorization: string | null; bo
 const received: Received[] = [];
 let scenario: "succeeds" | "fails" | "refuses" = "succeeds";
 /** The store routes: as this release answers them, from a dashboard before them, a refusal quoting what was sent, a token that may not list, or a listing that breaks. */
-let storeScenario: "answers" | "unmigrated" | "old" | "quotes" | "out-of-scope" | "not-found" | "broken" | "spent" = "answers";
+let storeScenario: "answers" | "undeclared" | "old" | "quotes" | "out-of-scope" | "not-found" | "broken" | "spent" = "answers";
 /** What a restart's observation concludes. */
 let restartVerdict: "active" | "failure" = "active";
 /** What the finished deployment says the store lacked, and the placeholders it hands the build; undefined for a dashboard before them. */
 let deploymentExtras: { placeholders?: { zone: string; contact: string }; missingSecrets?: { runtime: string[]; files: string[] } | null } = {};
 
-/**
- * The store of `shop`, as the control API lists it to a token: names, never a
- * value. Its legacy file, which the installed unit still reads, holds a name
- * the store holds too: deploying a manifest that names its variables drops
- * nothing.
- */
+/** The store of `shop`, as the control API lists it to a token: names, never a value. */
 const STORE = {
   slug: "shop",
   exists: true,
   state: "managed",
   reason: null,
   variables: [
-    { name: "API_KEY", source: "store", file: null, shadows: ["shop.env"], declared: true },
-    { name: "WEBHOOK_SECRET", source: "none", file: null, shadows: [], declared: true },
+    { name: "API_KEY", source: "store", declared: true },
+    { name: "WEBHOOK_SECRET", source: "none", declared: true },
   ],
   missing: ["WEBHOOK_SECRET"],
   files: [],
-  legacy: [{ name: "shop.env", state: "managed", reason: null, variables: ["API_KEY"], read: true, leftover: false, covered: null }],
   build: [],
   public: [],
   unitReadsStore: true,
   modifiedAt: 1_760_000_000_000,
   restartPending: true,
   previous: false,
-  may: { write: true, reveal: false, restore: false, migrate: false },
+  may: { write: true, reveal: false, restore: false },
 };
 
-/** The same before migrating: the unit reads SMTP_URL from shop.env, and the store lacks it. */
-const UNMIGRATED = {
+/** The same with a name set ahead in the store, which the deployed manifest does not declare. */
+const UNDECLARED = {
   ...STORE,
-  variables: [...STORE.variables, { name: "SMTP_URL", source: "legacy", file: "shop.env", shadows: [], declared: false }],
-  legacy: [{ ...STORE.legacy[0]!, variables: ["API_KEY", "SMTP_URL"] }],
+  variables: [...STORE.variables, { name: "SMTP_URL", source: "store", declared: false }],
 };
 const VERDICTS = {
   active: { kind: "active", state: "active", subState: "running", restarts: 0 },
@@ -154,7 +147,7 @@ beforeAll(() => {
         if (storeScenario === "spent") return Response.json({ error: "too-many-attempts", message: "too many refused requests this hour", wait: 1200 }, { status: 429 });
         if (storeScenario === "not-found") return Response.json({ error: "not-found", message: "shop is not deployed" }, { status: 404 });
         if (storeScenario === "broken") return Response.json({ error: "failure", message: "the store of shop does not read" }, { status: 500 });
-        return Response.json({ store: storeScenario === "unmigrated" ? UNMIGRATED : STORE });
+        return Response.json({ store: storeScenario === "undeclared" ? UNDECLARED : STORE });
       }
       const changed = (over: object) => Response.json({ store: STORE, created: false, set: [], generated: [], removed: [], absent: [], files: { set: [], removed: [] }, restart: null, ...over });
       if (url.pathname === "/api/v1/projects/shop/store" && req.method === "PATCH") {
@@ -539,14 +532,14 @@ describe("secrets and restart, with a token: the project's store", () => {
   const sent = () => received.filter((entry) => entry.method !== "GET");
   const STORE_APP = { ...APP, secrets: ["API_KEY", "WEBHOOK_SECRET"] };
 
-  test("secrets lists the store's names, where each comes from, what is missing: never a value", async () => {
-    storeScenario = "unmigrated";
+  test("secrets lists the store's names, what is set and what is missing: never a value", async () => {
+    storeScenario = "undeclared";
     received.length = 0;
     expect(SSH_COMMANDS).not.toContain("secrets");
     const root = project(STORE_APP, APP_FILES);
     const human = await cli(root, ["secrets"], env());
     expect(human.code).toBe(0);
-    for (const line of [`-> secrets of shop, through ${api}`, "   API_KEY", "set", "   SMTP_URL", "from shop.env", "missing: sitesolide secrets set WEBHOOK_SECRET", "legacy: shop.env, read by the service", "a value is never shown here"]) {
+    for (const line of [`-> secrets of shop, through ${api}`, "   API_KEY", "set", "   SMTP_URL", "set, not declared in sitesolide.json", "missing: sitesolide secrets set WEBHOOK_SECRET", "a value is never shown here"]) {
       expect(human.output).toContain(line);
     }
     expect(received.map((entry) => `${entry.method} ${entry.path}`)).toEqual(["GET /api/v1/projects/shop/store"]);
@@ -676,12 +669,12 @@ describe("secrets and restart, with a token: the project's store", () => {
     expect(received).toEqual([]);
   });
 
-  test("migrate is the owner's: with a token, needs-ssh, nothing sent; a static site has no store", async () => {
+  test("secrets takes no migrate: refused before anything is sent; a static site has no store", async () => {
     received.length = 0;
     const root = project(STORE_APP, APP_FILES);
     for (const asked of [["migrate"], ["migrate", "--retire"]]) {
       const r = await cli(root, ["secrets", ...asked, "--json"], env());
-      expect(events(r.output).at(-1)).toMatchObject({ type: "error", hint: expect.stringContaining("the owner") });
+      expect(events(r.output).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("nothing was sent") });
     }
     expect(received.filter((entry) => entry.path.includes("/store"))).toEqual([]);
     const site = project({ slug: "shop", publicDir: "public" }, { "public/index.html": "" });
@@ -778,38 +771,11 @@ describe("deploy through the API: the secrets", () => {
     expect(received.filter((entry) => entry.method === "PATCH")).toEqual([]);
   });
 
-  test("a manifest that names its variables while the unit still reads legacy values the store lacks: migrate first, nothing sent", async () => {
-    scenario = "succeeds";
-    for (const manifest of [{ ...APP, secrets: ["API_KEY"] }, APP]) {
-      storeScenario = "unmigrated";
-      received.length = 0;
-      const r = await cli(project(manifest, APP_FILES), ["deploy", "--json"], env());
-      expect(r.code).toBe(1);
-      expect(events(r.output).at(-1)).toMatchObject({
-        type: "error",
-        message: "migrate first: sitesolide secrets migrate --restart; the service reads SMTP_URL from legacy files this manifest no longer reads, and the store lacks it",
-        details: expect.arrayContaining(["SMTP_URL: in shop.env", "nothing was sent"]),
-        hint: expect.stringContaining("sitesolide secrets migrate --restart"),
-      });
-      // The deploy's own listing, which a token without Manage secrets is refused quietly.
-      expect(received.map((entry) => `${entry.method} ${entry.path}`)).toEqual(["GET /api/v1/projects/shop/store?for=deploy"]);
-      // Migrated, the store holds it: the deployment goes.
-      storeScenario = "answers";
-      expect((await cli(project(manifest, APP_FILES), ["deploy"], env())).code).toBe(0);
-    }
-    // The old form keeps reading its files: nothing to guard, nothing asked.
-    storeScenario = "unmigrated";
-    received.length = 0;
-    expect((await cli(project({ ...APP, secrets: ["shop.env"] }, APP_FILES), ["deploy"], env())).code).toBe(0);
-    expect(received.filter((entry) => entry.path.endsWith("/store"))).toEqual([]);
-    storeScenario = "answers";
-  });
-
-  test("a store this token may not list, or not again this hour: the machine judges what the deployment would drop, and it goes on", async () => {
+  test("a store this token may not list, or not again this hour: the machine's log names what is missing, and it goes on", async () => {
     scenario = "succeeds";
     for (const [state, said] of [
-      ["out-of-scope", "this token may not list the store: the machine judges what this deployment would drop"],
-      ["spent", "the store cannot be listed again this hour: the machine judges what this deployment would drop"],
+      ["out-of-scope", "this token may not list the store: the machine's log names what is missing"],
+      ["spent", "the store cannot be listed again this hour: the machine's log names what is missing"],
     ] as const) {
       storeScenario = state;
       for (const manifest of [{ ...APP, secrets: ["API_KEY"] }, APP]) {
@@ -823,33 +789,28 @@ describe("deploy through the API: the secrets", () => {
     storeScenario = "answers";
   });
 
-  test("a dashboard before the store, or a listing that breaks: what would be dropped cannot be told, a stop before anything is sent", async () => {
+  test("a dashboard before the store, or a listing that breaks: what the store lacks cannot be told, said, and the deployment goes on", async () => {
     scenario = "succeeds";
     for (const [state, said] of [
       ["old", "does not carry the store of secrets by token yet"],
       ["broken", "the store of shop does not read"],
     ] as const) {
-      for (const manifest of [{ ...APP, secrets: ["API_KEY"] }, APP]) {
-        storeScenario = state;
-        received.length = 0;
-        const r = await cli(project(manifest, APP_FILES), ["deploy", "--json"], env());
-        expect({ state, code: r.code }).toEqual({ state, code: 1 });
-        expect(events(r.output).at(-1)).toMatchObject({
-          type: "error",
-          message: expect.stringContaining(`cannot tell whether this deployment would drop values legacy files supply: `),
-          hint: expect.stringContaining("tell the owner of the machine"),
-        });
-        expect(r.output).toContain(said);
-        expect(received.filter((entry) => entry.method !== "GET")).toEqual([]);
-      }
+      storeScenario = state;
+      received.length = 0;
+      const r = await cli(project({ ...APP, secrets: ["API_KEY"] }, APP_FILES), ["deploy", "--json"], env());
+      expect({ state, code: r.code }).toEqual({ state, code: 0 });
+      expect(events(r.output)).toContainEqual(expect.objectContaining({ type: "warning", message: expect.stringContaining("cannot tell which declared runtime secrets the store lacks: ") }));
+      expect(r.output).toContain(said);
+      expect(received.some((entry) => entry.method === "POST" && entry.path === "/api/v1/deployments")).toBe(true);
+      // A manifest that declares no runtime secret never lists the store.
+      received.length = 0;
+      expect((await cli(project(APP, APP_FILES), ["deploy"], env())).code).toBe(0);
+      expect(received.filter((entry) => entry.path.includes("/store"))).toEqual([]);
     }
-    // The old form keeps reading its files: nothing to tell, nothing asked.
-    storeScenario = "broken";
-    expect((await cli(project({ ...APP, secrets: ["shop.env"] }, APP_FILES), ["deploy"], env())).code).toBe(0);
     storeScenario = "answers";
   });
 
-  test("a project not deployed yet: nothing installed reads a legacy file, and the deployment goes on", async () => {
+  test("a project not deployed yet: what its store lacks is said once the deployment is done, and it goes on", async () => {
     scenario = "succeeds";
     storeScenario = "not-found";
     const r = await cli(project({ ...APP, secrets: ["API_KEY"] }, APP_FILES), ["deploy"], env());

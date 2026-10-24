@@ -249,34 +249,35 @@ describe.skipIf(!VM || !APP)("first pass, with nothing prepared", () => {
 });
 
 /**
- * A secret in place, against the machine. The `sample-secret` project carries a
- * file in /etc/sitesolide and a service that reads it; it is the only place
- * where the presence reading is measured, which the dry run mode never does.
+ * A secret in place, against the machine. The `sample-secret` project names
+ * API_KEY, which its service reads from its store; it is the only place where
+ * the store's listing is read from a real steward, which the dry run mode
+ * never does.
  *
- * The VM is the authority: a secret present on the machine is left as it is,
- * and one that is missing stops the deployment with the dashboard to create it
- * in. The file is created on the machine beforehand, as the dashboard would.
+ * The VM is the authority: a value set there is left as it is, and one that
+ * is missing is warned of, never a stop. The value is set on the machine
+ * beforehand, with `sitesolide secrets set API_KEY`, as the dashboard would.
  */
 describe.skipIf(!VM || !APP)("a secret in place", () => {
   test(
-    "deploy checks it is there, and pushes nothing",
+    "deploy reads the store, and pushes nothing",
     async () => {
       const r = await run("projects/api-with-secret", ["deploy"]);
       expect(r.code).toBe(0);
-      expect(r.output).toContain("present  /etc/sitesolide/sample-secret.env");
+      expect(r.output).toContain("every declared runtime secret is set");
       expect(r.error).not.toContain("read refused");
     },
     180000,
   );
 
   test(
-    "run again, deploy finds it present and pushes nothing",
+    "run again, deploy finds it set and pushes nothing",
     async () => {
       const r = await run("projects/api-with-secret", ["deploy"]);
       expect(r.code).toBe(0);
-      expect(r.output).toContain("present  /etc/sitesolide/sample-secret.env");
+      expect(r.output).toContain("every declared runtime secret is set");
       expect(r.all).not.toContain("from the vault");
-      expect(r.all).not.toContain("cannot tell whether");
+      expect(r.all).not.toContain("cannot tell which");
     },
     180000,
   );

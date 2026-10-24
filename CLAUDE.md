@@ -73,8 +73,9 @@ asks for is put to the repository's author, never run on the agent's say-so.
 **The machine is the source of truth, and the only holder but its
 backups.** `/etc/sitesolide` is the production vault: each project's store,
 `projects/<slug>/`, root's alone, holds its runtime variables and files, and
-the flat files of before still sit beside it until each project migrates. A
-manifest lists names, never a value: `env` for what anyone may read, names
+flat beside the stores sit the platform's own files alone: the dashboard's and
+the portal's password hashes, the monitor's alerting and the backups' bucket.
+A manifest lists names, never a value: `env` for what anyone may read, names
 under `secrets` for the store, `secrets.files` read by the services at
 `$CREDENTIALS_DIRECTORY/files_<name>`, and `secrets.build`, which stays with
 whoever deploys. The backups copy the vault every hour with the rest of the

@@ -7,7 +7,6 @@
     "LAB_WORKER_URL": "http://127.0.0.1:3062",
     "LAB_PUBLIC_URL": "https://{slug}.{zone}"
   },
-  "secrets": ["sample-lab.env"],
   "exclude": [".venv", "__pycache__"],
   "services": {
     "web": {

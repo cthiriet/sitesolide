@@ -6,6 +6,7 @@ import {
   adoptLegacyKeys,
   composeConfig,
   configPath,
+  dashboardAddress,
   defaultPaths,
   deploymentAccount,
   expandHome,
@@ -88,6 +89,14 @@ describe("no default names a machine", () => {
     expect(() =>
       mergeConfig({ server: "me@elsewhere", email: "me@test.invalid", zone: "" }, {}, HOME),
     ).toThrow(IncompleteConfig);
+  });
+
+  test("the dashboard's address follows the configuration's zone, and invents none", () => {
+    // The dashboard is a project like any other, served under the machine's
+    // zone: a test machine under another zone serves it under that zone, and
+    // a message that points to it must point there.
+    expect(dashboardAddress("sample.test")).toBe("https://dashboard.sample.test");
+    expect(dashboardAddress("other.test")).toBe("https://dashboard.other.test");
   });
 });
 

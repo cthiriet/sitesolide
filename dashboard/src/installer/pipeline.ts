@@ -71,13 +71,6 @@
  * laid (src/control/claims.ts). Otherwise the token's code would run with
  * the owner's project and its values.
  *
- * **No value the service runs with is dropped.** A manifest that no longer
- * declares a legacy file its installed units read, its old form naming
- * fewer files or a manifest that lists names, would restart the service
- * without what that file supplies and neither the store nor a kept file
- * does: refused at step 1, `migrate-first`, before anything is written,
- * whatever the client checked (`judgeLegacyLoss`).
- *
  * **One rule `deploy` cannot apply, applied here.** Over SSH, a block or a unit
  * in service that differs from the generated one stops the deployment until
  * `--force`: it may have been edited by hand, and a manifest that changed looks
@@ -92,7 +85,6 @@ import {
   domainHosts,
   hasStore,
   isApp,
-  legacySecretFiles,
   readManifest,
   scheduledServices,
   secretsOf,
@@ -111,12 +103,10 @@ import { compareDirectives, summariseDivergence } from "../../borrowed/compariso
 import { FIRST_CERTIFICATE_MS, readZoneNamesAnswer, ZONE_NAMES_PATH } from "../../borrowed/zone-names";
 import { isPortalReady, portalHost, fromPortal, answers, describe, type ProbeResponse } from "../gatekeeper/probe";
 import { TIMEOUTS } from "../gatekeeper/transaction";
-import { allocatePorts, decideDoor, legacyLoss, legacyLossRefusal, scopeRefusals, takenPorts } from "../control/policy";
+import { allocatePorts, decideDoor, scopeRefusals, takenPorts } from "../control/policy";
 import { madeStore, readClaims } from "../control/claims";
 import type { InstallRequest } from "../control/protocol";
-import type { ProjectEntry } from "../secrets/scope";
 import { installBlock } from "./caddy";
-import { claimRefusals, claimsOf, namesToCheck, type SecretFile } from "./claims";
 import type { Host, Part } from "./host";
 
 /**
@@ -344,10 +334,6 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     const { manifest, text } = final;
     const previous = previousManifest(deposited.get(slug));
     const application = isApp(manifest);
-    // Only an app's unit reads its `secrets`; any project's name may take a
-    // file by its prefix all the same.
-    await judgeClaims(host, slug, text, application ? legacySecretFiles(manifest) : []);
-    if (hasStore(manifest)) await judgeLegacyLoss(host, slug, legacySecretFiles(manifest));
     const behindPortal = final.portal;
     for (const { service, port } of allocated) host.log(`   port ${port} chosen for ${service === null ? "the service" : `service ${service}`}`);
     host.log(`   project ${slug}, ${application ? `${servicesOf(manifest).length > 1 ? `${servicesOf(manifest).length} services` : "service"}` : "static"}, ${behindPortal ? "restricted" : "public"}`);
@@ -566,28 +552,6 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
 
     // --- 9. secrets, restart ----------------------------------------------------------
     if (application) {
-      const secrets = legacySecretFiles(manifest);
-      if (secrets.length > 0) {
-        host.log("-> declared secret files");
-        const foreign: string[] = [];
-        // Judged at step 1 already, and again here, right before the restart
-        // that has the unit read them: a file laid since by somebody else.
-        // A file missing stops nothing: the unit reads it optionally, and the
-        // service starts without its variables, which the log says.
-        const account = await host.accountUid(slug);
-        for (const name of secrets) {
-          const file = await host.secretFile(name);
-          if (file.kind === "absent") host.log(`   !! /etc/sitesolide/${name} missing: the service starts without its variables`);
-          else if (file.kind !== "file" || account === null || file.uid !== account) foreign.push(name);
-          else host.log(`   present  /etc/sitesolide/${name}`);
-        }
-        if (foreign.length > 0) {
-          throw new Stop(
-            "secret-taken",
-            `/etc/sitesolide/${foreign.join(", /etc/sitesolide/")} does not belong to site-${slug}: a project reads its own files alone; the files are in place, the service was not restarted, the owner of the machine must look at it`,
-          );
-        }
-      }
       missing = { missingSecrets: hasStore(manifest) ? await missingFromStore(host, slug, manifest) : null };
       // Every unit but the scheduled services, which their timers start:
       // restarted, one would run at once, outside its schedule, and an idle
@@ -679,25 +643,6 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
   }
 }
 
-/**
- * The secret files this deployment would read or take from another site,
- * judged before anything is written (claims.ts): a refusal names each file,
- * never what it holds.
- */
-async function judgeClaims(host: Host, slug: string, text: string, declared: readonly string[]): Promise<void> {
-  let scope: { projects: ProjectEntry[]; present: string[] };
-  try {
-    scope = await host.secretScope();
-  } catch (error) {
-    throw new Stop("machine-unreadable", `cannot list the projects and the secret files on the machine (${(error as Error).message}): nothing was changed`);
-  }
-  const claims = claimsOf(slug, text, scope.projects, scope.present);
-  const files = new Map<string, SecretFile>();
-  for (const name of namesToCheck(declared, claims)) files.set(name, await host.secretFile(name));
-  const refusals = claimRefusals(slug, declared, claims, files, await host.accountUid(slug));
-  if (refusals.length > 0) throw new Stop("secret-taken", `${refusals.join("; ")}; nothing was changed`);
-}
-
 /** A creation that finds its project laid since it was accepted: someone else's, the owner's SSH deploy above all. */
 function takenMeanwhile(slug: string): Stop {
   return new Stop("taken-meanwhile", `${slug} was deployed on the machine since this deployment was accepted as its creation: a token's creation never lays itself over another project; nothing was changed`);
@@ -722,31 +667,6 @@ async function judgeStoreOwn(host: Host, slug: string, token: string): Promise<v
     "store-not-yours",
     `/etc/sitesolide/projects/${slug} holds a store no write of this token made: a token's creation never takes a store it did not make; nothing was served, the owner of the machine must look at it`,
   );
-}
-
-/**
- * The values this deployment would drop (src/control/policy.ts,
- * `legacyLoss`): what the legacy files the installed units read supply and
- * the store lacks, a manifest that reads the store alone being deployed.
- * Refused before anything is written, `migrate-first`, naming neither a
- * variable nor a file: the owner runs `sitesolide secrets migrate --restart`
- * first. A store whose names cannot be read refuses too, rather than guess.
- */
-async function judgeLegacyLoss(host: Host, slug: string, kept: readonly string[]): Promise<void> {
-  let read: Awaited<ReturnType<Host["legacyReadByUnits"]>>;
-  try {
-    read = await host.legacyReadByUnits(slug, kept);
-  } catch (error) {
-    throw new Stop("machine-unreadable", `cannot read the units of ${slug} on the machine (${(error as Error).message}): nothing was changed`);
-  }
-  // Only the files an installed unit reads and this manifest no longer declares can drop anything.
-  if (read.every((file) => file.read === false || kept.includes(file.name) || file.state === "absent")) return;
-  const names = await host.storeNames(slug);
-  if (names === null) {
-    throw new Stop("machine-unreadable", "cannot tell what the project's store holds of the variables legacy files supply the service with: nothing was changed");
-  }
-  const refusal = legacyLossRefusal(legacyLoss(read, new Set(names.variables), kept));
-  if (refusal !== null) throw new Stop("migrate-first", refusal);
 }
 
 /**

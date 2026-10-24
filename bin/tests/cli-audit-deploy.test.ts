@@ -3,7 +3,6 @@ import { cpSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlink
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { call, eventOutput, login, readRemote, runRemote } from "../cli/remote";
-import { SWITCHES } from "./e2e/fake-ssh";
 import { createFakeVm, type FakeVm } from "./e2e/fake-vm";
 import { run, TESTS_ROOT, type Result } from "./e2e/run";
 
@@ -157,82 +156,38 @@ function secretApp(slug: string, secrets: string[]): string {
   return folder;
 }
 
-describe("the secret files a manifest declares", () => {
-  test("a file of the machine's own, the backups' keys, is refused before anything is sent", async () => {
-    const r = await cli(secretApp("sample-thief", ["dashboard-backup.env"]), ["deploy", "--dry-run", "--json"], fakeVm());
+describe("a manifest that names a file of /etc/sitesolide", () => {
+  test("is refused before anything is sent, the machine's own files and another project's alike: a secret is a variable's name", async () => {
+    for (const secrets of [["dashboard-backup.env"], ["cms.env"], ["sample-thief.env"], ["../../etc/shadow"]]) {
+      const r = await cli(secretApp("sample-thief", secrets), ["deploy", "--dry-run", "--json"], fakeVm());
+      expect(r.code).toBe(1);
+      expect(String(errorOf(r)?.message)).toBe("sitesolide.json rejected");
+      expect((errorOf(r)?.details as string[]).join("\n")).toContain("secrets: entry 1 is not a variable name");
+      expect(said(r)).not.toContain("rsync");
+    }
+  });
+
+  test("the dashboard declares none either: its unit reads its own file, which no manifest names", async () => {
+    const r = await cli(secretApp("dashboard", ["dashboard.env"]), ["deploy", "--dry-run", "--json"], fakeVm());
     expect(r.code).toBe(1);
-    expect(String(errorOf(r)?.message)).toContain("secrets: a file that is not this project's");
-    expect((errorOf(r)?.details as string[]).join("\n")).toContain("dashboard-backup.env belongs to the machine");
+    expect((errorOf(r)?.details as string[]).join("\n")).toContain("secrets: dashboard keeps its password hash in dashboard.env, which its unit reads: it declares no secret");
     expect(said(r)).not.toContain("rsync");
   });
 
-  test("another project's file, by its name, is refused", async () => {
-    const r = await cli(secretApp("sample-thief", ["cms.env"]), ["deploy", "--dry-run", "--json"], fakeVm());
-    expect(r.code).toBe(1);
-    expect((errorOf(r)?.details as string[]).join("\n")).toContain("cms.env is not named after sample-thief");
-  });
-
-  test("a name this slug prefixes, held by a more specific project deployed on the machine, is refused", async () => {
-    const vm = fakeVm();
-    vm.writeManifest("acme-crm", JSON.stringify({ slug: "acme-crm", port: 3040, start: "/usr/local/bin/bun run server.ts", secrets: ["acme-crm.env"] }));
-    const r = await cli(secretApp("acme", ["acme-crm.env"]), ["deploy", "--dry-run", "--json"], vm);
-    expect(r.code).toBe(1);
-    expect((errorOf(r)?.details as string[]).join("\n")).toContain("acme-crm.env belongs to acme-crm");
-  });
-
-  test("a file already on the machine that another account owns is refused, the landing's among them", async () => {
-    const vm = fakeVm();
-    // The docs' own example of a file of the landing, which a slug named landing-mail would name.
-    vm.writeFile(SWITCHES.secretFiles, JSON.stringify({ "landing-mail.env": "site-landing" }));
-    const r = await cli(secretApp("landing-mail", ["landing-mail.env"]), ["deploy", "--dry-run", "--json"], vm);
-    expect(r.code).toBe(1);
-    expect((errorOf(r)?.details as string[]).join("\n")).toContain("/etc/sitesolide/landing-mail.env is already on the machine and belongs to site-landing, not site-landing-mail");
-    expect(said(r)).not.toContain("rsync");
-  });
-
-  test("a file on the machine that its own account owns passes", async () => {
-    const vm = fakeVm();
-    vm.writeFile(SWITCHES.secretFiles, JSON.stringify({ "sample-secret.env": "site-sample-secret" }));
-    const r = await cli(secretApp("sample-secret", ["sample-secret.env"]), ["deploy", "--dry-run", "--json"], vm);
+  test("a manifest that names its variables passes", async () => {
+    const r = await cli(secretApp("sample-secret", ["API_KEY", "SMTP_URL"]), ["deploy", "--dry-run", "--json"], fakeVm());
     expect(errorOf(r)).toBeUndefined();
     expect(r.code).toBe(0);
-  });
-
-  test("the project's own files pass, the dashboard's root file included", async () => {
-    const own = await cli(secretApp("sample-secret", ["sample-secret.env", "sample-secret-smtp.env"]), ["deploy", "--dry-run", "--json"], fakeVm());
-    expect(errorOf(own)).toBeUndefined();
-    expect(own.code).toBe(0);
-    const dashboard = await cli(secretApp("dashboard", ["dashboard.env"]), ["deploy", "--dry-run", "--json"], fakeVm());
-    expect(String(errorOf(dashboard)?.message ?? "")).not.toContain("secrets:");
   });
 });
 
 describe("remove", () => {
-  test("keeps a file named after the project that another account owns", async () => {
-    const vm = fakeVm();
-    vm.writeFile(SWITCHES.secretFiles, JSON.stringify({ "landing-mail.env": "site-landing", "landing-mail-smtp.env": "site-landing-mail" }));
-    const r = await cli(secretApp("landing-mail", ["landing-mail.env", "landing-mail-smtp.env"]), ["remove", "--confirm", "landing-mail", "--dry-run", "--json"], vm);
+  test("deletes no flat file of /etc/sitesolide, only the project's store", async () => {
+    const r = await cli(secretApp("sample-gone", ["API_KEY"]), ["remove", "--confirm", "sample-gone", "--dry-run", "--json"], fakeVm());
     expect(r.code).toBe(0);
     const text = said(r);
-    expect(text).toContain("kept: /etc/sitesolide/landing-mail.env is already on the machine and belongs to site-landing");
-    expect(text).not.toContain("rm -f /etc/sitesolide/landing-mail.env");
-    expect(text).toContain("sudo rm -f /etc/sitesolide/landing-mail-smtp.env");
-  });
-
-  test("never deletes a secret file that is not the project's, whatever its manifest lists", async () => {
-    const r = await cli(
-      secretApp("sample-gone", ["sample-gone.env", "dashboard.env", "dashboard-backup.env", "cms.env"]),
-      ["remove", "--confirm", "sample-gone", "--dry-run", "--json"],
-      fakeVm(),
-    );
-    expect(r.code).toBe(0);
-    const text = said(r);
-    expect(text).toContain("sudo rm -f /etc/sitesolide/sample-gone.env");
-    for (const name of ["dashboard.env", "dashboard-backup.env", "cms.env"]) {
-      expect(text).not.toContain(`rm -f /etc/sitesolide/${name}`);
-      expect(text).not.toContain(`/${name}\n`);
-      expect(text).toContain(`kept: ${name}`);
-    }
+    expect(text).toContain("sudo rm -rf /etc/sitesolide/projects/sample-gone");
+    expect(text).not.toMatch(/rm -f \/etc\/sitesolide\//);
   });
 });
 

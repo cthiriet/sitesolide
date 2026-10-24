@@ -20,9 +20,10 @@ own: there is no staging environment and no second machine.
 `vm.test.ts` carries tests that dry-run mode cannot replace: an app never placed
 on the machine, deployed by the single `deploy` command, and that same
 deployment run again, which must place and reload nothing. Then a project with a
-secret file of the old form: `deploy` finds it present and pushes nothing, the
-machine being the source of truth. Dry-run reads nothing on the machine, so nothing would say whether the
-unit or the secret were really missing.
+runtime secret named in its manifest: `deploy` reads the store, finds the value
+set and pushes nothing, the machine being the source of truth. Dry-run reads
+nothing of the store, so nothing would say whether the unit or the secret were
+really missing.
 
 ## What protects production
 
@@ -84,7 +85,7 @@ standard input and is never recorded, which the tests check. The command
 that lays a store's folders is logged as `STORE-PREPARE <slug>` and lays them
 in the VM's tree, or answers as for a link in their place
 (`refuseStorePrepare`); the tests check it comes before the units, and the
-listing before the Caddy lock.
+listing, made for real alone, before the Caddy lock.
 
 ## Setup
 
@@ -165,7 +166,7 @@ with the binary itself. `help.test.ts` holds `help` and
 | `projects/bun-mixed` | Caddy serves `public/`, the service gets the rest |
 | `projects/own-domain` | a site waiting to switch to its own domain |
 | `projects/fastapi-app` | Python, no static page, everything goes to the service |
-| `projects/api-with-secret` | a secret file of the old form, `"secrets": ["sample-secret.env"]`, deployed with its warning, checked on the machine and never pushed, and outbound network |
+| `projects/api-with-secret` | one runtime secret named in the manifest, `"secrets": ["API_KEY"]`, read from the project's store and never pushed, and outbound network |
 | `projects/store-app` | secrets named in the manifest, two runtime variables and a file, kept in the project's store: its folders laid before the units, what it lacks read before the build and the Caddy lock, warned of and never a stop |
 | `projects/portal-mixed` | a project behind the portal, with an exempted path |
 | `projects/multi-service` | several services: a front, an API under `/v1`, an internal worker |
@@ -211,7 +212,7 @@ done
 sudo systemctl daemon-reload
 sudo rm -f /etc/caddy/sites/sample-*.caddy
 for slug in sample-static sample-docs sample-bun sample-api sample-secret; do
-  sudo rm -rf /srv/sites/$slug
+  sudo rm -rf /srv/sites/$slug /etc/sitesolide/projects/$slug /var/lib/sitesolide-steward/precedents/projects/$slug
   sudo userdel site-$slug 2>/dev/null || true
 done
 sudo systemctl reload caddy

@@ -282,6 +282,8 @@ const STEWARD_OPERATIONS: Readonly<Record<string, StewardOperation>> = {
   "secrets.replace": "replace",
   "secrets.password": "password",
   "secrets.generate": "generate",
+  // No longer written: what the steward did before projects kept their
+  // secrets in their store alone, still read from the rows that carry it.
   "secrets.migrate": "migrate",
   "secrets.retire": "retire",
   "access.general": "portal",
@@ -304,7 +306,7 @@ const DONE: Readonly<Record<StewardOperation, string>> = {
   code: "Gave a new code",
   restart: "Restarted",
   generate: "Generated",
-  migrate: "Merged the legacy files into the store",
+  migrate: "Merged the flat files into the store",
   retire: "Retired",
 }
 
@@ -323,7 +325,7 @@ const TRIED: Readonly<Record<StewardOperation, string>> = {
   code: "Tried to give a new code",
   restart: "Tried to restart",
   generate: "Tried to generate",
-  migrate: "Tried to merge the legacy files into the store",
+  migrate: "Tried to merge the flat files into the store",
   retire: "Tried to retire",
 }
 

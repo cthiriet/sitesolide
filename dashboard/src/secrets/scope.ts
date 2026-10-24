@@ -3,34 +3,22 @@
  *
  * Pure: receives the text of the manifests, the names present in the secrets
  * directory and the names asked for, returns a decision. The steward runs under root and writes
- * in /etc/sitesolide: every rule here is what separates "a site's file" from
- * "any file of the machine at all", and each one is checked without a VM.
+ * in /etc/sitesolide: every rule here is what separates "one of the
+ * platform's own files" from "any file of the machine at all", and each one is
+ * checked without a VM.
  *
- * ## The scope: every deployed site
+ * ## The scope: the platform's own files
  *
- * A site is a directory of /srv/sites, static or app, the landing included.
- * Its files come from two sources brought together:
+ * A project keeps its secrets in its store, /etc/sitesolide/projects/<slug>/
+ * (src/secrets/store.ts). Flat beside it, /etc/sitesolide holds the
+ * platform's own files alone, each listed under the site that uses it
+ * (PLATFORM_FILES): the dashboard's hash, the monitor's alerting addresses
+ * and the backups' bucket under the dashboard, the portal's hash and sign-in
+ * settings under the portal. Every other site lists none, and no other name
+ * is ever written.
  *
- * - `secrets` from its manifest, environment files that the generated unit
- *   reads through `EnvironmentFile=`;
- * - the files present in /etc/sitesolide that carry its name, which is how a
- *   site no manifest describes, the landing or a hand-made service, keeps its
- *   files in the dashboard.
- *
- * Either way a file is expected `site-<slug>` in 0600, and root's for the
- * dashboard's hash and the monitor's alerting alone (ROOT_FILES). A registry
- * embedded at build time used to say so line by line; every line but that one
- * repeated the rule, and it was dropped.
- *
- * A file is attached to a site by its name alone: `<slug>.env`,
- * `<slug>-<something>`, or `<slug>-secrets/<name>` for a subdirectory of a
- * single level. The landing is served from the zone's directory but its files
- * and its account carry the label `landing`, the only exception, already
- * written in src/state.ts.
- *
- * What is not a site stays outside: a name that no directory of /srv/sites
- * carries (`cloudflare.env`), a path outside /etc/sitesolide, and an owner
- * outside `site-*`, except the ROOT_FILES, root's.
+ * A file is expected `site-portal` in 0600 for the portal's, root's for the
+ * dashboard's three (ROOT_FILES).
  *
  * Inside, two more rules: `PASSWORD_HASH` changes only through `/password`, in
  * whatever file it may be, and `dashboard.env` and `portal.env` carry nothing
@@ -41,21 +29,18 @@
  */
 import { relative, resolve } from "node:path";
 import { MACHINE_FOLDER } from "../../borrowed/backups";
-import { hasStore, isApp, legacySecretFiles, readManifest, isValidSlug, secretsOf, type Manifest, type SecretsForm } from "../../borrowed/manifest";
+import { isApp, readManifest, isValidSlug, type Manifest } from "../../borrowed/manifest";
 import { PASSWORD_VARIABLE } from "../../borrowed/variables";
 import { IDENTITY_VARIABLES } from "../../borrowed/sharing";
 import { PASSWORD_MAX } from "../auth";
 import { LANDING_FOLDER } from "../state";
-import type { ErrorCode, FileKind } from "./protocol";
+import type { ErrorCode } from "./protocol";
 
 /** Beyond that, it is no longer a secret's file name. */
 export const MAX_FILE_NAME = 128;
 
-/** The prefix of the landing's files and account, whose directory is the bare domain. */
+/** The prefix of the landing's account, whose directory is the bare domain. */
 export const LANDING_LABEL = "landing";
-
-/** The only subdirectory allowed: `<slug>-secrets`, one level, never more. */
-export const SUBFOLDER_SUFFIX = "-secrets";
 
 /** A site's account, as bin/cli/unit.ts generates it. */
 export const ACCOUNT_PREFIX = "site-";
@@ -68,18 +53,30 @@ export const ACCOUNT_PREFIX = "site-";
  *   `EnvironmentFile=`, which PID 1 reads as root, but must not be able to
  *   rewrite it.
  * - `dashboard-monitor.env`, the monitor's alerting addresses
- *   (monitor/README.md). Its name attaches it to the dashboard's site, where
- *   it is managed with the others, but neither the dashboard's service nor the
+ *   (monitor/README.md). Listed under the dashboard's site, where it is
+ *   managed with the others, but neither the dashboard's service nor the
  *   monitor's account needs to read it: PID 1 hands it to the monitor. Owned by
  *   site-dashboard, a compromised dashboard would read the heartbeat's address
  *   without unlocking anything, and could ping it to hide that the machine is
  *   down.
  * - `dashboard-backup.env`, the backups' bucket and encryption passphrase,
- *   which the backup units read (dashboard/src/backup/README.md): attached to
- *   the dashboard site by its name, managed from its Secrets, and root's so
- *   that the dashboard's own account never reads them.
+ *   which the backup units read (dashboard/src/backup/README.md): listed under
+ *   the dashboard's site, managed from its Secrets, and root's so that the
+ *   dashboard's own account never reads them.
  */
 export const ROOT_FILES = ["dashboard.env", "dashboard-monitor.env", "dashboard-backup.env"];
+
+/**
+ * The platform's own flat files, by the site that lists them. The first of
+ * each is `<slug>.env`, which the site's unit reads (platformFile in
+ * bin/cli/unit.ts): listed whether present or not, so that a missing one says
+ * so. The others are listed once present: each is created by hand, once, on
+ * the machine (monitor/README.md, dashboard/src/backup/README.md).
+ */
+export const PLATFORM_FILES: Readonly<Record<string, readonly string[]>> = {
+  dashboard: ROOT_FILES,
+  portal: ["portal.env"],
+};
 
 /**
  * The variable that changes only through `/password`, in every managed
@@ -141,9 +138,6 @@ export const MIN_PASSWORD = 16;
 /** Any bigger, it is no longer a secret written by this dashboard. */
 export const MAX_FILE_BYTES = 256 * 1024;
 
-/** What a replacement of content can write: an ssh key, a service account's JSON. */
-export const MAX_CONTENT_BYTES = 64 * 1024;
-
 export type Refusal = { error: ErrorCode; message: string };
 
 export type ProjectEntry = { folder: string; manifest: string | null };
@@ -152,12 +146,9 @@ export type ProjectEntry = { folder: string; manifest: string | null };
 export type Expected = { owner: string; group: string; mode: number };
 
 export type Declaration = {
-  /** The path under /etc/sitesolide, `cms.env` or `<slug>-secrets/<name>`. */
+  /** The flat name under /etc/sitesolide, `portal.env`. */
   name: string;
-  kind: FileKind;
   expected: Expected;
-  /** False: write-only, never read back. */
-  readable: boolean;
   passwords: string[];
 };
 
@@ -168,15 +159,8 @@ export type Site = {
   manifest: Manifest | null;
   /** A manifest that names this directory and declares no service: no unit. */
   isStatic: boolean;
-  /** In the manifest's order, then the secrets directory's. */
+  /** The platform's own files it lists, in PLATFORM_FILES's order; none for any other site. */
   files: Declaration[];
-  /**
-   * Present flat files this store-form site is the most specific owner of, by
-   * prefix: listed, retired, never written, never created, never migrated.
-   */
-  leftovers: Declaration[];
-  /** The deposited manifest's secrets form; "none" without a conforming manifest. */
-  form: SecretsForm;
 };
 
 const outOfScope = (message: string): Refusal => ({ error: "out-of-scope", message });
@@ -187,7 +171,7 @@ const octal = (mode: number) => mode.toString(8).padStart(3, "0");
 /**
  * Is a directory of /srv/sites a site? A slug, or the landing's directory.
  * `landing` itself is not one: the CLI refuses that slug, and a directory of
- * that name would fight the landing over the `landing-*` files. Nor is
+ * that name would fight the landing over its account. Nor is
  * `machine`, the CLI refuses it too: it names the snapshots of the machine's
  * own state, its secrets among them, which no page lists or restores.
  */
@@ -200,7 +184,7 @@ export function isSiteFolder(folder: string): boolean {
   return isValidSlug(folder) && folder !== LANDING_LABEL && folder !== MACHINE_FOLDER;
 }
 
-/** The label that prefixes a site's files and account. */
+/** The label that names a site's account. */
 export function label(folder: string): string {
   return folder === LANDING_FOLDER ? LANDING_LABEL : folder;
 }
@@ -211,10 +195,10 @@ export function siteAccount(folder: string): string {
 
 // --- The names ---------------------------------------------------------------
 
-const COMPONENT_SHAPE = /^[A-Za-z0-9._-]+$/;
+const NAME_SHAPE = /^[A-Za-z0-9._-]+$/;
 
 /**
- * The shape of a name, without looking at which site it belongs to.
+ * The shape of a name, before it is looked for among a site's files.
  *
  * The character set is deliberately narrow: `EnvironmentFile=` expands the
  * wildcards `*?[`, and a name that carried some would read files other than
@@ -230,77 +214,19 @@ export function nameRefusal(name: unknown): Refusal | null {
   if (name.includes("..")) return outOfScope("file name with `..`");
   // A form that normalises differently designates, to the eye, another name.
   if (name.normalize("NFC") !== name) return outOfScope("file name not in Unicode normal form");
-
-  const components = name.split("/");
-  if (components.length > 2) return outOfScope("more than one folder level");
-  for (const component of components) {
-    if (component === "") return outOfScope("file name with an empty path component");
-    if (component.startsWith(".")) return outOfScope("hidden file name");
-    if (!COMPONENT_SHAPE.test(component)) return outOfScope("file name with unexpected characters");
-  }
-  if (components.length === 2) {
-    const folder = components[0]!;
-    const prefix = folder.slice(0, -SUBFOLDER_SUFFIX.length);
-    if (!folder.endsWith(SUBFOLDER_SUFFIX) || !isValidSlug(prefix)) {
-      return outOfScope(`a subfolder must be named <site>${SUBFOLDER_SUFFIX}`);
-    }
-  }
+  if (name.includes("/")) return outOfScope("a flat file name, with no folder");
+  if (name.startsWith(".")) return outOfScope("hidden file name");
+  if (!NAME_SHAPE.test(name)) return outOfScope("file name with unexpected characters");
   return null;
 }
 
-/** A name's subdirectory, `<slug>-secrets`, or null for a flat file. */
-export function subFolderOf(name: string): string | null {
-  const slash = name.indexOf("/");
-  return slash === -1 ? null : name.slice(0, slash);
-}
-
-/** `.env`: a file systemd reads variable by variable. The rest is managed as one block. */
-export function kindOf(name: string): FileKind {
-  return name.endsWith(".env") ? "variables" : "content";
-}
-
-/**
- * The sites whose name the prefix carries, among the given directories. One
- * name can designate several of them: `cms-tool.env` is both a `cms-*` and the
- * `.env` of `cms-tool`. It is for the caller to decide.
- */
-export function candidates(name: string, folders: Iterable<string>): string[] {
-  const subFolder = subFolderOf(name);
-  const found: string[] = [];
-  for (const folder of folders) {
-    if (!isSiteFolder(folder)) continue;
-    const e = label(folder);
-    const suits =
-      subFolder !== null ? subFolder === `${e}${SUBFOLDER_SUFFIX}` : name === `${e}.env` || name.startsWith(`${e}-`);
-    if (suits) found.push(folder);
-  }
-  return found.sort();
-}
-
-/** The path of a name under `folder`, at exactly one or two levels, or null if it leaves it. */
+/** The path of a flat name under `folder`, or null if it leaves it. */
 export function pathUnder(folder: string, name: string): string | null {
   const root = resolve(folder);
   const path = resolve(root, name);
   const under = relative(root, path);
-  if (under !== name || under === "" || under.startsWith("..")) return null;
-  const depth = under.split("/").length;
-  if (depth < 1 || depth > 2) return null;
+  if (under !== name || under === "" || under.startsWith("..") || under.includes("/")) return null;
   return path;
-}
-
-// --- Modes ---------------------------------------------------------------------
-
-/**
- * The mode allowed for a secret: readable by its owner, with no special bit, no
- * execution, never writable by the group nor by the others. An environment file
- * moreover opens to nobody else: systemd reads it under root, the service does
- * not need it. A public key in 0444 gets through, a private key in 0644 does
- * not.
- */
-export function isAllowedMode(mode: number, kind: FileKind): boolean {
-  if ((mode & 0o400) === 0) return false;
-  if ((mode & 0o7133) !== 0) return false;
-  return kind === "content" || (mode & 0o077) === 0;
 }
 
 // --- The scope ---------------------------------------------------------------
@@ -315,147 +241,33 @@ function manifestOf(text: string | null): Manifest | null {
 }
 
 /**
- * A name a manifest can declare: a flat environment file, since the generated
- * unit reads it through `EnvironmentFile=/etc/sitesolide/<name>`.
- */
-export function manifestName(name: unknown): name is string {
-  return nameRefusal(name) === null && subFolderOf(name as string) === null && kindOf(name as string) === "variables";
-}
-
-/**
- * Every site, by directory, with its files.
- *
- * The attachment of a name to a site:
- *
- * - declared by the manifest of a single one of the sites whose prefix it
- *   carries: that one. Declared by several, it belongs to none, the steward not
- *   knowing which one must own it;
- * - declared by no manifest but present in the secrets directory: the most
- *   specific site whose name it carries, `cms-tool.env` going to `cms-tool`
- *   when that site exists and to `cms` otherwise;
- * - neither: out of the scope, like any name no site carries.
- *
- * **A store-form site claims no flat file.** An app whose deposited manifest
- * names its secrets as variables, or declares none, reads them from its
- * project's store, `/etc/sitesolide/projects/<slug>/`, and its units read no
- * flat file: it declares none, and none is attached to it as a file it may
- * write. Without this, a new project `nis2-ses` would be handed
- * `nis2-ses.env`, `nis2`'s file, the day `nis2` stopped declaring it. A file
- * whose most specific owner by prefix is such a site goes to its
- * `leftovers`, which only the store's listing and retire read. Legacy-form
- * sites, storeless ones, and sites without a manifest (the landing, a
- * hand-made service) keep the rules above exactly.
+ * Every site, by directory, with the platform's own files it lists:
+ * `<slug>.env` of the dashboard and the portal whether present or not, the
+ * others of PLATFORM_FILES once present among `present`, the names in
+ * /etc/sitesolide. Every other site lists none.
  */
 export function readSites(entries: ProjectEntry[], present: readonly string[]): Map<string, Site> {
   const sites = new Map<string, Site>();
-  const declaring = new Map<string, string[]>();
-  const order: string[] = [];
-  const note = (name: string) => {
-    if (!order.includes(name)) order.push(name);
-  };
-
   for (const entry of [...entries].sort((a, b) => a.folder.localeCompare(b.folder))) {
     if (!isSiteFolder(entry.folder) || sites.has(entry.folder)) continue;
     const manifest = manifestOf(entry.manifest);
     const conforms = manifest !== null && manifest.slug === entry.folder;
-    sites.set(entry.folder, {
-      folder: entry.folder,
-      manifest,
-      isStatic: conforms && !isApp(manifest),
-      files: [],
-      leftovers: [],
-      form: conforms ? secretsOf(manifest).form : "none",
-    });
-
-    // Only an app site has a unit that reads its `secrets`, and only the old
-    // form names files: a list of variable names is no list of files, and a
-    // names-form manifest would otherwise declare flat files named after its
-    // variables.
-    if (!conforms || !isApp(manifest)) continue;
-    for (const name of legacySecretFiles(manifest) as unknown[]) {
-      if (!manifestName(name)) continue;
-      const enumerate = declaring.get(name) ?? [];
-      if (!enumerate.includes(entry.folder)) enumerate.push(entry.folder);
-      declaring.set(name, enumerate);
-      note(name);
-    }
+    const own = PLATFORM_FILES[entry.folder] ?? [];
+    const files = own.filter((name) => name === `${entry.folder}.env` || present.includes(name)).map((name) => declaration(name, entry.folder));
+    sites.set(entry.folder, { folder: entry.folder, manifest, isStatic: conforms && !isApp(manifest), files });
   }
-
-  const onDisk = new Set<string>();
-  for (const name of present) {
-    if (nameRefusal(name) !== null) continue;
-    onDisk.add(name);
-    note(name);
-  }
-
-  const folders = [...sites.keys()];
-  for (const name of order) {
-    // The machine's own files are the dashboard's, never a site's their name
-    // happens to prefix: a project deployed over SSH as dashboard-backup took
-    // the backups' keys and passphrase into its Secrets section, where its
-    // Admins read and rewrote them. A token may not create such a name
-    // (decideSlug); the owner's deployment of a cloned repository could.
-    const possible = ROOT_FILES.includes(name) ? candidates(name, folders).filter((folder) => folder === "dashboard") : candidates(name, folders);
-    const fromManifest = (declaring.get(name) ?? []).filter((folder) => possible.includes(folder));
-
-    let folder: string | undefined;
-    if (fromManifest.length > 0) {
-      if (fromManifest.length > 1) continue;
-      folder = fromManifest[0];
-    } else if (onDisk.has(name)) {
-      folder = mostSpecific(possible);
-    }
-    const site = folder === undefined ? undefined : sites.get(folder);
-    if (site === undefined) continue;
-    // Only a name present and declared by no manifest reaches a store-form
-    // site, which declares none: a leftover, never a file of its own.
-    if (isStoreForm(site)) site.leftovers.push(declaration(name, site.folder));
-    else site.files.push(declaration(name, site.folder));
-  }
-
   return sites;
 }
 
-/**
- * An app whose deposited manifest names this folder, that has a store, and
- * whose secrets are names or nothing: its units read the project's store and
- * no flat file it declares (readSites).
- */
-export function isStoreForm(site: Pick<Site, "folder" | "manifest" | "form">): boolean {
-  const { manifest } = site;
-  return manifest !== null && manifest.slug === site.folder && hasStore(manifest) && site.form !== "legacy";
-}
-
-/** The site with the longest label, the most specific of those a name could belong to. */
-function mostSpecific(folders: readonly string[]): string | undefined {
-  return [...folders].sort((a, b) => label(b).length - label(a).length || a.localeCompare(b))[0];
-}
-
-/**
- * The mode a file is expected to carry, from its name. An environment file is
- * read by systemd as root and opens to its owner alone. A secret's content is
- * never rewritten in place, so it is read-only, and a public key, the only
- * content meant to be shown, is readable by everyone.
- */
-export function expectedMode(name: string): number {
-  if (kindOf(name) === "variables") return 0o600;
-  return name.endsWith(".pub") ? 0o444 : 0o400;
-}
+/** The mode a platform file is expected to carry: read by systemd as root, open to its owner alone. */
+export const EXPECTED_MODE = 0o600;
 
 function declaration(name: string, folder: string): Declaration {
-  const kind = kindOf(name);
   const account = ROOT_FILES.includes(name) ? "root" : siteAccount(folder);
-  const expected: Expected = { owner: account, group: account, mode: expectedMode(name) };
-  return {
-    name,
-    kind,
-    expected,
-    readable: kind === "variables" || (expected.mode & 0o004) !== 0,
-    passwords: kind === "variables" ? [PASSWORD_VARIABLE] : [],
-  };
+  return { name, expected: { owner: account, group: account, mode: EXPECTED_MODE }, passwords: [PASSWORD_VARIABLE] };
 }
 
-/** `site-cms:site-cms 0600`, as the page displays it. */
+/** `site-portal:site-portal 0600`, as the page displays it. */
 export function expectedText(expected: Expected): string {
   return `${expected.owner}:${expected.group} ${octal(expected.mode).padStart(4, "0")}`;
 }
@@ -483,39 +295,12 @@ export function checkFile(
 
   const found = site.files.find((file) => file.name === valid);
   if (found === undefined) {
-    return { refusal: outOfScope(`${valid} is not declared in the sitesolide.json of ${site.folder}`) };
+    return { refusal: outOfScope(`${valid} is not one of the platform's files that ${site.folder} lists`) };
   }
 
   const path = pathUnder(secretsFolder, valid);
   if (path === null) return { refusal: outOfScope("the path leaves the secrets folder") };
   return { declaration: found, path };
-}
-
-/**
- * Why a token may not change this file, or null. A token manages
- * `<slug>.env` alone, the file a token's project may declare
- * (src/control/policy.ts, `scopeRefusals`), and only while the manifest
- * deployed on the machine declares it: an app's, naming this folder, listing
- * it in `secrets`. A `<slug>.env` present but declared by nothing is refused,
- * and never created: no unit reads it, and a hand-made service may.
- *
- * The file asked for is never quoted: a value pasted in its place would be
- * sent back.
- */
-export function tokenFileRefusal(site: Site, file: unknown): Refusal | null {
-  // A project that keeps its variables in its store has no flat file a token
-  // would manage: an older CLI is told what replaced it.
-  if (isStoreForm(site)) {
-    return outOfScope("this project keeps its variables in its store: update your sitesolide CLI, then sitesolide secrets set NAME");
-  }
-  const own = `${site.folder}.env`;
-  if (file !== own) return outOfScope(`a token manages ${own} alone`);
-  const { manifest } = site;
-  const declared = manifest !== null && manifest.slug === site.folder && isApp(manifest) && legacySecretFiles(manifest).includes(own);
-  if (!declared) {
-    return outOfScope(`the sitesolide.json deployed for ${site.folder} does not declare ${own}: add "secrets": ["${own}"] to it and deploy, then set its variables`);
-  }
-  return null;
 }
 
 /** The reason for refusing a chosen password, or null. None of them quotes it. */
@@ -622,10 +407,10 @@ export function unmanagedReason(info: FileInfo, expected: Expected, real: Owner 
 }
 
 /**
- * Why a file's subdirectory is not traversed, or null. It must be a real
- * directory, root's, and closed to writing by other accounts: a site that could
- * write there would put a link in the file's place between two actions of the
- * steward. `uidRoot` null: no check of the account.
+ * Why a folder of a store is not traversed, or null. It must be a real
+ * directory, root's, and closed to writing by other accounts: a project that
+ * could write there would put a link in a file's place between two actions of
+ * the steward. `uidRoot` null: no check of the account.
  */
 export function folderReason(info: FolderInfo, uidRoot: number | null, path: string): string | null {
   if (info.link) return `${path} is a symbolic link`;
@@ -651,32 +436,5 @@ export function previousReason(info: FileInfo, expected: Owner | null, account: 
     return `the previous version belonged to uid ${info.uid}, not ${account}: an earlier site of the same name?`;
   }
   if (info.size > MAX_FILE_BYTES) return "the previous version is larger than 256 KiB";
-  return null;
-}
-
-// --- The content of a file managed as one block ------------------------------
-
-/**
- * The text of a `content` file, or the reason to leave it out of management.
- * Strict UTF-8 and with no null byte: what cannot be read back as text would
- * not be rewritten identically from the page. The byte order mark is kept, so
- * that text and bytes correspond one for one.
- */
-export function readContent(bytes: Uint8Array): { text: string } | { reason: string } {
-  let text: string;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-  } catch {
-    return { reason: "not valid UTF-8 text" };
-  }
-  if (text.includes("\0")) return { reason: "contains a null byte" };
-  return { text };
-}
-
-/** The reason for refusing a submitted content, or null. None of them quotes the content. */
-export function checkContent(content: string): string | null {
-  if (!content.isWellFormed()) return "the content is not valid Unicode";
-  if (content.includes("\0")) return "the content contains a null byte";
-  if (new TextEncoder().encode(content).length > MAX_CONTENT_BYTES) return "the content is larger than 64 KiB";
   return null;
 }

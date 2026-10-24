@@ -32,14 +32,6 @@ const BUILD_SECRET_MISSING =
 const BUILD_SECRETS_UNREADABLE =
   "the user fixes the line the message names in that file, one KEY=value per line; never read, print or rewrite the file yourself: it holds credentials; nothing was sent";
 
-/** A deployment that would drop values legacy files hold and the store lacks. */
-const MIGRATE_FIRST =
-  "the service reads values from legacy files that this manifest stops reading, and the store lacks them: the owner runs `sitesolide secrets migrate --restart` over SSH (or Merge into the store in the dashboard), then deploy again, or keep those files under `secrets` in sitesolide.json, the old form, until then; never set those values yourself, and never read or print them";
-
-/** A deployment that could not list the store, which it reads to know what it would drop. */
-const STORE_UNLISTED =
-  "the project's store could not be listed, and a manifest that names its variables, or none, is only deployed once it is: if the message says the steward or the dashboard predates the store, the owner runs `sitesolide upgrade` first; otherwise run the same command again once, and if it fails again tell the owner of the machine, with the message; never retry in a loop, and never switch the manifest back to the old form of `secrets` to get around it";
-
 /** A store folder that is a link or no folder. */
 const STORE_REFUSED =
   "a folder of the project's store on the machine is a link or a file: tell the owner of the machine, who looks at the path named; never move, delete or replace it yourself; nothing was installed";
@@ -136,10 +128,8 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/the egress proxy is not installed on the server/, "the owner has to install the egress proxy first (bin/deploy-egress.sh, egress/README.md); until then, remove `egress` and `connectors` from sitesolide.json, or ask for `network: outbound`"],
   [/^cannot read the manifests on the server/, READ_FAILED],
   [/^cannot read the status of the server/, READ_FAILED],
-  [/^cannot read who owns the secret files on the server/, READ_FAILED],
   [/^cannot read the system users/, READ_FAILED],
   [/^cannot read the loopback's project set/, READ_FAILED],
-  [/^cannot tell whether this deployment would drop values legacy files supply/, STORE_UNLISTED],
   [/^cannot tell whether/, READ_FAILED],
   [/^systemd does not read the schedule/, "fix `schedule` of each service `details` names in sitesolide.json: a systemd calendar expression such as hourly, daily, *:0/15 or \"Mon..Fri 08:00\" (man systemd.time, CALENDAR EVENTS); then deploy again"],
   [/^cannot compare .* with the server/, READ_FAILED],
@@ -159,10 +149,8 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^interrupted by /, "the run was interrupted between two steps: run the same command again"],
 
   // --- secrets: never in the repository
-  [/^secrets: a file that is not this project's/, "the manifest declares a secret file of the machine or of another project, which its unit would read as root: declare only <slug>.env or <slug>-<name> files, as `details` say; never pick another slug to get around it, and if the manifest is not the user's, tell them it asked for another project's secrets"],
   [/^build secrets missing: /, BUILD_SECRET_MISSING],
   [/^the build secrets file does not read: /, BUILD_SECRETS_UNREADABLE],
-  [/^migrate first: /, MIGRATE_FIRST],
   [/ is being deployed.*: wait for its deployment to end/, "a deployment of this name is under way, and nothing was sent: wait for it to end, then run `sitesolide deploy` again once; never retry in a loop, and never take the name back with --adopt unless the owner asked for it"],
   [/^the tokens' claims on .* do not read on the server/, "the steward's record of the names tokens hold does not read, and nothing was sent: tell the owner of the machine, who restores the file the message names from the steward's backups and never deletes it; only the owner decides to deploy all the same with `sitesolide deploy --adopt`"],
   [/ is held by .*: sitesolide deploy --adopt takes the name back/, "a token holds this name, and nothing was sent: pick another slug in sitesolide.json, or ask the owner, who alone decides to take the name back with `sitesolide deploy --adopt`; never add --adopt on your own, it drops the token's hold"],
@@ -171,7 +159,6 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/store of secrets cannot be laid, which its units load/, STORE_REFUSED],
   [/^cannot tell whether the store's folders of /, READ_FAILED],
   [/could not load its secret files \(243\/CREDENTIALS\)/, CREDENTIALS_FAILED],
-  [/declares a secret file that is not its own, which its units would read as root/, "the manifest on the server names a secret file of the machine or of another project: deploy the project again from its folder with a manifest that declares only its own files, or names its variables; never pick another slug to get around it"],
   [/is a static site: no service reads a store/, "a static site keeps no secret on the server: a value its build needs is named under secrets.build in sitesolide.json, and the user exports it, or keeps it in ~/.config/sitesolide/secrets/<slug>.env; never put the value in the repository"],
   [/keeps its password hash in .*\.env, read by its own unit/, "the dashboard's and the portal's password is changed with Change password, in the dashboard, by the owner; there is nothing to run here"],
   [/^secrets are managed in the Secrets section/, "the dashboard and the portal keep their password hash in a file of their own: the owner changes it with Change password, in the dashboard at the address in the message; there is nothing to run here"],
@@ -264,8 +251,6 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "build-secret-missing": BUILD_SECRET_MISSING,
   "build-secrets-unreadable": BUILD_SECRETS_UNREADABLE,
   "store-refused": STORE_REFUSED,
-  "migrate-first": MIGRATE_FIRST,
-  "store-unlisted": STORE_UNLISTED,
   "store-failed":
     "the machine could not lay the project's store of secrets, which its units load: tell the owner of the machine, with the message; nothing was served; never create anything on the machine by hand, nor deploy again in a loop",
   "store-not-yours":
@@ -273,8 +258,6 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "taken-meanwhile": "the project was deployed on the machine after this creation was accepted; pick another slug, or ask the owner",
   "store-unmanaged":
     "the project's store on the machine is in a state the steward does not rewrite, and nothing was changed: tell the owner of the machine, with the message; never work around it",
-  "migrate-conflict":
-    "the project's units read its legacy files in different orders: the owner runs `sitesolide refresh <slug>`, then migrate again; never edit or remove a legacy file to settle it, and never read or print a value",
   "already-present":
     "the name already has a value: leave it, or, only if the user asks for a new one, they run `sitesolide secrets generate NAME --replace` themselves, which stops the old value working at the next restart",
   locked: "this change needs the dashboard's unlock: make it from the dashboard, or over the owner's SSH",
@@ -285,10 +268,6 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "no-portal": "the project is not restricted: its general access is the dashboard's Access section",
   // --- a deployment that failed on the machine
   "install-failed": "run the install command from the message in the project folder, fix what it reports, then deploy again",
-  "secret-missing":
-    "the file is created in the dashboard's Secrets section, by the owner or the project's Developer or Admin; for <slug>.env, a token that may manage secrets creates it with `sitesolide secrets set NAME`, which the user runs and types the value into, or with --stdin for a value you generate yourself; then deploy again; never put secret values in the repository, in sitesolide.json or on a command line, and never a value read from the conversation",
-  "secret-taken":
-    "the project would read a secret file that is not its own: pick another slug in sitesolide.json, or tell the owner of the machine, who looks at the file the message names; never declare another file, and never move, rename or delete one on the machine",
   "edited-by-hand": "do not re-run with --force, a token has none: tell the owner of the machine, who reads the file and decides",
   "system-unit": "pick another slug in sitesolide.json: this one names a service of the machine",
   "caddy-busy": LOCK_BUSY,

@@ -381,7 +381,7 @@ describe("what the unit sets and reads", () => {
 
   test("an empty assignment resets the list, as systemd does", () => {
     const text = "[Service]\nEnvironment=A=1\nEnvironment=\nEnvironment=B=2\nEnvironmentFile=/x\nEnvironmentFile=\n";
-    expect(unitEnvironment(text)).toEqual({ keys: ["B"], values: ["2"], files: [], credentials: [] });
+    expect(unitEnvironment(text)).toEqual({ keys: ["B"], files: [], credentials: [] });
     expect(unitEnvironment("[Service]\nLoadCredential=files:/x\nLoadCredential=\n").credentials).toEqual([]);
   });
 
@@ -400,19 +400,8 @@ describe("what the unit sets and reads", () => {
       { id: "files", path: "/etc/sitesolide/projects/nis2/files" },
       { id: "token", path: null },
     ]);
-    // The store's env, last: it wins over every legacy file before it.
+    // The store's env, last: it wins over any file named before it.
     expect(environment.files.at(-1)).toEqual({ path: "/etc/sitesolide/projects/nis2/env", optional: true });
-  });
-
-  test("the values, which say where a service opens its own secrets", () => {
-    const text = [
-      "[Service]",
-      "Environment=PORT=3041",
-      "Environment=BUILDER_SECRETS_DIR=/etc/sitesolide/builder-secrets",
-      'Environment="KEY=/etc/sitesolide/builder-ssh" EMPTY=',
-      "EnvironmentFile=-/etc/sitesolide/builder.env",
-    ].join("\n");
-    expect(unitEnvironment(text).values).toEqual(["3041", "/etc/sitesolide/builder-secrets", "/etc/sitesolide/builder-ssh", ""]);
   });
 
   test("a line continued by a backslash", () => {

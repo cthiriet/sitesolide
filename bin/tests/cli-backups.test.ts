@@ -133,7 +133,7 @@ describe("a service's backup command", () => {
         web: { start: "/usr/local/bin/bun run server.ts", port: 3080 },
         postgres: { start: "/bin/sh /srv/sites/shop/app/postgres.sh", port: 3081, internal: true, backup: BACKUP, ...postgres },
       },
-      secrets: ["shop.env"],
+      secrets: ["SHOP_TOKEN"],
       ...project,
     }) as Manifest;
 

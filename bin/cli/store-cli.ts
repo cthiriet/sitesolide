@@ -8,9 +8,6 @@
  *   sitesolide secrets remove NAME... [--restart]
  *   sitesolide secrets set-file NAME [--restart] < path  a file read whole, 64 KiB at most
  *   sitesolide secrets remove-file NAME [--restart]
- *   sitesolide secrets migrate [--dry-run] [--restart]   owner, over SSH: merge the legacy files into the store
- *   sitesolide secrets migrate --retire [--force]        owner, over SSH: delete the legacy files the store covers,
- *                                                        or with --force those whose values it overrides
  *
  * The store is `/etc/sitesolide/projects/<slug>/` on the machine (./store),
  * which PID 1 alone reads: a service receives its variables at start, its
@@ -21,7 +18,7 @@
  *   every body on standard input: no value ever travels in an argument, which
  *   `ps` shows to every account of the machine (`sshStore`);
  * - a token that may manage secrets, through the dashboard's control API
- *   (`apiStore`). Migrate and retire are the owner's.
+ *   (`apiStore`).
  *
  * **A value never comes from the command line.** `set` reads it at a prompt
  * that does not echo, or from a pipe with `--stdin`; `NAME=value`, or
@@ -35,20 +32,10 @@
  * deployment goes on.
  */
 import { askSteward, ownerReadCommand, ownerWriteCommand, type RunOnMachine } from "./access";
-import { isApp, isLegacySecretName, isValidFileName, isValidSlug, STORELESS_SLUGS, type Manifest, type SecretsDeclaration } from "./manifest";
+import { isApp, isValidFileName, isValidSlug, STORELESS_SLUGS, type Manifest, type SecretsDeclaration } from "./manifest";
 import { call, type Answer as ApiAnswer, type Failure, type Fetch, type Output, type Remote, type Typed } from "./remote";
 import { credentialName, GENERATE_DEFAULT_BYTES, GENERATE_FORMATS, GENERATE_MAX_BYTES, GENERATE_MIN_BYTES, MAX_STORE_FILE_BYTES, type GenerateFormat } from "./store";
-import type {
-  LegacyFileView,
-  RestartVerdict,
-  StoreChangeResponse,
-  StoreFileView,
-  StoreGenerateRequest,
-  StoreMigrateResponse,
-  StoreMissing,
-  StoreRetireResponse,
-  StoreView,
-} from "./store-protocol";
+import type { RestartVerdict, StoreChangeResponse, StoreFileView, StoreGenerateRequest, StoreMissing, StoreView } from "./store-protocol";
 import { checkValue, isVariableName, VALUE_LIKE_PREFIXES } from "./variables";
 
 // --- what was asked ----------------------------------------------------------------
@@ -59,9 +46,7 @@ export type StoreAsk =
   | { action: "generate"; name: string; format: GenerateFormat; bytes: number; replace: boolean; restart: boolean }
   | { action: "remove"; names: string[]; restart: boolean }
   | { action: "set-file"; name: string; restart: boolean }
-  | { action: "remove-file"; name: string; restart: boolean }
-  | { action: "migrate"; dryRun: boolean; restart: boolean }
-  | { action: "retire"; force: boolean };
+  | { action: "remove-file"; name: string; restart: boolean };
 
 /** The usage of `secrets`, as the refusals list it. */
 export const STORE_USAGE = [
@@ -73,8 +58,6 @@ export const STORE_USAGE = [
   "sitesolide secrets remove <NAME>... [--restart]      take variables out of the store",
   "sitesolide secrets set-file <NAME> [--restart] < path   a file read whole, 64 KiB at most",
   "sitesolide secrets remove-file <NAME> [--restart]",
-  "sitesolide secrets migrate [--dry-run] [--restart]   the owner's: merge the legacy files into the store",
-  "sitesolide secrets migrate --retire [--force]        the owner's: delete the legacy files the store covers; --force those it overrides",
 ];
 
 /**
@@ -132,7 +115,6 @@ const ACTION_OPTIONS: Readonly<Record<string, Readonly<Record<string, boolean>>>
   remove: { "--restart": false },
   "set-file": { "--restart": false },
   "remove-file": { "--restart": false },
-  migrate: { "--dry-run": false, "--restart": false, "--retire": false, "--force": false },
 };
 
 /** Every command takes these: they choose the output and the transport, read before here. */
@@ -142,8 +124,7 @@ const GLOBAL_OPTIONS = ["--json", "--api"];
  * The arguments of `secrets`, read whole before anything is asked or sent.
  * Only the options it takes and a name of a variable's or a file's shape are
  * ever named in a refusal: anything else may be a value typed in the wrong
- * place. `--dry-run` goes with migrate alone: over SSH it would otherwise be
- * taken for a deploy's, and a `set` run anyway.
+ * place.
  */
 export function readStoreArguments(arguments_: string[], json: boolean): StoreAsk | Failure {
   const rest = arguments_[0] === "secrets" ? arguments_.slice(1) : arguments_;
@@ -178,7 +159,7 @@ export function readStoreArguments(arguments_: string[], json: boolean): StoreAs
     // `sitesolide secrets sk_live_...`: the same slip, one word shorter.
     if (positional.length > 0 && looksLikeValue(action)) return valueAsName("secrets: what follows");
     if (positional.length === 0) return usage("sitesolide secrets alone lists, and takes no option");
-    return usage("sitesolide secrets takes set, generate, remove, set-file, remove-file or migrate, or nothing to list");
+    return usage("sitesolide secrets takes set, generate, remove, set-file or remove-file, or nothing to list");
   }
   const taken = ACTION_OPTIONS[action]!;
   for (const option of [...options.keys(), ...malformedValue]) {
@@ -230,8 +211,7 @@ export function readStoreArguments(arguments_: string[], json: boolean): StoreAs
       }
       return { action: "remove", names, restart };
     }
-    case "set-file":
-    case "remove-file": {
+    default: {
       const [name, ...extra] = names;
       if (name === undefined) return usage(`secrets ${action}: name the file, sitesolide secrets ${action} NAME`);
       if (extra.length > 0) return usage(`secrets ${action} takes one file name${action === "set-file" ? ", its content on standard input: < path" : ""}`);
@@ -239,16 +219,7 @@ export function readStoreArguments(arguments_: string[], json: boolean): StoreAs
       if (!isValidFileName(name)) {
         return { error: "invalid", message: `secrets ${action}: the file name is not one the store takes, letters, digits, dots, dashes and underscores, not starting with a dot, 64 characters at most: nothing was sent` };
       }
-      return { action, name, restart };
-    }
-    default: {
-      if (names.length > 0) return usage("secrets migrate takes no name: it reads the project's legacy files");
-      if (options.has("--retire")) {
-        if (options.has("--dry-run") || restart) return usage("secrets migrate --retire stands alone: it deletes only what the store already covers, after a restart");
-        return { action: "retire", force: options.has("--force") };
-      }
-      if (options.has("--force")) return usage("--force goes with migrate --retire alone: it lets the store's values stand over a legacy file's");
-      return { action: "migrate", dryRun: options.has("--dry-run"), restart };
+      return { action: action as "set-file" | "remove-file", name, restart };
     }
   }
 }
@@ -293,7 +264,7 @@ export type Answer<T> = { ok: true; value: T } | { ok: false; failure: Failure }
 export type StoreTransport = {
   /** For the first line: "over SSH, as the owner", "through https://dashboard.example.com". */
   via: string;
-  /** The owner over SSH: migrate and retire are theirs. */
+  /** The owner over SSH, to whom the listing says a file's size. */
   owner: boolean;
   /** `forDeploy`: the listing a token's deployment makes, which a token without Manage secrets is refused quietly. */
   list: (slug: string, forDeploy?: boolean) => Promise<Answer<StoreView>>;
@@ -302,9 +273,6 @@ export type StoreTransport = {
   setFile: (slug: string, name: string, content: Uint8Array) => Promise<Answer<StoreChangeResponse>>;
   removeFile: (slug: string, name: string) => Promise<Answer<StoreChangeResponse>>;
   restart: (slug: string) => Promise<Answer<{ verdict: RestartVerdict }>>;
-  migrate: ((slug: string, dryRun: boolean) => Promise<Answer<StoreMigrateResponse>>) | null;
-  /** `force`: the owner's explicit choice to retire a file whose values differ, the store's standing alone. */
-  retire: ((slug: string, files: string[], force: boolean) => Promise<Answer<StoreRetireResponse>>) | null;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -320,8 +288,6 @@ export function isStoreView(value: unknown): value is StoreView {
     isStrings(value.missing) &&
     Array.isArray(value.files) &&
     value.files.every((one) => isRecord(one) && typeof one.name === "string" && typeof one.state === "string") &&
-    Array.isArray(value.legacy) &&
-    value.legacy.every((one) => isRecord(one) && typeof one.name === "string") &&
     isStrings(value.build)
   );
 }
@@ -372,25 +338,6 @@ export function takenBackWarning(slug: string, holder: string, dropped: { variab
 
 const isVerdict = (value: unknown): value is RestartVerdict =>
   isRecord(value) && typeof value.kind === "string" && typeof value.state === "string" && typeof value.subState === "string" && typeof value.restarts === "number";
-
-function readMigrate(value: unknown): StoreMigrateResponse | null {
-  if (!isRecord(value) || !isStoreView(value.store)) return null;
-  for (const key of ["sources", "merged", "already", "overridden"]) if (!isStrings(value[key])) return null;
-  if (!Array.isArray(value.conflicts) || !value.conflicts.every((one) => isRecord(one) && typeof one.name === "string" && isStrings(one.files))) return null;
-  if (!Array.isArray(value.skipped) || !value.skipped.every((one) => isRecord(one) && typeof one.file === "string" && typeof one.reason === "string")) return null;
-  // A steward from before them answers no `shadowed`: none.
-  const shadowed = value.shadowed ?? [];
-  if (!Array.isArray(shadowed) || !shadowed.every((one) => isRecord(one) && typeof one.name === "string" && typeof one.kept === "string" && isStrings(one.others))) return null;
-  return { ...(value as unknown as StoreMigrateResponse), shadowed, written: value.written === true };
-}
-
-function readRetire(value: unknown): StoreRetireResponse | null {
-  if (!isRecord(value) || !isStoreView(value.store) || !isStrings(value.retired)) return null;
-  if (!Array.isArray(value.kept) || !value.kept.every((one) => isRecord(one) && typeof one.file === "string" && typeof one.reason === "string")) return null;
-  const forced = value.forced ?? [];
-  if (!isStrings(forced)) return null;
-  return { ...(value as unknown as StoreRetireResponse), forced };
-}
 
 const unreadable = (who: string, what: string): Answer<never> => ({ ok: false, failure: { error: "unreadable", message: `${who} answered with something that is not ${what}` } });
 
@@ -446,45 +393,7 @@ export function sshStore(run: RunOnMachine): StoreTransport {
       if (!read.ok) return read;
       return isVerdict(read.value.verdict) ? { ok: true, value: { verdict: read.value.verdict } } : unreadable(steward, "a restart's verdict");
     },
-    async migrate(slug, dryRun) {
-      if (!isValidSlug(slug)) return refusedSlug(slug);
-      // Conflicts refuse the migration with a 409 whose body is the migration's answer: read as one, so that they are said by name.
-      const read = await askSteward(run, ownerWriteCommand("POST", "/store/migrate"), JSON.stringify({ slug, dryRun }), {
-        ...words(true),
-        answers: (status, body) => status === 409 && Array.isArray(body.conflicts) && body.conflicts.length > 0,
-      });
-      if (!read.ok) return read;
-      const answer = readMigrate(read.value);
-      return answer === null ? unreadable(steward, "a migration") : { ok: true, value: answer };
-    },
-    async retire(slug, files, force) {
-      if (!isValidSlug(slug)) return refusedSlug(slug);
-      const read = await askSteward(run, ownerWriteCommand("POST", "/store/retire"), JSON.stringify({ slug, files, ...(force ? { force: true } : {}) }), words(false));
-      if (!read.ok) return read;
-      const answer = readRetire(read.value);
-      return answer === null ? unreadable(steward, "a retirement of legacy files") : { ok: true, value: answer };
-    },
   };
-}
-
-/**
- * A project's leftover flat files, as the steward attaches them to it: those
- * no manifest declares and whose most specific owner by prefix is this
- * project, which names its secrets in its store. Root's alone, on the owner's
- * socket: `sitesolide remove` reads them before it deletes the served folder,
- * after which nobody can tell whose they are, and judges each again before
- * deleting it. A flat file's name each, or the failure.
- */
-export async function ownerLeftovers(run: RunOnMachine, slug: string): Promise<Answer<string[]>> {
-  if (!isValidSlug(slug)) return { ok: false, failure: { error: "invalid", message: `${slug} is not a project's slug` } };
-  const read = await askSteward(run, ownerReadCommand(`/store/leftovers?slug=${slug}`), undefined, {
-    outdated: "the steward on the server cannot say which leftover secret files are this project's: run sitesolide upgrade first",
-    unchanged: false,
-  });
-  if (!read.ok) return read;
-  const leftovers = read.value.leftovers;
-  if (read.value.slug !== slug || !isStrings(leftovers) || !leftovers.every(isLegacySecretName)) return unreadable("the steward", "a list of leftover files");
-  return { ok: true, value: leftovers };
 }
 
 /**
@@ -565,8 +474,6 @@ export function apiStore(remote: Remote, fetcher: Fetch = fetch): StoreTransport
       if (!answer.ok) return { ok: false, failure: answer.failure };
       return isRecord(answer.body) && isVerdict(answer.body.verdict) ? { ok: true, value: { verdict: answer.body.verdict } } : unreadable(remote.api, "a restart's verdict");
     },
-    migrate: null,
-    retire: null,
   };
 }
 
@@ -603,27 +510,10 @@ function fileWords(file: StoreFileView): string {
 }
 
 /**
- * What to do with a legacy file the store does not cover, told by the cause.
- * A name it holds that the store lacks is a value the store does not have:
- * migrate carries it over when a unit reads the file; a leftover no unit
- * reads is not migrated, and its value is set in the store by hand first if
- * the service needs it. Never --force then: retiring would delete the only
- * copy. Only when the store holds every name, its values overriding the
- * file's, does `--retire --force` let the store's stand alone.
- */
-function uncovered(legacy: LegacyFileView, inStore: ReadonlySet<string>): string {
-  const lacking = legacy.variables.filter((name) => !inStore.has(name));
-  if (lacking.length === 0) return "its values differ from the store's, which overrides them: sitesolide secrets migrate --retire --force lets the store's stand alone";
-  const names = `${lacking.join(", ")}, which the store lacks`;
-  if (legacy.read) return `holds ${names}: sitesolide secrets migrate first, never --retire --force, which would drop ${lacking.length === 1 ? "it" : "them"}`;
-  return `holds ${names} and no unit reads: set ${lacking.length === 1 ? "it" : "them"} in the store first if the service needs ${lacking.length === 1 ? "it" : "them"}, the owner reads this file in the dashboard; --retire --force would delete the only copy`;
-}
-
-/**
- * The listing, the lines under its title: each variable and where its value
- * comes from, the files and the path the service reads them at, the legacy
- * files and what retiring them takes, the build's names, and whether a
- * restart is pending. Names alone: a value is never shown, nor its length.
+ * The listing, the lines under its title: each variable and whether the
+ * store holds it, the files and the path the service reads them at, the
+ * build's names, and whether a restart is pending. Names alone: a value is
+ * never shown, nor its length.
  */
 export function storeLines(view: StoreView): string[] {
   const lines: string[] = [];
@@ -631,33 +521,12 @@ export function storeLines(view: StoreView): string[] {
   if (view.unitReadsStore === false) lines.push(`   !! the service does not read the store yet: deploy the project, or sitesolide refresh ${view.slug}, so that it does`);
   const width = Math.max(0, ...view.variables.map((variable) => variable.name.length)) + 3;
   for (const variable of view.variables) {
-    const overrides = variable.shadows.length === 0 ? "" : `, overrides ${variable.shadows.join(", ")}`;
     const undeclared = variable.declared ? "" : ", not declared in sitesolide.json";
-    const state =
-      variable.source === "store"
-        ? `set${overrides}${undeclared}`
-        : variable.source === "legacy"
-          ? `from ${variable.file ?? "a legacy file"}${overrides}${undeclared}`
-          : `missing: sitesolide secrets set ${variable.name}`;
+    const state = variable.source === "store" ? `set${undeclared}` : `missing: sitesolide secrets set ${variable.name}`;
     lines.push(`   ${variable.name.padEnd(width)}${state}`);
   }
   if (view.variables.length === 0) lines.push("   no variable yet: sitesolide secrets set NAME, or sitesolide secrets generate NAME");
   if (view.files.length > 0) lines.push(`   files, read at ${filePath("<name>")}: ${view.files.map(fileWords).join(", ")}`);
-  const inStore = new Set(view.variables.filter((variable) => variable.source === "store").map((variable) => variable.name));
-  for (const legacy of view.legacy) {
-    // Deleted by migrate --retire, which is no fault: the steward's reason
-    // says where the copy is kept and how it is put back, last, since it
-    // carries commas of its own.
-    const retired = legacy.state === "absent" && legacy.reason?.startsWith("retired:") === true ? legacy.reason : null;
-    const parts = [
-      legacy.state === "absent" ? (retired === null ? "missing" : null) : legacy.state === "unmanaged" ? `not managed${legacy.reason === null ? "" : `, ${legacy.reason}`}` : null,
-      legacy.read ? "read by the service" : null,
-      legacy.leftover ? "no longer declared" : null,
-      legacy.covered === true ? "covered by the store: sitesolide secrets migrate --retire" : legacy.covered === false ? uncovered(legacy, inStore) : null,
-      retired,
-    ].filter((part): part is string => part !== null);
-    lines.push(`   legacy: ${legacy.name}${parts.length === 0 ? "" : `, ${parts.join(", ")}`}`);
-  }
   if (view.build.length > 0) lines.push(`   build, kept by whoever deploys: ${view.build.join(", ")}`);
   if (view.public.length > 0) lines.push(`   public, from sitesolide.json's env: ${view.public.map((entry) => entry.name).join(", ")}`);
   if (view.restartPending) lines.push("   restart pending: sitesolide secrets ... --restart, or the dashboard's Restart service");
@@ -668,85 +537,17 @@ export function storeLines(view: StoreView): string[] {
 /**
  * The listing with this folder's manifest in place of the deployed one:
  * deploy reads the store before it deposits the manifest, and a name the
- * new manifest declares is missing too. A name only the store supplies is
- * not, and a file present is not. A name a legacy file supplies is missing:
- * a manifest that names its variables makes units that read no legacy file,
- * so that value would be gone at the next start (legacyLoss stops the
- * deployment before that happens).
+ * new manifest declares is missing too. A name the store holds is not, and
+ * a file present is not.
  */
 export function withDeclared(view: StoreView, declaration: SecretsDeclaration): StoreView {
-  const supplied = new Set(view.variables.filter((variable) => (declaration.form === "legacy" ? variable.source !== "none" : variable.source === "store")).map((variable) => variable.name));
+  const supplied = new Set(view.variables.filter((variable) => variable.source === "store").map((variable) => variable.name));
   const missing = declaration.runtime.filter((name) => !supplied.has(name));
   const files: StoreFileView[] = view.files.map((file) => ({ ...file, declared: declaration.files.includes(file.name) }));
   for (const name of declaration.files) {
     if (!files.some((file) => file.name === name)) files.push({ name, state: "missing", declared: true, reason: null, bytes: null, modifiedAt: null, restartPending: false });
   }
   return { ...view, missing, files: files.filter((file) => file.declared || file.state !== "missing") };
-}
-
-/**
- * What a deployment would drop of the values the service runs with today:
- * the names a legacy file the installed units read holds, and that neither
- * the store nor a legacy file the new manifest still declares (`kept`)
- * supplies, each with the files that hold it; and the legacy files the
- * units read that the manifest no longer declares and that are not managed,
- * whose names cannot be told. A manifest that names its variables, or none,
- * keeps no legacy file: its units read the store alone. One in the old form
- * keeps the files it declares, and drops the others. Either way each of
- * these values would be gone at the next start: the service runs on without
- * it, often without a word. Names only.
- */
-export function legacyLoss(view: StoreView, kept: readonly string[] = []): { names: { name: string; files: string[] }[]; unmanaged: string[] } {
-  const inStore = new Set(view.variables.filter((variable) => variable.source === "store").map((variable) => variable.name));
-  const stays = new Set(kept);
-  const supplied = new Set(view.legacy.filter((file) => stays.has(file.name) && file.state === "managed").flatMap((file) => file.variables));
-  const names = new Map<string, string[]>();
-  const unmanaged: string[] = [];
-  for (const file of view.legacy) {
-    if (!file.read || file.state === "absent" || stays.has(file.name)) continue;
-    if (file.state === "unmanaged") {
-      unmanaged.push(file.name);
-      continue;
-    }
-    for (const name of file.variables) {
-      if (inStore.has(name) || supplied.has(name)) continue;
-      names.set(name, [...(names.get(name) ?? []), file.name]);
-    }
-  }
-  return { names: [...names].map(([name, files]) => ({ name, files })), unmanaged };
-}
-
-/**
- * The stop of a deployment or a refresh that would drop values the service
- * reads today: before anything is sent or written, with the command that
- * carries them into the store first. A data-loss guard, not a missing
- * secret: a name set nowhere never stops anything. `declaration` is the
- * manifest about to be deployed: in the old form, the legacy files it
- * declares are still read.
- */
-export function legacyLossRefusal(view: StoreView, nothing: string, declaration?: SecretsDeclaration): { message: string; details: string[] } | null {
-  const legacyForm = declaration?.form === "legacy";
-  const { names, unmanaged } = legacyLoss(view, legacyForm ? declaration!.legacy : []);
-  if (names.length === 0 && unmanaged.length === 0) return null;
-  const listed = names.map(({ name }) => name);
-  const message =
-    names.length > 0
-      ? `migrate first: sitesolide secrets migrate --restart; the service reads ${listed.join(", ")} from legacy files this manifest no longer reads, and the store lacks ${names.length === 1 ? "it" : "them"}`
-      : `migrate first: sitesolide secrets migrate --restart; the service reads ${unmanaged.join(", ")}, which the dashboard does not manage, and this manifest no longer reads ${unmanaged.length === 1 ? "it" : "them"}`;
-  const dropped = [...new Set([...names.flatMap(({ files }) => files), ...unmanaged])];
-  return {
-    message,
-    details: [
-      ...names.map(({ name, files }) => `${name}: in ${files.join(", ")}`),
-      ...unmanaged.map((file) => `${file}: read by the service, not managed by the dashboard, its variables cannot be told: fix it in the Secrets section first`),
-      legacyForm
-        ? `deployed as it is, the service would start without them: this manifest's units no longer read ${dropped.join(", ")}`
-        : "deployed as it is, the service would start without them: the units of a manifest that names its variables read the store alone",
-      "sitesolide secrets migrate --restart copies them into the store and restarts the service, the owner's, over SSH; then deploy again",
-      ...(legacyForm ? [`or keep ${dropped.join(", ")} under secrets in sitesolide.json`] : []),
-      nothing,
-    ],
-  };
 }
 
 /** The names a listing says are missing: declared runtime names with no value, declared files not present. */
@@ -1053,12 +854,6 @@ export async function restartCommand(slug: string, transport: StoreTransport, ou
   return 0;
 }
 
-const OWNER_ONLY = (action: string): Failure => ({
-  error: "needs-ssh",
-  message: `sitesolide secrets ${action} is the owner's, over SSH: it reads the project's legacy files, which no token may`,
-  details: ["ask the owner of the machine, who runs it from a workstation configured with sitesolide init", "or the dashboard's Merge into the store, unlocked by the owner"],
-});
-
 /** Runs one `secrets` command on `slug`'s store; the exit code is returned, never thrown. */
 export async function runStore(ask: StoreAsk, slug: string, transport: StoreTransport, deps: StoreDependencies): Promise<number> {
   const { output } = deps;
@@ -1104,65 +899,6 @@ export async function runStore(ask: StoreAsk, slug: string, transport: StoreTran
       const removed = await transport.removeFile(slug, ask.name);
       if (!removed.ok) return report(output, removed.failure);
       return concludeChange("remove-file", slug, removed.value, ask.restart, transport, output);
-    }
-    case "migrate": {
-      if (transport.migrate === null) return report(output, OWNER_ONLY("migrate"));
-      output.say(`-> ${slug}: the legacy files merged into the store, ${transport.via}${ask.dryRun ? ", dry run, nothing written" : ""}`);
-      const migrated = await transport.migrate(slug, ask.dryRun);
-      if (!migrated.ok) return report(output, migrated.failure);
-      const answer = migrated.value;
-      const fields = { action: "migrate", slug, dryRun: ask.dryRun, sources: answer.sources, skipped: answer.skipped, merged: answer.merged, already: answer.already, overridden: answer.overridden, shadowed: answer.shadowed, conflicts: answer.conflicts, written: answer.written };
-      if (answer.conflicts.length > 0) {
-        // The units read the files in different orders: which value is in effect cannot be told.
-        return report(output, {
-          error: "migrate-conflict",
-          message: `the units of ${slug} read its legacy files in different orders, so which value of ${answer.conflicts.map((conflict) => conflict.name).join(", ")} is in effect cannot be told: nothing was written`,
-          details: [...answer.conflicts.map((conflict) => `${conflict.name}: in ${conflict.files.join(" and ")}`), `sitesolide refresh ${slug}, so that every unit reads them in one order, then migrate again`],
-        });
-      }
-      output.say(`   read: ${answer.sources.length === 0 ? "no legacy file" : answer.sources.join(", ")}`);
-      for (const skipped of answer.skipped) output.say(`   skipped: ${skipped.file}, ${skipped.reason}`);
-      if (answer.merged.length > 0) output.say(`   ${ask.dryRun ? "would be merged" : "merged"}: ${answer.merged.join(", ")}`);
-      if (answer.already.length > 0) output.say(`   already in the store, the same: ${answer.already.join(", ")}`);
-      // Two legacy files set it differently: the value in effect, the last the units read, is the one merged.
-      for (const shadowed of answer.shadowed) {
-        const others = shadowed.others.map((file) => `${file}'s`).join(" and ");
-        output.say(`   ${shadowed.name}: kept ${shadowed.kept}'s value, in effect; ${others} ${shadowed.others.length === 1 ? "differs" : "differ"}`);
-      }
-      if (answer.overridden.length > 0) output.say(`   in the store with another value, which it keeps and the service already reads: ${answer.overridden.join(", ")}`);
-      if (!ask.dryRun) output.say(answer.written ? "   the store was written; the legacy files are untouched" : "   nothing to write: the store already holds every name");
-      if (ask.dryRun || !ask.restart) {
-        if (!ask.dryRun && answer.written) output.say("   then: sitesolide secrets migrate --restart, or a deploy, and once the service holds, sitesolide secrets migrate --retire");
-        output.succeeded("secrets", { ...fields, restart: null });
-        return 0;
-      }
-      output.say("-> restart");
-      const restarted = await transport.restart(slug);
-      if (!restarted.ok) return report(output, { ...restarted.failure, message: `the migration is written, the restart was not made: ${restarted.failure.message}` });
-      output.say(`   ${verdictWords(restarted.value.verdict)}`);
-      if (restarted.value.verdict.kind !== "active") return report(output, restartFailed(slug, restarted.value.verdict, ["the migration is written"]));
-      output.succeeded("secrets", { ...fields, restart: restarted.value.verdict });
-      return 0;
-    }
-    case "retire": {
-      if (transport.retire === null) return report(output, OWNER_ONLY("migrate --retire"));
-      const listed = await transport.list(slug);
-      if (!listed.ok) return report(output, listed.failure);
-      const files = listed.value.legacy.filter((legacy) => legacy.state !== "absent").map((legacy) => legacy.name);
-      output.say(`-> ${slug}: the legacy files the store covers deleted, ${transport.via}`);
-      if (files.length === 0) {
-        output.say("   no legacy file to retire");
-        output.succeeded("secrets", { action: "retire", slug, force: ask.force, retired: [], forced: [], kept: [] });
-        return 0;
-      }
-      const retired = await transport.retire(slug, files, ask.force);
-      if (!retired.ok) return report(output, retired.failure);
-      const plain = retired.value.retired.filter((file) => !retired.value.forced.includes(file));
-      if (plain.length > 0) output.say(`   retired, each kept as a copy with the project: ${plain.join(", ")}`);
-      if (retired.value.forced.length > 0) output.say(`   retired with --force, the store's values standing over theirs, each kept as a copy: ${retired.value.forced.join(", ")}`);
-      for (const kept of retired.value.kept) output.say(`   kept: ${kept.file}, ${kept.reason}`);
-      output.succeeded("secrets", { action: "retire", slug, force: ask.force, retired: retired.value.retired, forced: retired.value.forced, kept: retired.value.kept });
-      return 0;
     }
   }
 }

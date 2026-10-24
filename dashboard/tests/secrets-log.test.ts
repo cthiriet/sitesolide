@@ -236,9 +236,9 @@ describe("the new operations", () => {
     }
   });
 
-  test("a file in a subdirectory and the landing's directory are journalled", () => {
-    const line = encodeEntry(entry(1, { slug: "test-zone.invalid", file: "builder-secrets/registry" }));
-    expect(reread(line)[0]).toMatchObject({ slug: "test-zone.invalid", file: "builder-secrets/registry" });
+  test("a store's file and the landing's directory are journalled", () => {
+    const line = encodeEntry(entry(1, { slug: "test-zone.invalid", file: "store/registry.json" }));
+    expect(reread(line)[0]).toMatchObject({ slug: "test-zone.invalid", file: "store/registry.json" });
   });
 });
 

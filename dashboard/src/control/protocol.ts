@@ -28,7 +28,7 @@
 import type { EntryView, GeneralView } from "../access/protocol";
 import type { AuditRow } from "../audit/protocol";
 import type { ServiceKind } from "../../borrowed/manifest";
-import type { FileView, ServiceView, Verdict } from "../secrets/protocol";
+import type { Verdict } from "../secrets/protocol";
 import type { StoreMissing } from "../../borrowed/store-protocol";
 
 // --- Tokens --------------------------------------------------------------------
@@ -57,8 +57,7 @@ export type Scope = {
   public: boolean;
   /**
    * May list its projects' secret names, set, generate and remove any name
-   * and file of their stores, and, for a project still in the old form, the
-   * variables of `<slug>.env`, through the API. Never reads a value back.
+   * and file of their stores, through the API. Never reads a value back.
    * Without `public`, an owner's token writes only on a project restricted
    * on the machine, or the store of one it is creating.
    *
@@ -264,17 +263,16 @@ export const MAX_JOURNAL_LINES = 500;
  */
 export const MAX_SECRET_NAMES = 50;
 /**
- * The body of a change of secrets: the same bound as a whole content's
- * replacement (`MAX_CONTENT_BODY_BYTES`, src/secrets/steward.ts). Fifty values
- * of 8 KiB fit, unless JSON swells them with escapes.
+ * The body of a change of a store: the same bound as a store's file
+ * (`MAX_CONTENT_BODY_BYTES`, src/secrets/steward.ts). Fifty values of 8 KiB
+ * fit, unless JSON swells them with escapes.
  */
 export const MAX_SECRETS_BODY_BYTES = 512 * 1024;
 /**
- * What one change of secrets by a token costs of its hour: a variable name set
- * or removed is one, a request one at least, `{}` included, and a file it
- * created one more. In a store: a change its names, a value generated one, a
- * file set or removed one, and the store's folder made one more. Each is a
- * journal line at most.
+ * What one change of a store by a token costs of its hour: a change its
+ * names, a request one at least, `{}` included, a value generated one, a file
+ * set or removed one, and the store's folder made one more. Each is a journal
+ * line at most.
  */
 export const TOKEN_SECRET_CHANGES_PER_HOUR = 120;
 /** Restarts one token may ask for in an hour: each cuts a service for a few seconds, and is a journal line. */
@@ -306,13 +304,11 @@ export const TOKEN_REFUSALS_PER_HOUR = 60;
  *   invalid-manifest    422  the manifest is refused; `details` lists every reason
  *   not-found           404  no such deployment or project, for this token
  *   busy                409  a deployment of this project is already running, or too many are;
- *                            for the secrets and restart routes, the steward's queue of writes full
- *   too-large           413  the archive, the manifest or a change of secrets is over its limit
+ *                            for the store and restart routes, the steward's queue of writes full
+ *   too-large           413  the archive, the manifest or a change of a store is over its limit
  *   expired             410  the archive arrived after the upload window
- *   unmanaged           409  the secret file is there, in a form the steward does not rewrite
+ *   unmanaged           409  the store is there, in a form the steward does not rewrite
  *   already-present     409  a value to generate is set already: `replace` draws a new one
- *   migrate-first       409  the deployment would drop values legacy files supply the service
- *                            with today: sitesolide secrets migrate --restart first
  *   not-available       503  the machine does not carry the control API, the access registry
  *                            or the secrets routes yet
  *   failure             500/502  something broke on the machine; the message says where to look
@@ -336,7 +332,6 @@ export type ControlErrorCode =
   | "no-portal"
   | "unmanaged"
   | "already-present"
-  | "migrate-first"
   | "not-available"
   | "failure";
 
@@ -357,7 +352,6 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
   "no-portal": 409,
   unmanaged: 409,
   "already-present": 409,
-  "migrate-first": 409,
   "not-available": 503,
   failure: 500,
 };
@@ -375,8 +369,6 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 //   POST   /control/access/list   { bearer, slug }            -> AccessResponse (src/access/protocol.ts)
 //   PUT    /control/access        { bearer, slug, who, role } -> EntryResponse     Can open alone
 //   DELETE /control/access        { bearer, slug, who }       -> EntryResponse
-//   POST   /control/secrets/list  { bearer, slug }            -> SecretsListResponse            the `secrets` flag
-//   PATCH  /control/secrets       { bearer, slug, file, set, remove } -> 200|201 StewardSecretsChange   the `secrets` flag
 //   POST   /control/restart       { bearer, slug }            -> TokenRestartResponse           any token that deploys it
 //   POST   /control/store/list    { bearer, slug }            -> StoreListResponse              the `secrets` flag
 //   PATCH  /control/store         { bearer, slug, set, remove } -> 200|201 StoreChangeResponse   the `secrets` flag
@@ -384,7 +376,7 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 //   PUT    /control/store/file    { bearer, slug, name, content } -> StoreChangeResponse        content in base64
 //   DELETE /control/store/file    { bearer, slug, name }      -> StoreChangeResponse
 //
-// The secrets and store ones judge a person's token by role first
+// The restart and store ones judge a person's token by role first
 // (`secrets.list`, `secrets.write`, `restart`), then the project among those
 // it reaches, then the flag, and are bounded per token and per hour. `set` is
 // an object of names and values, `remove` a list of names: both optional,
@@ -480,34 +472,6 @@ export type PreflightResponse = { creating: boolean; placeholders: { zone: strin
 export type LogsRequest = { bearer: string; slug: string; lines: number; cursor: string | null };
 export type LogsResponse = { lines: string[]; cursor: string | null };
 
-/**
- * A secret file as a token lists it: a Developer's listing, every file
- * write-only (no value, no size, no previous version), and `writable`, true
- * for `<slug>.env` alone, and only when the deployed manifest declares it:
- * the one file a token sets and removes variables in.
- */
-export type TokenFileView = FileView & { writable: boolean };
-
-/** A project's secret files as a token reads them: its service, and its files. */
-export type ProjectSecrets = { slug: string; service: ServiceView | null; files: TokenFileView[] };
-export type SecretsListResponse = { secrets: ProjectSecrets };
-
-/**
- * A change of secrets as the dashboard relays it. `set`: names and values, an
- * object whose keys are read as its own (`"__proto__"` is a valid name);
- * `remove`: names. Never both for one name.
- */
-export type SecretsChangeRequest = { bearer: string; slug: string; file: string; set: Record<string, string>; remove: string[] };
-
-/**
- * The steward's answer to a change, 201 when it created the file: the file as
- * a token lists it, and what was done. `set` names every variable written,
- * whether its value changed or not: a write is never compared with what was
- * there. `absent`: names asked to be removed that the file did not carry,
- * nothing done for them.
- */
-export type StewardSecretsChange = { file: TokenFileView; created: boolean; set: string[]; removed: string[]; absent: string[] };
-
 /** A restart's verdict as a token reads it: 200 even when the service did not come back. */
 export type TokenRestartResponse = { verdict: Verdict };
 
@@ -517,9 +481,6 @@ export type TokenRestartResponse = { verdict: Verdict };
  * it is. Null when none was asked for.
  */
 export type RestartOutcome = { verdict: Verdict } | { error: ControlErrorCode; message: string; wait?: number };
-
-/** The API's answer to `PATCH /api/v1/projects/:slug/secrets/:file`. */
-export type SecretsChangeResponse = StewardSecretsChange & { restart: RestartOutcome | null };
 
 // --- The Tokens page's routes, under /api/tokens, behind the session --------------
 //
@@ -585,8 +546,6 @@ export type TeamPageResponse = {
 //   GET    /api/v1/projects/:slug/access           -> { access: ProjectAccess }
 //   PUT    /api/v1/projects/:slug/access    { who, role }  -> { entry, change, access: ProjectAccess }
 //   DELETE /api/v1/projects/:slug/access    { who }        -> { entry, change, access: ProjectAccess }
-//   GET    /api/v1/projects/:slug/secrets          -> SecretsListResponse
-//   PATCH  /api/v1/projects/:slug/secrets/:file  { set?, remove?, restart? } -> 200|201 SecretsChangeResponse
 //   POST   /api/v1/projects/:slug/restart          -> TokenRestartResponse
 //   GET    /api/v1/projects/:slug/store            -> StoreListResponse
 //   PATCH  /api/v1/projects/:slug/store     StoreApiChangeBody   -> 200|201 StoreApiChangeResponse

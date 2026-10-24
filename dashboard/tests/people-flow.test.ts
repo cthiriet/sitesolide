@@ -28,7 +28,7 @@ import { createSystem, type Command } from "../src/secrets/system";
  */
 
 const PASSWORD = "Owner-Password-For-The-Flow-1";
-const SECRET_VALUE = "a-value-only-a-project-admin-reads-1";
+const SECRET_VALUE = "a-value-only-the-owner-reads-1";
 const ZONE = "test-zone.invalid";
 const ALICE = "alice@acme.test";
 
@@ -217,12 +217,12 @@ beforeAll(async () => {
   const state = folder("state");
   const data = folder("data");
   folder("portal-key");
+  // Each project's unit reads its store, which the owner fills once the steward is up.
   const app = (slug: string, port: number, extra: Record<string, unknown> = {}) => {
     mkdirSync(join(sites, slug), { recursive: true });
-    const manifest = { slug, start: "/usr/local/bin/bun run server.ts", port, publicDir: "public", secrets: [`${slug}.env`], ...extra };
+    const manifest = { slug, start: "/usr/local/bin/bun run server.ts", port, publicDir: "public", secrets: ["API_KEY"], ...extra };
     writeFileSync(join(sites, slug, "sitesolide.json"), JSON.stringify(manifest));
-    writeFileSync(join(units, `${slug}.service`), "[Service]\nExecStart=/usr/local/bin/bun run server.ts\n");
-    writeFileSync(join(secrets, `${slug}.env`), `API_KEY=${SECRET_VALUE}\n`, { mode: 0o600 });
+    writeFileSync(join(units, `${slug}.service`), `[Service]\nExecStart=/usr/local/bin/bun run server.ts\nEnvironmentFile=-${join(secrets, "projects", slug, "env")}\n`);
     return manifest;
   };
   const manifests = [app("blog", 3040), app("shop", 3041, { portal: true }), app("secret-project", 3042)];
@@ -291,6 +291,10 @@ beforeAll(async () => {
   await steward.ensureMemberKeys();
   // The registry made before anything asks, as the entry point starts it.
   await steward.startAccess();
+  for (const { slug } of manifests) {
+    const body = JSON.stringify({ slug, name: "API_KEY", value: SECRET_VALUE });
+    expect((await steward.owner(new Request("http://steward/store/variable", { method: "PUT", body }))).status).toBe(201);
+  }
   writeFileSync(join(units, INSTALLER_TEMPLATE), "[Service]\n");
   control = createControlSteward(
     {
@@ -300,7 +304,7 @@ beforeAll(async () => {
         return arguments_[0] === "is-active" ? { code: 3, output: "inactive\n" } : { code: 0, output: "" };
       },
     },
-    { zone: ZONE, isUnlocked: steward.isUnlocked, uidRoot: null, members: steward.memberAuthority!, access: steward.accessForToken, secrets: steward.secretsForToken },
+    { zone: ZONE, isUnlocked: steward.isUnlocked, uidRoot: null, members: steward.memberAuthority!, access: steward.accessForToken, secrets: steward.secretsForToken, store: steward.storeForToken, storeAside: steward.storeAside },
   );
   const socket = join(root, "steward.sock");
   socketServer = Bun.serve({ unix: socket, fetch: (req) => (isControlPath(new URL(req.url).pathname) ? control(req) : steward(req)) });
@@ -481,36 +485,43 @@ describe("a person's secrets, general access and people, end to end", () => {
     return (await response.json()) as Record<string, unknown>;
   }
 
-  test("a Developer sees names, unlocks through a forced sign-in, writes, and is refused a read by the steward", async () => {
+  test("a Developer sees names, unlocks through a forced sign-in, writes the store, and is refused a read before the steward", async () => {
     await give(ALICE, { blog: "developer", shop: "viewer" });
     const { browser } = await signInAs(ALICE);
     const listed = await json(await browser.api("/api/secrets"));
-    expect((listed.projects as { slug: string }[]).map((project) => project.slug)).toEqual(["blog"]);
-    expect((listed.projects as { files: { readable: boolean; variables: string[] }[] }[])[0]!.files[0]).toMatchObject({ readable: false, variables: ["API_KEY"] });
+    const projects = listed.projects as { slug: string; files: unknown[]; store: { variables: { name: string; source: string; declared: boolean }[] } }[];
+    expect(projects.map((project) => project.slug)).toEqual(["blog"]);
+    expect(projects[0]!.files).toEqual([]);
+    expect(projects[0]!.store.variables).toEqual([{ name: "API_KEY", source: "store", declared: true }]);
     expect(JSON.stringify(listed)).not.toContain(SECRET_VALUE);
     expect(listed.until).toBeNull();
 
-    const write = { slug: "blog", file: "blog.env", variable: "FEATURE", value: "on-from-a-developer" };
-    const locked = await browser.api("/api/secrets/variable", { method: "PUT", body: write });
+    const write = { slug: "blog", name: "FEATURE", value: "on-from-a-developer" };
+    const locked = await browser.api("/api/secrets/store/variable", { method: "PUT", body: write });
     expect(locked.status).toBe(423);
 
     const landed = await unlockAs(browser, ALICE);
     expect(landed).toBe(`${DASHBOARD}/site/secrets/?s=blog`);
     expect(((await json(await browser.api("/api/secrets"))).until as number) > Date.now()).toBe(true);
-    const written = await browser.api("/api/secrets/variable", { method: "PUT", body: write });
+    const written = await browser.api("/api/secrets/store/variable", { method: "PUT", body: write });
     expect(written.status).toBe(200);
-    expect(readFileSync(join(root, "secrets", "blog.env"), "utf8")).toContain("FEATURE=on-from-a-developer");
+    expect(readFileSync(join(root, "secrets", "projects", "blog", "env"), "utf8")).toContain("FEATURE=on-from-a-developer");
 
-    const read = await browser.api("/api/secrets/value", { method: "POST", body: { slug: "blog", file: "blog.env", variable: "API_KEY" } });
-    expect(read.status).toBe(403);
-    const refusal = await json(read);
-    expect(refusal.message).toContain("never reads one");
-    expect(JSON.stringify(refusal)).not.toContain(SECRET_VALUE);
+    // Reading a value back, the store's or a platform file's, is the owner's: refused before any handler runs.
+    for (const [path, body] of [
+      ["/api/secrets/store/value", { slug: "blog", name: "API_KEY" }],
+      ["/api/secrets/value", { slug: "dashboard", file: "dashboard.env", variable: "PASSWORD_HASH" }],
+    ] as const) {
+      const read = await browser.api(path, { method: "POST", body });
+      expect(read.status).toBe(403);
+      const refusal = await json(read);
+      expect(refusal.message).toBe("This part of the dashboard is the owner's.");
+      expect(JSON.stringify(refusal)).not.toContain(SECRET_VALUE);
+    }
 
-    // The activity names them for the write and for the refused read.
+    // The activity names them for the unlock and the write.
     const rows = ((await json(await browser.api("/api/audit?source=steward"))).rows as { actor: string; action: string; target: string; detail: { result?: string } }[]);
     expect(rows.some((row) => row.actor === ALICE && row.action === "secrets.set" && row.target === "blog" && row.detail.result === "ok")).toBe(true);
-    expect(rows.some((row) => row.actor === ALICE && row.action === "secrets.read" && row.detail.result === "rejects")).toBe(true);
     expect(rows.some((row) => row.actor === ALICE && row.action === "secrets.unlock")).toBe(true);
   });
 
@@ -519,7 +530,7 @@ describe("a person's secrets, general access and people, end to end", () => {
     next.ignoreReauth = true;
     const landed = await unlockAs(browser, ALICE);
     expect(landed).toBe(`${DASHBOARD}/site/secrets/?s=blog&unlock=refused`);
-    expect((await browser.api("/api/secrets/variable", { method: "PUT", body: { slug: "blog", file: "blog.env", variable: "A", value: "b" } })).status).toBe(423);
+    expect((await browser.api("/api/secrets/store/variable", { method: "PUT", body: { slug: "blog", name: "A", value: "b" } })).status).toBe(423);
   });
 
   test("another account's forced sign-in does not unlock this person's session", async () => {
@@ -537,8 +548,8 @@ describe("a person's secrets, general access and people, end to end", () => {
     const owner = new Browser();
     owner.keep(signIn);
     expect((await owner.api("/api/secrets/unlock", { method: "POST", body: { password: PASSWORD } })).status).toBe(200);
-    expect((await browser.api("/api/secrets/variable", { method: "PUT", body: { slug: "blog", file: "blog.env", variable: "SIDE", value: "by-side" } })).status).toBe(200);
-    expect((await owner.api("/api/secrets/value", { method: "POST", body: { slug: "blog", file: "blog.env", variable: "SIDE" } })).status).toBe(200);
+    expect((await browser.api("/api/secrets/store/variable", { method: "PUT", body: { slug: "blog", name: "SIDE", value: "by-side" } })).status).toBe(200);
+    expect(await json(await owner.api("/api/secrets/store/value", { method: "POST", body: { slug: "blog", name: "SIDE" } }))).toEqual({ value: "by-side" });
   });
 
   test("an Admin never reads a value back, and gives people access to their project, which the portal is told through the steward's projection", async () => {
@@ -547,11 +558,9 @@ describe("a person's secrets, general access and people, end to end", () => {
     const { browser } = await signInAs(HAL);
     await unlockAs(browser, HAL, "/site/secrets/?s=shop");
     // Reading a value back is the owner's alone, an Admin's unlock included (I8).
-    const read = await browser.api("/api/secrets/value", { method: "POST", body: { slug: "shop", file: "shop.env", variable: "API_KEY" } });
+    const read = await browser.api("/api/secrets/store/value", { method: "POST", body: { slug: "shop", name: "API_KEY" } });
     expect(read.status).toBe(403);
-    const refusal = await json(read);
-    expect(refusal.message).toContain("the owner's alone");
-    expect(JSON.stringify(refusal)).not.toContain(SECRET_VALUE);
+    expect(JSON.stringify(await json(read))).not.toContain(SECRET_VALUE);
 
     const page = await json(await browser.api("/api/access?slug=shop"));
     expect(page).toMatchObject({ slug: "shop", you: { kind: "person", email: HAL, role: "admin" }, grantable: ["visitor", "viewer", "developer", "admin"], portal: { reading: "steward" } });
@@ -634,14 +643,14 @@ describe("a person's own tokens, end to end", () => {
     const who = (await (await api("/api/v1/whoami", secret)).json()) as { identity: { member: string; scope: { slugs: string[] } } };
     expect(who.identity).toMatchObject({ member: carol, scope: { slugs: ["blog"] } });
     // blog is in the open on the machine: a Developer's token deploys it as it stands.
-    const opened = await api("/api/v1/deployments", secret, { method: "POST", body: { manifest: { slug: "blog", start: "/usr/local/bin/bun run server.ts", port: 3040, publicDir: "public", secrets: ["blog.env"] } } });
+    const opened = await api("/api/v1/deployments", secret, { method: "POST", body: { manifest: { slug: "blog", start: "/usr/local/bin/bun run server.ts", port: 3040, publicDir: "public", secrets: ["API_KEY"] } } });
     expect(opened.status).toBe(201);
 
     // Lowered to Viewer on blog: the next deployment is refused by the steward, in its words.
     await give(carol, { blog: "viewer" });
     const narrowed = (await (await api("/api/v1/whoami", secret)).json()) as { identity: { scope: { slugs: string[] } } };
     expect(narrowed.identity.scope.slugs).toEqual([]);
-    const refused = await api("/api/v1/deployments", secret, { method: "POST", body: { manifest: { slug: "blog", start: "/usr/local/bin/bun run server.ts", port: 3040, publicDir: "public", secrets: ["blog.env"] } } });
+    const refused = await api("/api/v1/deployments", secret, { method: "POST", body: { manifest: { slug: "blog", start: "/usr/local/bin/bun run server.ts", port: 3040, publicDir: "public", secrets: ["API_KEY"] } } });
     expect(refused.status).toBe(403);
     expect(((await refused.json()) as { message: string }).message).toBe(`${carol} is a Viewer on blog: deploying it takes a Developer or an Admin`);
 
@@ -669,30 +678,30 @@ describe("a person's own tokens, end to end", () => {
     expect(created.status).toBe(201);
     const { token, secret } = (await created.json()) as { token: { id: string }; secret: string };
 
-    const listed = await api("/api/v1/projects/blog/secrets", secret);
+    const listed = await api("/api/v1/projects/blog/store", secret);
     expect(listed.status).toBe(200);
     const text = await listed.text();
-    expect(JSON.parse(text)).toMatchObject({ secrets: { slug: "blog", files: [{ name: "blog.env", variables: expect.arrayContaining(["API_KEY"]), readable: false, writable: true }] } });
+    expect(JSON.parse(text)).toMatchObject({ store: { slug: "blog", variables: expect.arrayContaining([{ name: "API_KEY", source: "store", declared: true }]), may: { write: true, reveal: false } } });
     expect(text).not.toContain(SECRET_VALUE);
 
     const before = restarts.length;
-    const changed = await api("/api/v1/projects/blog/secrets/blog.env", secret, { method: "PATCH", body: { set: { TOKEN_KEY: value }, restart: true } });
+    const changed = await api("/api/v1/projects/blog/store", secret, { method: "PATCH", body: { set: { TOKEN_KEY: value }, restart: true } });
     const answer = await changed.text();
     expect(changed.status).toBe(200);
     expect(JSON.parse(answer)).toMatchObject({ set: ["TOKEN_KEY"], restart: { verdict: { kind: "active" } } });
     expect(answer).not.toContain(value);
-    expect(readFileSync(join(root, "secrets", "blog.env"), "utf8")).toContain(`TOKEN_KEY=${value}`);
+    expect(readFileSync(join(root, "secrets", "projects", "blog", "env"), "utf8")).toContain(`TOKEN_KEY=${value}`);
     expect(restarts.slice(before)).toEqual(["blog"]);
 
     // Lowered to Viewer: the steward's refusal naming the role, never an unknown project.
     await give(erin, { blog: "viewer" });
-    const refused = await api("/api/v1/projects/blog/secrets/blog.env", secret, { method: "PATCH", body: { remove: ["TOKEN_KEY"] } });
+    const refused = await api("/api/v1/projects/blog/store", secret, { method: "PATCH", body: { remove: ["TOKEN_KEY"] } });
     expect(refused.status).toBe(403);
     expect(((await refused.json()) as { message: string }).message).toBe(`${erin} is a Viewer on blog: changing its secrets takes a Developer or an Admin`);
     const journal = readFileSync(join(root, "state", "journal.jsonl"), "utf8");
     expect(journal).toContain(`"actor":"token:${token.id}"`);
     expect(journal).not.toContain(value);
-    expect(readFileSync(join(root, "secrets", "blog.env"), "utf8")).toContain("TOKEN_KEY=");
+    expect(readFileSync(join(root, "secrets", "projects", "blog", "env"), "utf8")).toContain("TOKEN_KEY=");
     await takeOff(erin);
   });
 

@@ -43,7 +43,7 @@ import { localConnectorsSteward, localEgress } from "./src/connectors/client";
 import { createConnectorsRoutes } from "./src/connectors/relay";
 import { join } from "node:path";
 import { openDatabase } from "./src/database";
-import { createApiRoutes, failure, secretsRoutes, STEWARD_IDLE_S, storeRoutes } from "./src/control/api";
+import { createApiRoutes, failure, restartRoutes, STEWARD_IDLE_S, storeRoutes } from "./src/control/api";
 import { localControlSteward } from "./src/control/client";
 import { createLimiter } from "./src/control/limiter";
 import { SPOOL_NAME } from "./src/control/protocol";
@@ -326,25 +326,22 @@ const server = Bun.serve({
     // A member unlocks through a forced sign-in, never with a password: see
     // /api/sso/begin?reauth=1. The rest relays their session and unlock.
     "/api/secrets/unlock": { POST: either((req, server) => long(req, server, secrets.unlock), memberRelay.unlock) },
-    "/api/secrets/value": { POST: either((req, server) => long(req, server, secrets.readValue), (req, server) => long(req, server, memberRelay.readValue)) },
+    // The platform's own files, the dashboard's and the portal's: the owner's alone.
+    "/api/secrets/value": { POST: owner((req, server) => long(req, server, secrets.readValue)) },
     "/api/secrets/variable": {
-      PUT: either((req, server) => long(req, server, secrets.setVariable), (req, server) => long(req, server, memberRelay.setVariable)),
-      DELETE: either((req, server) => long(req, server, secrets.removeVariable), (req, server) => long(req, server, memberRelay.removeVariable)),
+      PUT: owner((req, server) => long(req, server, secrets.setVariable)),
+      DELETE: owner((req, server) => long(req, server, secrets.removeVariable)),
     },
-    "/api/secrets/file": { POST: either((req, server) => long(req, server, secrets.createFile), (req, server) => long(req, server, memberRelay.createFile)) },
-    "/api/secrets/restore": { POST: either((req, server) => long(req, server, secrets.restoreFile), (req, server) => long(req, server, memberRelay.restoreFile)) },
-    "/api/secrets/content": {
-      POST: either((req, server) => long(req, server, secrets.readContent), (req, server) => long(req, server, memberRelay.readContent)),
-      PUT: either((req, server) => long(req, server, secrets.replaceContent), (req, server) => long(req, server, memberRelay.replaceContent)),
-    },
+    "/api/secrets/file": { POST: owner((req, server) => long(req, server, secrets.createFile)) },
+    "/api/secrets/restore": { POST: owner((req, server) => long(req, server, secrets.restoreFile)) },
     // A password hash changes with the dashboard's own password: the owner's alone.
     "/api/secrets/password": { POST: owner((req, server) => long(req, server, secrets.changePassword)) },
     "/api/secrets/portal": { POST: either((req, server) => long(req, server, secrets.togglePortal), (req, server) => long(req, server, memberRelay.togglePortal)) },
     "/api/secrets/restart": { POST: either((req, server) => long(req, server, secrets.restart), (req, server) => long(req, server, members.restart)) },
     // A project's store: the owner's writes under the session's unlock, a
     // person's relayed with theirs, which the steward judges by role. Reading
-    // a value back, merging the old files and retiring them are the owner's
-    // alone: a person is answered 403 before any handler runs.
+    // a value back is the owner's alone: a person is answered 403 before any
+    // handler runs.
     "/api/secrets/store/variable": {
       PUT: either((req, server) => long(req, server, secrets.setStoreVariable), (req, server) => long(req, server, memberRelay.setStoreVariable)),
       DELETE: either((req, server) => long(req, server, secrets.removeStoreVariables), (req, server) => long(req, server, memberRelay.removeStoreVariables)),
@@ -358,8 +355,6 @@ const server = Bun.serve({
     },
     "/api/secrets/store/restore": { POST: either((req, server) => long(req, server, secrets.restoreStore), (req, server) => long(req, server, memberRelay.restoreStore)) },
     "/api/secrets/store/value": { POST: owner((req, server) => long(req, server, secrets.revealStoreValue)) },
-    "/api/secrets/store/migrate": { POST: owner((req, server) => long(req, server, secrets.migrateStore)) },
-    "/api/secrets/store/retire": { POST: owner((req, server) => long(req, server, secrets.retireStore)) },
     // The connectors: their writes wait in the steward's lock like a secret's.
     "/api/connectors": { GET: owner(connectors.list) },
     "/api/connectors/activity": { GET: owner(connectors.activity) },
@@ -393,11 +388,11 @@ const server = Bun.serve({
       PUT: (req) => api.putProjectAccess(req, req.params.slug),
       DELETE: (req) => api.removeProjectAccess(req, req.params.slug),
     },
-    // A token's secrets and restart. A change waits its turn under the
-    // steward's lock, and a restart is observed for eight seconds: the long
-    // delay, as for the Secrets page, twice for a change with its restart.
-    ...secretsRoutes(api),
-    // A token's work on a project's store, every write with a change's delay.
+    // A token's restart, observed for eight seconds: the long delay, as for
+    // the Secrets page.
+    ...restartRoutes(api),
+    // A token's work on a project's store, every write waiting its turn under
+    // the steward's lock: twice the long delay for a change with its restart.
     ...storeRoutes(api),
     "/api/v1/*": () => failure("not-found", "no such route: see docs/access.md for the control API's routes"),
     // The backups go through the steward too: it reads them as root, and starts

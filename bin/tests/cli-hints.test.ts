@@ -7,7 +7,7 @@ import { PROJECT_PORTS_FILE } from "../cli/loopback";
 import { confirmDoorUnderLock, decidePortal, guardDepositedManifest } from "../cli/portal-vm";
 import { missingBuildSecrets, unreadableWorkstation } from "../cli/build-secrets";
 import { credentialsFailure } from "../cli/store";
-import { foreignSecretFiles, storeRefused } from "../cli/refresh";
+import { storeRefused } from "../cli/refresh";
 import { storelessRefusal } from "../cli/store-cli";
 import type { Manifest } from "../cli/manifest";
 
@@ -65,7 +65,6 @@ describe("the hints", () => {
       "the store of secrets cannot be laid: /etc/sitesolide/projects/shop is a link or not a folder",
       "cannot tell whether the store's folders of shop are laid",
       credentialsFailure("shop.service", "shop"),
-      foreignSecretFiles("shop"),
       storeRefused("shop"),
       storelessRefusal({ slug: "blog", publicDir: "dist" } as Manifest).message,
       storelessRefusal({ slug: "portal", start: "/x", port: 3001 } as Manifest).message,
@@ -79,7 +78,7 @@ describe("the hints", () => {
     ]) {
       if (decision.kind === "rejects") messages.push(decision.message);
     }
-    expect(messages.length).toBe(15);
+    expect(messages.length).toBe(14);
     expect(messages.filter((message) => hintFor(message) === DEFAULT_HINT)).toEqual([]);
   });
 
@@ -116,37 +115,30 @@ describe("the hints", () => {
 
   test("a refusal through the API is answered by its code, and never with --force", () => {
     expect(hintForFailure("no-dry-run", "deploy --dry-run is not available with a token: nothing was sent")).toContain("without --dry-run");
-    expect(hintForFailure("secret-missing", "/etc/sitesolide/shop.env missing")).toContain("never put secret values in the repository");
     // A code the table lacks falls back to what the message says.
     expect(hintForFailure("brand-new", "build failed: bun run build")).toBe(hintFor("build failed: bun run build"));
     for (const hint of Object.values(REMOTE_HINTS)) {
       if (hint.includes("--force")) expect(hint).toMatch(/do not re-run with --force/);
     }
     // The codes the installer stops on, as docs/access.md lists them.
-    for (const code of ["install-failed", "secret-taken", "store-refused", "store-failed", "store-not-yours", "taken-meanwhile", "migrate-first", "edited-by-hand", "system-unit", "caddy-busy", "bundle-refused", "service-failed", "verify-failed"]) {
+    for (const code of ["install-failed", "store-refused", "store-failed", "store-not-yours", "taken-meanwhile", "edited-by-hand", "system-unit", "caddy-busy", "bundle-refused", "service-failed", "verify-failed"]) {
       expect(Object.hasOwn(REMOTE_HINTS, code)).toBe(true);
     }
   });
 
-  test("a deployment stopped over a secret file has its code's hint, the file another project's or the machine's never declared instead", () => {
+  test("a deployment stopped over the project's store has its code's hint, and none stops over a secret file any more", () => {
     // The installer's codes reach the CLI as the deployment's error.code
     // (bin/cli/remote.ts), and a code without a hint would fall back to the
-    // message's: every `secret-` one it stops on is covered here.
+    // message's: every `store-` one it stops on is covered here.
     const source = readFileSync(join(import.meta.dir, "..", "..", "dashboard", "src", "installer", "pipeline.ts"), "utf8");
+    // A project's secrets live in its store: no flat file is judged, and none stops a deployment.
     const codes = new Set([...source.matchAll(/new Stop\(\s*"(secret-[a-z-]+)"/g)].map((match) => match[1]!));
-    // A missing file no longer stops a deployment: only one the project may not read does.
-    expect([...codes].sort()).toEqual(["secret-taken"]);
-    expect([...codes].filter((code) => !Object.hasOwn(REMOTE_HINTS, code))).toEqual([]);
-    // And the store's folders, which the installer lays before the units.
+    expect([...codes]).toEqual([]);
+    // The store's folders, which the installer lays before the units.
     const store = new Set([...source.matchAll(/new Stop\(\s*"(store-[a-z-]+)"/g)].map((match) => match[1]!));
     expect([...store].sort()).toEqual(["store-failed", "store-not-yours", "store-refused"]);
     expect([...store].filter((code) => !Object.hasOwn(REMOTE_HINTS, code))).toEqual([]);
     expect(hintForFailure("store-failed", "the project's store of secrets could not be laid under /etc/sitesolide/projects (EACCES)")).toContain("tell the owner of the machine");
-    const hint = hintForFailure("secret-taken", "secrets: /etc/sitesolide/shop.env is already on the machine and does not belong to site-shop; nothing was changed");
-    expect(hint).toContain("pick another slug in sitesolide.json");
-    expect(hint).toContain("tell the owner of the machine");
-    expect(hint).toContain("never declare another file");
-    expect(hint).not.toContain("--force");
   });
 
   test("busy names a token's previous restart as well as a deployment, and asks once", () => {
@@ -183,7 +175,7 @@ describe("the hints", () => {
   });
 
   test("a secret's value comes from the user, or from what an agent generates itself, never from the conversation nor a command line", () => {
-    for (const code of ["value-in-arguments", "needs-stdin", "secret-missing", "stdin-is-terminal", "looks-like-value"]) {
+    for (const code of ["value-in-arguments", "needs-stdin", "stdin-is-terminal", "looks-like-value"]) {
       expect(REMOTE_HINTS[code]).toContain("never a value read from the conversation");
       expect(REMOTE_HINTS[code]).toContain("sitesolide secrets set NAME");
     }
@@ -192,7 +184,6 @@ describe("the hints", () => {
     // A change whose answer never came: checked, then made again once, never in a loop.
     expect(hintForFailure("unconfirmed", "the change of shop.env was sent and its answer never came: it may have been written")).toContain("sitesolide secrets --json");
     expect(REMOTE_HINTS.unconfirmed).toContain("never retry in a loop");
-    expect(REMOTE_HINTS["secret-missing"]).toContain("never put secret values in the repository");
     expect(REMOTE_HINTS["needs-ssh"]).toContain("secrets, restart and login");
     expect(hintForFailure("restart-failed", "the service of shop did not hold after its restart")).toContain("never restart in a loop");
     expect(hintForFailure("unmanaged", "shop.env is not managed here")).toContain("tell the owner");
@@ -202,12 +193,6 @@ describe("the hints", () => {
     expect(REMOTE_HINTS["build-secret-missing"]).toContain("never a value read from the conversation");
     expect(REMOTE_HINTS["build-secret-missing"]).toContain("nothing was sent");
     expect(REMOTE_HINTS["build-secrets-unreadable"]).toContain("never read, print or rewrite the file yourself");
-    expect(REMOTE_HINTS["migrate-conflict"]).toContain("sitesolide refresh <slug>`, then migrate again");
-    expect(REMOTE_HINTS["migrate-conflict"]).not.toContain("duplicate");
-    // A deployment that would drop legacy values stops, and says to migrate first, the owner's.
-    expect(REMOTE_HINTS["migrate-first"]).toContain("sitesolide secrets migrate --restart");
-    expect(hintFor("migrate first: sitesolide secrets migrate --restart; the service reads A from legacy files this manifest no longer reads, and the store lacks it")).toBe(REMOTE_HINTS["migrate-first"]!);
-    expect(REMOTE_HINTS["migrate-conflict"]).toContain("never read or print a value");
     expect(REMOTE_HINTS["store-refused"]).toContain("never move, delete or replace it yourself");
     expect(REMOTE_HINTS["already-present"]).toContain("--replace");
     expect(REMOTE_HINTS["steward-outdated"]).toContain("sitesolide upgrade");
@@ -217,12 +202,17 @@ describe("the hints", () => {
     expect(HINTS.some(([pattern]) => pattern.test("secret missing on the server: /etc/sitesolide/shop.env"))).toBe(false);
   });
 
-  test("the codes of what is gone have no hint left: members and the portal's own sharing", () => {
-    for (const code of ["not-a-member", "portal-unreachable"]) expect(Object.hasOwn(REMOTE_HINTS, code)).toBe(false);
+  test("the codes of what is gone have no hint left: members, the portal's own sharing, and a project's flat secret files", () => {
+    for (const code of ["not-a-member", "portal-unreachable", "secret-missing", "secret-taken", "migrate-first", "migrate-conflict", "store-unlisted"]) {
+      expect(Object.hasOwn(REMOTE_HINTS, code)).toBe(false);
+    }
     for (const hint of Object.values(REMOTE_HINTS)) {
       expect(hint).not.toContain("sitesolide members");
       expect(hint).not.toMatch(/\bsharing\b/);
+      expect(hint).not.toContain("secrets migrate");
+      expect(hint).not.toMatch(/legacy files?/);
     }
+    for (const [, hint] of HINTS) expect(hint).not.toContain("secrets migrate");
   });
 
   test("a refusal nobody foresaw gets the default, which forbids the workarounds", () => {

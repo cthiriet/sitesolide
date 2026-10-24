@@ -22,11 +22,9 @@ import {
   isValidFileName,
   isValidMemory,
   isValidSchedule,
-  isValidSecretName,
   isValidServiceName,
   isValidSlug,
   isValidTimeout,
-  legacySecretFiles,
   secretsOf,
   SERVICE_PORTS,
   servedContact,
@@ -93,9 +91,13 @@ export function systemUser(slug: string): string {
   return `site-${slug}`;
 }
 
-/** Where a declared secret lives on the machine: one directory, one name. */
-export function secretPath(name: string, folder = "/etc/sitesolide"): string {
-  return `${folder}/${name}`;
+/**
+ * The flat file a project without a store reads, the dashboard's or the
+ * portal's (STORELESS_SLUGS): `/etc/sitesolide/<slug>.env`, which carries the
+ * owner's password hash. Its manifest declares no secret: the unit names it.
+ */
+export function platformFile(slug: string): string {
+  return `${SECRETS_FOLDER}/${slug}.env`;
 }
 
 /**
@@ -153,9 +155,6 @@ function assertWritable(manifest: Manifest, service: ServiceView): void {
   }
   for (const [name, value] of Object.entries(service.env)) {
     if (!isValidEnvName(name) || !isValidEnvValue(value)) throw refused(`env ${JSON.stringify(name)}`);
-  }
-  for (const secret of legacySecretFiles(manifest)) {
-    if (!isValidSecretName(secret)) throw refused(`secrets ${JSON.stringify(secret)}`);
   }
   // No file's name goes into the unit, which loads the whole folder: still,
   // a name systemd would skip or flatten is refused here as in validate().
@@ -377,14 +376,14 @@ function renderTimer(manifest: Manifest, service: ServiceView, mainUnit: string)
   ].join("\n");
 }
 
-/** What 0.7 wrote above InaccessiblePaths in a unit reading no secret, and still writes for dashboard and portal. */
+/** What 0.7 wrote above InaccessiblePaths in a unit reading no secret. */
 const NO_SECRET_COMMENT: readonly string[] = [
   "# No secret for this project: the whole folder is closed to it, which",
   "# hides from it even the names of the files.",
 ];
 
-/** What 0.7 wrote in place of InaccessiblePaths in a unit reading a flat file, and still writes for dashboard and portal. */
-const LEGACY_SECRET_COMMENT: readonly string[] = [
+/** In place of InaccessiblePaths in the dashboard's and the portal's units, which read their own flat file. */
+const PLATFORM_FILE_COMMENT: readonly string[] = [
   "# This project reads its own file in /etc/sitesolide: InaccessiblePaths",
   "# is not laid here, or systemd could not hand the file to it.",
 ];
@@ -409,7 +408,6 @@ function renderUnit(
   const slug = manifest.slug;
   const account = systemUser(slug);
   const paths = projectPaths(slug);
-  const secrets = legacySecretFiles(manifest);
   const store = hasStore(manifest);
   const isOutbound = manifest.network === "outbound";
   const description = escapeSpecifiers(manifest.description ?? `Project ${slug}`);
@@ -491,11 +489,7 @@ function renderUnit(
   // account, 0400, at $CREDENTIALS_DIRECTORY/files_<name> (measured on
   // systemd 257, the store's bench, Q1 and Q3).
   //
-  // The old form's flat files first, in the manifest's order, then the
-  // project's store, last: systemd lets a later EnvironmentFile win, so the
-  // store's value is the one in force on a name both hold, and the steward
-  // never lets a removal from the store bring a file's value back. The dash
-  // lets the service start without a file or a store not written yet: deploy
+  // The dash lets the service start with a store not written yet: deploy
   // warns of a missing variable, and an app that cannot do without it stops
   // at its start, which the stability check reports.
   //
@@ -506,12 +500,11 @@ function renderUnit(
   //
   // The lines depend on the manifest alone, never on what the store holds:
   // setting or removing a variable or a file never rewrites a unit. dashboard
-  // and portal keep their flat file, and the unit of 0.7, line for line.
-  for (const secret of secrets) {
-    lines.push(`EnvironmentFile=-${secretPath(secret)}`);
-  }
+  // and portal have no store and read their own flat file, as 0.7 wrote it.
   if (store) {
     lines.push(`EnvironmentFile=${storeEnvironmentFile(slug)}`, `LoadCredential=${storeCredentials(slug)}`);
+  } else {
+    lines.push(`EnvironmentFile=-${platformFile(slug)}`);
   }
 
   lines.push(
@@ -541,24 +534,18 @@ function renderUnit(
   );
 
   if (store) {
-    // Every project with a store, whether it reads old files or not:
-    // EnvironmentFile and LoadCredential are both delivered behind
+    // Every project with a store: EnvironmentFile and LoadCredential are both delivered behind
     // InaccessiblePaths, the service seeing /etc/sitesolide as a folder it
     // can neither list nor read (bench Q3). ProtectProc hides the processes
     // of other accounts; a project's services share one account and see
     // each other, which the model accepts: they receive the same secrets
     // (bench Q4). See withoutStoreLines for the units laid before this.
     lines.push(...STORE_UNIT_COMMENT, ...STORE_UNIT_LINES_AFTER, "");
-  } else if (secrets.length === 0) {
-    // A service with no secret must not even learn which other sites have one.
-    // The dash avoids the 226/NAMESPACE failure if the directory does not exist
-    // yet, which Restart=always would turn into a loop.
-    lines.push(...NO_SECRET_COMMENT, `InaccessiblePaths=-${SECRETS_FOLDER}`, "");
   } else {
     // dashboard and portal alone (STORELESS_SLUGS), whose flat file holds
     // the owner's password hash: their unit stays as 0.7 wrote it, line for
-    // line, without InaccessiblePaths, the rule of every unit then.
-    lines.push(...LEGACY_SECRET_COMMENT, "");
+    // line, without InaccessiblePaths, or systemd could not hand it the file.
+    lines.push(...PLATFORM_FILE_COMMENT, "");
   }
 
   lines.push(
@@ -735,38 +722,28 @@ function isStoreCredentialLine(line: string): boolean {
   return value.slice(value.indexOf(":") + 1).startsWith(`${STORE_ROOT}/`);
 }
 
-/** `EnvironmentFile=-/etc/sitesolide/<name>`, a flat file of the old form. */
-function isLegacyEnvironmentLine(line: string): boolean {
-  const prefix = `EnvironmentFile=-${SECRETS_FOLDER}/`;
-  return line.startsWith(prefix) && !line.slice(prefix.length).includes("/");
-}
-
 /**
  * A unit as 0.7 generated it, from what this release generates.
  *
  * Every project but dashboard and portal now reads its store, and every
  * unit in service would otherwise read as edited by hand at its next
  * deployment. Taken off: the store's `EnvironmentFile=` and
- * `LoadCredential=`, `ProtectProc=invisible`, and `InaccessiblePaths` when a
- * flat file is still read, which 0.7 laid only for a project without one.
- * The comment above them becomes the one 0.7 wrote there, so that a text
- * this release generated comes back as 0.7 wrote it, byte for byte; the
- * comparison ignores comments anyway, and a text of another making only
- * loses those directives.
+ * `LoadCredential=`, and `ProtectProc=invisible`. The comment above them
+ * becomes the one 0.7 wrote there, so that a text this release generated
+ * comes back as 0.7 wrote it, byte for byte; the comparison ignores comments
+ * anyway, and a text of another making only loses those directives.
  */
 export function withoutStoreLines(text: string): string {
   const lines = text.split("\n");
-  const legacy = lines.some(isLegacyEnvironmentLine);
   const kept: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     if (STORE_UNIT_COMMENT.every((comment, offset) => lines[i + offset] === comment)) {
-      kept.push(...(legacy ? LEGACY_SECRET_COMMENT : NO_SECRET_COMMENT));
+      kept.push(...NO_SECRET_COMMENT);
       i += STORE_UNIT_COMMENT.length - 1;
       continue;
     }
     if (isStoreEnvironmentLine(line) || isStoreCredentialLine(line) || line === "ProtectProc=invisible") continue;
-    if (legacy && line === `InaccessiblePaths=-${SECRETS_FOLDER}`) continue;
     kept.push(line);
   }
   return kept.join("\n");
@@ -981,6 +958,21 @@ export function readUnitAnswer(output: string): UnitRead {
   return { kind: "unreadable" };
 }
 
+export type PresenceRead = { kind: "absent" } | { kind: "present" } | { kind: "unreadable" };
+
+/**
+ * The answer of a remote presence test, `test -f` printing one marker or
+ * the other. Anything that is neither marker, an empty output included,
+ * reads as a failure: a refused sudo prints nothing, and taking that silence
+ * for an absence would act on a file that is there.
+ */
+export function readPresenceAnswer(output: string): PresenceRead {
+  const clean = output.trim();
+  if (clean === MARKER_ABSENT) return { kind: "absent" };
+  if (clean === MARKER_PRESENT) return { kind: "present" };
+  return { kind: "unreadable" };
+}
+
 export type UnitState = {
   /** What /etc/systemd/system/<slug>.service holds, "" if the file is missing. */
   installed: string;
@@ -1022,7 +1014,7 @@ export type UnitAction = "install" | "present" | "diverged";
  *
  * So is a unit generated from the manifest the previous deployment left on
  * the machine, by this release or an earlier one: a changed manifest, a port,
- * an `env`, or the old form of `secrets` turned into names, replaces it,
+ * an `env` or a secret's name replaces it,
  * rather than every manifest change asking for --force. Only what neither
  * manifest generates was edited by hand.
  */

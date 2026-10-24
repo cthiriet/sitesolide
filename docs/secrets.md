@@ -84,21 +84,16 @@ The listing says where each name comes from and what is missing:
 ```text
 -> secrets of shop, over SSH, as the owner
    ADMIN_TOKEN             set
-   STRIPE_SECRET_KEY       set, overrides shop-stripe.env
+   STRIPE_SECRET_KEY       set
    STRIPE_WEBHOOK_SECRET   missing: sitesolide secrets set STRIPE_WEBHOOK_SECRET
    files, read at $CREDENTIALS_DIRECTORY/files_<name>: gcp.json set (2318 bytes), tls.key missing (sitesolide secrets set-file tls.key < tls.key)
-   legacy: shop-stripe.env, read by the service, covered by the store: sitesolide secrets migrate --retire
    build, kept by whoever deploys: CMS_TOKEN
    public, from sitesolide.json's env: NODE_ENV, VITE_STRIPE_KEY, PUBLIC_URL
    restart pending: sitesolide secrets ... --restart, or the dashboard's Restart service
    a value is never shown here
 ```
 
-A name a legacy file alone supplies reads `from shop-stripe.env` rather than
-`set`. A legacy file `migrate --retire` deleted reads `retired: a copy is
-kept at ...`, with the command that puts it back, and one absent for no such
-reason reads `missing`. A file's size is listed to the owner alone, over SSH
-as in the dashboard. Not a secret all the same from whoever may write the
+A file's size is listed to the owner alone, over SSH as in the dashboard. Not a secret all the same from whoever may write the
 store: the size refusals, 64 KiB for a file, 512 KiB for all of them, 256 KiB
 for the variables, let a writer, a Developer, an Admin or a token with *Manage
 secrets*, narrow a size down by trying writes. That gives them nothing
@@ -138,8 +133,6 @@ What still stops a deployment, and why:
 |---|---|---|
 | a build secret missing | before anything is read on the machine or sent | the remedy is on your workstation, and nothing is half done |
 | a workstation secrets file that does not parse | the same | a guess would build with a wrong value |
-| a legacy file that is the machine's, another project's, or owned by another account | before anything is pushed | root reads whatever a unit names |
-| a manifest whose units would stop reading a legacy file the installed units read, holding values the store lacks (`migrate-first`): one that names its variables, or none, or one in the old form that no longer declares that file | the same | the service would start without those values |
 | over SSH, a name a token holds that the machine does not carry yet, without `--adopt` | before the prompts | your values would sit in a store, and your project under a name, that token may deploy code to ([commands.md](commands.md)) |
 | the store's folder is a link, not a folder, or not root's | before the units and the code | systemd would read through it |
 | the store's folders cannot be laid | the same | without `files/`, every start of the project fails |
@@ -163,9 +156,8 @@ the deploy prompt draws one on the server: 32 random bytes by default, 16 to
 `--format base64url`. **The value is never returned, journaled or logged**;
 the owner may reveal it later in the dashboard.
 
-A name already set, in the store or by a legacy file the service reads, is
-refused without `--replace`: `NAME is already set; --replace draws a new value
-in the store, which overrides it`. The old value stops working at the next
+A name already set in the store is refused without `--replace`: `NAME is
+already set; --replace draws a new value in the store, which overrides it`. The old value stops working at the next
 restart. A provider's key, Stripe's or AWS's, is never generated: it is set
 with `sitesolide secrets set NAME`.
 
@@ -213,22 +205,21 @@ empty file is listed *missing* too.
 
 | Who | A project's store |
 |---|---|
-| The owner, in the dashboard, unlocked with its password | everything: lists the names, **reads a value back** (*Reveal*, thirty seconds on screen), sets, generates, removes, uploads and removes files, restores the previous version, merges and retires legacy files |
-| The owner over SSH, `sitesolide secrets` | lists the names, sets, generates, removes, sets and removes files, merges and retires legacy files, for a project not deployed yet too; never a value back |
+| The owner, in the dashboard, unlocked with its password | everything: lists the names, **reads a value back** (*Reveal*, thirty seconds on screen), sets, generates, removes, uploads and removes files, restores the previous version |
+| The owner over SSH, `sitesolide secrets` | lists the names, sets, generates, removes, sets and removes files, for a project not deployed yet too; never a value back |
 | An Admin of the project | lists the names; sets, generates, removes, uploads, removes files and restores the previous version after unlocking; never a value back |
 | A Developer of the project | lists the names; sets, generates, removes, uploads and removes files after unlocking; never a value back, no restore |
 | A token with *Manage secrets* | lists the names; sets, generates and removes any name of its project's store, and its files, with no unlock: ticking the box was that decision; for a project it may create, before its first deployment too, which makes the name its own. Never a value back, whoever holds it |
 | A token without it | nothing: `deploy` says it may not list secrets, and the machine's log names any that is missing |
 | A Viewer, or someone who can only open the site | nothing: the Secrets section is not theirs |
 
-**Only the owner reads a value back**, and only in the unlocked dashboard.
-Admin no longer does, in a store or in a legacy file: a Developer's or an
-Admin's dashboard shows every value write-only. Nothing of the token API, the
-CLI, the MCP tools or the build returns one. Even what tells a value apart is
-the owner's, in the dashboard and over SSH: whether a legacy file is covered
-by the store, and a file's size, which the listing shows the owner alone. A
-writer may still narrow a size down through the size refusals, by trying
-writes; that is no more than the code a writer may deploy already reads.
+**Only the owner reads a value back**, and only in the unlocked dashboard: a
+Developer's or an Admin's dashboard shows every value write-only. Nothing of
+the token API, the CLI, the MCP tools or the build returns one. Even a
+file's size is the owner's, in the dashboard and over SSH, which the listing
+shows the owner alone. A writer may still narrow a size down through the size
+refusals, by trying writes; that is no more than the code a writer may deploy
+already reads.
 
 The steward decides every one of these, as root, on its own access registry,
 and a compromised dashboard, which relays the requests, cannot make one pass.
@@ -348,11 +339,8 @@ code. A build that needs another variable of yours, a proxy, or the agent to
 fetch a private dependency, names it under `secrets.build`: that is what
 "taken from whoever deploys" means.
 `deploy.sh`, the script that deploys without the CLI, takes build secrets
-from the environment alone, and never puts a value on a command line. It
-reads no store: a manifest that names its variables, or none, deployed over
-a project whose units still read legacy files holding values the store
-lacks, is refused by the machine, `migrate-first`, and the owner migrates
-first.
+from the environment alone, never puts a value on a command line, and reads
+no store.
 
 A static site may have build secrets, and `env` once it has a `build`: no
 service reads anything at runtime there, so `secrets.runtime` and
@@ -377,9 +365,7 @@ cd my-tool && sitesolide run -- bun scripts/sync.ts
 The file is read strictly, the format the store's `env` uses: one
 `NAME=value` per line, no space around `=`, the value bare or entirely in
 single or double quotes, `#` comments on lines of their own. A line it cannot
-read stops the run with its number and reason, never its content. For a
-manifest in the legacy form, `run` loads the files it declares from that
-folder, as before.
+read stops the run with its number and reason, never its content.
 
 It is not a copy of production. A value only the machine uses stays on the
 machine, and one the workstation keeps has two copies to hold equal: change it
@@ -389,93 +375,21 @@ The folder is outside every repository, beside the configuration file, so no
 `git add` can ever publish it. Claude Code is denied reading and writing there,
 see `.claude/settings.json`.
 
-## Legacy files, and moving to the store
-
-Before the store, a manifest declared flat files of `/etc/sitesolide`:
-
-```json
-"secrets": ["shop.env", "shop-stripe.env"]
-```
-
-**That form is still read**, every entry holding a dot, and `deploy` warns:
-`secrets: shop.env, shop-stripe.env are file names, the old form: they keep
-loading before the project's store; run sitesolide secrets migrate, then list
-the variable names`. Each unit reads the legacy files first, in the
-manifest's order, then the store last, so **the store wins on a shared
-name**. Two rules keep what the dashboard shows as the value in force the one
-the next start gets:
-
-- a name may not leave the store while a legacy file of the project, read by
-  a unit, declared, or kept as a leftover, holds it, since that file's value
-  would come back, nor while such a file cannot be read to tell; a restore,
-  or a removal in a batch, that would take it out is refused the same way:
-  `NAME is also in shop-stripe.env, which the service reads before the
-  store: removing it here would bring that file's value back. Retire the file
-  first (sitesolide secrets migrate --retire), or remove NAME from it`. The
-  owner alone, who reads every value anyway, may still take out a name every
-  such file holds with the store's very value, which changes nothing in
-  force: that is how a merge is undone before its files are retired. For
-  anyone else the answer never depends on a value;
-- a name the store holds may not be set in a legacy file, where it would have
-  no effect: `NAME is set in the project's store, which overrides
-  shop-stripe.env: change it there`.
-
-A legacy file is owned by `site-<slug>`, mode `0600`, and its name is the
-project's: `<slug>.env`, `<slug>-<name>`, or `<slug>-secrets/<name>`. `deploy`
-and `refresh` refuse, before anything is pushed or written, a declared file
-that is one of the machine's own, one a more specific site deployed there
-holds, `acme-crm.env` for `acme` when `acme-crm` is there, or one present that
-is not a plain file of `site-<slug>`: root reads whatever a unit names. A
-missing legacy file no longer stops a deployment: it is a warning, and the
-service starts without its variables. A site no manifest describes, the
-landing or a service made by hand, keeps its files by name, as before.
-
-**Moving a project to the store**, its values never seen by anyone:
-
-1. `sitesolide deploy`, the manifest unchanged, or `sitesolide refresh
-   <slug>`: the units read the legacy files, then the empty store.
-2. `sitesolide secrets migrate --dry-run`, then `sitesolide secrets migrate`,
-   or *Merge into the store* in the dashboard: every legacy variable is copied
-   into the store, with its value. A name two legacy files give different
-   values takes the value in effect, the one of the file the units read
-   last, which is what the service runs with, and is said by name and files,
-   never a value. Only units that read the files in different orders refuse
-   the merge: `sitesolide refresh <slug>`, then merge again.
-3. `sitesolide secrets migrate --restart`, or a deployment: the service
-   starts on the store's values, identical.
-4. `sitesolide secrets migrate --retire`, or *Retire* in the dashboard: each
-   legacy file the store covers, every variable in it present in the store
-   with the same value, after a restart that loaded the store, is kept as a
-   copy with the project and deleted. A leftover whose values differ from
-   the store's, which overrides them, is kept and said; `sitesolide secrets
-   migrate --retire --force` retires it all the same, the owner's choice,
-   the store's values standing alone.
-5. In the repository, `secrets` becomes the names, `sitesolide secrets
-   --json` listing them; commit, deploy. Deployed before step 2, a manifest
-   that names its variables would drop the values the legacy files still
-   supply, its units reading the store alone: `deploy` stops before anything
-   is sent, `migrate first: sitesolide secrets migrate --restart`, naming
-   them. With a token, the machine refuses such a deployment itself,
-   `migrate-first`, whether the token may list the store or not. A
-   deployment whose listing of the store fails otherwise stops too, since
-   what it would drop cannot be told: a steward or a dashboard from before
-   the store is upgraded first.
-
-Merging and retiring are the owner's alone. Steps 4 and 5 may come in either
-order. Never `sitesolide refresh --all` for any of them. The detail, and how
-to go back, is in [migration.md](migration.md#secrets-the-per-project-store).
-
 ## The platform's own files
 
-`dashboard.env` and `portal.env` stay flat files for good: they hold the
-hash of a password, read by their own unit, and the dashboard and the portal
-have no store. `dashboard-monitor.env` and `dashboard-backup.env`, the
-machine's, stay where they are. The dashboard manages them from the
-dashboard's and the portal's own *Secrets*, the owner alone:
+Beside the stores, `/etc/sitesolide` holds the platform's own files, flat,
+and nothing else: `dashboard.env` and `portal.env` hold the hash of a
+password, read by their own unit, and the dashboard and the portal have no
+store. Their manifests declare no secret: each unit reads
+`/etc/sitesolide/<slug>.env` by itself, and a `secrets` field there is
+refused, `dashboard keeps its password hash in dashboard.env, which its unit
+reads: it declares no secret`. `dashboard-monitor.env` and
+`dashboard-backup.env`, the machine's, stay where they are. The dashboard
+manages the four from the dashboard's and the portal's own *Secrets*, the
+owner alone:
 
 | Rule | Files | Why |
 |---|---|---|
-| **write-only**: replaced, never read back, size not shown | legacy files read whole and closed to other accounts | a private key never comes back to the screen, and its size would already give away its algorithm; a writer may narrow a size down through the size refusals by trying writes, which tells them nothing the code they may deploy cannot read |
 | **Change password only**: never read, never set by hand, never restored, the old one erased | any `PASSWORD_HASH`, in any file | a hash is cracked offline, and restoring would revalidate the password you changed because it had leaked |
 | **hash only**: no other variable | `dashboard.env`, `portal.env` | one more variable there would change what the service does: a socket path would send the next password typed to another socket |
 

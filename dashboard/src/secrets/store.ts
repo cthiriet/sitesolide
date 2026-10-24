@@ -1,8 +1,8 @@
 /**
  * A project's store of secrets: what the steward decides about it, and
- * nothing else. Pure: the steward reads the folders, the env file, the files
- * and the legacy files, and hands their state here; a value or a refusal
- * comes back, each checked without a VM.
+ * nothing else. Pure: the steward reads the folders, the env file and the
+ * files, and hands their state here; a value or a refusal comes back, each
+ * checked without a VM.
  *
  *   /etc/sitesolide/projects/<slug>/          root:root 0700
  *   /etc/sitesolide/projects/<slug>/env       root:root 0600, the runtime variables
@@ -11,9 +11,7 @@
  *
  * PID 1 reads them for the project's units (bin/cli/store.ts); nobody else
  * does. **No answer built here carries a store value**: the listing gives
- * names, sources and states, and a legacy file's coverage and a file's size
- * to the owner alone, since anyone who may write the store could otherwise
- * test a guess against a value (set, look, repeat). The one read is the
+ * names, sources and states, and a file's size to the owner alone. The one read is the
  * owner's `/store/value`, which never comes through this module.
  *
  * A refusal is a value, never an exception, as in scope.ts. A refusal quotes
@@ -33,11 +31,9 @@ import {
   MAX_STORE_FILE_BYTES,
   MAX_STORE_FILES,
   MAX_STORE_FILES_BYTES,
-  SECRETS_FOLDER,
-  STORE_PREVIOUS_ROOT,
   type GenerateFormat,
 } from "../../borrowed/store";
-import type { LegacyFileView, StoreFileView, StoreMay, StoreVariableView, StoreView } from "../../borrowed/store-protocol";
+import type { StoreFileView, StoreMay, StoreVariableView, StoreView } from "../../borrowed/store-protocol";
 import { checkKey, checkValue, isVariableName, MAX_KEY, PASSWORD_VARIABLE, VALUE_LIKE_PREFIXES } from "../../borrowed/variables";
 import { machineRefusal } from "../people/powers";
 import { restartPending } from "./restart";
@@ -83,11 +79,11 @@ export type StoreSlugContext = {
  */
 export function storeSlugRefusal(slug: unknown, context: StoreSlugContext): Refusal | null {
   if (typeof slug !== "string" || !isValidSlug(slug)) return invalid("slug: a project's slug, lowercase letters, digits and dashes");
-  if (slug === LANDING_LABEL) return outOfScope("landing names the landing's files, never a project's store");
+  if (slug === LANDING_LABEL) return outOfScope("landing names the landing's account, never a project's store");
   if (slug === MACHINE_FOLDER) return outOfScope("machine names the machine's own snapshots, never a project");
   if (context.zone !== "" && slug === context.zone) return outOfScope(`${slug} is the landing's folder, which has no store`);
   if (STORELESS_SLUGS.includes(slug)) {
-    return outOfScope(`${slug} keeps its hash in ${slug}.env, read by its own unit: it has no store`);
+    return outOfScope(`${slug} keeps its password hash in ${slug}.env, which its unit reads: it has no store`);
   }
   if (isSystemName(slug)) return outOfScope(`${slug} names a unit of the machine, never a project`);
   if (context.requester !== "owner") {
@@ -150,76 +146,6 @@ export function storeValueRefusal(name: string, value: unknown): Refusal | null 
   if (typeof value !== "string") return invalid(`set: ${name}: the value must be a string`);
   const reason = checkValue(value);
   return reason === null ? null : invalid(`set: ${name}: ${reason}`);
-}
-
-// --- Removing never brings a legacy value back (S1, S1') ---------------------
-
-/**
- * A legacy file attached to the project, as the rules of removal read it:
- * `known` when its assignments could be read, whatever its owner or mode,
- * since systemd reads it as root all the same.
- */
-export type LegacyHolder =
-  | { file: string; read: boolean; known: true; values: ReadonlyMap<string, string> }
-  | { file: string; read: boolean; known: false };
-
-/**
- * S1 and S1': may these names leave the store? A unit reads its legacy files
- * first and the store last, the later winning: a name removed from the store
- * would hand the service the legacy file's value again, a value nobody chose
- * any more. Refused while a legacy file attached to the project, read,
- * declared, or kept as a leftover that a redeploy of an older commit would
- * read again, holds the name, or cannot be read to tell.
- *
- * The owner alone, who reads every value anyway, may remove a name every
- * holder carries with the store's very value: nothing in force changes, which
- * is what going back after a migration does. For anyone else the answer
- * never depends on a value: it would tell whoever may write the store
- * whether a guess equals a legacy value.
- *
- * A name the store does not hold leaves nothing: no refusal.
- */
-export function removalRefusal(names: readonly string[], store: ReadonlyMap<string, string>, legacy: readonly LegacyHolder[], owner: boolean): Refusal | null {
-  for (const name of names) {
-    if (!store.has(name)) continue;
-    const unknown = legacy.find((holder) => !holder.known);
-    if (unknown !== undefined) {
-      return invalid(
-        `${unknown.file} cannot be read here, and may hold ${name}: removing it from the store could bring that file's value back. Fix ${unknown.file} first, or retire it`,
-      );
-    }
-    const holders = legacy.filter((holder): holder is Extract<LegacyHolder, { known: true }> => holder.known && holder.values.has(name));
-    if (holders.length === 0) continue;
-    if (owner && holders.every((holder) => holder.values.get(name) === store.get(name))) continue;
-    const read = holders.filter((holder) => holder.read);
-    const named = read.at(-1) ?? holders[0]!;
-    const why = named.read ? "which the service reads before the store: removing it here would bring that file's value back" : "which the project declares or kept: removing it here could bring that file's value back at a later deploy";
-    return invalid(`${name} is also in ${named.file}, ${why}. Retire the file first (sitesolide secrets migrate --retire), or remove ${name} from it`);
-  }
-  return null;
-}
-
-/**
- * S1' for a restore: the names the current version holds and the previous
- * one lacks disappear from the store, judged as a removal of each, against
- * the values in force now.
- */
-export function restoreRemovalRefusal(current: ReadonlyMap<string, string>, previous: ReadonlyMap<string, string>, legacy: readonly LegacyHolder[], owner: boolean): Refusal | null {
-  const disappearing = [...current.keys()].filter((name) => !previous.has(name));
-  return removalRefusal(disappearing, current, legacy, owner);
-}
-
-/**
- * S2: a name set in a legacy file while the store holds it would have no
- * effect, the store being read last. `storeNames` null: the store cannot be
- * read, and nobody can tell; refused rather than written blind.
- */
-export function legacyWriteRefusal(name: string, storeNames: ReadonlySet<string> | null, file: string): Refusal | null {
-  if (storeNames === null) {
-    return invalid(`the project's store cannot be read here, and a variable it holds would override ${file}: fix the store first`);
-  }
-  if (!storeNames.has(name)) return null;
-  return invalid(`${name} is set in the project's store, which overrides ${file}: change it there`);
 }
 
 // --- Sizes -------------------------------------------------------------------
@@ -316,14 +242,12 @@ export function drawValue(random: (bytes: number) => Uint8Array, ask: GenerateAs
 }
 
 /**
- * Without `replace`, a name the store holds, or that a legacy file the
- * service reads sets, is not drawn again: rotating a live secret is a choice,
- * never a side effect.
+ * Without `replace`, a name the store holds is not drawn again: rotating a
+ * live secret is a choice, never a side effect.
  */
-export function generateRefusal(name: string, storeNames: ReadonlySet<string>, readLegacy: readonly LegacyHolder[], replace: boolean): Refusal | null {
-  if (replace) return null;
-  const set = storeNames.has(name) || readLegacy.some((holder) => holder.read && holder.known && holder.values.has(name));
-  return set ? { error: "already-present", message: `${name} is already set; --replace draws a new value in the store, which overrides it` } : null;
+export function generateRefusal(name: string, storeNames: ReadonlySet<string>, replace: boolean): Refusal | null {
+  if (replace || !storeNames.has(name)) return null;
+  return { error: "already-present", message: `${name} is already set; --replace draws a new value in its place` };
 }
 
 // --- The listing -------------------------------------------------------------
@@ -349,31 +273,16 @@ export type StoreState = {
   previous: boolean;
 };
 
-/**
- * A legacy file as the listing shows it. `values` only for a managed one,
- * read for the coverage, which only the owner is told.
- */
-export type LegacyState = {
-  file: string;
-  state: "managed" | "absent" | "unmanaged";
-  reason: string | null;
-  values: ReadonlyMap<string, string> | null;
-  read: boolean;
-  leftover: boolean;
-};
-
 export type StoreViewInput = {
   slug: string;
   /** The deployed manifest naming this slug, null ahead of a deployment or when it does not conform. */
   manifest: Manifest | null;
   store: StoreState;
-  /** Read files first, in the units' order, then the others. */
-  legacy: readonly LegacyState[];
   unitReadsStore: boolean | null;
   /** The main service's start, to the microsecond; null for an anchor or when unknown. */
   startedUs: number | null;
   may: StoreMay;
-  /** The owner: coverage and sizes are told. */
+  /** The owner: sizes are told. */
   owner: boolean;
 };
 
@@ -382,16 +291,15 @@ const SHOWN_FILE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,248}$/;
 
 /**
  * The store as the requester may see it (spec §6.11): names, sources,
- * states, and what may be done. Never a store value, never a legacy value;
- * the public `env` of the manifest is in git already.
+ * states, and what may be done. Never a store value; the public `env` of the
+ * manifest is in git already.
  */
 export function storeView(input: StoreViewInput): StoreView {
   const { store, manifest, owner, may } = input;
-  const declared = manifest === null ? { form: "none" as const, legacy: [], runtime: [], files: [], build: [] } : secretsOf(manifest);
+  const declared = manifest === null ? { form: "none" as const, runtime: [], files: [], build: [] } : secretsOf(manifest);
   const runtime = declared.form === "names" ? unique(declared.runtime.filter((name) => isVariableName(name))) : [];
   const declaredFiles = declared.form === "names" ? unique(declared.files.filter((name) => isValidFileName(name))) : [];
   const storeValues = store.env.kind === "managed" ? store.env.values : new Map<string, string>();
-  const read = input.legacy.filter((file) => file.read && file.state === "managed" && file.values !== null);
 
   const names: string[] = [];
   const add = (name: string) => {
@@ -399,15 +307,8 @@ export function storeView(input: StoreViewInput): StoreView {
   };
   runtime.forEach(add);
   [...storeValues.keys()].forEach(add);
-  for (const file of read) [...file.values!.keys()].forEach(add);
 
-  const variables: StoreVariableView[] = names.map((name) => {
-    const holders = read.filter((file) => file.values!.has(name)).map((file) => file.file);
-    const isDeclared = runtime.includes(name);
-    if (storeValues.has(name)) return { name, source: "store", file: null, shadows: holders, declared: isDeclared };
-    if (holders.length > 0) return { name, source: "legacy", file: holders.at(-1)!, shadows: holders.slice(0, -1), declared: isDeclared };
-    return { name, source: "none", file: null, shadows: [], declared: isDeclared };
-  });
+  const variables: StoreVariableView[] = names.map((name) => ({ name, source: storeValues.has(name) ? "store" : "none", declared: runtime.includes(name) }));
 
   const present = new Map(store.files.map((file) => [file.name, file]));
   const fileNames = [...declaredFiles, ...[...present.keys()].filter((name) => !declaredFiles.includes(name) && SHOWN_FILE.test(name)).sort()];
@@ -433,16 +334,6 @@ export function storeView(input: StoreViewInput): StoreView {
     };
   });
 
-  const legacy: LegacyFileView[] = input.legacy.map((file) => ({
-    name: file.file,
-    state: file.state,
-    reason: file.reason,
-    variables: file.state === "managed" && file.values !== null ? [...file.values.keys()] : [],
-    read: file.read,
-    leftover: file.leftover,
-    covered: owner && file.state === "managed" && file.values !== null ? isCovered(file.values, store.env) : null,
-  }));
-
   const envModified = store.env.kind === "absent" ? null : store.env.modifiedAt;
   const newest = [envModified, ...store.files.map((file) => file.modifiedAt)].reduce<number | null>(
     (latest, date) => (date === null ? latest : latest === null ? date : Math.max(latest, date)),
@@ -464,7 +355,6 @@ export function storeView(input: StoreViewInput): StoreView {
     variables,
     missing: variables.filter((variable) => variable.declared && variable.source === "none").map((variable) => variable.name),
     files,
-    legacy,
     build: declared.form === "names" ? unique(declared.build.filter((name) => isVariableName(name))) : [],
     public: publicEnv,
     unitReadsStore: input.unitReadsStore,
@@ -473,35 +363,6 @@ export function storeView(input: StoreViewInput): StoreView {
     previous: store.previous && may.restore,
     may,
   };
-}
-
-/**
- * Where retire keeps a legacy file it deletes, on the machine: under the
- * project's own folder of previous versions, which `sitesolide remove`
- * deletes whole with the store (storeRemovalActions in bin/cli/store.ts), its
- * owner and mode kept. Throws on a slug or a name no path is built from.
- */
-export function retiredCopyPath(slug: string, name: string): string {
-  if (typeof slug !== "string" || !isValidSlug(slug)) throw new Error("not a project's slug");
-  if (typeof name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name.includes("..")) throw new Error("not a legacy file's name");
-  return `${STORE_PREVIOUS_ROOT}/${slug}/legacy/${name}`;
-}
-
-/**
- * What the listing says of a legacy file retire deleted: where its copy is,
- * and how the owner puts it back by hand. Names and paths, never a value.
- */
-export function retiredReason(slug: string, name: string): string {
-  const copy = retiredCopyPath(slug, name);
-  return `retired: a copy is kept at ${copy}; to put it back, sudo cp -p ${copy} ${SECRETS_FOLDER}/${name}, then sitesolide refresh ${slug}`;
-}
-
-/** Every assignment of a legacy file is in the store with the very same value. An empty file is covered. */
-export function isCovered(values: ReadonlyMap<string, string>, env: StoreEnvState): boolean {
-  if (values.size === 0) return true;
-  if (env.kind !== "managed") return false;
-  for (const [name, value] of values) if (env.values.get(name) !== value) return false;
-  return true;
 }
 
 function unique(names: readonly string[]): string[] {
@@ -514,10 +375,10 @@ function unique(names: readonly string[]): string[] {
  * What a requester may do on a store, as the listing says and the routes
  * enforce: the owner everything, but reading a value back over SSH; an
  * Admin writes and restores; a Developer and a token with Manage secrets
- * write. Migrate and retire are the owner's.
+ * write.
  */
 export function storeMay(requester: { kind: "owner" | "ssh" | "person" | "token"; restore: boolean }): StoreMay {
-  if (requester.kind === "owner") return { write: true, reveal: true, restore: true, migrate: true };
-  if (requester.kind === "ssh") return { write: true, reveal: false, restore: true, migrate: true };
-  return { write: true, reveal: false, restore: requester.kind === "person" && requester.restore, migrate: false };
+  if (requester.kind === "owner") return { write: true, reveal: true, restore: true };
+  if (requester.kind === "ssh") return { write: true, reveal: false, restore: true };
+  return { write: true, reveal: false, restore: requester.kind === "person" && requester.restore };
 }

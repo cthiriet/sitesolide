@@ -13,15 +13,12 @@
  * `site-<slug>`, mode 0400 (measured on Debian 13 and systemd 257.13, the
  * bench's Q1 to Q8).
  *
- * `projects` is a folder that does not end in `-secrets`: no name of the old
- * form, flat or `<slug>-secrets/<name>`, ever designates anything under it.
- *
  * Pure: the CLI, the steward and the installer read it, the dashboard through
  * its borrowed copy. Nothing here touches the disk or the network.
  */
 import { isValidFileName, isValidSlug, STORELESS_SLUGS } from "./manifest";
 
-/** The machine's folder of secrets, root's, 0755: the old form's flat files, and the store's root. */
+/** The machine's folder of secrets, root's, 0755: the stores' root, and the platform's own flat files beside it. */
 export const SECRETS_FOLDER = "/etc/sitesolide";
 export const STORE_ROOT = "/etc/sitesolide/projects";
 /** One previous version of the store's env and of each file, kept by the steward before each write. */
@@ -60,9 +57,8 @@ export function slugHasStore(slug: string): boolean {
 
 /**
  * The value of the `EnvironmentFile=` line every service unit of an app with
- * a store carries, last, so that the store wins over a legacy file on a
- * shared name. Optional: a store with no `env` yet starts the service with
- * none of its variables, and no error (bench Q3).
+ * a store carries. Optional: a store with no `env` yet starts the service
+ * with none of its variables, and no error (bench Q3).
  */
 export function storeEnvironmentFile(slug: string): string {
   return `-${storePaths(slug).env}`;

@@ -46,7 +46,7 @@ import { cn } from "@/lib/utils"
  *
  * Every write goes through the steward under the secrets' unlock, the lock in
  * the header being the same one. A value is typed once, sent once, and never
- * shown: there is no Reveal here, as for a write-only secret file.
+ * shown: there is no Reveal here.
  */
 
 type ListState =

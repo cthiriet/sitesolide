@@ -104,8 +104,7 @@ export type Manifest = {
   /**
    * The names of the project's secrets, never a value: a list of variable
    * names, the short form, or SecretsLongForm when a file or a build secret
-   * is needed. A list of file names, each with a dot, is the old form, still
-   * read: see secretsOf.
+   * is needed: see secretsOf.
    */
   secrets?: string[] | SecretsLongForm;
   domain?: { name: string; aliases?: string[]; active?: boolean };
@@ -794,16 +793,6 @@ export function isValidEnvValue(value: unknown): value is string {
   return typeof value === "string" && !CONTROL_CHARACTERS.test(value) && !/[\s"'\\]/.test(value);
 }
 
-/**
- * The name of a secret file, written into the unit as
- * `EnvironmentFile=-/etc/sitesolide/<name>` and read there as root. A plain
- * file name: no path, no space, no `%` systemd would expand, no line break
- * that would add a directive of its own after it.
- */
-export function isValidSecretName(name: unknown): name is string {
-  return typeof name === "string" && name.length <= 255 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name);
-}
-
 // --- Secrets -----------------------------------------------------------------
 //
 // A manifest names its secrets, never their values. The values live on the
@@ -814,11 +803,6 @@ export function isValidSecretName(name: unknown): name is string {
 // - The long form, SecretsLongForm, adds files read whole, which every
 //   service finds at $CREDENTIALS_DIRECTORY/files_<name>, and the build's
 //   secrets.
-// - The old form lists flat files of /etc/sitesolide, each name with a dot
-//   (`"secrets": ["crm.env"]`). Still read, before the store, with a warning.
-//
-// A variable name never has a dot and every old entry has one: the dot alone
-// tells the forms apart.
 
 /** The long form of `secrets`, each list optional. */
 export type SecretsLongForm = { runtime?: string[]; files?: string[]; build?: string[] };
@@ -826,24 +810,23 @@ export type SecretsLongForm = { runtime?: string[]; files?: string[]; build?: st
 /** The keys of the long form, refused beyond these for the same reason as KNOWN_KEYS. */
 const SECRETS_KEYS = ["runtime", "files", "build"];
 
-/** How a manifest declares its secrets: not at all, as flat files (the old form), or as names. */
-export type SecretsForm = "none" | "legacy" | "names";
+/** How a manifest declares its secrets: not at all, or as names. */
+export type SecretsForm = "none" | "names";
 
-/** A manifest's secrets, read tolerantly: what parses is kept, nothing throws (scope.ts reads deployed manifests so). */
+/** A manifest's secrets, read tolerantly: what parses is kept, nothing throws (the steward reads deployed manifests so). */
 export type SecretsDeclaration = {
   form: SecretsForm;
-  /** Legacy file names, in the manifest's order: read flat from /etc/sitesolide, before the store. */
-  legacy: string[];
   runtime: string[];
   files: string[];
   build: string[];
 };
 
 /**
- * Projects whose hash-only files stay flat: no store, units as in 0.7. The
- * dashboard's and the portal's `<slug>.env` carry the owner's password hash,
- * which their own unit reads and Change password writes; nothing else goes
- * there, see HASH_ONLY in dashboard/src/secrets/scope.ts.
+ * The platform's projects that have no store: the dashboard's and the
+ * portal's units read `/etc/sitesolide/<slug>.env`, which carries the owner's
+ * password hash and which Change password writes; nothing else goes there,
+ * see HASH_ONLY in dashboard/src/secrets/scope.ts. Their manifests declare no
+ * secret: the generator names that file itself (./unit, platformFile).
  */
 export const STORELESS_SLUGS: readonly string[] = ["dashboard", "portal"];
 
@@ -851,11 +834,6 @@ export const STORELESS_SLUGS: readonly string[] = ["dashboard", "portal"];
 export function hasStore(manifest: Manifest): boolean {
   const slug = manifest.slug as unknown;
   return isApp(manifest) && typeof slug === "string" && isValidSlug(slug) && !STORELESS_SLUGS.includes(slug);
-}
-
-/** A legacy entry: a valid secret file name with a dot. */
-export function isLegacySecretName(name: unknown): name is string {
-  return isValidSecretName(name) && name.includes(".");
 }
 
 /**
@@ -890,42 +868,18 @@ function stringsOf(value: unknown): string[] {
  * The manifest's secrets, whatever their form, read tolerantly: the dashboard
  * and the steward read the manifests deployed on the machine as they are, and
  * one bad entry must not take a page down. validate() judges them.
- *
- * A list with a dot in any entry reads as the old form, every entry a file:
- * validate() refuses a list that mixes both, so only a CLI from before the
- * store could have deployed one, and it read every entry as a file.
  */
 export function secretsOf(manifest: Manifest): SecretsDeclaration {
-  const declaration: SecretsDeclaration = { form: "none", legacy: [], runtime: [], files: [], build: [] };
+  const declaration: SecretsDeclaration = { form: "none", runtime: [], files: [], build: [] };
   const raw = manifest.secrets as unknown;
   if (Array.isArray(raw)) {
     const names = stringsOf(raw);
-    if (names.length === 0) return declaration;
-    if (names.some((name) => name.includes("."))) return { ...declaration, form: "legacy", legacy: names };
-    return { ...declaration, form: "names", runtime: names };
+    return names.length === 0 ? declaration : { ...declaration, form: "names", runtime: names };
   }
   if (isRecord(raw) && Object.keys(raw).length > 0) {
     return { ...declaration, form: "names", runtime: stringsOf(raw.runtime), files: stringsOf(raw.files), build: stringsOf(raw.build) };
   }
   return declaration;
-}
-
-/** secretsOf(manifest).legacy: what the code that predates the store meant by `manifest.secrets`. */
-export function legacySecretFiles(manifest: Manifest): string[] {
-  return secretsOf(manifest).legacy;
-}
-
-/**
- * Not errors: what deploy prints before it goes on. The old form on a project
- * that has a store keeps working, its files read before the store, and says
- * how to leave it.
- */
-export function secretsWarnings(manifest: Manifest): string[] {
-  const declaration = secretsOf(manifest);
-  if (declaration.form !== "legacy" || !hasStore(manifest)) return [];
-  const files = declaration.legacy.join(", ");
-  const [are, they, keep] = declaration.legacy.length === 1 ? ["is a file name", "it", "keeps"] : ["are file names", "they", "keep"];
-  return [`secrets: ${files} ${are}, the old form: ${they} ${keep} loading before the project's store; run sitesolide secrets migrate, then list the variable names`];
 }
 
 /**
@@ -1385,17 +1339,10 @@ function secretsErrors(manifest: Manifest, isApplication: boolean): string[] {
 
   const declaration = secretsOf(manifest);
   if (declaration.form === "none") return [];
-  if (declaration.form === "legacy") {
-    if (declaration.legacy.some((name) => !name.includes("."))) {
-      return ["secrets: file names (with a dot) and variable names cannot be mixed: migrate the files first (sitesolide secrets migrate), then list the variable names"];
-    }
-    // The old form's rule and message, unchanged.
-    return declaration.legacy.filter((name) => !isValidSecretName(name)).map((name) => `secrets: "${name}" must be a plain file name under /etc/sitesolide`);
-  }
 
   const slug = manifest.slug as unknown;
   if (typeof slug === "string" && STORELESS_SLUGS.includes(slug)) {
-    return [`secrets: ${slug} keeps its hash in ${slug}.env, read by its own unit: its secrets cannot move to a store`];
+    return [`secrets: ${slug} keeps its password hash in ${slug}.env, which its unit reads: it declares no secret`];
   }
   const errors: string[] = [];
   const shortForm = Array.isArray(raw);

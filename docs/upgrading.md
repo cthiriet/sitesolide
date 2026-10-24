@@ -120,6 +120,59 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## Secrets: a project's store alone
+
+**What the release brings.** A project's secrets live in its store alone,
+`/etc/sitesolide/projects/<slug>/`. This release no longer reads a project's
+flat files of `/etc/sitesolide`, and `secrets` in `sitesolide.json` takes
+variable names only: a list of file names, `"secrets": ["shop.env"]`, the
+form from before 0.8, is refused like any entry that is not a variable's
+name. `sitesolide secrets migrate` and its `--retire`, *Merge into the store*
+and *Retire* in the dashboard, and the token routes for a project's files,
+`GET /api/v1/projects/<slug>/secrets` and `PATCH
+/api/v1/projects/<slug>/secrets/<file>`, are gone. The dashboard's and the
+portal's manifests no longer declare `secrets`: their units read
+`/etc/sitesolide/<slug>.env` by themselves, and those two files, with
+`dashboard-monitor.env` and `dashboard-backup.env`, are all that stays flat
+in `/etc/sitesolide`. See [secrets.md](secrets.md).
+
+**Before upgrading, with 0.8**, every project must read its store alone. For
+each one whose manifest still lists file names, or whose units still read a
+file of `/etc/sitesolide`, run in its folder `sitesolide secrets migrate`,
+then `sitesolide secrets migrate --restart`, then `sitesolide secrets migrate
+--retire`; list the variable names in its manifest, which `sitesolide secrets
+--json` gives, and deploy it. Then check, names only:
+
+```bash
+ssh you@your-machine 'sudo grep -H "^EnvironmentFile=-/etc/sitesolide/[^/]*$" /etc/systemd/system/*.service'
+```
+
+Only `dashboard.service` and `portal.service` may answer.
+
+**What `sitesolide upgrade` brings**, in its usual order: the steward, which
+no longer lists nor writes a project's flat files; the dashboard and the
+portal, whose manifests declare nothing and whose units stay as they are;
+the installer, which no longer reads a project's flat files. Nothing on the
+machine changes form.
+
+**What changes for you.**
+
+- **A project's flat file is read by nothing.** Deployed again or refreshed,
+  a project whose units still named one loses them, and the values that file
+  held with them: migrate before upgrading.
+- **`sitesolide remove`** deletes the project's store and its previous
+  versions, and no flat file.
+- **A site no manifest describes**, the landing or a service made by hand,
+  no longer has files listed in the dashboard; they stay on the machine,
+  untouched, read by whatever unit names them.
+- **The copies 0.8's `--retire` kept**, under
+  `/var/lib/sitesolide-steward/precedents/projects/<slug>/legacy/`, are read
+  by nothing: delete them by hand once the store has served without them.
+
+**Going back.** `sitesolide upgrade` with the previous binary. The stores are
+read as before, and the dashboard and the portal it deploys declare their
+files again.
+
 ## The dashboard names its release
 
 **What the release brings.** The dashboard says which release it was built
@@ -168,18 +221,13 @@ deployment, a `sitesolide refresh` of it, or its first value.
 
 **Every app's units change at its next deployment**, or at `sitesolide
 refresh <slug>`. Each service unit of an app gains four lines: the store's
-`env`, read after the legacy files the manifest names, so that the store wins
-on a shared name; `LoadCredential=` for its `files/` folder;
-`InaccessiblePaths=-/etc/sitesolide`, which hides the folder from the service
-whether or not it reads legacy files; and `ProtectProc=invisible`, which hides
-the processes of other accounts. A unit 0.7 or an earlier release wrote is
-the generator's own and is replaced without `--force`, and so is one the
-generator made from the manifest the previous deployment left on the
-machine: a changed manifest, the old form of `secrets` turned into names
-included, replaces it. One edited by hand stays as it is, and says so,
-even one that only names a legacy file again or in another order, which
-decides the value that wins. The store being empty, the service starts with
-the environment it had. The dashboard's and the portal's units do not change:
+`env`; `LoadCredential=` for its `files/` folder;
+`InaccessiblePaths=-/etc/sitesolide`, which hides the folder from the
+service; and `ProtectProc=invisible`, which hides the processes of other
+accounts. A unit 0.7 or an earlier release wrote is the generator's own and
+is replaced without `--force`, and so is one the generator made from the
+manifest the previous deployment left on the machine. One edited by hand
+stays as it is, and says so. The dashboard's and the portal's units do not change:
 their password hashes stay in their own files, and they have no store.
 
 **Before upgrading, on the machine**, names only, never a content:
@@ -188,27 +236,17 @@ their password hashes stay in their own files, and they have no store.
 ssh you@your-machine 'sudo find /etc/sitesolide -mindepth 1 -maxdepth 2 | sort'
 ```
 
-Check there that no service reads a file of `/etc/sitesolide` by its path,
-a `<slug>-secrets/` folder for instance: the folder becomes invisible to
-every service at its next deployment. Check also that no manifest declares a
-legacy file without a dot, and that nothing is already named `projects`.
+Check there that no service reads a file of `/etc/sitesolide` by its path:
+the folder becomes invisible to every service at its next deployment. Check
+also that nothing is already named `projects`.
 
 **What changes for you.**
 
-- **A missing secret no longer stops a deployment.** A missing legacy file is
-  a warning, and the service starts without its variables; a declared name
-  the store lacks is asked for at a terminal, and warned otherwise. A missing
+- **A missing secret no longer stops a deployment.** A declared name the
+  store lacks is asked for at a terminal, and warned otherwise. A missing
   build secret stops it, before anything is sent.
-- **The old form is still read, with a warning.** `"secrets": ["shop.env"]`
-  keeps loading `/etc/sitesolide/shop.env`, before the store. Move each
-  project when you choose, one at a time, as
-  [migration.md](migration.md#secrets-the-per-project-store) says: deploy it,
-  merge its files into its store, restart, retire the files, then list the
-  names in its manifest. Never `sitesolide refresh --all` for that: it skips a
-  project it refuses, with a warning, and goes on to the next.
-- **An entry without a dot is now a variable name.** A legacy file named
-  without one, `"secrets": ["token"]`, would be read as the name of a
-  variable, `token`: rename the file first, or migrate.
+- **A project that declared files** moves to its store before a later
+  release, see [Secrets: a project's store alone](#secrets-a-projects-store-alone).
 - **The build gets a clean environment.** It inherits only what locates things
   and the toolchains from yours, `PATH`, `HOME`, `LANG` and their kin; a
   variable it read from your shell, a proxy or a registry's token, now goes
@@ -218,17 +256,15 @@ legacy file without a dot, and that nothing is already named `projects`.
   whatever its name, and accepts a name with a framework's public prefix,
   `NEXT_PUBLIC_STRIPE_KEY`, which it used to refuse.
 - **Only the owner reads a value back.** An Admin of a project no longer
-  reads one, in its store or in a legacy file: their dashboard shows every
-  value write-only.
+  reads one: their dashboard shows every value write-only.
 - **`sitesolide secrets` works over SSH**, as the owner, for every app but
   the dashboard and the portal, and with a token it changes any name of the
-  project's store, no longer `<slug>.env` alone. A static site has no store:
+  project's store. A static site has no store:
   its build secrets stay with whoever deploys.
 - **`sitesolide run`**, for a project whose manifest lists names, reads
   `~/.config/sitesolide/secrets/<slug>.env` with a strict parser and never a
   shell: `export A=b` or a space around `=` stop it, with the line number,
-  and `$(...)` is a value taken as it is, never run. A legacy manifest's files
-  are loaded as before.
+  and `$(...)` is a value taken as it is, never run.
 - **A name a token holds stops your deploy.** A token's deployment accepted,
   or its write that made a project's store ahead of one, holds the name,
   and so does a creation that made the token Admin of a project the machine
@@ -240,27 +276,18 @@ legacy file without a dot, and that nothing is already named `projects`.
   waited for. A steward from before claims holds none; claims that do not
   read stop it unless `--adopt`, and are restored from the steward's
   backups, never deleted.
-- **The old form drops nothing silently either.** A manifest in the old
-  form that stops declaring a legacy file the units read, whose values the
-  store lacks, is refused before anything is sent, `migrate first`, as one
-  that names its variables is.
 
 **Whoever works with a token installs the new CLI.** A CLI from before 0.8
-refuses a manifest that lists names before anything is pushed, and the old
-token route answers a project kept in its store `this project keeps its
-variables in its store: update your sitesolide CLI, then sitesolide secrets
-set NAME`. The new CLI facing a steward or a dashboard not upgraded yet
-deploys a manifest in the old form as before, and stops one that lists
-names before anything is sent, since what that deployment would drop cannot
-be told: upgrade the machine first.
+refuses a manifest that lists names before anything is pushed. The new CLI
+facing a steward or a dashboard not upgraded yet stops before anything is
+sent: upgrade the machine first.
 
 **Going back.** `sitesolide upgrade` with the previous binary. The values in
 the stores stay on the machine, unread by the previous steward and dashboard;
 a unit written by this release still reads its store until it is written
 again, which the previous CLI does only with `--force`, reading the new lines
 as edited by hand. A project whose manifest already lists names cannot be
-deployed by the previous CLI: put its legacy files back first, see
-[migration.md](migration.md#going-back-to-the-legacy-files).
+deployed by the previous CLI.
 
 ## Machines from eight clouds, and any domain
 
@@ -460,21 +487,11 @@ and its code served past its portal.
 **A cloned repository deployed over SSH could reach the machine's files.**
 `deploy` now refuses, before anything is pushed:
 
-- **a secret file that is not the project's.** The unit reads every declared
-  file as root: `dashboard-backup.env` handed the code the backups' bucket
-  keys and passphrase, `cms.env` the secrets of cms. A project declares
-  `<slug>.env` and `<slug>-<name>` files alone, never the machine's own nor
-  one a more specific site deployed there holds, and a file already on the
-  machine must belong to `site-<slug>`;
 - **a `publicDir` that is a link out of the repository**, which sent
   `~/.ssh` and served it to anyone;
 - **a link among the public files that leads out of them**, which Caddy
   follows on the machine: `robots.txt -> /etc/caddy/cloudflare.env` served the
   zone's DNS token.
-
-`sitesolide remove` deleted every secret file the folder's manifest named,
-`dashboard.env` included; it now deletes the project's own alone, and says
-which it kept.
 
 **A token could do more than its scope said.** Its deployment could switch the
 project's domain on, which `sitesolide domain --activate` does only after
@@ -618,18 +635,10 @@ dashboard's unlock.
   refuse framing. A block edited by hand on the machine still stops
   `deploy` until `--force`.
 - **Over your SSH, `deploy` may stop on a manifest that deployed before**,
-  saying which file or link, with nothing pushed: `secrets: a file that is not
-  this project's`, `publicDir leads outside the repository`, or `carries
-  links that lead out of publicDir`. Rename a secret file after the project,
-  `<slug>.env` or `<slug>-<name>`, and move its variables there from
-  *Secrets*; replace a link with the file it points to. A manifest in your
-  sites repository keeps a `publicDir` that leads anywhere, as its `source`
-  already did. `deploy` also reads, before anything is pushed, who owns each
-  declared file on the machine, through `sudo`, never its content.
-- **`remove` keeps what is not the project's**, and prints each with its
-  reason, `kept: dashboard.env belongs to the machine, root's, and no project
-  reads it`. A file it kept that really was the removed project's, made by
-  hand under another name, you remove yourself.
+  saying which link, with nothing pushed: `publicDir leads outside the
+  repository`, or `carries links that lead out of publicDir`. Replace a link
+  with the file it points to. A manifest in your sites repository keeps a
+  `publicDir` that leads anywhere, as its `source` already did.
 - **A token no longer creates a name a removed project left things under.**
   The refusal, `reserved`, counts the snapshots and the connector grants left,
   never what they hold. Deploy it yourself over SSH, which is how a removed
@@ -661,8 +670,8 @@ dashboard's unlock.
 - **A value with a Unicode noncharacter is refused**, U+FDD0 to U+FDEF and the
   last two code points of every plane, from the dashboard, a token or the
   CLI: systemd would read none of the file's variables.
-- **A secret file created from the dashboard or by a token has no previous
-  version**: one kept under its name, from an earlier file, is dropped first.
+- **A secret file created from the dashboard has no previous version**: one
+  kept under its name, from an earlier file, is dropped first.
 - **A WebSocket on a restricted site needs the site's Origin.** Every browser
   sends it; a client of your own outside a browser sends it too, or is
   refused 403.
@@ -708,9 +717,8 @@ vault, unread. The registry, its log and `team.json` stay as they are.
 ## Secrets with a token
 
 A token may now manage secrets. Minted with *Manage secrets*, it lists its
-projects' secret files and variable names, and sets and removes the variables
-of `<slug>.env`, never reading one back; any token that deploys a project
-also restarts it. From a workstation with a token, `sitesolide secrets`,
+projects' secrets and sets and removes their values, never reading one back;
+any token that deploys a project also restarts it. From a workstation with a token, `sitesolide secrets`,
 `secrets set`, `secrets remove` and `sitesolide restart` do it, see
 [access.md](access.md#secrets-with-a-token).
 
@@ -760,36 +768,22 @@ without the CLI calls the routes over HTTPS
 **Going back.** `sitesolide upgrade` with the previous binary. The previous
 steward reads `team.json` as it stands, the new key ignored, and knows no
 secrets route, which the dashboard answers `not-available`. The values tokens
-set stay in the files, and their lines in the journal.
+set stay on the machine, and their lines in the journal.
 
-## A token's project reads its own secret files alone
+## A token may not take a platform project's name
 
-The installer now refuses, before anything is written, a deployment by token
-whose project would read or take a secret file that is not its own:
-`secret-taken`, naming the file, never what it holds. That is a file kept for
-root (`dashboard-backup.env`, `dashboard-monitor.env`), a declared file
-already in `/etc/sitesolide` that is not a plain file of `site-<slug>`, and a
-file another site holds that a new project would take by its name, `cms-smtp`
-taking cms's `cms-smtp.env`. The steward refuses a token creating a project
-named after a platform project and a dash, `dashboard-*`, `portal-*`,
-`api-*`, `analytics-*`, `landing-*`, `www-*`, as `reserved`; a project of such
-a name already on the machine stays deployable.
+The steward refuses a token creating a project named after a platform project
+and a dash, `dashboard-*`, `portal-*`, `api-*`, `analytics-*`, `landing-*`,
+`www-*`, as `reserved`; a project of such a name already on the machine stays
+deployable.
 
 **What `sitesolide upgrade` brings**: the steward, which refuses the new
-names; the dashboard, whose folder carries the sources of both, with nothing
-new for it; the installer, which judges the files. The backups, the egress
-proxy, the collector, the gatekeeper, the shared service, the portal, the
-monitor, the Caddyfile and Caddy's drop-in do not move. Nothing changes form
-on the machine.
+names; the dashboard, whose folder carries the steward's sources, with nothing
+new for it. The backups, the egress proxy, the collector, the gatekeeper, the
+shared service, the portal, the monitor, the Caddyfile and Caddy's drop-in do
+not move. Nothing changes form on the machine.
 
-**What changes for you.** A token's deployment that read a file of another
-project, or of the machine, stops at its next run, and says which file: move
-the variable into the project's own `<slug>.env` from *Secrets*, or, for a
-file created by hand, give it to `site-<slug>` (`sudo chown site-<slug>:site-<slug>`)
-if it is the project's. Over your SSH, nothing changes.
-
-**Going back.** `sitesolide upgrade` with the previous binary: the previous
-installer reads the declared files whoever owns them, as before.
+**Going back.** `sitesolide upgrade` with the previous binary.
 
 ## Workers and scheduled services
 
@@ -876,7 +870,7 @@ they are.
 ## The machine's own state is backed up
 
 Every run now takes, first, a snapshot named `machine`: `/etc/sitesolide`,
-every project's secret files; `/var/lib/sitesolide-steward`, the access
+every project's store and the platform's own files; `/var/lib/sitesolide-steward`, the access
 registry, the previous versions of the secrets and the steward's log; and
 `/etc/caddy`, the preview codes, the zone's settings, the DNS token and the
 domains table. It is read back, kept, copied to the bucket and checked like a

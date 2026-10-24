@@ -27,8 +27,5 @@
   "memory": "128M",
   "headers": {
     "X-Robots-Tag": "noindex, nofollow, noarchive"
-  },
-  "secrets": [
-    "portal.env"
-  ]
+  }
 }

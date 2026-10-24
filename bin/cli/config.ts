@@ -231,6 +231,14 @@ export function deploymentAccount(server: string): string {
   return separator === -1 ? server : server.slice(0, separator);
 }
 
+/**
+ * The dashboard's address, derived from the configured zone. No default: a
+ * ready-made value would send a user towards someone else's dashboard.
+ */
+export function dashboardAddress(zone: string): string {
+  return `https://dashboard.${zone}`;
+}
+
 export function configPath(home = homedir(), environment: Record<string, string | undefined> = process.env): string {
   return join(privateFolder(home, environment), "config.json");
 }

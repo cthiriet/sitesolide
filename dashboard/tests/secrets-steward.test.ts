@@ -26,7 +26,6 @@ import type {
   Failure,
   FileView,
   ProjectView,
-  ContentResponse,
   UnlockResponse,
   FileResponse,
   LogResponse,
@@ -48,9 +47,8 @@ import {
   type StewardOptions,
 } from "../src/secrets/steward";
 import { createSystem, isTemporary, readAccount, readGroup, type Command, type SystemConfig, type System } from "../src/secrets/system";
-import type { StoreChangeResponse, StoreListResponse, StoreMigrateResponse, StoreRetireResponse, StoreRevealResponse, StoreView } from "../borrowed/store-protocol";
+import type { StoreChangeResponse, StoreListResponse, StoreRevealResponse, StoreView } from "../borrowed/store-protocol";
 import { STORE_PREVIOUS_ROOT, storeRemovalActions } from "../borrowed/store";
-import { retiredCopyPath } from "../src/secrets/store";
 import { ACCESS_MAX_LINES, ACCESS_PRUNE_BYTES, ACCESS_PRUNE_INTERVAL_MS, ACCESS_RETENTION_MS, createHistory, encodeEntry, inWindow, latest, MAX_ENTRY_BYTES, mergeLogs, page, reread, type AccessWindow } from "../src/secrets/log";
 
 /**
@@ -59,9 +57,10 @@ import { ACCESS_MAX_LINES, ACCESS_PRUNE_BYTES, ACCESS_PRUNE_INTERVAL_MS, ACCESS_
  * forward itself. Each test has its own `mkdtemp` directory, never `.attempts`,
  * which tests/setup.ts empties on every run.
  *
- * The bench's machine looks like the real one: app sites, a static site, the
- * landing with no manifest, the dashboard and the portal with their
- * hash, a builder with its ssh key and its subdirectory of secrets.
+ * The bench's machine looks like the real one: app sites with their stores, a
+ * static site, the landing with no manifest and the file its old service
+ * reads, the dashboard with its hash and its monitor's alerting, and the
+ * portal with its hash.
  */
 
 const PASSWORD = "Xith-G4r4-nRJs-uDMV-KhsD-mzuK";
@@ -71,18 +70,10 @@ const SECRET_SID = "ID_VALUE-SECRET-2";
 const SECRET_SET = "sk_live 'VALUE' \"SECRET\" $3 #";
 /** A token made only of the characters of a variable name: it would pass for a name. */
 const SECRET_ALNUM = "fake_live_Q9x7Zk2Lm4Np8Rt6Vw3Yb5";
-/**
- * A fake key's header, split so that a secret scanner reading this file does
- * not take it for a leaked one. At runtime it is whole.
- */
-const KEY_HEADER = "-----BEGIN OPENSSH " + "PRIVATE KEY-----";
-const PRIVATE_KEY = `${KEY_HEADER}\nb3BlbnNzaC1rZXktdjEAAAAAC-PRIVATE-KEY-SECRET\n-----END OPENSSH PRIVATE KEY-----\n`;
-const PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI-public-key builder\n";
-const SECRET_REGISTRY = "reg-REGISTRY-TOKEN-SECRET\n";
 const BACKSLASH = String.fromCharCode(92);
 const charOf = (code: number) => String.fromCharCode(code);
 
-const CMS_ENV = `# CMS mail, to renew at the slightest doubt\nSID=${SECRET_SID}\n\n# the token\nTOKEN=${SECRET_TOKEN}\n`;
+const MONITOR_ENV = `# the alerting, to renew at the slightest doubt\nSID=${SECRET_SID}\n\n# the token\nTOKEN=${SECRET_TOKEN}\n`;
 
 const UID = process.getuid!();
 /** The group of a file created under tmpdir: the directory's on macOS, the process's on Linux. */
@@ -100,15 +91,7 @@ const ACCOUNTS = ["root", "site-cms", "site-calendar", "site-library", "site-das
 
 const toClean: string[] = [];
 afterEach(() => {
-  for (const folder of toClean.splice(0)) {
-    // A directory closed by a test has to be reopened before it can go.
-    try {
-      chmodSync(join(folder, "secrets", "builder-secrets"), 0o755);
-    } catch {
-      // missing
-    }
-    rmSync(folder, { recursive: true, force: true });
-  }
+  for (const folder of toClean.splice(0)) rmSync(folder, { recursive: true, force: true });
 });
 
 type Scenario = (unit: string, sinceRestartMs: number) => string;
@@ -193,13 +176,13 @@ async function mount(options: Mount = {}): Promise<Bench> {
   project("cms", {
     ...appManifest,
     env: { NODE_ENV: "production", DEFAULT_SENDER: "me@test-zone.invalid" },
-    secrets: ["cms.env", "cms-webhook.env"],
+    secrets: ["SID", "TOKEN"],
   });
-  project("calendar", { ...appManifest, secrets: ["calendar.env"] });
-  project("library", { ...appManifest, secrets: ["library.env"] });
-  project("dashboard", { ...appManifest, secrets: ["dashboard.env"] });
-  project("portal", { ...appManifest, secrets: ["portal.env"] });
-  project("builder", { ...appManifest, secrets: ["builder.env"] });
+  project("calendar", { ...appManifest, secrets: ["API_KEY"] });
+  project("library", { ...appManifest, secrets: ["KEY"] });
+  project("dashboard", { ...appManifest });
+  project("portal", { ...appManifest });
+  project("builder", { ...appManifest, secrets: ["BUILDER"] });
   project("showcase", { publicDir: "public" });
   // The landing: a directory with no manifest, named after the bare domain.
   mkdirSync(join(sites, "test-zone.invalid"));
@@ -211,8 +194,8 @@ async function mount(options: Mount = {}): Promise<Bench> {
       "Environment=PORT=3048",
       "Environment=DATA_DIR=/srv/sites/cms/data",
       "Environment=ADDED_BY_HAND=1",
-      `EnvironmentFile=-${secrets}/cms.env`,
-      `EnvironmentFile=-${secrets}/cms-webhook.env`,
+      `EnvironmentFile=-${secrets}/projects/cms/env`,
+      `LoadCredential=files:${secrets}/projects/cms/files`,
       "ExecStart=/usr/local/bin/bun run server.ts",
       "",
     ].join("\n"),
@@ -220,29 +203,25 @@ async function mount(options: Mount = {}): Promise<Bench> {
   // An extension that sets one more variable.
   mkdirSync(join(units, "cms.service.d"));
   writeFileSync(join(units, "cms.service.d", "local.conf"), "[Service]\nEnvironment=FROM_EXTENSION=1\n");
-  // A unit that reads no secret file at all.
+  // A unit that reads no secret at all.
   writeFileSync(join(units, "library.service"), "[Service]\nEnvironment=PORT=3044\nExecStart=/bin/true\n");
   writeFileSync(join(units, "dashboard.service"), `[Service]\nEnvironmentFile=-${secrets}/dashboard.env\nExecStart=/bin/true\n`);
+  writeFileSync(join(units, "portal.service"), `[Service]\nEnvironmentFile=-${secrets}/portal.env\nExecStart=/bin/true\n`);
+  // The landing's old service, made by hand, reads a file of its own: no site lists it.
   writeFileSync(join(units, "sitesolide-landing.service"), `[Service]\nEnvironmentFile=-${secrets}/landing-mail.env\nExecStart=/bin/true\n`);
-  // builder reads the files of its subdirectory only through the directory's path.
-  writeFileSync(join(units, "builder.service"), `[Service]\nEnvironment=BUILDER_SECRETS_DIR=${secrets}/builder-secrets\nExecStart=/bin/true\n`);
+  writeFileSync(join(units, "builder.service"), "[Service]\nExecStart=/bin/true\n");
 
-  writeFileSync(join(secrets, "cms.env"), CMS_ENV, { mode: 0o600 });
-  writeFileSync(join(secrets, "library.env"), "KEY=1\n", { mode: 0o600 });
-  // Two files no manifest declares, present as on a machine in service: the
-  // landing has no manifest, builder is a service made by hand.
-  writeFileSync(join(secrets, "builder.env"), "BUILDER=1\n", { mode: 0o600 });
+  // The monitor's alerting, which the dashboard's site lists and the monitor's unit reads.
+  writeFileSync(join(secrets, "dashboard-monitor.env"), MONITOR_ENV, { mode: 0o600 });
+  // Flat files of no platform project, present as on a machine where a
+  // service made by hand or an earlier release left them: listed nowhere.
+  writeFileSync(join(secrets, "cms.env"), `TOKEN=${SECRET_TOKEN}\n`, { mode: 0o600 });
   writeFileSync(join(secrets, "landing-mail.env"), "AWS_REGION=eu-west-3\n", { mode: 0o600 });
-  writeFileSync(join(secrets, "builder-ssh"), PRIVATE_KEY, { mode: 0o400 });
-  writeFileSync(join(secrets, "builder-ssh.pub"), PUBLIC_KEY, { mode: 0o444 });
-  mkdirSync(join(secrets, "builder-secrets"), { mode: 0o755 });
-  chmodSync(join(secrets, "builder-secrets"), 0o755);
-  writeFileSync(join(secrets, "builder-secrets", "registry"), SECRET_REGISTRY, { mode: 0o400 });
   const portalHash = await Bun.password.hash(PORTAL_PASSWORD, { algorithm: "bcrypt", cost: 4 });
   writeFileSync(join(secrets, "portal.env"), `PASSWORD_HASH=${portalHash}\n`, { mode: 0o600 });
   // Two hours old: no restart pending to begin with.
   const twoHoursAgo = (Date.now() - 7_200_000) / 1000;
-  utimesSync(join(secrets, "cms.env"), twoHoursAgo, twoHoursAgo);
+  for (const name of ["dashboard-monitor.env", "portal.env"]) utimesSync(join(secrets, name), twoHoursAgo, twoHoursAgo);
 
   const hashFile = join(secrets, "dashboard.env");
   if (options.hash !== null) {
@@ -359,9 +338,9 @@ async function mount(options: Mount = {}): Promise<Bench> {
       if (body !== undefined) requested.body = typeof body === "string" ? body : JSON.stringify(body);
       const response = await handler(new Request(`http://steward${path}`, requested));
       // Every body returned is kept for the final test: no value must appear
-      // in it, except in what /value, /content and /password return.
+      // in it, except in what /value and /password return.
       const text = await response.clone().text();
-      if (!["/value", "/content", "/password", "/store/value"].includes(path)) renderedTexts.push(text);
+      if (!["/value", "/password", "/store/value"].includes(path)) renderedTexts.push(text);
       return response;
     },
   };
@@ -446,7 +425,7 @@ describe("routing and the shape of requests", () => {
     expect(refused.status).toBe(405);
     expect(refused.headers.get("Allow")).toBe("GET");
     expect((await bench.call("GET", "/variable")).headers.get("Allow")).toBe("PUT, DELETE");
-    expect((await bench.call("DELETE", "/content")).headers.get("Allow")).toBe("POST, PUT");
+    expect((await bench.call("GET", "/restore")).headers.get("Allow")).toBe("POST");
     expect((await bench.call("GET", "/portal")).headers.get("Allow")).toBe("POST");
   });
 
@@ -457,9 +436,9 @@ describe("routing and the shape of requests", () => {
       ["{not json", 400],
       [[1, 2], 400],
       ["null", 400],
-      [{ token, slug: "cms", file: "cms.env", variable: "TOKEN", extra: 1 }, 400],
-      [{ token, slug: "cms", file: "cms.env", variable: 42 }, 400],
-      [{ token, slug: "cms", file: "cms.env", variable: "TOKEN", pad: "x".repeat(MAX_BODY_BYTES) }, 400],
+      [{ token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN", extra: 1 }, 400],
+      [{ token, slug: "dashboard", file: "dashboard-monitor.env", variable: 42 }, 400],
+      [{ token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN", pad: "x".repeat(MAX_BODY_BYTES) }, 400],
     ];
     for (const [body, status] of cas) {
       const response = await bench.call("POST", "/value", body);
@@ -516,16 +495,15 @@ describe("what a compromised dashboard can send is bounded", () => {
     expect(bench.simultaneousShows.max).toBe(2);
   });
 
-  test("a content over 64 KiB of JSON passes on /content alone", async () => {
+  test("a store's file over 64 KiB of JSON passes on the store's routes alone", async () => {
     const bench = await mount();
+    addStoreProject(bench);
     const token = await unlock(bench);
     const pad = "x".repeat(MAX_BODY_BYTES);
-    expect((await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "A", value: pad })).status).toBe(400);
-    const content = `${pad.slice(0, 1000)}\n`;
-    // Each control character becomes six bytes in JSON: 30,000 make 180 KiB.
-    const controlChars = charOf(1).repeat(30_000);
-    const response = await bench.call("PUT", "/content", { token, slug: "builder", file: "builder-ssh", content: `${content}${controlChars}` });
-    expect(response.status).toBe(200);
+    expect((await bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "A", value: pad })).status).toBe(400);
+    // 60 KiB of a file make 80 KiB in base64.
+    const response = await bench.call("PUT", "/store/file", { token, slug: "shop", name: "gcp.json", content: b64("x".repeat(60 * 1024)) });
+    expect(response.status).toBeLessThan(300);
   });
 });
 
@@ -536,71 +514,59 @@ describe("GET /projects: every site", () => {
     expect(enumerate.map((project) => project.slug)).toEqual(["builder", "calendar", "cms", "dashboard", "library", "portal", "showcase", "test-zone.invalid"]);
     const showcase = enumerate.find((project) => project.slug === "showcase")!;
     expect(showcase).toMatchObject({ service: null, files: [] });
+    // The landing's service made by hand reads a file of its own: no site lists it.
     const landing = enumerate.find((project) => project.slug === "test-zone.invalid")!;
     expect(landing.service?.unit).toBe("sitesolide-landing");
-    expect(landing.files.map((file) => [file.name, file.state, file.expected])).toEqual([
-      ["landing-mail.env", "managed", "site-landing:site-landing 0600"],
-    ]);
+    expect(landing.files).toEqual([]);
+    expect(JSON.stringify(enumerate)).not.toContain("landing-mail");
     // cloudflare.env belongs to no site, under /etc/caddy as under the secrets directory.
     expect(JSON.stringify(enumerate)).not.toContain("cloudflare");
   });
 
-  test("a site's files, their variables, with no value at all", async () => {
+  test("the platform's files, their variables, with no value at all", async () => {
     const bench = await mount();
     const response = await bench.call("GET", "/projects");
     expect(response.status).toBe(200);
     const text = await response.clone().text();
     const { projects: enumerate } = (await response.json()) as ProjectsResponse;
 
-    const cms = enumerate.find((project) => project.slug === "cms")!;
-    expect(cms.service).toEqual({ unit: "cms", state: "active", subState: "running", startedAt: AN_HOUR_AGO_S * 1000 });
-    expect(cms.files).toEqual([
-      {
-        name: "cms.env",
-        kind: "variables",
-        state: "managed",
-        reason: null,
-        expected: "site-cms:site-cms 0600",
-        readable: true,
-        variables: ["SID", "TOKEN"],
-        passwords: [],
-        bytes: null,
-        modifiedAt: expect.any(Number),
-        previous: false,
-        restartPending: false,
-      },
-      {
-        name: "cms-webhook.env",
-        kind: "variables",
-        state: "absent",
-        reason: null,
-        expected: "site-cms:site-cms 0600",
-        readable: true,
-        variables: [],
-        passwords: [],
-        bytes: null,
-        modifiedAt: null,
-        previous: false,
-        restartPending: false,
-      },
-    ]);
+    const dashboard = enumerate.find((project) => project.slug === "dashboard")!;
+    expect(dashboard.files.map((file) => file.name)).toEqual(["dashboard.env", "dashboard-monitor.env"]);
+    expect(dashboard.files[1]).toEqual({
+      name: "dashboard-monitor.env",
+      state: "managed",
+      reason: null,
+      expected: "root:root 0600",
+      variables: ["SID", "TOKEN"],
+      passwords: [],
+      modifiedAt: expect.any(Number),
+      previous: false,
+      restartPending: false,
+    });
 
-    for (const forbidden of [SECRET_TOKEN, SECRET_SID, "$2b$", PRIVATE_KEY.slice(40, 70), SECRET_REGISTRY.trim(), PUBLIC_KEY.slice(20, 50)]) {
+    for (const forbidden of [SECRET_TOKEN, SECRET_SID, "$2b$"]) {
       expect(text).not.toContain(forbidden);
     }
   });
 
-  test("builder: variables, private key and registry token write-only, public key readable", async () => {
+  test("a project lists no file: its secrets are its store's, a flat file named after it on the machine included", async () => {
     const bench = await mount();
-    const builder = (await projects(bench)).find((project) => project.slug === "builder")!;
-    // The size of a write-only file does not come out: a key's size gives away
-    // its algorithm. Its date does come out.
-    expect(builder.files.map((f) => [f.name, f.kind, f.state, f.expected, f.readable, f.bytes, typeof f.modifiedAt])).toEqual([
-      ["builder.env", "variables", "managed", "site-builder:site-builder 0600", true, null, "number"],
-      ["builder-secrets/registry", "content", "managed", "site-builder:site-builder 0400", false, null, "number"],
-      ["builder-ssh", "content", "managed", "site-builder:site-builder 0400", false, null, "number"],
-      ["builder-ssh.pub", "content", "managed", "site-builder:site-builder 0444", true, PUBLIC_KEY.length, "number"],
-    ]);
+    const enumerate = await projects(bench);
+    for (const slug of ["builder", "calendar", "cms", "library"]) expect(enumerate.find((project) => project.slug === slug)!.files).toEqual([]);
+    expect(JSON.stringify(enumerate)).not.toContain("cms.env");
+    const token = await unlock(bench);
+    const target = { token, slug: "cms", file: "cms.env" };
+    for (const [method, path, body] of [
+      ["POST", "/value", { ...target, variable: "TOKEN" }],
+      ["PUT", "/variable", { ...target, variable: "TOKEN", value: "x" }],
+      ["DELETE", "/variable", { ...target, variable: "TOKEN" }],
+      ["POST", "/file", target],
+      ["POST", "/restore", target],
+    ] as const) {
+      const response = await bench.call(method, path, body);
+      expect({ path, status: response.status }).toEqual({ path, status: 403 });
+    }
+    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(`TOKEN=${SECRET_TOKEN}\n`);
   });
 
   test("the dashboard's and the portal's hashes are passwords, never values", async () => {
@@ -621,7 +587,7 @@ describe("GET /projects: every site", () => {
 
   test("each site's portal: asked for, installed, changeable and its reason", async () => {
     const bench = await mount();
-    writeFileSync(join(bench.sites, "cms", "sitesolide.json"), JSON.stringify({ slug: "cms", start: "bun server.ts", port: 3048, portal: true, secrets: ["cms.env"] }));
+    writeFileSync(join(bench.sites, "cms", "sitesolide.json"), JSON.stringify({ slug: "cms", start: "bun server.ts", port: 3048, portal: true, secrets: ["SID", "TOKEN"] }));
     writeFileSync(join(bench.caddy, "cms.caddy"), "cms.test-zone.invalid {\n\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\turi /verifier\n\t}\n}\n");
     writeFileSync(join(bench.caddy, "calendar.caddy"), "calendar.test-zone.invalid {\n\treverse_proxy 127.0.0.1:3040\n}\n");
     // A link in place of a block is not read.
@@ -650,63 +616,49 @@ describe("GET /projects: every site", () => {
     expect((await projects(bench)).find((project) => project.slug === "cms")!.service).toBeNull();
   });
 
-  test("an unmanaged content file is listed with its reason, without quoting the line", async () => {
+  test("an unmanaged file is listed with its reason, without quoting the line", async () => {
     const bench = await mount();
-    writeFileSync(join(bench.secrets, "cms.env"), `SID=1\nexport TOKEN=${SECRET_TOKEN}\n`);
+    writeFileSync(join(bench.secrets, "dashboard-monitor.env"), `SID=1\nexport TOKEN=${SECRET_TOKEN}\n`);
     const text = await (await bench.call("GET", "/projects")).text();
-    const file = (JSON.parse(text) as ProjectsResponse).projects.find((project) => project.slug === "cms")!.files[0]!;
+    const file = (JSON.parse(text) as ProjectsResponse).projects.find((project) => project.slug === "dashboard")!.files[1]!;
     expect(file.state).toBe("unmanaged");
     expect(file.reason).toContain("line 2");
     expect(file.variables).toEqual([]);
     expect(text).not.toContain(SECRET_TOKEN);
   });
 
-  test("a content file that is not UTF-8 text is unmanaged", async () => {
-    const bench = await mount();
-    chmodSync(join(bench.secrets, "builder-ssh"), 0o600);
-    writeFileSync(join(bench.secrets, "builder-ssh"), new Uint8Array([0x41, 0xff, 0x00]));
-    chmodSync(join(bench.secrets, "builder-ssh"), 0o400);
-    expect(await fileSeen(bench, "builder", "builder-ssh")).toMatchObject({ state: "unmanaged", reason: "not valid UTF-8 text", bytes: null });
-  });
-
   test("a symbolic link is unmanaged, and its target never read", async () => {
     const bench = await mount();
     const target = join(bench.root, "elsewhere.env");
     writeFileSync(target, `STOLEN=${SECRET_TOKEN}\n`);
-    symlinkSync(target, join(bench.secrets, "calendar.env"));
+    rmSync(join(bench.secrets, "portal.env"));
+    symlinkSync(target, join(bench.secrets, "portal.env"));
 
     const text = await (await bench.call("GET", "/projects")).text();
-    const calendar = (JSON.parse(text) as ProjectsResponse).projects.find((project) => project.slug === "calendar")!;
-    expect(calendar.files[0]).toMatchObject({ state: "unmanaged", reason: "symbolic link", variables: [] });
+    const portal = (JSON.parse(text) as ProjectsResponse).projects.find((project) => project.slug === "portal")!;
+    expect(portal.files[0]).toMatchObject({ name: "portal.env", state: "unmanaged", reason: "symbolic link", variables: [] });
     expect(text).not.toContain("STOLEN");
   });
 
   test("a file with two hard links is unmanaged", async () => {
     const bench = await mount();
-    linkSync(join(bench.secrets, "cms.env"), join(bench.root, "copy.env"));
-    expect(await fileSeen(bench, "cms", "cms.env")).toMatchObject({ state: "unmanaged", reason: "several hard links" });
+    linkSync(join(bench.secrets, "dashboard-monitor.env"), join(bench.root, "copy.env"));
+    expect(await fileSeen(bench, "dashboard", "dashboard-monitor.env")).toMatchObject({ state: "unmanaged", reason: "several hard links" });
   });
 
   test("a mode other than the expected one, more open or more closed, is unmanaged, and the reason gives the command", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    chmodSync(join(bench.secrets, "cms.env"), 0o640);
-    expect((await fileSeen(bench, "cms", "cms.env")).reason).toBe(`mode 640, expected 600: sudo chmod 600 ${join(bench.secrets, "cms.env")}`);
-    const set = await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "A", value: "1" });
+    chmodSync(join(bench.secrets, "dashboard-monitor.env"), 0o640);
+    expect((await fileSeen(bench, "dashboard", "dashboard-monitor.env")).reason).toBe(`mode 640, expected 600: sudo chmod 600 ${join(bench.secrets, "dashboard-monitor.env")}`);
+    const set = await bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "A", value: "1" });
     expect(set.status).toBe(409);
 
-    chmodSync(join(bench.secrets, "cms.env"), 0o400);
+    chmodSync(join(bench.secrets, "dashboard-monitor.env"), 0o400);
     bench.clock.t += 2000;
-    expect((await fileSeen(bench, "cms", "cms.env")).reason).toContain("expected 600: sudo chmod 600");
-
-    // A private key reopened at 0600 is not rewritten either: 0400 is expected.
-    chmodSync(join(bench.secrets, "builder-ssh"), 0o600);
-    expect((await fileSeen(bench, "builder", "builder-ssh")).reason).toContain("expected 400: sudo chmod 400");
-    const replaced = await bench.call("PUT", "/content", { token, slug: "builder", file: "builder-ssh", content: "other\n" });
-    expect(replaced.status).toBe(409);
-    chmodSync(join(bench.secrets, "cms.env"), 0o600);
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
-    expect(readFileSync(join(bench.secrets, "builder-ssh"), "utf8")).toBe(PRIVATE_KEY);
+    expect((await fileSeen(bench, "dashboard", "dashboard-monitor.env")).reason).toContain("expected 600: sudo chmod 600");
+    chmodSync(join(bench.secrets, "dashboard-monitor.env"), 0o600);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(MONITOR_ENV);
   });
 
   test("a write in the same second as the service's start is pending (bench measurement 4)", async () => {
@@ -717,9 +669,9 @@ describe("GET /projects: every site", () => {
     const started = Date.now() - 10;
     bench.scenario.current = () => showA("active", "running", 0, started);
 
-    const set = await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "TOKEN", value: "after" });
+    const set = await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", value: "https://id.test-zone.invalid" });
     const { file } = (await set.json()) as FileResponse;
-    const modified = statSync(join(bench.secrets, "cms.env")).mtimeMs;
+    const modified = statSync(join(bench.secrets, "portal.env")).mtimeMs;
     expect(Math.floor(modified / 1000)).toBe(Math.floor(started / 1000));
     expect(file.restartPending).toBe(true);
     expect(Number.isInteger(file.modifiedAt)).toBe(true);
@@ -728,48 +680,39 @@ describe("GET /projects: every site", () => {
   test("saving then restarting: nothing is pending any more", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "TOKEN", value: "then" });
+    await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", value: "https://then.test-zone.invalid" });
     // The restart that follows the write, a few milliseconds later.
-    const started = statSync(join(bench.secrets, "cms.env")).mtimeMs + 3;
+    const started = statSync(join(bench.secrets, "portal.env")).mtimeMs + 3;
     bench.scenario.current = () => showA("active", "running", 0, started);
     bench.clock.t += 2000;
-    const cms = (await projects(bench)).find((project) => project.slug === "cms")!;
-    expect(cms.service!.startedAt).toBe(Math.floor(started));
-    expect(cms.files[0]!.restartPending).toBe(false);
+    const portal = (await projects(bench)).find((project) => project.slug === "portal")!;
+    expect(portal.service!.startedAt).toBe(Math.floor(started));
+    expect(portal.files[0]!.restartPending).toBe(false);
   });
 
   test("a timestamp systemd would return in an unknown form announces nothing", async () => {
     const bench = await mount();
     const token = await unlock(bench);
     bench.scenario.current = () => "LoadState=loaded\nActiveState=active\nSubState=running\nNRestarts=0\nActiveEnterTimestamp=@1789593252\n";
-    await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "TOKEN", value: "x" });
+    await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", value: "https://x.test-zone.invalid" });
     bench.clock.t += 2000;
-    const cms = (await projects(bench)).find((project) => project.slug === "cms")!;
-    expect(cms.service).toEqual({ unit: "cms", state: "active", subState: "running", startedAt: null });
-    expect(cms.files[0]!.restartPending).toBe(false);
+    const portal = (await projects(bench)).find((project) => project.slug === "portal")!;
+    expect(portal.service).toEqual({ unit: "portal", state: "active", subState: "running", startedAt: null });
+    expect(portal.files[0]!.restartPending).toBe(false);
   });
 
   test("a restart pending after a change", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "TOKEN", value: "other" });
-    expect((await fileSeen(bench, "cms", "cms.env")).restartPending).toBe(true);
+    await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", value: "https://other.test-zone.invalid" });
+    expect((await fileSeen(bench, "portal", "portal.env")).restartPending).toBe(true);
   });
 
-  test("a variables file its unit does not read waits for no restart, as the monitor's and the backups' do", async () => {
+  test("a file its site's unit does not read waits for no restart: the monitor's and the backups' are read by units of their own", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    // library.service reads no secret file: a restart would apply nothing.
-    expect((await bench.call("PUT", "/variable", { token, slug: "library", file: "library.env", variable: "KEY", value: "2" })).status).toBe(200);
-    expect((await fileSeen(bench, "library", "library.env")).restartPending).toBe(false);
-  });
-
-  test("a file a unit reads with no manifest to declare it still waits for its restart", async () => {
-    const bench = await mount();
-    const token = await unlock(bench);
-    // The landing has no manifest; its unit reads landing-mail.env all the same.
-    expect((await bench.call("PUT", "/variable", { token, slug: "test-zone.invalid", file: "landing-mail.env", variable: "AWS_REGION", value: "eu-west-1" })).status).toBe(200);
-    expect((await fileSeen(bench, "test-zone.invalid", "landing-mail.env")).restartPending).toBe(true);
+    expect((await bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN", value: "2" })).status).toBe(200);
+    expect((await fileSeen(bench, "dashboard", "dashboard-monitor.env")).restartPending).toBe(false);
   });
 });
 
@@ -784,151 +727,11 @@ describe("a file whose site is gone", () => {
   });
 });
 
-describe("the subdirectory of secrets", () => {
-  test("replaced inside the directory, at the expected mode, previous version kept apart", async () => {
-    const bench = await mount();
-    const token = await unlock(bench);
-    const response = await bench.call("PUT", "/content", { token, slug: "builder", file: "builder-secrets/registry", content: "reg-NEW\n" });
-    expect(response.status).toBe(200);
-    expect(((await response.json()) as FileResponse).file).toMatchObject({ name: "builder-secrets/registry", state: "managed", previous: true, bytes: null });
-    expect(statSync(join(bench.secrets, "builder-secrets", "registry")).mode & 0o777).toBe(0o400);
-    expect(readFileSync(join(bench.secrets, "builder-secrets", "registry"), "utf8")).toBe("reg-NEW\n");
-    expect(readFileSync(join(bench.state, "precedents", "builder-secrets", "registry"), "utf8")).toBe(SECRET_REGISTRY);
-    expect(statSync(join(bench.state, "precedents", "builder-secrets")).mode & 0o777).toBe(0o700);
-    expect(readdirSync(join(bench.secrets, "builder-secrets"))).toEqual(["registry"]);
-    expect(log(bench).at(-1)).toMatchObject({ operation: "replace", result: "ok", slug: "builder", file: "builder-secrets/registry" });
-  });
-
-  test("a link in place of the directory: nothing is read or written through it", async () => {
-    const bench = await mount();
-    const token = await unlock(bench);
-    const elsewhere = join(bench.root, "elsewhere");
-    mkdirSync(elsewhere);
-    writeFileSync(join(elsewhere, "registry"), "STOLEN-THROUGH-THE-LINK\n", { mode: 0o400 });
-    chmodSync(join(bench.secrets, "builder-secrets", "registry"), 0o600);
-    rmSync(join(bench.secrets, "builder-secrets"), { recursive: true });
-    symlinkSync(elsewhere, join(bench.secrets, "builder-secrets"));
-
-    const text = await (await bench.call("GET", "/projects")).text();
-    // The listing never follows the link, so no file of it is present, and no
-    // manifest declares one: the name is out of the scope altogether.
-    const files = (JSON.parse(text) as ProjectsResponse).projects.find((p) => p.slug === "builder")!.files;
-    expect(files.map((f) => f.name)).not.toContain("builder-secrets/registry");
-    const replaced = await bench.call("PUT", "/content", { token, slug: "builder", file: "builder-secrets/registry", content: "overwrite\n" });
-    expect(replaced.status).toBe(403);
-    expect(readFileSync(join(elsewhere, "registry"), "utf8")).toBe("STOLEN-THROUGH-THE-LINK\n");
-    expect(text).not.toContain("STOLEN-THROUGH");
-  });
-
-  test("a directory writable by others: unmanaged, and the reason gives the command", async () => {
-    const bench = await mount();
-    chmodSync(join(bench.secrets, "builder-secrets"), 0o777);
-    const seen = await fileSeen(bench, "builder", "builder-secrets/registry");
-    expect(seen).toMatchObject({ state: "unmanaged", reason: expect.stringContaining("sudo chmod go-w") });
-  });
-
-  test("a missing directory: its files are out of the scope, and the steward never creates it", async () => {
-    const bench = await mount();
-    const token = await unlock(bench);
-    chmodSync(join(bench.secrets, "builder-secrets", "registry"), 0o600);
-    rmSync(join(bench.secrets, "builder-secrets"), { recursive: true });
-    const builder = (await projects(bench)).find((project) => project.slug === "builder")!;
-    expect(builder.files.map((f) => f.name)).not.toContain("builder-secrets/registry");
-    const creation = await bench.call("POST", "/file", { token, slug: "builder", file: "builder-secrets/registry" });
-    expect(creation.status).toBe(403);
-    expect(existsSync(join(bench.secrets, "builder-secrets"))).toBe(false);
-  });
-
-  test("with checks on, a directory not owned by root is unmanaged", async () => {
-    const bench = await mount({ checkAccounts: true, accounts: ACCOUNTS, uidRoot: UID + 1 });
-    const seen = await fileSeen(bench, "builder", "builder-secrets/registry");
-    expect(seen).toMatchObject({ state: "unmanaged", reason: expect.stringContaining("not root: sudo chown root:root") });
-  });
-});
-
-describe("POST /content: reading back, and only what is readable", () => {
-  test("the public key reads back, the private key and the subdirectory's secrets never", async () => {
-    const bench = await mount();
-    const token = await unlock(bench);
-    const unitEnv = await bench.call("POST", "/content", { token, slug: "builder", file: "builder-ssh.pub" });
-    expect(unitEnv.status).toBe(200);
-    expect(((await unitEnv.json()) as ContentResponse).content).toBe(PUBLIC_KEY);
-
-    for (const file of ["builder-ssh", "builder-secrets/registry"]) {
-      const refused = await bench.call("POST", "/content", { token, slug: "builder", file });
-      expect(refused.status).toBe(403);
-      const text = await refused.text();
-      expect(text).toContain("write-only");
-      expect(text).not.toContain("PRIVATE KEY");
-      expect(text).not.toContain("REGISTRY-TOKEN");
-    }
-    expect(log(bench).filter((e) => e.operation === "read").map((e) => [e.file, e.result])).toEqual([
-      ["builder-ssh.pub", "ok"],
-      ["builder-ssh", "rejects"],
-      ["builder-secrets/registry", "rejects"],
-    ]);
-  });
-
-  test("a write-only file is refused before it is even opened", async () => {
-    const openFiles: string[] = [];
-    let real!: System;
-    const bench = await mount({
-      overrides: {
-        examineSecret: async (name) => {
-          openFiles.push(name);
-          return real.examineSecret(name);
-        },
-      },
-    });
-    real = createSystem(bench.config);
-    const token = await unlock(bench);
-    expect((await bench.call("POST", "/content", { token, slug: "builder", file: "builder-ssh" })).status).toBe(403);
-    expect(openFiles).toEqual([]);
-  });
-
-  test("an environment file is not read as one block, a content file not variable by variable", async () => {
-    const bench = await mount();
-    const token = await unlock(bench);
-    const block = await bench.call("POST", "/content", { token, slug: "cms", file: "cms.env" });
-    expect(block.status).toBe(400);
-    expect(await block.text()).not.toContain(SECRET_TOKEN);
-    expect((await bench.call("POST", "/value", { token, slug: "builder", file: "builder-ssh.pub", variable: "A" })).status).toBe(400);
-    expect((await bench.call("PUT", "/variable", { token, slug: "builder", file: "builder-ssh", variable: "A", value: "1" })).status).toBe(400);
-    expect((await bench.call("DELETE", "/variable", { token, slug: "builder", file: "builder-ssh", variable: "A" })).status).toBe(400);
-    expect((await bench.call("PUT", "/content", { token, slug: "cms", file: "cms.env", content: "A=1\n" })).status).toBe(400);
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
-  });
-
-  test("no route returns the private key", async () => {
-    const bench = await mount();
-    const token = await unlock(bench);
-    const target = { token, slug: "builder", file: "builder-ssh" };
-    const responses = [
-      await bench.call("GET", "/projects"),
-      await bench.call("POST", "/content", target),
-      await bench.call("POST", "/value", { ...target, variable: "KEY" }),
-      await bench.call("PUT", "/content", { ...target, content: "replacement\n" }),
-      await bench.call("POST", "/restore", target),
-      await bench.call("POST", "/content", target),
-      await bench.call("POST", "/file", target),
-      await bench.call("GET", "/log"),
-      await bench.call("GET", "/log?slug=builder"),
-    ];
-    expect(readFileSync(join(bench.secrets, "builder-ssh"), "utf8")).toBe(PRIVATE_KEY);
-    for (const response of responses) {
-      const text = await response.text();
-      expect(text).not.toContain("PRIVATE KEY");
-      expect(text).not.toContain("replacement");
-    }
-    expect(readFileSync(join(bench.state, "journal.jsonl"), "utf8")).not.toContain("PRIVATE");
-  });
-});
-
 describe("GET /log by pages, for the Activity page", () => {
   test("without a page asked, the latest fifty as always; with one, paged and dated", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    for (let i = 0; i < 3; i++) await bench.call("POST", "/value", { token, slug: "cms", file: "cms.env", variable: "TOKEN" });
+    for (let i = 0; i < 3; i++) await bench.call("POST", "/value", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN" });
     const plain = (await (await bench.call("GET", "/log")).json()) as LogResponse;
     expect(plain.paged).toBeUndefined();
     expect(plain.entries.length).toBe(4);
@@ -940,7 +743,7 @@ describe("GET /log by pages, for the Activity page", () => {
     const older = (await (await bench.call("GET", `/log?limit=50&before=${oldest + 1}`)).json()) as LogResponse;
     expect(older.entries.every((entry) => entry.a <= oldest)).toBe(true);
     expect(older.entries.at(-1)).toEqual(plain.entries.at(-1));
-    const site = (await (await bench.call("GET", "/log?slug=cms&limit=10")).json()) as LogResponse;
+    const site = (await (await bench.call("GET", "/log?slug=dashboard&limit=10")).json()) as LogResponse;
     expect(site.entries.map((entry) => entry.operation)).toEqual(["read", "read", "read"]);
   });
 
@@ -949,103 +752,6 @@ describe("GET /log by pages, for the Activity page", () => {
     for (const query of ["limit=0", "limit=501", "limit=1&before=yesterday", "before=12"]) {
       expect((await bench.call("GET", `/log?${query}`)).status).toBe(400);
     }
-  });
-});
-
-describe("PUT /content: replacing as one block", () => {
-  test("byte for byte, Windows line ending, byte order mark and final newline included, previous version kept", async () => {
-    const bench = await mount();
-    const token = await unlock(bench);
-    const content = `${charOf(0xfeff)}${KEY_HEADER}\r\nline ${charOf(0xe9)}t${charOf(0xe9)} ${charOf(0x1f511)}\r\n\n-----END-----\n`;
-    const response = await bench.call("PUT", "/content", { token, slug: "builder", file: "builder-ssh", content });
-    expect(response.status).toBe(200);
-    const { file } = (await response.json()) as FileResponse;
-    const expected = new TextEncoder().encode(content);
-    expect(file).toMatchObject({ state: "managed", readable: false, previous: true, bytes: null });
-    expect(new Uint8Array(readFileSync(join(bench.secrets, "builder-ssh")))).toEqual(expected);
-    expect(statSync(join(bench.secrets, "builder-ssh")).mode & 0o777).toBe(0o400);
-    expect(readFileSync(join(bench.state, "precedents", "builder-ssh"), "utf8")).toBe(PRIVATE_KEY);
-    expect(readdirSync(bench.secrets).filter(isTemporary)).toEqual([]);
-    // The answer returns neither the content nor, for a write-only file, its size.
-    expect(JSON.stringify(file)).not.toContain("BEGIN");
-  });
-
-  test("the public key keeps its 0444, and reads back as written", async () => {
-    const bench = await mount();
-    const token = await unlock(bench);
-    const content = "ssh-ed25519 AAAA-newer builder";
-    const replaced = await bench.call("PUT", "/content", { token, slug: "builder", file: "builder-ssh.pub", content });
-    expect(replaced.status).toBe(200);
-    // Readable, so its size is given.
-    expect(((await replaced.json()) as FileResponse).file.bytes).toBe(content.length);
-    expect(statSync(join(bench.secrets, "builder-ssh.pub")).mode & 0o777).toBe(0o444);
-    const reread = await bench.call("POST", "/content", { token, slug: "builder", file: "builder-ssh.pub" });
-    expect(((await reread.json()) as ContentResponse).content).toBe(content);
-  });
-
-  test("refused contents leave the file intact, and the message does not quote them", async () => {
-    const bench = await mount();
-    const token = await unlock(bench);
-    const raw = (content: string) => `{"token":"${token}","slug":"builder","file":"builder-ssh","content":"${content}"}`;
-    const refusal = [
-      JSON.stringify({ token, slug: "builder", file: "builder-ssh", content: "SECRET\0after" }),
-      JSON.stringify({ token, slug: "builder", file: "builder-ssh", content: "x".repeat(64 * 1024 + 1) }),
-      JSON.stringify({ token, slug: "builder", file: "builder-ssh", content: charOf(0xe9).repeat(32 * 1024 + 1) }),
-      raw(`SECRET${BACKSLASH}ud800`),
-      JSON.stringify({ token, slug: "builder", file: "builder-ssh", content: 42 }),
-    ];
-    for (const body of refusal) {
-      const response = await bench.call("PUT", "/content", body);
-      expect(response.status).toBe(400);
-      expect(await response.text()).not.toContain("SECRET");
-    }
-    expect(readFileSync(join(bench.secrets, "builder-ssh"), "utf8")).toBe(PRIVATE_KEY);
-    expect(existsSync(join(bench.state, "precedents", "builder-ssh"))).toBe(false);
-  });
-
-  test("exactly 64 KiB passes", async () => {
-    const bench = await mount();
-    const token = await unlock(bench);
-    const response = await bench.call("PUT", "/content", { token, slug: "builder", file: "builder-ssh", content: "x".repeat(64 * 1024) });
-    expect(response.status).toBe(200);
-  });
-
-  test("missing and declared by no manifest: out of the scope, never created", async () => {
-    // A content file cannot be declared by a manifest, so once gone it is no
-    // site's: put it back by hand on the machine, and the dashboard manages it
-    // again. Creating it from here would let the dashboard lay a file down for
-    // a service that does not expect one.
-    const bench = await mount();
-    const token = await unlock(bench);
-    chmodSync(join(bench.secrets, "builder-ssh"), 0o600);
-    rmSync(join(bench.secrets, "builder-ssh"));
-    const target = { token, slug: "builder", file: "builder-ssh" };
-    expect((await bench.call("PUT", "/content", { ...target, content: "key\n" })).status).toBe(403);
-    expect((await bench.call("POST", "/file", target)).status).toBe(403);
-    expect(existsSync(join(bench.secrets, "builder-ssh"))).toBe(false);
-  });
-
-  test("restoring swaps a content file and its previous version", async () => {
-    const bench = await mount();
-    const token = await unlock(bench);
-    const target = { token, slug: "builder", file: "builder-secrets/registry" };
-    await bench.call("PUT", "/content", { ...target, content: "newer\n" });
-    expect((await bench.call("POST", "/restore", target)).status).toBe(200);
-    expect(readFileSync(join(bench.secrets, "builder-secrets", "registry"), "utf8")).toBe(SECRET_REGISTRY);
-    expect(statSync(join(bench.secrets, "builder-secrets", "registry")).mode & 0o777).toBe(0o400);
-    expect(readFileSync(join(bench.state, "precedents", "builder-secrets", "registry"), "utf8")).toBe("newer\n");
-  });
-
-  test("with checks on, creation and replacement set the account and mode that follow from the name", async () => {
-    const bench = await mount({ checkAccounts: true, accounts: ACCOUNTS, uidRoot: UID });
-    const token = await unlock(bench);
-    // A file its manifest declares is created at 0600, an environment file.
-    expect((await bench.call("POST", "/file", { token, slug: "cms", file: "cms-webhook.env" })).status).toBe(200);
-    const created = statSync(join(bench.secrets, "cms-webhook.env"));
-    expect([created.uid, created.gid, created.mode & 0o777]).toEqual([UID, TEST_GID, 0o600]);
-    // A public key replaced keeps the 0444 its name calls for.
-    expect((await bench.call("PUT", "/content", { token, slug: "builder", file: "builder-ssh.pub", content: "ssh-ed25519 X\n" })).status).toBe(200);
-    expect(statSync(join(bench.secrets, "builder-ssh.pub")).mode & 0o777).toBe(0o444);
   });
 });
 
@@ -1204,7 +910,7 @@ describe("POST /unlock", () => {
 
   test("expiry: the token dies at ten minutes, locking revokes it", async () => {
     const bench = await mount();
-    const body = (token: string) => ({ token, slug: "cms", file: "cms.env", variable: "TOKEN" });
+    const body = (token: string) => ({ token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN" });
 
     const token = await unlock(bench);
     bench.clock.t += UNLOCK_DURATION_MS - 1;
@@ -1240,20 +946,17 @@ describe("the write queue", () => {
     const release = blockQueue(bench);
 
     const restarting = bench.call("POST", "/restart", { token, slug: "cms" });
-    const set = bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "TOKEN", value: "stolen" });
-    const replacing = bench.call("PUT", "/content", { token, slug: "builder", file: "builder-ssh", content: "stolen\n" });
+    const set = bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN", value: "stolen" });
     await settle();
     // Locking does not wait on the queue: it is what stops whatever is waiting.
     expect((await bench.call("POST", "/lock", { token })).status).toBe(204);
     release();
 
     expect((await restarting).status).toBe(200);
-    for (const refused of [await set, await replacing]) {
-      expect(refused.status).toBe(401);
-      expect((await errorOf(refused)).error).toBe("locked");
-    }
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
-    expect(readFileSync(join(bench.secrets, "builder-ssh"), "utf8")).toBe(PRIVATE_KEY);
+    const refused = await set;
+    expect(refused.status).toBe(401);
+    expect((await errorOf(refused)).error).toBe("locked");
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(MONITOR_ENV);
   });
 
   test("a request the relay gave up on is not carried out", async () => {
@@ -1266,7 +969,7 @@ describe("the write queue", () => {
     const set = bench.call(
       "PUT",
       "/variable",
-      { token, slug: "cms", file: "cms.env", variable: "TOKEN", value: "too late" },
+      { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN", value: "too late" },
       { signal: abandon.signal },
     );
     await settle();
@@ -1275,7 +978,7 @@ describe("the write queue", () => {
 
     await restarting;
     expect((await set).status).toBe(500);
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(MONITOR_ENV);
   });
 
   test("beyond four waiting requests, 503", async () => {
@@ -1285,25 +988,25 @@ describe("the write queue", () => {
 
     const queued = [bench.call("POST", "/restart", { token, slug: "cms" })];
     for (let i = 0; i < MAX_QUEUED; i++) {
-      queued.push(bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: `KEY_${i}`, value: "1" }));
+      queued.push(bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: `KEY_${i}`, value: "1" }));
     }
     await settle();
-    const refused = await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "TOO_MANY", value: "1" });
+    const refused = await bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOO_MANY", value: "1" });
     expect(refused.status).toBe(503);
 
     release();
     expect((await Promise.all(queued)).map((response) => response.status)).toEqual([200, 200, 200, 200, 200]);
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).not.toContain("TOO_MANY");
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).not.toContain("TOO_MANY");
   });
 
   test("two simultaneous writes go one after the other, neither is lost", async () => {
     const bench = await mount({ slownessMs: 5 });
     const token = await unlock(bench);
     const poses = Array.from({ length: MAX_QUEUED + 1 }, (_, i) =>
-      bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: `KEY_${i}`, value: `${i}` }),
+      bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: `KEY_${i}`, value: `${i}` }),
     );
     expect((await Promise.all(poses)).map((response) => response.status)).toEqual(Array(MAX_QUEUED + 1).fill(200));
-    const text = readFileSync(join(bench.secrets, "cms.env"), "utf8");
+    const text = readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8");
     for (let i = 0; i <= MAX_QUEUED; i++) expect(text).toContain(`KEY_${i}=${i}\n`);
   });
 });
@@ -1311,15 +1014,13 @@ describe("the write queue", () => {
 describe("the scope of requests", () => {
   test("with no token, nothing: no read, no write, no password, no portal, no restart", async () => {
     const bench = await mount();
-    const before = readFileSync(join(bench.secrets, "cms.env"), "utf8");
+    const before = readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8");
     const wanted: [string, string, Record<string, unknown>][] = [
-      ["POST", "/value", { slug: "cms", file: "cms.env", variable: "TOKEN" }],
-      ["PUT", "/variable", { slug: "cms", file: "cms.env", variable: "TOKEN", value: "x" }],
-      ["DELETE", "/variable", { slug: "cms", file: "cms.env", variable: "TOKEN" }],
-      ["POST", "/file", { slug: "cms", file: "cms-webhook.env" }],
-      ["POST", "/restore", { slug: "cms", file: "cms.env" }],
-      ["POST", "/content", { slug: "builder", file: "builder-ssh.pub" }],
-      ["PUT", "/content", { slug: "builder", file: "builder-ssh", content: "x" }],
+      ["POST", "/value", { slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN" }],
+      ["PUT", "/variable", { slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN", value: "x" }],
+      ["DELETE", "/variable", { slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN" }],
+      ["POST", "/file", { slug: "dashboard", file: "dashboard.env" }],
+      ["POST", "/restore", { slug: "dashboard", file: "dashboard-monitor.env" }],
       ["POST", "/password", { slug: "portal", file: "portal.env", variable: "PASSWORD_HASH", dashboardPassword: PASSWORD, newPassword: null }],
       // Making a site public; restricting one takes no token (POST /portal's own tests).
       ["POST", "/portal", { slug: "cms", active: false, confirmation: "cms" }],
@@ -1331,9 +1032,7 @@ describe("the scope of requests", () => {
         expect(response.status).toBe(401);
       }
     }
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(before);
-    expect(readFileSync(join(bench.secrets, "builder-ssh"), "utf8")).toBe(PRIVATE_KEY);
-    expect(existsSync(join(bench.secrets, "cms-webhook.env"))).toBe(false);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(before);
     expect(bench.systemctlCalls).toEqual([]);
     // A dashboard password submitted with no token does not count towards the rate limiting.
     expect(existsSync(join(bench.state, "rate-limit.json"))).toBe(false);
@@ -1351,9 +1050,9 @@ describe("the scope of requests", () => {
       ["cms", "dashboard.env"],
       ["cms", "cms-non-declare.env"],
       ["cms", "calendar.env"],
-      ["builder", "builder-secrets/../cms.env"],
-      ["builder", "builder-secrets/unknown"],
-      ["builder", "cms-secrets/registry"],
+      ["builder", "builder.env/../cms.env"],
+      ["builder", "folder/unknown"],
+      ["builder", "cms/registry"],
       ["../cms", "cms.env"],
       ["showcase", "showcase.env"],
       ["unknown", "unknown.env"],
@@ -1384,15 +1083,18 @@ describe("the scope of requests", () => {
     });
   });
 
-  test("builder.env and the landing are handled like ordinary variables", async () => {
+  test("the backups' file, once present, holds ordinary variables; the landing's and a project's flat files are no site's", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    for (const [slug, file] of [["builder", "builder.env"], ["test-zone.invalid", "landing-mail.env"]] as const) {
-      expect((await bench.call("PUT", "/variable", { token, slug, file, variable: "KEY", value: "v1" })).status).toBe(200);
-      const unitEnv = await bench.call("POST", "/value", { token, slug, file, variable: "KEY" });
-      expect(((await unitEnv.json()) as ValueResponse).value).toBe("v1");
+    writeFileSync(join(bench.secrets, "dashboard-backup.env"), "", { mode: 0o600 });
+    expect((await bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-backup.env", variable: "KEY", value: "v1" })).status).toBe(200);
+    const read = await bench.call("POST", "/value", { token, slug: "dashboard", file: "dashboard-backup.env", variable: "KEY" });
+    expect(((await read.json()) as ValueResponse).value).toBe("v1");
+    expect(log(bench).at(-1)).toMatchObject({ operation: "read", slug: "dashboard", file: "dashboard-backup.env", variable: "KEY" });
+    for (const [slug, file] of [["test-zone.invalid", "landing-mail.env"], ["cms", "cms.env"], ["dashboard", "cms.env"]] as const) {
+      expect((await bench.call("PUT", "/variable", { token, slug, file, variable: "KEY", value: "v1" })).status).toBe(403);
     }
-    expect(log(bench).find((e) => e.slug === "test-zone.invalid")).toMatchObject({ file: "landing-mail.env" });
+    expect(readFileSync(join(bench.secrets, "landing-mail.env"), "utf8")).toBe("AWS_REGION=eu-west-3\n");
   });
 });
 
@@ -1492,15 +1194,16 @@ describe("reading and writing", () => {
   test("POST /value returns the value, 404 for a missing variable or file", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    const unitEnv = await bench.call("POST", "/value", { token, slug: "cms", file: "cms.env", variable: "TOKEN" });
+    const unitEnv = await bench.call("POST", "/value", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN" });
     expect(((await unitEnv.json()) as ValueResponse).value).toBe(SECRET_TOKEN);
 
-    expect((await bench.call("POST", "/value", { token, slug: "cms", file: "cms.env", variable: "NON" })).status).toBe(404);
-    expect((await bench.call("POST", "/value", { token, slug: "cms", file: "cms-webhook.env", variable: "X" })).status).toBe(404);
+    expect((await bench.call("POST", "/value", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "NON" })).status).toBe(404);
+    rmSync(join(bench.secrets, "portal.env"));
+    expect((await bench.call("POST", "/value", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER" })).status).toBe(404);
 
     expect(log(bench).find((e) => e.operation === "read" && e.result === "ok")).toMatchObject({
-      slug: "cms",
-      file: "cms.env",
+      slug: "dashboard",
+      file: "dashboard-monitor.env",
       variable: "TOKEN",
     });
   });
@@ -1509,30 +1212,34 @@ describe("reading and writing", () => {
     const bench = await mount();
     const token = await unlock(bench);
 
-    const response = await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "TOKEN", value: SECRET_SET });
+    const response = await bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN", value: SECRET_SET });
     expect(response.status).toBe(200);
-    expect(((await response.json()) as FileResponse).file).toMatchObject({ name: "cms.env", state: "managed", variables: ["SID", "TOKEN"], previous: true });
+    expect(((await response.json()) as FileResponse).file).toMatchObject({ name: "dashboard-monitor.env", state: "managed", variables: ["SID", "TOKEN"], previous: true });
 
-    const text = readFileSync(join(bench.secrets, "cms.env"), "utf8");
-    expect(text.startsWith(`# CMS mail, to renew at the slightest doubt\nSID=${SECRET_SID}\n\n# the token\nTOKEN=`)).toBe(true);
-    expect(readFileSync(join(bench.state, "precedents", "cms.env"), "utf8")).toBe(CMS_ENV);
-    expect(statSync(join(bench.state, "precedents", "cms.env")).mode & 0o777).toBe(0o600);
-    expect(statSync(join(bench.secrets, "cms.env")).mode & 0o777).toBe(0o600);
+    const text = readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8");
+    expect(text.startsWith(`# the alerting, to renew at the slightest doubt\nSID=${SECRET_SID}\n\n# the token\nTOKEN=`)).toBe(true);
+    expect(readFileSync(join(bench.state, "precedents", "dashboard-monitor.env"), "utf8")).toBe(MONITOR_ENV);
+    expect(statSync(join(bench.state, "precedents", "dashboard-monitor.env")).mode & 0o777).toBe(0o600);
+    expect(statSync(join(bench.secrets, "dashboard-monitor.env")).mode & 0o777).toBe(0o600);
     expect(readdirSync(bench.secrets).filter(isTemporary)).toEqual([]);
 
-    const reread = await bench.call("POST", "/value", { token, slug: "cms", file: "cms.env", variable: "TOKEN" });
+    const reread = await bench.call("POST", "/value", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN" });
     expect(((await reread.json()) as ValueResponse).value).toBe(SECRET_SET);
   });
 
   test("a new variable goes to the end", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "REGION", value: "eu-west-3" });
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(`${CMS_ENV}REGION=eu-west-3\n`);
+    await bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "REGION", value: "eu-west-3" });
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(`${MONITOR_ENV}REGION=eu-west-3\n`);
   });
 
   test("the keys set by the unit, its extensions, the manifest, and the reserved families are refused", async () => {
     const bench = await mount();
+    writeFileSync(join(bench.units, "dashboard.service"), `[Service]\nEnvironment=PORT=3022\nEnvironment=ADDED_BY_HAND=1\nEnvironmentFile=-${bench.secrets}/dashboard.env\nExecStart=/bin/true\n`);
+    mkdirSync(join(bench.units, "dashboard.service.d"));
+    writeFileSync(join(bench.units, "dashboard.service.d", "local.conf"), "[Service]\nEnvironment=FROM_EXTENSION=1\n");
+    writeFileSync(join(bench.sites, "dashboard", "sitesolide.json"), JSON.stringify({ slug: "dashboard", start: "bun server.ts", port: 3022, env: { NODE_ENV: "production", DEFAULT_SENDER: "me@test-zone.invalid" } }));
     const token = await unlock(bench);
     const refused = [
       "PORT",
@@ -1552,101 +1259,105 @@ describe("reading and writing", () => {
       "A-B",
     ];
     for (const variable of refused) {
-      const response = await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable, value: "x" });
+      const response = await bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable, value: "x" });
       expect(response.status).toBe(400);
       expect((await errorOf(response)).error).toBe("invalid");
     }
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(MONITOR_ENV);
   });
 
   test("the refused values, and the message does not quote them", async () => {
     const bench = await mount();
     const token = await unlock(bench);
     for (const value of [`${SECRET_SET}\nINJECTED=1`, `a\rb`, "a\0b", "x".repeat(8193), `SECRET${charOf(0xd800)}`]) {
-      const response = await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "TOKEN", value });
+      const response = await bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN", value });
       expect(response.status).toBe(400);
       expect(JSON.stringify(await response.json())).not.toContain("SECRET");
     }
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(MONITOR_ENV);
   });
 
   test("an unmanaged file or a link is never rewritten: 409", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    writeFileSync(join(bench.secrets, "cms.env"), "export A=1\n");
+    writeFileSync(join(bench.secrets, "dashboard-monitor.env"), "export A=1\n");
     const target = join(bench.root, "elsewhere.env");
     writeFileSync(target, "A=1\n");
-    symlinkSync(target, join(bench.secrets, "calendar.env"));
+    rmSync(join(bench.secrets, "portal.env"));
+    symlinkSync(target, join(bench.secrets, "portal.env"));
 
-    for (const [slug, file] of [["cms", "cms.env"], ["calendar", "calendar.env"]] as const) {
-      const response = await bench.call("PUT", "/variable", { token, slug, file, variable: "B", value: "2" });
+    for (const [slug, file, variable] of [["dashboard", "dashboard-monitor.env", "B"], ["portal", "portal.env", "OIDC_ISSUER"]] as const) {
+      const response = await bench.call("PUT", "/variable", { token, slug, file, variable, value: "2" });
       expect(response.status).toBe(409);
       expect((await errorOf(response)).error).toBe("unmanaged");
     }
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe("export A=1\n");
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe("export A=1\n");
     expect(readFileSync(target, "utf8")).toBe("A=1\n");
-    expect(lstatSync(join(bench.secrets, "calendar.env")).isSymbolicLink()).toBe(true);
+    expect(lstatSync(join(bench.secrets, "portal.env")).isSymbolicLink()).toBe(true);
   });
 
   test("PUT on a missing file: 404, it has to be created first", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    const response = await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms-webhook.env", variable: "A", value: "1" });
+    rmSync(join(bench.secrets, "portal.env"));
+    const response = await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", value: "1" });
     expect(response.status).toBe(404);
-    expect(existsSync(join(bench.secrets, "cms-webhook.env"))).toBe(false);
+    expect(existsSync(join(bench.secrets, "portal.env"))).toBe(false);
   });
 
   test("DELETE /variable removes without touching the neighbours, 404 if missing", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    const response = await bench.call("DELETE", "/variable", { token, slug: "cms", file: "cms.env", variable: "SID" });
+    const response = await bench.call("DELETE", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "SID" });
     expect(response.status).toBe(200);
     expect(((await response.json()) as FileResponse).file.variables).toEqual(["TOKEN"]);
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(`# CMS mail, to renew at the slightest doubt\n\n# the token\nTOKEN=${SECRET_TOKEN}\n`);
-    expect((await bench.call("DELETE", "/variable", { token, slug: "cms", file: "cms.env", variable: "SID" })).status).toBe(404);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(`# the alerting, to renew at the slightest doubt\n\n# the token\nTOKEN=${SECRET_TOKEN}\n`);
+    expect((await bench.call("DELETE", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "SID" })).status).toBe(404);
   });
 
-  test("POST /file creates a declared and missing file empty at 0600, 409 if it exists", async () => {
+  test("POST /file creates a listed and missing file empty at 0600, 409 if it exists", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    const response = await bench.call("POST", "/file", { token, slug: "cms", file: "cms-webhook.env" });
+    rmSync(join(bench.secrets, "portal.env"));
+    const response = await bench.call("POST", "/file", { token, slug: "portal", file: "portal.env" });
     expect(response.status).toBe(200);
     expect(((await response.json()) as FileResponse).file).toMatchObject({ state: "managed", variables: [] });
-    expect(readFileSync(join(bench.secrets, "cms-webhook.env"), "utf8")).toBe("");
-    expect(statSync(join(bench.secrets, "cms-webhook.env")).mode & 0o777).toBe(0o600);
+    expect(readFileSync(join(bench.secrets, "portal.env"), "utf8")).toBe("");
+    expect(statSync(join(bench.secrets, "portal.env")).mode & 0o777).toBe(0o600);
 
-    const encore = await bench.call("POST", "/file", { token, slug: "cms", file: "cms-webhook.env" });
+    const encore = await bench.call("POST", "/file", { token, slug: "portal", file: "portal.env" });
     expect(encore.status).toBe(409);
     expect((await errorOf(encore)).error).toBe("already-present");
 
-    expect((await bench.call("POST", "/file", { token, slug: "cms", file: "cms.env" })).status).toBe(409);
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
+    expect((await bench.call("POST", "/file", { token, slug: "dashboard", file: "dashboard-monitor.env" })).status).toBe(409);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(MONITOR_ENV);
   });
 
   test("POST /file does not replace a symbolic link", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    symlinkSync(join(bench.root, "nowhere"), join(bench.secrets, "cms-webhook.env"));
-    expect((await bench.call("POST", "/file", { token, slug: "cms", file: "cms-webhook.env" })).status).toBe(409);
+    rmSync(join(bench.secrets, "portal.env"));
+    symlinkSync(join(bench.root, "nowhere"), join(bench.secrets, "portal.env"));
+    expect((await bench.call("POST", "/file", { token, slug: "portal", file: "portal.env" })).status).toBe(409);
     expect(existsSync(join(bench.root, "nowhere"))).toBe(false);
   });
 
   test("POST /restore swaps current and previous, twice comes back to the start", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    const target = { token, slug: "cms", file: "cms.env" };
+    const target = { token, slug: "dashboard", file: "dashboard-monitor.env" };
 
     expect((await bench.call("POST", "/restore", target)).status).toBe(404);
 
     await bench.call("PUT", "/variable", { ...target, variable: "TOKEN", value: "newvalue" });
-    const modified = readFileSync(join(bench.secrets, "cms.env"), "utf8");
+    const modified = readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8");
 
     expect((await bench.call("POST", "/restore", target)).status).toBe(200);
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
-    expect(readFileSync(join(bench.state, "precedents", "cms.env"), "utf8")).toBe(modified);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(MONITOR_ENV);
+    expect(readFileSync(join(bench.state, "precedents", "dashboard-monitor.env"), "utf8")).toBe(modified);
 
     expect((await bench.call("POST", "/restore", target)).status).toBe(200);
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(modified);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(modified);
   });
 
   test("restoring writes the previous version before the secret: a stop between the two keeps the version in place", async () => {
@@ -1666,7 +1377,7 @@ describe("reading and writing", () => {
     });
     real = createSystem(bench.config);
     const token = await unlock(bench);
-    const target = { token, slug: "cms", file: "cms.env" };
+    const target = { token, slug: "dashboard", file: "dashboard-monitor.env" };
     await bench.call("PUT", "/variable", { ...target, variable: "TOKEN", value: "newvalue" });
     order.length = 0;
 
@@ -1678,9 +1389,9 @@ describe("reading and writing", () => {
     const bench = await mount();
     const token = await unlock(bench);
     mkdirSync(join(bench.state, "precedents"), { recursive: true });
-    writeFileSync(join(bench.state, "precedents", "cms.env"), "export A=1\n");
-    expect((await bench.call("POST", "/restore", { token, slug: "cms", file: "cms.env" })).status).toBe(409);
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
+    writeFileSync(join(bench.state, "precedents", "dashboard-monitor.env"), "export A=1\n");
+    expect((await bench.call("POST", "/restore", { token, slug: "dashboard", file: "dashboard-monitor.env" })).status).toBe(409);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(MONITOR_ENV);
   });
 });
 
@@ -1715,13 +1426,13 @@ describe("password hashes never go through /value or /variable", () => {
   });
 });
 
-describe("PASSWORD_HASH in a site's file: a password like the dashboard's and the portal's", () => {
-  const CALENDAR_PASSWORD = "Calendar-Password-2026";
+describe("PASSWORD_HASH in the monitor's file: a password like the dashboard's and the portal's", () => {
+  const MONITOR_PASSWORD = "Monitor-Password-2026";
 
-  /** calendar.env with an ordinary token and a hash. */
+  /** dashboard-monitor.env with an ordinary token and a hash. */
   async function callsWithHash(bench: Bench): Promise<string> {
-    const hash = await hashFast(CALENDAR_PASSWORD);
-    writeFileSync(join(bench.secrets, "calendar.env"), `TOKEN=${SECRET_TOKEN}\nPASSWORD_HASH=${hash}\n`, { mode: 0o600 });
+    const hash = await hashFast(MONITOR_PASSWORD);
+    writeFileSync(join(bench.secrets, "dashboard-monitor.env"), `TOKEN=${SECRET_TOKEN}\nPASSWORD_HASH=${hash}\n`, { mode: 0o600 });
     return hash;
   }
 
@@ -1729,8 +1440,8 @@ describe("PASSWORD_HASH in a site's file: a password like the dashboard's and th
     const bench = await mount();
     const token = await unlock(bench);
     const hash = await callsWithHash(bench);
-    const before = readFileSync(join(bench.secrets, "calendar.env"), "utf8");
-    const target = { token, slug: "calendar", file: "calendar.env", variable: "PASSWORD_HASH" };
+    const before = readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8");
+    const target = { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "PASSWORD_HASH" };
 
     const unitEnv = await bench.call("POST", "/value", target);
     expect(unitEnv.status).toBe(403);
@@ -1746,48 +1457,49 @@ describe("PASSWORD_HASH in a site's file: a password like the dashboard's and th
       expect((await errorOf(response)).message).toBe("PASSWORD_HASH is a password hash, change it with Change password");
     }
     // A file that carries none does not get one through /variable either.
-    const cms = await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "PASSWORD_HASH", value: "$argon2id$wrong" });
-    expect(cms.status).toBe(403);
-    expect(readFileSync(join(bench.secrets, "calendar.env"), "utf8")).toBe(before);
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
+    writeFileSync(join(bench.secrets, "dashboard-backup.env"), "TOKEN=x\n", { mode: 0o600 });
+    const backup = await bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-backup.env", variable: "PASSWORD_HASH", value: "$argon2id$wrong" });
+    expect(backup.status).toBe(403);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(before);
+    expect(readFileSync(join(bench.secrets, "dashboard-backup.env"), "utf8")).toBe("TOKEN=x\n");
 
     // The neighbours stay ordinary.
     const neighbour = await bench.call("POST", "/value", { ...target, variable: "TOKEN" });
     expect(((await neighbour.json()) as ValueResponse).value).toBe(SECRET_TOKEN);
-    expect(await fileSeen(bench, "calendar", "calendar.env")).toMatchObject({ state: "managed", variables: ["TOKEN", "PASSWORD_HASH"], passwords: ["PASSWORD_HASH"] });
-    expect((await fileSeen(bench, "cms", "cms.env")).passwords).toEqual([]);
+    expect(await fileSeen(bench, "dashboard", "dashboard-monitor.env")).toMatchObject({ state: "managed", variables: ["TOKEN", "PASSWORD_HASH"], passwords: ["PASSWORD_HASH"] });
+    expect((await fileSeen(bench, "dashboard", "dashboard-backup.env")).passwords).toEqual([]);
   });
 
   test("changed through /password, without keeping the old one, and never restored", async () => {
     const bench = await mount({ hashPassword: hashFast });
     const token = await unlock(bench);
     const previous = await callsWithHash(bench);
-    const target = { token, slug: "calendar", file: "calendar.env" };
+    const target = { token, slug: "dashboard", file: "dashboard-monitor.env" };
 
     // Writing a neighbour keeps a previous version, which carries the
     // hash of the moment: the page does not offer it.
     expect((await bench.call("PUT", "/variable", { ...target, variable: "TOKEN", value: "newer" })).status).toBe(200);
-    expect(readFileSync(join(bench.state, "precedents", "calendar.env"), "utf8")).toContain(previous);
-    expect((await fileSeen(bench, "calendar", "calendar.env")).previous).toBe(false);
+    expect(readFileSync(join(bench.state, "precedents", "dashboard-monitor.env"), "utf8")).toContain(previous);
+    expect((await fileSeen(bench, "dashboard", "dashboard-monitor.env")).previous).toBe(false);
 
     const change = await bench.call("POST", "/password", { ...target, variable: "PASSWORD_HASH", dashboardPassword: PASSWORD, newPassword: null });
     expect(change.status).toBe(200);
     const { password, file } = (await change.json()) as PasswordResponse;
     expect(file).toMatchObject({ variables: ["TOKEN", "PASSWORD_HASH"], passwords: ["PASSWORD_HASH"], previous: false });
-    const fresh = hashOfFile(bench, "calendar.env");
+    const fresh = hashOfFile(bench, "dashboard-monitor.env");
     expect(await Bun.password.verify(password!, fresh)).toBe(true);
-    expect(await Bun.password.verify(CALENDAR_PASSWORD, fresh)).toBe(false);
-    expect(readFileSync(join(bench.secrets, "calendar.env"), "utf8")).toContain("TOKEN=newer\n");
+    expect(await Bun.password.verify(MONITOR_PASSWORD, fresh)).toBe(false);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toContain("TOKEN=newer\n");
     // The previous version that carried the old one went with it.
-    expect(existsSync(join(bench.state, "precedents", "calendar.env"))).toBe(false);
+    expect(existsSync(join(bench.state, "precedents", "dashboard-monitor.env"))).toBe(false);
 
     // A write after the change keeps a previous version, which still cannot be restored.
     expect((await bench.call("PUT", "/variable", { ...target, variable: "TOKEN", value: "encore" })).status).toBe(200);
     const restore = await bench.call("POST", "/restore", target);
     expect(restore.status).toBe(403);
     expect((await errorOf(restore)).message).toBe("a password is only changed with Change password");
-    expect(readFileSync(join(bench.secrets, "calendar.env"), "utf8")).toContain("TOKEN=encore\n");
-    expect(hashOfFile(bench, "calendar.env")).toBe(fresh);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toContain("TOKEN=encore\n");
+    expect(hashOfFile(bench, "dashboard-monitor.env")).toBe(fresh);
   });
 });
 
@@ -1830,29 +1542,29 @@ describe("restoring never gives back a hash that Change password replaced", () =
     const bench = await mount();
     const token = await unlock(bench);
     mkdirSync(join(bench.state, "precedents"), { recursive: true });
-    writeFileSync(join(bench.state, "precedents", "cms.env"), "PASSWORD_HASH=$2b$04$older\nTOKEN=x\n", { mode: 0o600 });
-    expect((await fileSeen(bench, "cms", "cms.env")).previous).toBe(false);
-    expect((await bench.call("POST", "/restore", { token, slug: "cms", file: "cms.env" })).status).toBe(403);
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
+    writeFileSync(join(bench.state, "precedents", "dashboard-monitor.env"), "PASSWORD_HASH=$2b$04$older\nTOKEN=x\n", { mode: 0o600 });
+    expect((await fileSeen(bench, "dashboard", "dashboard-monitor.env")).previous).toBe(false);
+    expect((await bench.call("POST", "/restore", { token, slug: "dashboard", file: "dashboard-monitor.env" })).status).toBe(403);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(MONITOR_ENV);
 
     // With no hash on either side, restoring is still offered.
-    writeFileSync(join(bench.state, "precedents", "cms.env"), "TOKEN=x\n", { mode: 0o600 });
-    expect((await fileSeen(bench, "cms", "cms.env")).previous).toBe(true);
-    expect((await bench.call("POST", "/restore", { token, slug: "cms", file: "cms.env" })).status).toBe(200);
+    writeFileSync(join(bench.state, "precedents", "dashboard-monitor.env"), "TOKEN=x\n", { mode: 0o600 });
+    expect((await fileSeen(bench, "dashboard", "dashboard-monitor.env")).previous).toBe(true);
+    expect((await bench.call("POST", "/restore", { token, slug: "dashboard", file: "dashboard-monitor.env" })).status).toBe(200);
   });
 
   test("a current file carrying a hash cannot be restored, even to a version that carried none", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    const current = `TOKEN=y\nPASSWORD_HASH=${await hashFast("Calendar-Password-2026")}\n`;
-    writeFileSync(join(bench.secrets, "calendar.env"), current, { mode: 0o600 });
+    const current = `TOKEN=y\nPASSWORD_HASH=${await hashFast("Monitor-Password-2026")}\n`;
+    writeFileSync(join(bench.secrets, "dashboard-monitor.env"), current, { mode: 0o600 });
     mkdirSync(join(bench.state, "precedents"), { recursive: true });
     // Restoring would remove the hash: the service would ask for nothing any more.
-    writeFileSync(join(bench.state, "precedents", "calendar.env"), "TOKEN=x\n", { mode: 0o600 });
-    expect((await fileSeen(bench, "calendar", "calendar.env")).previous).toBe(false);
-    const response = await bench.call("POST", "/restore", { token, slug: "calendar", file: "calendar.env" });
+    writeFileSync(join(bench.state, "precedents", "dashboard-monitor.env"), "TOKEN=x\n", { mode: 0o600 });
+    expect((await fileSeen(bench, "dashboard", "dashboard-monitor.env")).previous).toBe(false);
+    const response = await bench.call("POST", "/restore", { token, slug: "dashboard", file: "dashboard-monitor.env" });
     expect(response.status).toBe(403);
-    expect(readFileSync(join(bench.secrets, "calendar.env"), "utf8")).toBe(current);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(current);
   });
 
   test("the dashboard and the portal are never restored, not even with no hash, nor when unmanaged", async () => {
@@ -1977,7 +1689,7 @@ describe("POST /password", () => {
     const response = await bench.call("POST", "/password", requested(token, { slug: "dashboard", file: "dashboard.env", newPassword }));
     expect(response.status).toBe(200);
     // The token in force stays valid: changing the password does not lock.
-    expect((await bench.call("POST", "/value", { token, slug: "cms", file: "cms.env", variable: "TOKEN" })).status).toBe(200);
+    expect((await bench.call("POST", "/value", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN" })).status).toBe(200);
     expect((await bench.call("POST", "/unlock", { password: PASSWORD })).status).toBe(401);
     expect((await bench.call("POST", "/unlock", { password: newPassword })).status).toBe(200);
   });
@@ -2021,11 +1733,10 @@ describe("POST /password", () => {
       [{ dashboardPassword: "" }, 400],
       [{ dashboardPassword: "x".repeat(257) }, 400],
       [{ variable: "OTHER" }, 403],
-      [{ slug: "cms", file: "cms.env", variable: "TOKEN" }, 403],
+      [{ slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN" }, 403],
       [{ slug: "cms", file: "../portal.env" }, 403],
-      [{ slug: "builder", file: "builder-ssh" }, 403],
-      // PASSWORD_HASH can be changed anywhere, but calendar.env does not exist.
-      [{ slug: "calendar", file: "calendar.env" }, 404],
+      // A flat file of a project is no platform file, whatever it holds.
+      [{ slug: "cms", file: "cms.env" }, 403],
     ];
     for (const [others, status] of cas) {
       const response = await bench.call("POST", "/password", requested(token, others));
@@ -2556,7 +2267,7 @@ describe("POST /portal", () => {
     real = createSystem(bench.config);
     const token = await unlock(bench);
     const portal = bench.call("POST", "/portal", { token, slug: "cms", active: true, confirmation: "" });
-    const set = bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "A", value: "1" });
+    const set = bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "A", value: "1" });
     await settle();
     release();
     expect((await portal).status).toBe(200);
@@ -2569,17 +2280,17 @@ describe("GET /log", () => {
   test("with no slug, everything; with one, that site alone; a name that is not a site, 400", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    await bench.call("POST", "/value", { token, slug: "cms", file: "cms.env", variable: "TOKEN" });
-    await bench.call("POST", "/content", { token, slug: "builder", file: "builder-ssh.pub" });
+    await bench.call("POST", "/value", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN" });
+    await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", value: "https://id.test-zone.invalid" });
     await bench.call("POST", "/file", { token, slug: "test-zone.invalid", file: "landing-mail.env" });
 
     const whole = (await (await bench.call("GET", "/log")).json()) as LogResponse;
-    expect(whole.entries.map((e) => e.slug)).toEqual(["test-zone.invalid", "builder", "cms", null]);
+    expect(whole.entries.map((e) => e.slug)).toEqual(["test-zone.invalid", "portal", "dashboard", null]);
 
-    const builder = (await (await bench.call("GET", "/log?slug=builder")).json()) as LogResponse;
-    expect(builder.entries.map((e) => [e.slug, e.file])).toEqual([["builder", "builder-ssh.pub"]]);
+    const portal = (await (await bench.call("GET", "/log?slug=portal")).json()) as LogResponse;
+    expect(portal.entries.map((e) => [e.slug, e.file])).toEqual([["portal", "portal.env"]]);
     const landing = (await (await bench.call("GET", "/log?slug=test-zone.invalid")).json()) as LogResponse;
-    expect(landing.entries.map((e) => e.operation)).toEqual(["create"]);
+    expect(landing.entries.map((e) => [e.operation, e.result])).toEqual([["create", "rejects"]]);
     expect(((await (await bench.call("GET", "/log?slug=showcase")).json()) as LogResponse).entries).toEqual([]);
 
     for (const request of ["/log?slug=", "/log?slug=..%2Fcms", "/log?slug=CMS", "/log?slug=landing", "/log?slug=cms&slug=builder"]) {
@@ -2596,7 +2307,7 @@ describe("GET /log", () => {
     writeFileSync(join(bench.state, "journal.jsonl"), `${JSON.stringify(before)}\n${JSON.stringify(restarted)}\n`);
 
     const token = await unlock(bench);
-    await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "TOKEN", value: "new" });
+    await bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN", value: "new" });
 
     const { entries } = (await (await bench.call("GET", "/log")).json()) as LogResponse;
     expect(entries.map((e) => [e.operation, e.detail])).toEqual([
@@ -2615,13 +2326,13 @@ describe("owners checked", () => {
 
   test("a file under the right account is managed, under another it is unmanaged", async () => {
     const bon = await underChecks();
-    expect((await fileSeen(bon, "cms", "cms.env")).state).toBe("managed");
+    expect((await fileSeen(bon, "portal", "portal.env")).state).toBe("managed");
     expect((await fileSeen(bon, "dashboard", "dashboard.env")).state).toBe("managed");
 
-    const other = await underChecks({ accounts: ACCOUNTS.replace(account("site-cms"), account("site-cms", UID + 1)) });
-    const file = await fileSeen(other, "cms", "cms.env");
+    const other = await underChecks({ accounts: ACCOUNTS.replace(account("site-portal"), account("site-portal", UID + 1)) });
+    const file = await fileSeen(other, "portal", "portal.env");
     expect(file.state).toBe("unmanaged");
-    expect(file.reason).toContain("sudo chown site-cms:site-cms");
+    expect(file.reason).toContain("sudo chown site-portal:site-portal");
   });
 
   test("the dashboard's hash has to belong to root", async () => {
@@ -2630,36 +2341,38 @@ describe("owners checked", () => {
   });
 
   test("a file in another group is unmanaged, and the reason gives chgrp", async () => {
-    const bench = await underChecks({ accounts: ACCOUNTS.replace(account("site-cms"), account("site-cms", UID, TEST_GID + 1)) });
-    expect((await fileSeen(bench, "cms", "cms.env")).reason).toBe(
-      `group gid ${TEST_GID}, not site-cms: sudo chgrp site-cms ${join(bench.secrets, "cms.env")}`,
+    const bench = await underChecks({ accounts: ACCOUNTS.replace(account("site-portal"), account("site-portal", UID, TEST_GID + 1)) });
+    expect((await fileSeen(bench, "portal", "portal.env")).reason).toBe(
+      `group gid ${TEST_GID}, not site-portal: sudo chgrp site-portal ${join(bench.secrets, "portal.env")}`,
     );
   });
 
   test("a missing account: file unmanaged, creation refused", async () => {
-    const bench = await underChecks({ accounts: ACCOUNTS.replace(account("site-cms"), "") });
+    const bench = await underChecks({ accounts: ACCOUNTS.replace(account("site-portal"), "") });
     const token = await unlock(bench);
-    expect((await fileSeen(bench, "cms", "cms.env")).reason).toContain("does not exist");
-    expect((await bench.call("POST", "/file", { token, slug: "cms", file: "cms-webhook.env" })).status).toBe(404);
+    expect((await fileSeen(bench, "portal", "portal.env")).reason).toContain("does not exist");
+    rmSync(join(bench.secrets, "portal.env"));
+    expect((await bench.call("POST", "/file", { token, slug: "portal", file: "portal.env" })).status).toBe(404);
   });
 
   test("creation sets the site's account, and a write carries it over", async () => {
     const bench = await underChecks();
     const token = await unlock(bench);
-    expect((await bench.call("POST", "/file", { token, slug: "cms", file: "cms-webhook.env" })).status).toBe(200);
-    const created = statSync(join(bench.secrets, "cms-webhook.env"));
+    rmSync(join(bench.secrets, "portal.env"));
+    expect((await bench.call("POST", "/file", { token, slug: "portal", file: "portal.env" })).status).toBe(200);
+    const created = statSync(join(bench.secrets, "portal.env"));
     expect([created.uid, created.gid, created.mode & 0o777]).toEqual([UID, TEST_GID, 0o600]);
 
-    expect((await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms-webhook.env", variable: "A", value: "1" })).status).toBe(200);
-    expect(statSync(join(bench.secrets, "cms-webhook.env")).uid).toBe(UID);
+    expect((await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", value: "https://id.test-zone.invalid" })).status).toBe(200);
+    expect(statSync(join(bench.secrets, "portal.env")).uid).toBe(UID);
   });
 
   test("the previous version keeps the owner of the file it replaces", async () => {
     const bench = await underChecks();
     const token = await unlock(bench);
-    await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "TOKEN", value: "x" });
-    const previous = statSync(join(bench.state, "precedents", "cms.env"));
-    const current = statSync(join(bench.secrets, "cms.env"));
+    await bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN", value: "x" });
+    const previous = statSync(join(bench.state, "precedents", "dashboard-monitor.env"));
+    const current = statSync(join(bench.secrets, "dashboard-monitor.env"));
     expect([previous.uid, previous.gid, previous.mode & 0o777]).toEqual([current.uid, current.gid, 0o600]);
   });
 
@@ -2675,14 +2388,14 @@ describe("owners checked", () => {
     });
     real = createSystem(bench.config);
     const token = await unlock(bench);
-    const target = { token, slug: "cms", file: "cms.env" };
+    const target = { token, slug: "dashboard", file: "dashboard-monitor.env" };
     await bench.call("PUT", "/variable", { ...target, variable: "TOKEN", value: "newvalue" });
-    const current = readFileSync(join(bench.secrets, "cms.env"), "utf8");
+    const current = readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8");
 
     const response = await bench.call("POST", "/restore", target);
     expect(response.status).toBe(409);
     expect((await errorOf(response)).message).toContain(`uid ${UID + 7}`);
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(current);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(current);
   });
 
   test("a file created here starts with no previous version, even one left by an earlier site whose uid its account was given again", async () => {
@@ -2690,24 +2403,17 @@ describe("owners checked", () => {
     // use: an account removed last comes back on the same uid, and the uid no
     // longer tells the earlier site's previous version from this one's. The
     // earlier file was removed by hand, its previous version stayed.
-    const PREDECESSOR = "API_KEY=predecessor-secret-value\n";
+    const PREDECESSOR = "OIDC_CLIENT_SECRET=predecessor-secret-value\n";
     const bench = await underChecks();
     const token = await unlock(bench);
-    for (const [name, create] of [
-      ["cms-webhook.env", () => bench.call("POST", "/file", { token, slug: "cms", file: "cms-webhook.env" })],
-      ["calendar.env", () => bench.current().secretsForToken!.change(new Request("http://steward/control/secrets"), { slug: "calendar", file: "calendar.env", set: [], remove: [] }, { actor: "token:0123456789ab", member: null, token: "0123456789ab" }, async () => null)],
-    ] as const) {
-      mkdirSync(join(bench.state, "precedents"), { recursive: true, mode: 0o700 });
-      writeFileSync(join(bench.state, "precedents", name), PREDECESSOR, { mode: 0o600 });
-      expect((await create()).status).toBeLessThan(300);
-      expect(readFileSync(join(bench.secrets, name), "utf8")).toBe("");
-
-      const slug = name.slice(0, name.indexOf(name.startsWith("cms") ? "-" : "."));
-      const restored = await bench.call("POST", "/restore", { token, slug, file: name });
-      expect(readFileSync(join(bench.secrets, name), "utf8")).toBe("");
-      expect(restored.status).toBe(404);
-      expect((await fileSeen(bench, slug, name)).previous).toBe(false);
-    }
+    rmSync(join(bench.secrets, "portal.env"));
+    mkdirSync(join(bench.state, "precedents"), { recursive: true, mode: 0o700 });
+    writeFileSync(join(bench.state, "precedents", "portal.env"), PREDECESSOR, { mode: 0o600 });
+    expect((await bench.call("POST", "/file", { token, slug: "portal", file: "portal.env" })).status).toBe(200);
+    expect(readFileSync(join(bench.secrets, "portal.env"), "utf8")).toBe("");
+    // The earlier file's previous version went before the file was made.
+    expect(existsSync(join(bench.state, "precedents", "portal.env"))).toBe(false);
+    expect((await fileSeen(bench, "portal", "portal.env")).previous).toBe(false);
   });
 
   test("with checks on, a gatekeeper result owned by root passes, one writable by others does not", async () => {
@@ -2754,30 +2460,13 @@ describe("POST /restart", () => {
     expect(log(bench).at(-1)).toMatchObject({ operation: "restart", result: "ok", slug: "cms", detail: expect.stringContaining("active") });
   });
 
-  test("the landing restarts under its unit, which reads its file", async () => {
+  test("the landing's service made by hand reads no managed file nor any store: refused, with no restart", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    expect((await bench.call("POST", "/restart", { token, slug: "test-zone.invalid" })).status).toBe(200);
-    expect(bench.systemctlCalls.slice(0, 2)).toEqual([
-      ["reset-failed", "sitesolide-landing"],
-      ["restart", "sitesolide-landing"],
-    ]);
-  });
-
-  test("builder: a unit that gives the subdirectory's path through Environment= does read its secrets", async () => {
-    const bench = await mount();
-    const token = await unlock(bench);
-    expect((await bench.call("POST", "/restart", { token, slug: "builder" })).status).toBe(200);
-
-    // Another site's directory, or a directory with no managed file in it, is not enough.
-    writeFileSync(join(bench.units, "builder.service"), `[Service]\nEnvironment=DIR=${bench.secrets}/cms-secrets\nEnvironment=ROOT=${bench.secrets}\n`);
-    const refuse = await bench.call("POST", "/restart", { token, slug: "builder" });
-    expect(refuse.status).toBe(403);
-    expect((await errorOf(refuse)).message).toContain("reads none of the managed files");
-
-    // The path of a managed file, through Environment=, is enough.
-    writeFileSync(join(bench.units, "builder.service"), `[Service]\nEnvironment="KEY=${bench.secrets}/builder-ssh"\n`);
-    expect((await bench.call("POST", "/restart", { token, slug: "builder" })).status).toBe(200);
+    const response = await bench.call("POST", "/restart", { token, slug: "test-zone.invalid" });
+    expect(response.status).toBe(403);
+    expect((await errorOf(response)).message).toContain("a restart would apply nothing");
+    expect(bench.systemctlCalls).toEqual([]);
   });
 
   test("after start-limit-hit, reset-failed makes the restart possible", async () => {
@@ -2825,21 +2514,19 @@ describe("POST /restart", () => {
     expect(bench.systemctlCalls).toEqual([]);
   });
 
-  test("a project whose every service is scheduled: its runs read the files anew, nothing waits for a restart, and none is made", async () => {
+  test("a project whose every service is scheduled: its runs read the store anew, nothing waits for a restart, and none is made", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    const manifest = { slug: "jobs", services: { sync: { start: "/usr/local/bin/bun run sync.ts", schedule: "hourly" } }, secrets: ["jobs.env"] } as Manifest;
+    const manifest = { slug: "jobs", services: { sync: { start: "/usr/local/bin/bun run sync.ts", schedule: "hourly" } }, secrets: ["KEY"] } as Manifest;
     mkdirSync(join(bench.sites, "jobs"));
     writeFileSync(join(bench.sites, "jobs", "sitesolide.json"), JSON.stringify(manifest));
-    // The anchor, started an hour ago; both files are newer.
+    // The anchor, started an hour ago; the store is newer.
     writeFileSync(join(bench.units, "jobs.service"), generateUnits(manifest)[0]!.text);
-    writeFileSync(join(bench.secrets, "jobs.env"), "KEY=1\n", { mode: 0o600 });
-    writeFileSync(join(bench.secrets, "jobs-key"), "a key\n", { mode: 0o400 });
+    expect((await bench.call("PUT", "/store/variable", { token, slug: "jobs", name: "KEY", value: "1" })).status).toBe(201);
+    freshReadings(bench);
     const jobs = (await projects(bench)).find((project) => project.slug === "jobs")!;
-    expect(jobs.files.map((file) => [file.name, file.restartPending])).toEqual([
-      ["jobs.env", false],
-      ["jobs-key", false],
-    ]);
+    expect(jobs.files).toEqual([]);
+    expect(jobs.store?.restartPending).toBe(false);
     const response = await bench.call("POST", "/restart", { token, slug: "jobs" });
     expect(response.status).toBe(403);
     const { message } = await errorOf(response);
@@ -2875,9 +2562,9 @@ describe("POST /restart", () => {
     expect(log(bench).filter((e) => e.operation === "restart")).toEqual([]);
 
     // A write that arrived in the meantime waits on the reserved restart.
-    const set = bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "AFTER", value: "1" });
+    const set = bench.call("PUT", "/variable", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "AFTER", value: "1" });
     await settle();
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).not.toContain("AFTER");
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).not.toContain("AFTER");
 
     trigger();
     expect((await set).status).toBe(200);
@@ -2891,11 +2578,11 @@ describe("POST /restart", () => {
   });
 });
 
-describe("no value outside /value and /content", () => {
+describe("no value outside /value", () => {
   test("a refusal journals a variable name only if it exists in the file", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    const target = { token, slug: "cms", file: "cms.env" };
+    const target = { token, slug: "dashboard", file: "dashboard-monitor.env" };
 
     // A token pasted into the name field: it has the shape of a name.
     await bench.call("POST", "/value", { ...target, variable: SECRET_ALNUM });
@@ -2911,7 +2598,7 @@ describe("no value outside /value and /content", () => {
   test("neither in the journal, nor in any other answer", async () => {
     const bench = await mount({ hashPassword: hashFast });
     const token = await unlock(bench);
-    const target = { token, slug: "cms", file: "cms.env" };
+    const target = { token, slug: "dashboard", file: "dashboard-monitor.env" };
     const NEW_VALUE = "new-portal-password-SECRET";
 
     await bench.call("POST", "/unlock", { password: "wrong" });
@@ -2926,8 +2613,7 @@ describe("no value outside /value and /content", () => {
     await bench.call("PUT", "/variable", { ...target, variable: "TOKEN", value: `${SECRET_SET}\n` });
     await bench.call("DELETE", "/variable", { ...target, variable: "SID" });
     await bench.call("POST", "/restore", target);
-    await bench.call("POST", "/file", { token, slug: "cms", file: "cms-webhook.env" });
-    await bench.call("PUT", "/content", { token, slug: "builder", file: "builder-secrets/registry", content: "reg-REPLACEMENT-SECRET\n" });
+    await bench.call("POST", "/file", { token, slug: "dashboard", file: "dashboard.env" });
     await bench.call("POST", "/password", {
       token,
       slug: "portal",
@@ -2959,8 +2645,6 @@ describe("no value outside /value and /content", () => {
       PORTAL_PASSWORD,
       NEW_VALUE,
       "wrong-password",
-      "PRIVATE KEY",
-      "REPLACEMENT",
       "PROFILE",
       token,
       "$2b$",
@@ -2980,7 +2664,6 @@ describe("no value outside /value and /content", () => {
     expect(entries[0]!.operation).toBe("lock");
     expect(entries.map((e) => e.operation)).toContain("read");
     expect(entries.map((e) => e.operation)).toContain("password");
-    expect(entries.map((e) => e.operation)).toContain("replace");
     expect(entries.every((e) => e.variable === null || /^[A-Za-z_][A-Za-z0-9_]*$/.test(e.variable))).toBe(true);
 
     // The Activity page reads this very answer, put in the shared shape: the
@@ -3105,51 +2788,6 @@ describe("the real system", () => {
       expect(readdirSync(files)).toEqual([]);
     });
 
-    test("a retired legacy file's copy lies under the project's own previous versions, its owner kept, and nowhere else", async () => {
-      const root = throwawayRoot();
-      mkdirSync(join(root, "secrets"));
-      const system = systemOn(root);
-      const owner = { uid: UID, gid: TEST_GID };
-      await system.writeStorePrevious("shop", "legacy/shop-ses.env", new TextEncoder().encode("A=1\n"), owner);
-      const copy = join(root, "state", "precedents", "projects", "shop", "legacy", "shop-ses.env");
-      expect(readFileSync(copy, "utf8")).toBe("A=1\n");
-      expect([statSync(copy).uid, statSync(copy).mode & 0o777]).toEqual([UID, 0o600]);
-      expect(statSync(join(root, "state", "precedents", "projects", "shop", "legacy")).mode & 0o777).toBe(0o700);
-      expect(await system.listRetired("shop")).toEqual(["shop-ses.env"]);
-      expect(await system.listRetired("other")).toEqual([]);
-      expect((await system.readStorePrevious("shop", "legacy/shop-ses.env")).kind).toBe("present");
-      for (const part of ["legacy/../env", "legacy/.x", "legacy/a/b", "legacy/", "legacy/x\\y"] as const) {
-        await expect(system.writeStorePrevious("shop", part as "env", new Uint8Array([1]))).rejects.toThrow();
-        await expect(system.readStorePrevious("shop", part as "env")).rejects.toThrow();
-      }
-      // A temporary left there by an abrupt stop goes at the next start; the copy stays.
-      writeFileSync(join(root, "state", "precedents", "projects", "shop", "legacy", ".shop-ses.env.0123456789abcdef.tmp"), "A=");
-      expect(await system.cleanTemporaries()).toBe(1);
-      expect(await system.listRetired("shop")).toEqual(["shop-ses.env"]);
-      // A link in the place of its folder: nothing is read or written through it.
-      rmSync(join(root, "state", "precedents", "projects", "shop", "legacy"), { recursive: true });
-      mkdirSync(join(root, "elsewhere"));
-      symlinkSync(join(root, "elsewhere"), join(root, "state", "precedents", "projects", "shop", "legacy"));
-      await expect(system.writeStorePrevious("shop", "legacy/shop-ses.env", new Uint8Array([1]))).rejects.toThrow();
-      await expect(system.listRetired("shop")).rejects.toThrow();
-      expect(readdirSync(join(root, "elsewhere"))).toEqual([]);
-    });
-
-    test("removeLegacy unlinks a flat file alone", async () => {
-      const root = throwawayRoot();
-      mkdirSync(join(root, "secrets", "cms-secrets"), { recursive: true });
-      writeFileSync(join(root, "secrets", "cms.env"), "A=1\n");
-      writeFileSync(join(root, "secrets", "cms-secrets", "x.env"), "A=1\n");
-      const system = systemOn(root);
-      for (const name of ["cms-secrets/x.env", ".cms.env", "../cms.env"]) await expect(system.removeLegacy(name)).rejects.toThrow();
-      await system.removeLegacy("cms.env");
-      expect(readdirSync(join(root, "secrets"))).toEqual(["cms-secrets"]);
-      // The store's folder is never a legacy file, nor are its files.
-      await system.ensureStore("cms");
-      await system.writeStoreEnv("cms", new TextEncoder().encode("A=1\n"));
-      await system.writeStoreFile("cms", "x.env", new TextEncoder().encode("A=1\n"));
-      expect(await system.listSecrets()).toEqual(["cms-secrets/x.env"]);
-    });
   });
 
   describe("the access log", () => {
@@ -3440,45 +3078,22 @@ describe("the real system", () => {
     await expect(system.writeSecret("../evade.env", new Uint8Array(0), permissions)).rejects.toThrow();
     await expect(system.writeSecret("a/b/c", new Uint8Array(0), permissions)).rejects.toThrow();
     await expect(system.examineSecret(".cache.env")).rejects.toThrow();
-    await expect(system.examineSecret("builder-secrets/.cache")).rejects.toThrow();
+    // Flat names alone: no folder of /etc/sitesolide is ever written into.
+    mkdirSync(join(root, "secrets", "builder-secrets"));
+    await expect(system.writeSecret("keys/registry", new Uint8Array(0), permissions)).rejects.toThrow();
+    await expect(system.examineSecret("keys/registry")).rejects.toThrow();
+    expect(readdirSync(join(root, "secrets", "builder-secrets"))).toEqual([]);
     await expect(system.readFragment("../secrets/cms")).rejects.toThrow();
     await expect(system.readGatekeeperResult("cms/../x")).rejects.toThrow();
-    await expect(system.examineFolder("../etc")).rejects.toThrow();
     expect(existsSync(join(root, "evade.env"))).toBe(false);
   });
 
-  test("the second lock refuses a subdirectory that is a link", async () => {
+  test("at startup, only the temporary files matching our pattern are removed, in the folders this steward writes", async () => {
     const root = throwawayRoot();
-    mkdirSync(join(root, "secrets"));
-    mkdirSync(join(root, "elsewhere"));
-    symlinkSync(join(root, "elsewhere"), join(root, "secrets", "builder-secrets"));
-    const system = systemOn(root);
-    await expect(system.writeSecret("builder-secrets/registry", new TextEncoder().encode("x"), { owner: null, mode: 0o400 })).rejects.toThrow();
-    await expect(system.examineSecret("builder-secrets/registry")).rejects.toThrow();
-    expect(readdirSync(join(root, "elsewhere"))).toEqual([]);
-    expect(await system.examineFolder("builder-secrets")).toMatchObject({ link: true, folder: false });
-    expect(await system.examineFolder("absent-secrets")).toBeNull();
-  });
-
-  test("writing at 0400 into a subdirectory, through the already open descriptor", async () => {
-    const root = throwawayRoot();
-    mkdirSync(join(root, "secrets", "builder-secrets"), { recursive: true });
-    const system = systemOn(root);
-    await system.writeSecret("builder-secrets/registry", new TextEncoder().encode("first\n"), { owner: null, mode: 0o400 });
-    await system.writeSecret("builder-secrets/registry", new TextEncoder().encode("second\n"), { owner: null, mode: 0o400 });
-    expect(readFileSync(join(root, "secrets", "builder-secrets", "registry"), "utf8")).toBe("second\n");
-    expect(statSync(join(root, "secrets", "builder-secrets", "registry")).mode & 0o777).toBe(0o400);
-    expect(readdirSync(join(root, "secrets", "builder-secrets"))).toEqual(["registry"]);
-  });
-
-  test("at startup, only the temporary files matching our pattern are removed, subdirectories included", async () => {
-    const root = throwawayRoot();
-    for (const folder of ["secrets/builder-secrets", "secrets/other", "state/precedents/builder-secrets"]) mkdirSync(join(root, folder), { recursive: true });
+    for (const folder of ["secrets/other", "state/precedents"]) mkdirSync(join(root, folder), { recursive: true });
     const ours = [
-      "secrets/.cms.env.0123456789abcdef.tmp",
-      "secrets/builder-secrets/.registry.0123456789abcdef.tmp",
-      "state/precedents/.cms.env.fedcba9876543210.tmp",
-      "state/precedents/builder-secrets/.registry.fedcba9876543210.tmp",
+      "secrets/.portal.env.0123456789abcdef.tmp",
+      "state/precedents/.portal.env.fedcba9876543210.tmp",
       "state/.journal.jsonl.00112233445566ff.tmp",
     ];
     const others = [
@@ -3488,7 +3103,7 @@ describe("the real system", () => {
       "secrets/.cms.env.ABCDEFABCDEFABCD.tmp",
       "secrets/.cms.env.0123.tmp",
       "secrets/cms.env.0123456789abcdef.tmp",
-      // Outside a secrets subdirectory: not ours.
+      // In a folder this steward never writes into: not ours.
       "secrets/other/.x.0123456789abcdef.tmp",
       "state/precedents/cms.env",
     ];
@@ -3547,19 +3162,17 @@ describe("the real system", () => {
     expect(await system.gatekeeperBackups()).toEqual(["calendar", "cms", "library"]);
   });
 
-  test("removing a previous version: missing, nothing to do; present, it goes, flat as in a subdirectory", async () => {
+  test("removing a previous version: missing, nothing to do; present, it goes; a name with a folder never", async () => {
     const root = throwawayRoot();
     mkdirSync(join(root, "secrets"));
     const system = systemOn(root);
-    await system.removePrevious("cms.env");
-    await system.removePrevious("builder-secrets/x.env");
-    await system.writePrevious("cms.env", new TextEncoder().encode("A=1\n"), null);
-    await system.writePrevious("builder-secrets/x.env", new TextEncoder().encode("B=1\n"), null);
-    await system.removePrevious("cms.env");
-    await system.removePrevious("builder-secrets/x.env");
-    expect((await system.examinePrevious("cms.env")).kind).toBe("absent");
-    expect(readdirSync(join(root, "state", "precedents", "builder-secrets"))).toEqual([]);
-    await expect(system.removePrevious("../cms.env")).rejects.toThrow();
+    await system.removePrevious("portal.env");
+    await system.writePrevious("portal.env", new TextEncoder().encode("A=1\n"), null);
+    await system.removePrevious("portal.env");
+    expect((await system.examinePrevious("portal.env")).kind).toBe("absent");
+    await expect(system.writePrevious("keys/x.env", new TextEncoder().encode("B=1\n"), null)).rejects.toThrow();
+    await expect(system.removePrevious("keys/x.env")).rejects.toThrow();
+    await expect(system.removePrevious("../portal.env")).rejects.toThrow();
   });
 });
 
@@ -3618,7 +3231,7 @@ describe("unit and capabilities", () => {
     // The steward creates no directory in /etc/sitesolide but a project's
     // store, its three folders root's 0700 (ensureStore); the others are its
     // previous versions'.
-    expect(source.match(/mkdirSync\(/g)?.length).toBe(4);
+    expect(source.match(/mkdirSync\(/g)?.length).toBe(3);
     const ensure = source.slice(source.indexOf("async ensureStore("), source.indexOf("async readStoreEnv("));
     expect(ensure.match(/mkdirSync\(/g)?.length).toBe(1);
     expect(ensure).toContain("mkdirSync(path, { mode: 0o700 })");
@@ -3639,12 +3252,12 @@ describe("integration: dashboard/steward.ts on a socket", () => {
     }
     writeFileSync(
       join(root, "sites/cms/sitesolide.json"),
-      JSON.stringify({ slug: "cms", start: "bun server.ts", port: 3048, publicDir: "public", secrets: ["cms.env"] }),
+      JSON.stringify({ slug: "cms", start: "bun server.ts", port: 3048, publicDir: "public", secrets: ["SID", "TOKEN"] }),
     );
-    writeFileSync(join(root, "sites/dashboard/sitesolide.json"), JSON.stringify({ slug: "dashboard", start: "bun server.ts", secrets: ["dashboard.env"] }));
-    writeFileSync(join(root, "secrets/cms.env"), CMS_ENV, { mode: 0o600 });
+    writeFileSync(join(root, "sites/dashboard/sitesolide.json"), JSON.stringify({ slug: "dashboard", start: "bun server.ts" }));
+    writeFileSync(join(root, "secrets/dashboard-monitor.env"), MONITOR_ENV, { mode: 0o600 });
     // A temporary file from an abrupt stop, which the start has to remove.
-    writeFileSync(join(root, "secrets/.cms.env.0123456789abcdef.tmp"), "A=1\n");
+    writeFileSync(join(root, "secrets/.dashboard-monitor.env.0123456789abcdef.tmp"), "A=1\n");
     const hash = await hashFast(PASSWORD);
     writeFileSync(join(root, "secrets/dashboard.env"), `PASSWORD_HASH=${hash}\n`, { mode: 0o600 });
     const socket = join(root, "run", "secretaire.sock");
@@ -3704,15 +3317,14 @@ describe("integration: dashboard/steward.ts on a socket", () => {
       // The key pair was laid at startup, the private half where the portal reads it.
       expect(existsSync(join(root, "portal-key", "assertion.key"))).toBe(true);
       expect(existsSync(join(root, "state", "assertion.pub"))).toBe(true);
-      expect(existsSync(join(root, "secrets/.cms.env.0123456789abcdef.tmp"))).toBe(false);
+      expect(existsSync(join(root, "secrets/.dashboard-monitor.env.0123456789abcdef.tmp"))).toBe(false);
 
       const { projects: enumerate } = (await (await fetch("http://steward/projects", { unix: socket })).json()) as ProjectsResponse;
       expect(enumerate.map((project) => project.slug)).toEqual(["cms", "dashboard"]);
-      expect(enumerate[0]!.files[0]!.variables).toEqual(["SID", "TOKEN"]);
-      // The embedded registry does not know this throwaway directory: the
-      // dashboard's expectation is a manifest's, and the real registry was
-      // indeed read.
+      // A project lists no file; the dashboard its own, from the platform's table.
+      expect(enumerate[0]!.files).toEqual([]);
       expect(enumerate[1]!.files[0]).toMatchObject({ name: "dashboard.env", passwords: ["PASSWORD_HASH"] });
+      expect(enumerate[1]!.files[1]!.variables).toEqual(["SID", "TOKEN"]);
 
       const opening = await fetch("http://steward/unlock", {
         unix: socket,
@@ -3723,7 +3335,7 @@ describe("integration: dashboard/steward.ts on a socket", () => {
       const value = await fetch("http://steward/value", {
         unix: socket,
         method: "POST",
-        body: JSON.stringify({ token, slug: "cms", file: "cms.env", variable: "TOKEN" }),
+        body: JSON.stringify({ token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN" }),
       });
       expect(((await value.json()) as ValueResponse).value).toBe(SECRET_TOKEN);
 
@@ -3750,76 +3362,6 @@ describe("integration: dashboard/steward.ts on a socket", () => {
   });
 });
 
-describe("a token's secrets, handed over by the control routes", () => {
-  /** An owner's own token, as src/control/steward.ts names it once judged. */
-  const TOKEN = { actor: "token:0123456789ab", member: null, token: "0123456789ab" };
-  const still = async () => null;
-  const request = () => new Request("http://steward/control/secrets", { method: "PATCH" });
-
-  test("an owner's token is answered as a Developer is: every file write-only, no size, no previous version; writable on <slug>.env alone", async () => {
-    const bench = await mount();
-    const ops = bench.current().secretsForToken!;
-    const changed = await ops.change(request(), { slug: "cms", file: "cms.env", set: [["NEW_KEY", SECRET_ALNUM]], remove: [] }, TOKEN, still);
-    expect(changed.status).toBe(200);
-    const answer = (await changed.json()) as { file: FileView & { writable: boolean } };
-    // A previous version is kept, the file is readable by the owner: a token is told neither.
-    expect(answer.file).toMatchObject({ name: "cms.env", readable: false, previous: false, bytes: null, writable: true });
-    expect(JSON.stringify(answer)).not.toContain(SECRET_ALNUM);
-    expect(log(bench).at(-1)).toMatchObject({ operation: "set", result: "ok", actor: TOKEN.actor, member: null, slug: "cms", file: "cms.env", variable: "NEW_KEY" });
-
-    const listed = (await (await ops.list("cms", TOKEN)).json()) as { secrets: { files: (FileView & { writable: boolean })[] } };
-    expect(listed.secrets.files.map((file) => [file.name, file.readable, file.previous, file.bytes, file.writable])).toEqual([
-      ["cms.env", false, false, null, true],
-      ["cms-webhook.env", false, false, null, false],
-    ]);
-    const text = JSON.stringify(listed);
-    for (const value of [SECRET_SID, SECRET_TOKEN, SECRET_ALNUM]) expect(text).not.toContain(value);
-    // The owner's own page still sees what the owner sees.
-    expect(await fileSeen(bench, "cms", "cms.env")).toMatchObject({ readable: true, previous: true });
-  });
-
-  test("the machine's own projects and files are refused to a token, the owner's own included, whatever reached them", async () => {
-    const bench = await mount();
-    const ops = bench.current().secretsForToken!;
-    // The landing's folder, the zone, is no slug: the control routes refuse it before it comes here.
-    for (const slug of ["dashboard", "portal"]) {
-      expect(await errorOf(await ops.list(slug, TOKEN))).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("belongs to the platform") });
-    }
-    const hash = readFileSync(join(bench.secrets, "dashboard.env"), "utf8");
-    const write = await ops.change(request(), { slug: "dashboard", file: "dashboard.env", set: [["STEWARD_SOCKET", "/tmp/elsewhere.sock"]], remove: [] }, TOKEN, still);
-    expect(write.status).toBe(403);
-    expect(await errorOf(write)).toMatchObject({ error: "out-of-scope", message: "dashboard belongs to the platform, which stays the owner's" });
-    expect(readFileSync(join(bench.secrets, "dashboard.env"), "utf8")).toBe(hash);
-    expect(log(bench).at(-1)).toMatchObject({ operation: "set", result: "rejects", actor: TOKEN.actor, slug: "dashboard", file: null });
-    // Nor its restart.
-    const restarted = await ops.restart(request(), "portal", TOKEN, still);
-    expect(await errorOf(restarted)).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("belongs to the platform") });
-    expect(bench.systemctlCalls.some((call) => call[0] === "restart")).toBe(false);
-  });
-
-  test("a refusal under the lock comes back as it stands, and nothing is written", async () => {
-    const bench = await mount();
-    const ops = bench.current().secretsForToken!;
-    const refused = await ops.change(request(), { slug: "cms", file: "cms.env", set: [["LATE", "x"]], remove: [] }, TOKEN, async () => Response.json({ error: "unauthenticated", message: "this token was revoked" }, { status: 401 }));
-    expect(refused.status).toBe(401);
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
-  });
-
-  test("a value systemd would refuse, a Unicode noncharacter, never lands: the unit would read none of the file's variables", async () => {
-    const bench = await mount();
-    const ops = bench.current().secretsForToken!;
-    const refused = await ops.change(request(), { slug: "cms", file: "cms.env", set: [["BROKEN", "x\uffff"]], remove: [] }, TOKEN, still);
-    expect(refused.status).toBe(400);
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
-    // Nor through a person's route.
-    const token = await unlock(bench);
-    expect((await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "BROKEN", value: "\ufdd0" })).status).toBe(400);
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
-  });
-});
-
-// --- A project's store -------------------------------------------------------
-
 /** A value set into a store, that no answer, journal line or log may ever carry but `/store/value`'s. */
 const STORE_CANARY = "store-canary-VALUE-4b19e7d2";
 /** A file's bytes, the same rule. */
@@ -3836,14 +3378,13 @@ const storeOf = (bench: Bench, slug: string): StorePaths => ({
   files: join(bench.secrets, "projects", slug, "files"),
 });
 
-/** A unit as this release generates it: legacy files, then the store last, its files loaded, the folder hidden. */
-function storeUnit(bench: Bench, slug: string, legacy: string[] = [], extra: string[] = []): string {
+/** A unit as this release generates it: the store, its files loaded, the folder hidden. */
+function storeUnit(bench: Bench, slug: string, extra: string[] = []): string {
   const store = storeOf(bench, slug);
   return [
     "[Service]",
     "Environment=PORT=3050",
     ...extra,
-    ...legacy.map((file) => `EnvironmentFile=-${bench.secrets}/${file}`),
     `EnvironmentFile=-${store.env}`,
     `LoadCredential=files:${store.files}`,
     "ExecStart=/usr/local/bin/bun run server.ts",
@@ -3861,16 +3402,16 @@ const SHOP = {
   secrets: { runtime: ["API_KEY", "SESSION_KEY"], files: ["gcp.json"], build: ["CMS_TOKEN"] },
 };
 
-/** A store-form app deployed on the bench: its manifest and its unit, as this release lays them. */
+/** An app deployed on the bench: its manifest and its unit, as this release lays them. */
 function addStoreProject(bench: Bench, slug = "shop", manifest: Record<string, unknown> = SHOP): void {
   mkdirSync(join(bench.sites, slug), { recursive: true });
   writeFileSync(join(bench.sites, slug, "sitesolide.json"), JSON.stringify({ slug, ...manifest }));
   writeFileSync(join(bench.units, `${slug}.service`), storeUnit(bench, slug));
 }
 
-/** cms, deployed again by this release (M1): its legacy files first, then its store. */
+/** cms's unit as this release lays it. */
 function cmsReadsStore(bench: Bench): void {
-  writeFileSync(join(bench.units, "cms.service"), storeUnit(bench, "cms", ["cms.env", "cms-webhook.env"], ["Environment=DATA_DIR=/srv/sites/cms/data"]));
+  writeFileSync(join(bench.units, "cms.service"), storeUnit(bench, "cms", ["Environment=DATA_DIR=/srv/sites/cms/data"]));
 }
 
 async function storeList(bench: Bench, slug: string): Promise<StoreView> {
@@ -3899,7 +3440,7 @@ describe("a project's store: the owner's routes on the dashboard's socket", () =
       build: ["CMS_TOKEN"],
       unitReadsStore: true,
       previous: false,
-      may: { write: true, reveal: true, restore: true, migrate: true },
+      may: { write: true, reveal: true, restore: true },
     });
     expect(store.variables.map((variable) => [variable.name, variable.source, variable.declared])).toEqual([
       ["API_KEY", "none", true],
@@ -4001,16 +3542,13 @@ describe("a project's store: the owner's routes on the dashboard's socket", () =
 
     const again = await bench.call("POST", "/store/generate", { token, slug: "shop", name: "SESSION_KEY" });
     expect(again.status).toBe(409);
-    expect(await errorOf(again)).toEqual({ error: "already-present", message: "SESSION_KEY is already set; --replace draws a new value in the store, which overrides it" });
+    expect(await errorOf(again)).toEqual({ error: "already-present", message: "SESSION_KEY is already set; --replace draws a new value in its place" });
     const replaced = await bench.call("POST", "/store/generate", { token, slug: "shop", name: "SESSION_KEY", format: "base64url", bytes: 16, replace: true });
     expect(replaced.status).toBe(200);
     expect(readFileSync(storeOf(bench, "shop").env, "utf8")).toBe(`SESSION_KEY=${drawn(16).toBase64({ alphabet: "base64url", omitPadding: true })}\n`);
     for (const extra of [{ format: "base64" }, { bytes: 8 }, { bytes: 65 }, { replace: "yes" }]) {
       expect((await bench.call("POST", "/store/generate", { token, slug: "shop", name: "OTHER", ...extra })).status).toBe(400);
     }
-    // A name a legacy file the service reads sets is set already.
-    cmsReadsStore(bench);
-    expect((await errorOf(await bench.call("POST", "/store/generate", { token, slug: "cms", name: "TOKEN" }))).error).toBe("already-present");
   });
 
   test("PUT /store/file and DELETE /store/file: a file read whole, root's 0600, its last version kept; the folder never removed", async () => {
@@ -4131,10 +3669,10 @@ describe("a project's store: the owner's routes on the dashboard's socket", () =
     const bench = await mount();
     const token = await unlock(bench);
     for (const [slug, status, message] of [
-      ["dashboard", 403, "dashboard keeps its hash in dashboard.env, read by its own unit: it has no store"],
-      ["portal", 403, "portal keeps its hash in portal.env, read by its own unit: it has no store"],
+      ["dashboard", 403, "dashboard keeps its password hash in dashboard.env, which its unit reads: it has no store"],
+      ["portal", 403, "portal keeps its password hash in portal.env, which its unit reads: it has no store"],
       ["showcase", 403, "a static site has no service to read a store; its build secrets stay with whoever deploys"],
-      ["landing", 403, "landing names the landing's files, never a project's store"],
+      ["landing", 403, "landing names the landing's account, never a project's store"],
       ["caddy", 403, "caddy names a unit of the machine, never a project"],
       ["test-zone.invalid", 400, "slug: a project's slug, lowercase letters, digits and dashes"],
       ["sk_live_pasted", 400, "slug: a project's slug, lowercase letters, digits and dashes"],
@@ -4203,9 +3741,9 @@ describe("a project's store: what refuses every write", () => {
     writeFileSync(store.env, "export A=1\n", { mode: 0o600 });
     expect((await errorOf(await bench.call("PUT", "/store/variable", { token, slug: "shop", name: "B", value: "2" }))).message).toContain("line 1");
     rmSync(store.env);
-    symlinkSync(join(bench.secrets, "cms.env"), store.env);
+    symlinkSync(join(bench.secrets, "dashboard-monitor.env"), store.env);
     expect((await errorOf(await bench.call("POST", "/store/generate", { token, slug: "shop", name: "B" }))).message).toContain("symbolic link");
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(MONITOR_ENV);
   });
 
   test("a file of the store that is a link or open to others is not managed: its name refuses writes, the others do not", async () => {
@@ -4214,366 +3752,14 @@ describe("a project's store: what refuses every write", () => {
     const token = await unlock(bench);
     await bench.call("PUT", "/store/file", { token, slug: "shop", name: "ok.pem", content: b64("x") });
     const store = storeOf(bench, "shop");
-    symlinkSync(join(bench.secrets, "builder-ssh"), join(store.files, "gcp.json"));
+    symlinkSync(join(bench.secrets, "dashboard-monitor.env"), join(store.files, "gcp.json"));
     const refused = await bench.call("PUT", "/store/file", { token, slug: "shop", name: "gcp.json", content: b64("y") });
     expect(refused.status).toBe(409);
     expect((await errorOf(refused)).message).toBe("gcp.json in the store is not managed here: symbolic link");
     expect((await bench.call("DELETE", "/store/file", { token, slug: "shop", name: "gcp.json" })).status).toBe(409);
     expect((await bench.call("PUT", "/store/file", { token, slug: "shop", name: "ok.pem", content: b64("z") })).status).toBe(200);
-    expect(readFileSync(join(bench.secrets, "builder-ssh"), "utf8")).toBe(PRIVATE_KEY);
+    expect(readFileSync(join(bench.secrets, "dashboard-monitor.env"), "utf8")).toBe(MONITOR_ENV);
     expect((await storeList(bench, "shop")).files.find((file) => file.name === "gcp.json")).toMatchObject({ state: "unmanaged", reason: "symbolic link", bytes: null });
-  });
-});
-
-describe("a project's store never brings a legacy value back (S1, S1', S2)", () => {
-  test("S1: a name a legacy file the service reads holds cannot leave the store, alone or in a batch", async () => {
-    const bench = await mount();
-    cmsReadsStore(bench);
-    const token = await unlock(bench);
-    await bench.call("PUT", "/store/variable", { token, slug: "cms", name: "TOKEN", value: "the-store-s-own" });
-    const message =
-      "TOKEN is also in cms.env, which the service reads before the store: removing it here would bring that file's value back. Retire the file first (sitesolide secrets migrate --retire), or remove TOKEN from it";
-    expect(await errorOf(await bench.call("DELETE", "/store/variable", { token, slug: "cms", names: ["TOKEN"] }))).toEqual({ error: "invalid", message });
-    expect(await errorOf(await bench.call("PATCH", "/store", { token, slug: "cms", set: { OTHER: "1" }, remove: ["TOKEN"] }))).toEqual({ error: "invalid", message });
-    expect(await errorOf(await bench.owner("DELETE", "/store/variable", { slug: "cms", names: ["TOKEN"] }))).toEqual({ error: "invalid", message });
-    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe("TOKEN=the-store-s-own\n");
-  });
-
-  test("the owner removes a name every legacy file carries with the very same value: nothing in force changes", async () => {
-    const bench = await mount();
-    cmsReadsStore(bench);
-    const token = await unlock(bench);
-    await bench.call("PUT", "/store/variable", { token, slug: "cms", name: "TOKEN", value: SECRET_TOKEN });
-    expect((await bench.call("DELETE", "/store/variable", { token, slug: "cms", names: ["TOKEN"] })).status).toBe(200);
-    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe("");
-  });
-
-  test("S1': a restore that would drop a name a legacy file holds is refused, the same", async () => {
-    const bench = await mount();
-    cmsReadsStore(bench);
-    const token = await unlock(bench);
-    await bench.call("PUT", "/store/variable", { token, slug: "cms", name: "OWN", value: "1" });
-    await bench.call("PUT", "/store/variable", { token, slug: "cms", name: "SID", value: "the-store-s-own" });
-    const refused = await bench.call("POST", "/store/restore", { token, slug: "cms", dryRun: true });
-    expect(refused.status).toBe(400);
-    expect((await errorOf(refused)).message).toStartWith("SID is also in cms.env, which the service reads before the store");
-    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe("OWN=1\nSID=the-store-s-own\n");
-  });
-
-  test("S2: a name the store holds is not set in a legacy file, where it would change nothing", async () => {
-    const bench = await mount();
-    cmsReadsStore(bench);
-    const token = await unlock(bench);
-    await bench.call("PUT", "/store/variable", { token, slug: "cms", name: "TOKEN", value: "the-store-s-own" });
-    const refused = await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "TOKEN", value: "x" });
-    expect(await errorOf(refused)).toEqual({ error: "invalid", message: "TOKEN is set in the project's store, which overrides cms.env: change it there" });
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
-    // A token's change of the old file, the same.
-    const ops = bench.current().secretsForToken!;
-    const tokenWho = { actor: "token:0123456789ab", member: null, token: "0123456789ab" };
-    const byToken = await ops.change(new Request("http://steward/control/secrets", { method: "PATCH" }), { slug: "cms", file: "cms.env", set: [["TOKEN", "y"]], remove: [] }, tokenWho, async () => null);
-    expect(await errorOf(byToken)).toMatchObject({ message: "TOKEN is set in the project's store, which overrides cms.env: change it there" });
-    // A name the store does not hold is written as before; removing one it holds from the old file is allowed.
-    expect((await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "OTHER", value: "1" })).status).toBe(200);
-    expect((await bench.call("DELETE", "/variable", { token, slug: "cms", file: "cms.env", variable: "TOKEN" })).status).toBe(200);
-  });
-
-  test("the listing says where each value in force comes from, and what the store overrides", async () => {
-    const bench = await mount();
-    cmsReadsStore(bench);
-    const token = await unlock(bench);
-    await bench.call("PUT", "/store/variable", { token, slug: "cms", name: "TOKEN", value: "the-store-s-own" });
-    const store = await storeList(bench, "cms");
-    expect(store.variables).toEqual([
-      { name: "TOKEN", source: "store", file: null, shadows: ["cms.env"], declared: false },
-      { name: "SID", source: "legacy", file: "cms.env", shadows: [], declared: false },
-    ]);
-    expect(store.legacy).toEqual([
-      { name: "cms.env", state: "managed", reason: null, variables: ["SID", "TOKEN"], read: true, leftover: false, covered: false },
-      { name: "cms-webhook.env", state: "absent", reason: null, variables: [], read: true, leftover: false, covered: null },
-    ]);
-    expect(store.missing).toEqual([]);
-  });
-});
-
-describe("migrate and retire (spec §6.8, §6.9, §8.1)", () => {
-  test("migrate waits for every unit to read the store; then merges without anyone seeing a value, idempotent", async () => {
-    const bench = await mount();
-    const token = await unlock(bench);
-    const before = await bench.call("POST", "/store/migrate", { token, slug: "cms" });
-    expect(await errorOf(before)).toEqual({ error: "out-of-scope", message: "deploy or refresh cms first, so that its units read the store: sitesolide refresh cms" });
-
-    cmsReadsStore(bench);
-    const dry = (await (await bench.call("POST", "/store/migrate", { token, slug: "cms", dryRun: true })).json()) as StoreMigrateResponse;
-    expect(dry).toMatchObject({ sources: ["cms.env"], skipped: [{ file: "cms-webhook.env", reason: "absent" }], merged: ["SID", "TOKEN"], already: [], overridden: [], conflicts: [], written: false });
-    expect(existsSync(storeOf(bench, "cms").env)).toBe(false);
-
-    const done = await bench.call("POST", "/store/migrate", { token, slug: "cms" });
-    const answer = (await done.json()) as StoreMigrateResponse;
-    expect(answer).toMatchObject({ merged: ["SID", "TOKEN"], written: true });
-    for (const value of [SECRET_SID, SECRET_TOKEN]) expect(JSON.stringify(answer)).not.toContain(value);
-    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe(`SID=${SECRET_SID}\nTOKEN=${SECRET_TOKEN}\n`);
-    expect(log(bench).at(-1)).toMatchObject({ operation: "migrate", result: "ok", file: "store", detail: "2 merged from cms.env" });
-    // The legacy file is untouched, and now covered.
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
-    expect(answer.store.legacy[0]).toMatchObject({ name: "cms.env", covered: true });
-
-    const again = (await (await bench.call("POST", "/store/migrate", { token, slug: "cms" })).json()) as StoreMigrateResponse;
-    expect(again).toMatchObject({ merged: [], already: ["SID", "TOKEN"], written: false });
-    // Going back before retiring: the owner restores the version before the merge.
-    expect(await (await bench.call("POST", "/store/restore", { token, slug: "cms" })).json()).toMatchObject({ restored: true, disappeared: ["SID", "TOKEN"] });
-  });
-
-  test("a name the store holds with another value stays the store's: overridden", async () => {
-    const bench = await mount();
-    cmsReadsStore(bench);
-    const token = await unlock(bench);
-    await bench.call("PUT", "/store/variable", { token, slug: "cms", name: "TOKEN", value: "the-store-s-own" });
-    const answer = (await (await bench.call("POST", "/store/migrate", { token, slug: "cms" })).json()) as StoreMigrateResponse;
-    expect(answer).toMatchObject({ merged: ["SID"], overridden: ["TOKEN"], written: true });
-    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe(`TOKEN=the-store-s-own\nSID=${SECRET_SID}\n`);
-  });
-
-  test("two legacy files that disagree on a name: the value in effect, the later file's, is merged; the other said by name and file, never a value (I-3)", async () => {
-    const bench = await mount();
-    cmsReadsStore(bench);
-    // The unit reads cms.env, then cms-webhook.env: the latter's TOKEN is the one the service runs with.
-    writeFileSync(join(bench.secrets, "cms-webhook.env"), `TOKEN=${STORE_CANARY}\nHOOK=1\n`, { mode: 0o600 });
-    const token = await unlock(bench);
-    const dry = await bench.call("POST", "/store/migrate", { token, slug: "cms", dryRun: true });
-    expect(await dry.json()).toMatchObject({ shadowed: [{ name: "TOKEN", kept: "cms-webhook.env", others: ["cms.env"] }], conflicts: [], written: false });
-    const response = await bench.call("POST", "/store/migrate", { token, slug: "cms" });
-    expect(response.status).toBe(200);
-    const text = await response.text();
-    expect(JSON.parse(text)).toMatchObject({
-      sources: ["cms.env", "cms-webhook.env"],
-      merged: ["SID", "TOKEN", "HOOK"],
-      shadowed: [{ name: "TOKEN", kept: "cms-webhook.env", others: ["cms.env"] }],
-      conflicts: [],
-      written: true,
-    });
-    for (const value of [SECRET_TOKEN, STORE_CANARY]) expect(text).not.toContain(value);
-    // What the service ran with, exactly.
-    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe(`SID=${SECRET_SID}\nTOKEN=${STORE_CANARY}\nHOOK=1\n`);
-    expect(log(bench).at(-1)).toMatchObject({ operation: "migrate", result: "ok", detail: "3 merged from cms.env, cms-webhook.env; 1 taken from the file in effect over another value" });
-    expect(readFileSync(join(bench.state, "journal.jsonl"), "utf8")).not.toContain(STORE_CANARY);
-  });
-
-  test("the units of a project reading its legacy files in different orders: a differing name is a conflict, and nothing is written", async () => {
-    const bench = await mount();
-    const lab = { slug: "lab", services: { web: { start: "/usr/local/bin/bun run server.ts", port: 3053 }, worker: { start: "/bin/true", kind: "worker" } }, secrets: ["lab-a.env", "lab-b.env"] };
-    mkdirSync(join(bench.sites, "lab"), { recursive: true });
-    writeFileSync(join(bench.sites, "lab", "sitesolide.json"), JSON.stringify(lab));
-    writeFileSync(join(bench.units, "lab.service"), storeUnit(bench, "lab", ["lab-a.env", "lab-b.env"]));
-    // Edited by hand: the worker reads them the other way round.
-    writeFileSync(join(bench.units, "lab.worker.service"), storeUnit(bench, "lab", ["lab-b.env", "lab-a.env"]));
-    writeFileSync(join(bench.secrets, "lab-a.env"), `KEY=${STORE_CANARY}-a\nSAME=1\n`, { mode: 0o600 });
-    writeFileSync(join(bench.secrets, "lab-b.env"), `KEY=${STORE_CANARY}-b\nSAME=1\n`, { mode: 0o600 });
-    const token = await unlock(bench);
-    const response = await bench.call("POST", "/store/migrate", { token, slug: "lab" });
-    expect(response.status).toBe(409);
-    const text = await response.text();
-    const answer = JSON.parse(text) as StoreMigrateResponse & { error: string; message: string };
-    expect(answer).toMatchObject({ error: "unmanaged", conflicts: [{ name: "KEY", files: ["lab-a.env", "lab-b.env"] }], written: false });
-    expect(answer.message).toStartWith("KEY: in lab-a.env and lab-b.env, with different values, which the units of lab read in different orders");
-    expect(text).not.toContain(STORE_CANARY);
-    expect(existsSync(storeOf(bench, "lab").env)).toBe(false);
-  });
-
-  test("a file a unit names twice counts at its last place, as systemd reads it again: A, B, A runs with A's value, and migrate takes it", async () => {
-    const bench = await mount();
-    const lab = { slug: "lab", start: "/usr/local/bin/bun run server.ts", port: 3053, secrets: ["lab-a.env", "lab-b.env"] };
-    mkdirSync(join(bench.sites, "lab"), { recursive: true });
-    writeFileSync(join(bench.sites, "lab", "sitesolide.json"), JSON.stringify(lab));
-    writeFileSync(join(bench.units, "lab.service"), storeUnit(bench, "lab", ["lab-a.env", "lab-b.env", "lab-a.env"]));
-    writeFileSync(join(bench.secrets, "lab-a.env"), "KEY=from-a\n", { mode: 0o600 });
-    writeFileSync(join(bench.secrets, "lab-b.env"), "KEY=from-b\n", { mode: 0o600 });
-    // The listing names the file in effect.
-    expect((await storeList(bench, "lab")).variables).toEqual([{ name: "KEY", source: "legacy", file: "lab-a.env", shadows: ["lab-b.env"], declared: false }]);
-    const token = await unlock(bench);
-    const answer = (await (await bench.call("POST", "/store/migrate", { token, slug: "lab" })).json()) as StoreMigrateResponse;
-    expect(answer).toMatchObject({ sources: ["lab-b.env", "lab-a.env"], shadowed: [{ name: "KEY", kept: "lab-a.env", others: ["lab-b.env"] }], written: true });
-    expect(readFileSync(storeOf(bench, "lab").env, "utf8")).toBe("KEY=from-a\n");
-  });
-
-  test("a legacy file setting a name the project's env sets too: refused, saying the file's value is the one in effect and what keeps it", async () => {
-    const bench = await mount();
-    cmsReadsStore(bench);
-    // cms's manifest sets DEFAULT_SENDER; cms-webhook.env, read after, overrides it.
-    writeFileSync(join(bench.secrets, "cms-webhook.env"), `DEFAULT_SENDER=${STORE_CANARY}\n`, { mode: 0o600 });
-    const token = await unlock(bench);
-    const refused = await bench.call("POST", "/store/migrate", { token, slug: "cms" });
-    expect(refused.status).toBe(400);
-    const failure = await errorOf(refused);
-    expect(failure.message).toBe(
-      "cms-webhook.env holds DEFAULT_SENDER, which the project's env or its unit sets too: the file's value, read after, is the one the service runs with, and a store takes no name its unit sets. Drop it from the manifest's env (or the unit) and deploy, then migrate again: the store keeps its value from cms-webhook.env. Removing it from cms-webhook.env instead would switch the service to the env's value",
-    );
-    expect(JSON.stringify(failure)).not.toContain(STORE_CANARY);
-    expect(existsSync(storeOf(bench, "cms").env)).toBe(false);
-    // Following the advice: the manifest no longer sets it, and the store takes the file's value, the one in effect.
-    const manifest = JSON.parse(readFileSync(join(bench.sites, "cms", "sitesolide.json"), "utf8")) as { env: Record<string, string> };
-    delete manifest.env.DEFAULT_SENDER;
-    writeFileSync(join(bench.sites, "cms", "sitesolide.json"), JSON.stringify(manifest));
-    expect(await (await bench.call("POST", "/store/migrate", { token, slug: "cms" })).json()).toMatchObject({ merged: ["SID", "TOKEN", "DEFAULT_SENDER"], written: true });
-    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toContain(`DEFAULT_SENDER=${STORE_CANARY}\n`);
-  });
-
-  test("PORT, DATA_DIR, PUBLIC_DIR or the proxy in a legacy file: the generated unit sets them, so the advice is a reserved name's, never to drop them from the env", async () => {
-    const bench = await mount();
-    cmsReadsStore(bench);
-    const token = await unlock(bench);
-    const reserved = (names: string) =>
-      `cms-webhook.env holds ${names}, which a store never holds: the file's values are the ones the service runs with, and removing them from cms-webhook.env changes that. Move them to the manifest's env if they belong there, deploy, then remove them from cms-webhook.env and migrate again`;
-    writeFileSync(join(bench.secrets, "cms-webhook.env"), "PORT=4000\nDATA_DIR=/tmp/x\nPUBLIC_DIR=/tmp/y\n", { mode: 0o600 });
-    expect(await errorOf(await bench.call("POST", "/store/migrate", { token, slug: "cms" }))).toEqual({ error: "invalid", message: reserved("PORT, DATA_DIR, PUBLIC_DIR") });
-    // The egress proxy's names, when the manifest asks for the proxy.
-    const manifest = JSON.parse(readFileSync(join(bench.sites, "cms", "sitesolide.json"), "utf8")) as Record<string, unknown>;
-    writeFileSync(join(bench.sites, "cms", "sitesolide.json"), JSON.stringify({ ...manifest, egress: ["api.example.com"] }));
-    writeFileSync(join(bench.secrets, "cms-webhook.env"), "HTTPS_PROXY=http://elsewhere\nNO_PROXY=x\n", { mode: 0o600 });
-    expect(await errorOf(await bench.call("POST", "/store/migrate", { token, slug: "cms" }))).toEqual({ error: "invalid", message: reserved("HTTPS_PROXY, NO_PROXY") });
-    expect(existsSync(storeOf(bench, "cms").env)).toBe(false);
-  });
-
-  test("a legacy file carrying PASSWORD_HASH, or not managed, refuses the whole migration", async () => {
-    const bench = await mount();
-    cmsReadsStore(bench);
-    const token = await unlock(bench);
-    writeFileSync(join(bench.secrets, "cms-webhook.env"), "PASSWORD_HASH=$argon2id$x\n", { mode: 0o600 });
-    expect(await errorOf(await bench.call("POST", "/store/migrate", { token, slug: "cms" }))).toEqual({
-      error: "invalid",
-      message:
-        "cms-webhook.env holds PASSWORD_HASH, which a store never holds: the file's value is the one the service runs with, and removing it from cms-webhook.env changes that. Move it to the manifest's env if it belongs there, deploy, then remove it from cms-webhook.env and migrate again",
-    });
-    chmodSync(join(bench.secrets, "cms-webhook.env"), 0o644);
-    expect((await errorOf(await bench.call("POST", "/store/migrate", { token, slug: "cms" }))).message).toStartWith("cms-webhook.env is not managed here: mode 644");
-    expect(existsSync(storeOf(bench, "cms").env)).toBe(false);
-  });
-
-  test("retire deletes a covered file once a restart has loaded the store, keeping its copy under the project's own previous versions", async () => {
-    const bench = await mount();
-    cmsReadsStore(bench);
-    const token = await unlock(bench);
-    // A version the dashboard kept of it while it was a legacy file.
-    await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "SID", value: SECRET_SID });
-    expect(existsSync(join(bench.state, "precedents", "cms.env"))).toBe(true);
-    // Not covered yet: kept.
-    const early = (await (await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env"] })).json()) as StoreRetireResponse;
-    expect(early).toMatchObject({ retired: [], kept: [{ file: "cms.env", reason: "not covered: SID is not in the store; sitesolide secrets migrate first" }] });
-    await bench.call("POST", "/store/migrate", { token, slug: "cms" });
-    // Covered, but the service started before the merge: its store values are not loaded yet.
-    const unloaded = (await (await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env"] })).json()) as StoreRetireResponse;
-    expect(unloaded.kept).toEqual([{ file: "cms.env", reason: "the service has not restarted since the store was last written: restart it, then retire" }]);
-    expect(existsSync(join(bench.secrets, "cms.env"))).toBe(true);
-
-    // A restart that loaded the store.
-    bench.scenario.current = () => showA("active", "running", 0, Date.now() + 1_000);
-    freshReadings(bench);
-    const done = (await (await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env", "cms-webhook.env", "library.env", "dashboard.env"] })).json()) as StoreRetireResponse & { forced: string[] };
-    expect(done.retired).toEqual(["cms.env"]);
-    expect(done.forced).toEqual([]);
-    expect(done.kept).toEqual([
-      { file: "cms-webhook.env", reason: "absent: nothing to retire" },
-      { file: "library.env", reason: "not a legacy file of this project" },
-      { file: "dashboard.env", reason: "not a legacy file of this project" },
-    ]);
-    expect(existsSync(join(bench.secrets, "cms.env"))).toBe(false);
-    // Its copy lies where sitesolide remove deletes the project's: never in precedents/<name>, which nothing deletes with it.
-    const copy = join(bench.state, "precedents", "projects", "cms", "legacy", "cms.env");
-    expect(readFileSync(copy, "utf8")).toBe(CMS_ENV);
-    expect(statSync(copy).mode & 0o777).toBe(0o600);
-    expect(existsSync(join(bench.state, "precedents", "cms.env"))).toBe(false);
-    expect(storeRemovalActions("cms").map((action) => action.command)).toContain(`sudo rm -rf ${STORE_PREVIOUS_ROOT}/cms`);
-    expect(retiredCopyPath("cms", "cms.env").startsWith(`${STORE_PREVIOUS_ROOT}/cms/`)).toBe(true);
-    expect(log(bench).at(-1)).toMatchObject({ operation: "retire", result: "ok", slug: "cms", file: "cms.env", detail: null });
-    // The store still holds every value: nothing the service had was lost.
-    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe(`SID=${SECRET_SID}\nTOKEN=${SECRET_TOKEN}\n`);
-    // The listing says where the copy is and how it is put back, the file still being named by the manifest.
-    expect((await storeList(bench, "cms")).legacy.find((file) => file.name === "cms.env")).toEqual({
-      name: "cms.env",
-      state: "absent",
-      reason: `retired: a copy is kept at ${STORE_PREVIOUS_ROOT}/cms/legacy/cms.env; to put it back, sudo cp -p ${STORE_PREVIOUS_ROOT}/cms/legacy/cms.env /etc/sitesolide/cms.env, then sitesolide refresh cms`,
-      variables: [],
-      read: true,
-      leftover: false,
-      covered: null,
-    });
-    expect((await errorOf(await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["../cms.env"] }))).message).toBe("files: entry 1 is not a legacy file's name");
-  });
-
-  test("a leftover, once its project names its secrets, is retired the same; one the store does not match only by the owner's explicit force (I-5)", async () => {
-    const bench = await mount();
-    // cms moved to names (M5 before M4): its files are leftovers now.
-    writeFileSync(join(bench.sites, "cms", "sitesolide.json"), JSON.stringify({ slug: "cms", start: "/usr/local/bin/bun run server.ts", port: 3048, publicDir: "public", secrets: ["SID", "TOKEN"] }));
-    writeFileSync(join(bench.units, "cms.service"), storeUnit(bench, "cms"));
-    writeFileSync(join(bench.secrets, "cms-old.env"), `SID=${STORE_CANARY}\nOLD_ONLY=1\n`, { mode: 0o600 });
-    const token = await unlock(bench);
-    await bench.call("PATCH", "/store", { token, slug: "cms", set: { SID: SECRET_SID, TOKEN: SECRET_TOKEN }, remove: [] });
-    const listed = await storeList(bench, "cms");
-    expect(listed.legacy.map((file) => [file.name, file.leftover, file.read, file.covered])).toEqual([
-      ["cms-old.env", true, false, false],
-      ["cms.env", true, false, true],
-    ]);
-    // A leftover is never written through the old routes.
-    expect((await bench.call("PUT", "/variable", { token, slug: "cms", file: "cms.env", variable: "X", value: "1" })).status).toBe(403);
-    bench.scenario.current = () => showA("active", "running", 0, Date.now() + 1_000);
-    freshReadings(bench);
-    const done = (await (await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env", "cms-old.env"] })).json()) as StoreRetireResponse & { forced: string[] };
-    expect(done).toMatchObject({ retired: ["cms.env"], forced: [] });
-    expect(done.kept).toEqual([
-      { file: "cms-old.env", reason: "not covered: the value of SID differs from the store's, which is the one in effect; retire it with force to let the store's value stand alone" },
-    ]);
-    expect(existsSync(join(bench.secrets, "cms-old.env"))).toBe(true);
-    // The owner's explicit choice: the store's value stands, the file goes, its copy kept.
-    const forced = await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms-old.env"], force: true });
-    const text = await forced.text();
-    expect(JSON.parse(text)).toMatchObject({ retired: ["cms-old.env"], forced: ["cms-old.env"], kept: [] });
-    expect(text).not.toContain(STORE_CANARY);
-    expect(existsSync(join(bench.secrets, "cms-old.env"))).toBe(false);
-    expect(readFileSync(join(bench.state, "precedents", "projects", "cms", "legacy", "cms-old.env"), "utf8")).toBe(`SID=${STORE_CANARY}\nOLD_ONLY=1\n`);
-    expect(readFileSync(storeOf(bench, "cms").env, "utf8")).toBe(`SID=${SECRET_SID}\nTOKEN=${SECRET_TOKEN}\n`);
-    expect(log(bench).at(-1)).toMatchObject({ operation: "retire", result: "ok", file: "cms-old.env", detail: "forced: the store's values stand" });
-    // The retired copies are listed, absent, with their way back; no longer leftovers.
-    expect((await storeList(bench, "cms")).legacy.map((file) => [file.name, file.state, file.leftover, file.reason?.startsWith("retired: a copy is kept at")])).toEqual([
-      ["cms-old.env", "absent", false, true],
-      ["cms.env", "absent", false, true],
-    ]);
-    expect((await errorOf(await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env"], force: "yes" }))).message).toBe("force must be a boolean");
-  });
-
-  test("a forced retire never takes a value a unit still reads and the store lacks", async () => {
-    const bench = await mount();
-    cmsReadsStore(bench);
-    const token = await unlock(bench);
-    await bench.call("PUT", "/store/variable", { token, slug: "cms", name: "TOKEN", value: "the-store-s-own" });
-    bench.scenario.current = () => showA("active", "running", 0, Date.now() + 1_000);
-    freshReadings(bench);
-    const kept = (await (await bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env"], force: true })).json()) as StoreRetireResponse;
-    expect(kept).toMatchObject({ retired: [], kept: [{ file: "cms.env", reason: "not covered: SID is not in the store; sitesolide secrets migrate first" }] });
-    expect(readFileSync(join(bench.secrets, "cms.env"), "utf8")).toBe(CMS_ENV);
-  });
-
-  test("the owner's socket says which flat files a store-form project left, for sitesolide remove", async () => {
-    const bench = await mount();
-    writeFileSync(join(bench.sites, "cms", "sitesolide.json"), JSON.stringify({ slug: "cms", start: "/usr/local/bin/bun run server.ts", port: 3048, publicDir: "public", secrets: ["SID", "TOKEN"] }));
-    writeFileSync(join(bench.secrets, "cms-old.env"), "A=1\n", { mode: 0o600 });
-    const leftovers = async (query: string) => bench.owner("GET", `/store/leftovers${query}`);
-    expect(await (await leftovers("?slug=cms")).json()).toEqual({ slug: "cms", leftovers: ["cms-old.env", "cms.env"] });
-    // A project in the old form, a static site, one not deployed, a storeless one: none.
-    for (const slug of ["calendar", "showcase", "not-yet", "dashboard"]) expect(await (await leftovers(`?slug=${slug}`)).json()).toEqual({ slug, leftovers: [] });
-    for (const query of ["", "?slug=cms&slug=calendar", "?slug=../cms", "?slug=test-zone.invalid"]) expect((await leftovers(query)).status).toBe(400);
-    // Root's alone: not on the dashboard's socket.
-    expect((await bench.call("GET", "/store/leftovers?slug=cms")).status).toBe(404);
-  });
-
-  test("migrate and retire are the owner's: refused for a project not deployed, nowhere for a person or a token", async () => {
-    const bench = await mount();
-    const token = await unlock(bench);
-    expect(await errorOf(await bench.call("POST", "/store/migrate", { token, slug: "not-yet" }))).toMatchObject({ error: "out-of-scope" });
-    expect((await bench.call("POST", "/people/store/migrate", { session: "x", token, slug: "cms" })).status).toBe(404);
-    expect((await bench.call("POST", "/people/store/retire", { session: "x", token, slug: "cms", files: ["cms.env"] })).status).toBe(404);
-    expect((await bench.call("POST", "/people/store/value", { session: "x", token, slug: "cms", name: "TOKEN" })).status).toBe(404);
-    const ops = bench.current().storeForToken!;
-    expect(Object.keys(ops).sort()).toEqual(["change", "generate", "list", "removeFile", "setFile"]);
   });
 });
 
@@ -4589,7 +3775,7 @@ describe("the owner's socket: the store over SSH", () => {
     expect((await bench.owner("DELETE", "/store/variable", { slug: "shop", names: ["A"] })).status).toBe(200);
     expect(await (await bench.owner("POST", "/store/restore", { slug: "shop", dryRun: true })).json()).toMatchObject({ appeared: ["A"] });
     const listed = (await (await bench.owner("GET", "/store?slug=shop")).json()) as StoreListResponse;
-    expect(listed.store.may).toEqual({ write: true, reveal: false, restore: true, migrate: true });
+    expect(listed.store.may).toEqual({ write: true, reveal: false, restore: true });
     expect(JSON.stringify(listed)).not.toContain(STORE_CANARY);
     expect(JSON.stringify(listed)).not.toContain(DRAWN_HEX);
     // Unknown fields refused, the token's place included.
@@ -4597,22 +3783,10 @@ describe("the owner's socket: the store over SSH", () => {
     expect(log(bench).find((entry) => entry.operation === "set" && entry.variable === "API_KEY")).toMatchObject({ actor: "owner" });
   });
 
-  test("migrate and retire over SSH, and a store laid ahead of a deployment", async () => {
+  test("a store laid ahead of a deployment, over SSH", async () => {
     const bench = await mount();
-    cmsReadsStore(bench);
-    expect(await (await bench.owner("POST", "/store/migrate", { slug: "cms", dryRun: true })).json()).toMatchObject({ merged: ["SID", "TOKEN"], written: false });
-    expect(await (await bench.owner("POST", "/store/migrate", { slug: "cms" })).json()).toMatchObject({ written: true });
-    bench.scenario.current = () => showA("active", "running", 0, Date.now() + 1_000);
-    freshReadings(bench);
-    expect(await (await bench.owner("POST", "/store/retire", { slug: "cms", files: ["cms.env"] })).json()).toMatchObject({ retired: ["cms.env"], kept: [] });
-    expect(existsSync(join(bench.secrets, "cms.env"))).toBe(false);
     expect((await bench.owner("PUT", "/store/variable", { slug: "not-yet", name: "A", value: "1" })).status).toBe(201);
-    expect(log(bench).filter((entry) => ["migrate", "retire", "create"].includes(entry.operation)).map((entry) => [entry.operation, entry.actor])).toEqual([
-      ["create", "owner"],
-      ["migrate", "owner"],
-      ["retire", "owner"],
-      ["create", "owner"],
-    ]);
+    expect(log(bench).filter((entry) => entry.operation === "create").map((entry) => [entry.operation, entry.actor, entry.slug])).toEqual([["create", "owner", "not-yet"]]);
   });
 
   test("POST /restart restarts a project's service, whatever files it reads, the platform's too", async () => {
@@ -4631,21 +3805,20 @@ describe("the owner's socket: the store over SSH", () => {
 });
 
 describe("the units this release generates read the store as the steward expects", () => {
-  test("every service unit reads the store last and loads its files: the store is in effect, migrate may run, a restart applies it", async () => {
+  test("every service unit reads the store and loads its files: the store is in effect, a restart applies it", async () => {
     const bench = await mount();
-    const lab = { slug: "lab", services: { web: { start: "/usr/local/bin/bun run server.ts", port: 3052 }, job: { start: "/bin/true", schedule: "daily" } }, secrets: ["lab.env"] };
+    const lab = { slug: "lab", services: { web: { start: "/usr/local/bin/bun run server.ts", port: 3052 }, job: { start: "/bin/true", schedule: "daily" } }, secrets: ["LAB_KEY"] };
     mkdirSync(join(bench.sites, "lab"), { recursive: true });
     writeFileSync(join(bench.sites, "lab", "sitesolide.json"), JSON.stringify(lab));
-    writeFileSync(join(bench.secrets, "lab.env"), "LAB_KEY=from-the-file\n", { mode: 0o600 });
     // The units as the generator writes them, the machine's folder of secrets being the bench's.
     for (const { unit, text } of generateUnits(lab as Manifest, { slug: "lab", zone: "test-zone.invalid", contact: "" })) {
       if (unit.endsWith(".timer")) continue;
       writeFileSync(join(bench.units, `${unit}.service`), text.replaceAll("/etc/sitesolide", bench.secrets));
     }
-    expect(await storeList(bench, "lab")).toMatchObject({ unitReadsStore: true, variables: [{ name: "LAB_KEY", source: "legacy", file: "lab.env" }] });
+    expect(await storeList(bench, "lab")).toMatchObject({ unitReadsStore: true, missing: ["LAB_KEY"], variables: [{ name: "LAB_KEY", source: "none", declared: true }] });
     const token = await unlock(bench);
-    expect(await (await bench.call("POST", "/store/migrate", { token, slug: "lab" })).json()).toMatchObject({ merged: ["LAB_KEY"], written: true });
-    expect((await storeList(bench, "lab")).variables[0]).toMatchObject({ name: "LAB_KEY", source: "store", shadows: ["lab.env"] });
+    expect((await bench.call("PUT", "/store/variable", { token, slug: "lab", name: "LAB_KEY", value: "from-the-store" })).status).toBe(201);
+    expect((await storeList(bench, "lab")).variables[0]).toEqual({ name: "LAB_KEY", source: "store", declared: true });
     expect((await bench.call("POST", "/restart", { token, slug: "lab" })).status).toBe(200);
   });
 });
@@ -4674,7 +3847,7 @@ describe("a restart that cannot load the store's files (I-6)", () => {
 });
 
 describe("a restart applies the store", () => {
-  test("a unit that reads its project's store, and no legacy file, is restarted from the Secrets section", async () => {
+  test("a unit that reads its project's store is restarted from the Secrets section", async () => {
     const bench = await mount();
     addStoreProject(bench);
     const token = await unlock(bench);
@@ -4700,13 +3873,13 @@ describe("a restart applies the store", () => {
 });
 
 describe("GET /projects carries each project's store", () => {
-  test("an app's, legacy form or not; null for a static site, a storeless project and the landing", async () => {
+  test("an app's; null for a static site, a storeless project and the landing", async () => {
     const bench = await mount();
     addStoreProject(bench);
     const all = await projects(bench);
     const store = (slug: string) => all.find((project) => project.slug === slug)!.store;
     expect(store("shop")).toMatchObject({ slug: "shop", exists: false, missing: ["API_KEY", "SESSION_KEY"] });
-    expect(store("cms")).toMatchObject({ slug: "cms", unitReadsStore: false, legacy: [{ name: "cms.env", read: true }, { name: "cms-webhook.env", read: true }] });
+    expect(store("cms")).toMatchObject({ slug: "cms", exists: false, unitReadsStore: true, missing: ["SID", "TOKEN"] });
     for (const slug of ["showcase", "dashboard", "portal", "test-zone.invalid"]) expect([slug, store(slug)]).toEqual([slug, null]);
   });
 });
@@ -4727,7 +3900,7 @@ describe("a token's store, handed over by the control routes", () => {
     const filed = await ops.setFile(request(), { slug: "shop", name: "gcp.json", content: b64(FILE_CANARY) }, TOKEN, false, still);
     expect(filed.status).toBe(200);
     const listed = (await (await ops.list("shop", TOKEN, false)).json()) as StoreListResponse;
-    expect(listed.store.may).toEqual({ write: true, reveal: false, restore: false, migrate: false });
+    expect(listed.store.may).toEqual({ write: true, reveal: false, restore: false });
     expect(listed.store.previous).toBe(false);
     expect(listed.store.files[0]).toMatchObject({ name: "gcp.json", state: "set", bytes: null });
     const removed = await ops.removeFile(request(), { slug: "shop", name: "gcp.json" }, TOKEN, still);
@@ -4809,13 +3982,11 @@ describe("no store value outside /store/value (I1): the canary", () => {
       await keep(ops.change(request(), { slug: "shop", set: [["BY_TOKEN", `${STORE_CANARY}-token`]], remove: [] }, TOKEN, false, async () => null));
       await keep(ops.setFile(request(), { slug: "shop", name: "token.pem", content: b64(FILE_CANARY) }, TOKEN, false, async () => null));
       await keep(ops.generate(request(), { slug: "shop", name: "TOKEN_DRAWN", replace: true }, TOKEN, false, async () => null));
-      await keep(bench.call("POST", "/store/migrate", { token, slug: "cms" }));
       await keep(bench.call("POST", "/store/restore", { token, slug: "shop", dryRun: true }));
       await keep(bench.call("POST", "/store/restore", { token, slug: "shop" }));
       await keep(bench.call("POST", "/store/restore", { token, slug: "shop" }));
       await keep(bench.call("DELETE", "/store/variable", { token, slug: "shop", names: ["API_KEY"] }));
       await keep(bench.call("DELETE", "/store/file", { token, slug: "shop", name: "gcp.json" }));
-      await keep(bench.call("POST", "/store/retire", { token, slug: "cms", files: ["cms.env"] }));
       // Every listing.
       await keep(bench.call("GET", "/store?slug=shop"));
       await keep(bench.call("GET", "/store?slug=cms"));
@@ -4837,7 +4008,7 @@ describe("no store value outside /store/value (I1): the canary", () => {
       }
       // The journal has what was done, by name.
       const operations = log(bench).map((entry) => entry.operation);
-      for (const operation of ["create", "set", "generate", "replace", "remove", "migrate", "restore", "read"] as const) expect(operations).toContain(operation);
+      for (const operation of ["create", "set", "generate", "replace", "remove", "restore", "read"] as const) expect(operations).toContain(operation);
     } finally {
       console.log = original.log;
       console.error = original.error;

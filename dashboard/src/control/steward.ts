@@ -56,14 +56,13 @@
  * projection. The journal names the token, never an actor the dashboard
  * would choose.
  *
- * **A token's secrets and restart are judged here too**, the token, its
- * person's role and its `secrets` flag, then handed to the secrets routes'
- * own code (src/secrets/steward.ts, `secretsForToken`), with the token as
- * the requester, under their lock, or the project's own turn for a restart,
- * where this judgement is made again once the turn has come. Each token is
- * bounded per hour, in memory: what it may push through the journal, its
- * changes, its restarts and its refusals each, those of its changes of
- * access included, and how often it cuts a service.
+ * **A token's restart is judged here too**, the token and its person's
+ * role, then handed to the secrets routes' own code (src/secrets/steward.ts,
+ * `secretsForToken`), with the token as the requester, in the project's own
+ * turn, where this judgement is made again once the turn has come. Each
+ * token is bounded per hour, in memory: what it may push through the
+ * journal, its changes, its restarts and its refusals each, those of its
+ * changes of access included, and how often it cuts a service.
  *
  * **So is a token's work on a project's store** (`/control/store/*`): the
  * same judgement, then the store's own code (src/secrets/steward.ts,
@@ -87,7 +86,7 @@
  * shape of the body, token, slug, state of the machine, writing.
  */
 import type { RandomSource } from "../sessions";
-import { hasStore, isValidSlug, secretsOf, servicesOf, readManifest as parseManifest } from "../../borrowed/manifest";
+import { isValidSlug, servicesOf, readManifest as parseManifest } from "../../borrowed/manifest";
 import { portalFromManifest } from "../../borrowed/portal-vm";
 import { unitArgument } from "../../borrowed/unit";
 import type { MemberEvent, MemberPrincipal, TokenRefusal } from "../people/steward";
@@ -99,7 +98,7 @@ import type { LeavingToken } from "../access/protocol";
 import { deployRefusal, MAX_TOKENS_PER_MEMBER, mintRefusals, narrowIdentity, scopeText, type MemberRights } from "../people/tokens";
 import type { StoreForToken } from "../secrets/store-api";
 import type { StoreView } from "../../borrowed/store-protocol";
-import { readFileContent, readFileName, readGenerate, readSecretsChange, type TokenSecretsChange } from "./secrets";
+import { readFileContent, readFileName, readGenerate, readSecretsChange } from "./secrets";
 import { CREATION_MAX_AGE_MS, encodeCreations, MAX_PENDING, readCreations, type PendingCreation } from "./creations";
 import {
   claimOf,
@@ -117,7 +116,7 @@ import {
   type DeploymentOutcome,
 } from "./claims";
 import { MAX_CONTROL_FILE_BYTES, type ControlSystem } from "./system";
-import { decideManifest, decideSlug, legacyLossOfView, legacyLossRefusal, leftoversReason, reservedReason, type Leftovers, type SlugDecision } from "./policy";
+import { decideManifest, decideSlug, leftoversReason, reservedReason, type Leftovers, type SlugDecision } from "./policy";
 import {
   CONTROL_STATUSES,
   DEPLOYMENT_ID_SHAPE,
@@ -250,16 +249,11 @@ export type ControlStewardOptions = {
 };
 
 /**
- * What this steward asks the secrets routes for a token's secrets and
- * restart. `still` is asked once the turn has come, the secrets' lock for a
- * change, the project's own turn for a restart: the token, its person's role
- * and its flag judged again, nothing done on a refusal.
+ * What this steward asks the secrets routes for a token's restart. `still`
+ * is asked once the project's own turn has come: the token and its person's
+ * role judged again, nothing done on a refusal.
  */
 export type SecretsForToken = {
-  /** One project's files as a token lists them, never a value: `SecretsListResponse`. */
-  list: (slug: string, who: Who) => Promise<Response>;
-  /** A change of `<slug>.env`, all or nothing: `StewardSecretsChange`, 201 when the file was created. */
-  change: (req: Request, change: TokenSecretsChange, who: Who, still: () => Promise<Response | null>) => Promise<Response>;
   /** The project's service restarted and observed: `TokenRestartResponse`. */
   restart: (req: Request, slug: string, who: Who, still: () => Promise<Response | null>) => Promise<Response>;
   /** A refusal decided here, into the journal: bounded per token here, before it is asked. */
@@ -305,8 +299,8 @@ type SlugState = { exists: boolean; owner: string | null; claims: Claims | null 
 export const MAX_CONTROL_BODY_BYTES = MAX_MANIFEST_BYTES + 4 * 1024;
 
 /**
- * A change of secrets as the dashboard relays it: the API's own bound, and
- * room for the bearer, the slug and the file it adds. The steward's socket
+ * A change of a store as the dashboard relays it: the API's own bound, and
+ * room for the bearer and the slug it adds. The steward's socket
  * admits it (dashboard/steward.ts, `maxRequestBodySize`).
  */
 export const MAX_SECRETS_CHANGE_BODY_BYTES = MAX_SECRETS_BODY_BYTES + 4 * 1024;
@@ -314,9 +308,6 @@ export const MAX_SECRETS_CHANGE_BODY_BYTES = MAX_SECRETS_BODY_BYTES + 4 * 1024;
 const HOUR_MS = 3_600_000;
 
 const CURSOR_SHAPE = /^[A-Za-z0-9=;_-]{1,512}$/;
-
-/** The old token route's answer for a project whose variables live in its store. */
-export const STORE_FORM = "this project keeps its variables in its store: update your sitesolide CLI, then sitesolide secrets set NAME";
 
 function failure(code: ControlErrorCode, message: string, details?: string[]): Response {
   const body: ControlFailure = details === undefined ? { error: code, message } : { error: code, message, details };
@@ -719,24 +710,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     return Response.json(answer);
   }
 
-  /**
-   * The values a deployment of this manifest would drop, as the store's own
-   * listing says what the installed units read and the store holds: those
-   * of the legacy files the manifest no longer declares, its old form or
-   * not; null when none, or when the store cannot list it here (the
-   * installer judges it again from the files).
-   */
-  async function lossOf(holder: Holder, slug: string, manifest: string): Promise<string | null> {
-    const { manifest: read } = parseManifest(manifest);
-    if (read === undefined || !hasStore(read) || store === null) return null;
-    const listed = await store.list(slug, whoOf(holder), false);
-    if (listed.status !== 200) return null;
-    const view = ((await listed.json()) as { store?: StoreView }).store;
-    if (view === undefined || !Array.isArray(view.legacy) || !Array.isArray(view.variables)) return null;
-    // The files its old form still declares are kept, and supply what they hold.
-    return legacyLossRefusal(legacyLossOfView(view, secretsOf(read).legacy));
-  }
-
   async function isActive(unit: string): Promise<boolean> {
     const answer = await system.systemctl(["is-active", unit], systemctlTimeoutMs);
     const state = answer.output.trim();
@@ -780,13 +753,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
         named = undefined;
       }
       if (named !== target) return failure("invalid", `manifest: its slug must be ${target}`);
-
-      // A manifest that reads the store alone, over units that read legacy
-      // files the store lacks the values of: deployed, the service would
-      // start without them. Judged here, whatever the client checked or
-      // could list, and again by the installer before it lays a unit.
-      const loss = state.exists ? await lossOf(holder, target, manifest) : null;
-      if (loss !== null) return failure("migrate-first", loss);
 
       if (!(await system.installerInstalled())) {
         return failure("not-available", "the installer is not installed on this machine yet: the owner must run sitesolide setup again for this machine, without --minimal");
@@ -1061,20 +1027,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     return null;
   }
 
-  /**
-   * Does the project keep its variables in its store: an app, not the
-   * dashboard nor the portal, whose deployed manifest conforms and lists
-   * names, or nothing, rather than files? A manifest missing or refused
-   * is not: the old route keeps today's rules for it.
-   */
-  async function keepsAStore(slug: string): Promise<boolean> {
-    const raw = await system.readManifest(slug);
-    if (raw === null) return false;
-    const { manifest, errors } = parseManifest(raw);
-    if (manifest === undefined || errors.length > 0) return false;
-    return hasStore(manifest) && secretsOf(manifest).form !== "legacy";
-  }
-
   /** A token without the `secrets` flag: refused, journaled within its hour. */
   function noSecrets(holder: Holder, slug: string, operation: WorkOperation, quiet: boolean): Promise<Response> {
     const another = holder.rights === null ? "ask the owner of the machine for one that may manage secrets" : "mint one with Manage secrets from the dashboard's Tokens page";
@@ -1120,58 +1072,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     }
     spend(key, cost);
     return null;
-  }
-
-  async function secretsList(req: Request): Promise<Response> {
-    const body = await readBody(req, ["bearer", "slug"], bodyTimeoutMs);
-    if (body instanceof Response) return body;
-    const holder = await identify(body.bearer);
-    if (holder instanceof Response) return holder;
-    const slug = tokenSlug(body.slug);
-    if (slug instanceof Response) return slug;
-    const refused = await judgeWork(holder, slug, "list", "list");
-    if (refused !== null) return refused;
-    return secrets!.list(slug, whoOf(holder));
-  }
-
-  /**
-   * A change of `<slug>.env`: the body read first, every name's shape and
-   * every value judged before the token is, so that nothing malformed goes
-   * further; then the token, and the change handed over with a `still`
-   * judged again once the secrets' lock is taken.
-   */
-  async function secretsChange(req: Request): Promise<Response> {
-    const body = await readBody(req, ["bearer", "slug", "file", "set", "remove"], bodyTimeoutMs, MAX_SECRETS_CHANGE_BODY_BYTES);
-    if (body instanceof Response) return body;
-    const change = readSecretsChange(body.set, body.remove);
-    if ("refusal" in change) return failure("invalid", change.refusal);
-    if (typeof body.file !== "string") return failure("invalid", "file: the name of the project's .env file");
-    const holder = await identify(body.bearer);
-    if (holder instanceof Response) return holder;
-    const slug = tokenSlug(body.slug);
-    if (slug instanceof Response) return slug;
-    const operation = change.set.length === 0 && change.remove.length > 0 ? "remove" : "set";
-    const refused = await judgeWork(holder, slug, "write", operation);
-    if (refused !== null) return refused;
-    // A project that keeps its variables in its store: a `<slug>.env` its
-    // units no longer read would take the change and change nothing. A CLI
-    // from before the store sends this route; it is told to update.
-    if (await keepsAStore(slug)) return refusal(holder, slug, operation, "kept in its store", failure("out-of-scope", STORE_FORM), false);
-    // The file asked for is never quoted nor journaled: a value pasted in its place would stay.
-    if (body.file !== `${slug}.env`) return refusal(holder, slug, operation, "out-of-scope", failure("out-of-scope", `a token manages ${slug}.env alone`), false);
-    const names = change.set.length + change.remove.length;
-    const key = `secrets:${holder.identity.id}`;
-    const bounded = withinHour(key, Math.max(1, names), secretChangesPerHour, "variable names set or removed");
-    if (bounded !== null) return bounded;
-    const still = async (): Promise<Response | null> => {
-      const again = await identify(body.bearer, false);
-      if (again instanceof Response) return again;
-      return judgeWork(again, slug, "write", operation, true);
-    };
-    const answer = await secrets!.change(req, { slug, file: body.file, set: change.set, remove: change.remove }, whoOf(holder), still);
-    // A file created alongside names is one line more in the journal: counted once known.
-    if (answer.status === 201 && names > 0) spend(key, 1);
-    return answer;
   }
 
   /**
@@ -1390,7 +1290,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   async function storeChange(req: Request): Promise<Response> {
     const body = await readBody(req, ["bearer", "slug", "set", "remove"], bodyTimeoutMs, MAX_SECRETS_CHANGE_BODY_BYTES);
     if (body instanceof Response) return body;
-    const change = readSecretsChange(body.set, body.remove, true);
+    const change = readSecretsChange(body.set, body.remove);
     if ("refusal" in change) return failure("invalid", change.refusal);
     const operation = change.set.length === 0 && change.remove.length > 0 ? "remove" : "set";
     return storeWrite(body, operation, change.set.length + change.remove.length, true, (who, slug, creating, still) =>
@@ -2048,8 +1948,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     ...(secrets === null
       ? {}
       : {
-          "/control/secrets/list": { POST: secretsList },
-          "/control/secrets": { PATCH: secretsChange },
           "/control/restart": { POST: restartRoute },
         }),
     ...(store === null

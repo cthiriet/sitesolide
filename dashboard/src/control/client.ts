@@ -10,7 +10,7 @@
  */
 import { DEFAULT_TIMEOUTS } from "../secrets/client";
 import type { StoreChangeRequest, StoreFileRemoveRequest, StoreFileRequest, StoreGenerateRequest } from "../../borrowed/store-protocol";
-import type { CreateTokenRequest, DeployRequest, LogsRequest, SecretsChangeRequest } from "./protocol";
+import type { CreateTokenRequest, DeployRequest, LogsRequest } from "./protocol";
 
 export type ControlSteward = {
   listTokens: () => Promise<Response>;
@@ -26,10 +26,6 @@ export type ControlSteward = {
   /** Someone given Can open, or taken off, by a token: the steward judges both. */
   accessPut: (requested: { bearer: string; slug: string; who: unknown; role: unknown }) => Promise<Response>;
   accessRemove: (requested: { bearer: string; slug: string; who: unknown }) => Promise<Response>;
-  /** A project's secret files and variable names, as a token reads them. */
-  secretsList: (bearer: string, slug: string) => Promise<Response>;
-  /** A change of `<slug>.env` by a token, all or nothing. */
-  secretsChange: (requested: SecretsChangeRequest) => Promise<Response>;
   /** A project's service restarted for a token, and its verdict. */
   restart: (bearer: string, slug: string) => Promise<Response>;
   /**
@@ -81,12 +77,10 @@ export function localControlSteward(socket: string, timeoutMs = CONTROL_TIMEOUT_
     accessList: (bearer, slug) => call("POST", "/control/access/list", { bearer, slug }),
     accessPut: (requested) => call("PUT", "/control/access", requested),
     accessRemove: (requested) => call("DELETE", "/control/access", requested),
-    secretsList: (bearer, slug) => call("POST", "/control/secrets/list", { bearer, slug }),
-    secretsChange: (requested) => call("PATCH", "/control/secrets", requested, longMs),
     restart: (bearer, slug) => call("POST", "/control/restart", { bearer, slug }, longMs),
     // Sent only when asked: a steward from before refuses a field it does not know.
     storeList: (bearer, slug, quiet = false) => call("POST", "/control/store/list", quiet ? { bearer, slug, quiet: true } : { bearer, slug }),
-    // Every write waits its turn under the secrets' lock, as a change of secrets does.
+    // Every write waits its turn under the steward's lock.
     storeChange: (requested) => call("PATCH", "/control/store", requested, longMs),
     storeGenerate: (requested) => call("POST", "/control/store/generate", requested, longMs),
     storeSetFile: (requested) => call("PUT", "/control/store/file", requested, longMs),

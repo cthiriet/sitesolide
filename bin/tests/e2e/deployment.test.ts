@@ -811,13 +811,14 @@ describe("rejects", () => {
 });
 
 describe("project with a secret", () => {
-  test("the unit loads the file, then the project's store, and closes the folder all the same", async () => {
+  test("the unit loads the project's store alone, and closes the folder all the same", async () => {
     const r = await run("projects/api-with-secret", ["deploy", "--dry-run"]);
     expect(r.code).toBe(0);
-    expect(r.output).toContain("EnvironmentFile=-/etc/sitesolide/sample-secret.env\nEnvironmentFile=-/etc/sitesolide/projects/sample-secret/env\n");
+    expect(r.output).toContain("\nEnvironmentFile=-/etc/sitesolide/projects/sample-secret/env\n");
+    expect(r.output).not.toContain("EnvironmentFile=-/etc/sitesolide/sample-secret.env");
     expect(r.output).toContain("LoadCredential=files:/etc/sitesolide/projects/sample-secret/files");
-    // PID 1 reads both before the walls go up (bench Q3): the folder is
-    // closed to the service whether it reads a flat file or not.
+    // PID 1 reads both before the walls go up (bench Q3): the folder stays
+    // closed to the service.
     expect(r.output).toContain("InaccessiblePaths=-/etc/sitesolide");
     expect(r.output).toContain("ProtectProc=invisible");
   });
@@ -830,15 +831,19 @@ describe("project with a secret", () => {
     expect(r.output).toContain("MemoryMax=256M");
   });
 
-  test("in a dry run, the secret's presence is not asked of the VM", async () => {
-    const r = await run("projects/api-with-secret", ["deploy", "--dry-run"]);
-    expect(r.code).toBe(0);
-    expect(r.output).toContain(
-      "[dry-run] check that /etc/sitesolide/sample-secret.env is on the server",
-    );
-    // Nothing is asked of the machine: an end to end test must run without it.
-    expect(r.all).not.toContain("test -f");
-    expect(r.all).not.toContain("from the vault");
+  test("in a dry run, nothing of its secrets is asked of the VM", async () => {
+    const vm = createFakeVm();
+    try {
+      const r = await run("projects/api-with-secret", ["deploy", "--dry-run"], { vm });
+      expect(r.code).toBe(0);
+      expect(r.output).toContain("[dry-run] the declared runtime secrets the store lacks asked for at a terminal, warned of otherwise");
+      // Nothing is asked of the machine: an end to end test must run without it.
+      expect(vm.logs().filter((line) => line.startsWith("STORE "))).toEqual([]);
+      expect(r.all).not.toContain("/etc/sitesolide/sample-secret.env");
+      expect(r.all).not.toContain("from the vault");
+    } finally {
+      vm.cleanup();
+    }
   });
 });
 
@@ -855,11 +860,10 @@ function jsonEvents(output: string): Record<string, unknown>[] {
 /**
  * The project's store of secrets, /etc/sitesolide/projects/<slug>/, on the
  * deploy path: its folders laid before the units, what it lacks read before
- * the build and the Caddy lock, warned of and never a stop. The legacy form
- * keeps deploying, with a warning.
+ * the build and the Caddy lock, warned of and never a stop.
  */
 describe("deploy and the store of secrets", () => {
-  test("a dry run reads the store, which it may, and lays nothing nor asks for a value", async () => {
+  test("a dry run reads nothing of the store, lays nothing and asks for no value", async () => {
     const vm = createFakeVm();
     try {
       const r = await run("projects/store-app", ["deploy", "--dry-run", "--json"], { vm });
@@ -872,8 +876,8 @@ describe("deploy and the store of secrets", () => {
       const lay = planned.findIndex((message) => message.startsWith("lay /etc/sitesolide/projects/"));
       expect(lay).toBeLessThan(planned.findIndex((message) => message.startsWith("read /etc/systemd/system/sample-store.service")));
       expect(list.at(-1)).toMatchObject({ type: "result", command: "deploy", missingSecrets: null, buildSecrets: [] });
-      // The listing is a read, which tells what deploying would drop: nothing else reached the machine.
-      expect(vm.logs().filter((line) => /^(STORE|ACCEPTED|REFUSED)/.test(line))).toEqual(["STORE GET sample-store"]);
+      // Nothing reached the machine: what the store lacks is asked of it for real alone.
+      expect(vm.logs().filter((line) => /^(STORE|ACCEPTED|REFUSED)/.test(line))).toEqual([]);
     } finally {
       vm.cleanup();
     }
@@ -913,53 +917,22 @@ describe("deploy and the store of secrets", () => {
     }
   }, 30_000);
 
-  test("a manifest that names its variables while the unit reads them from a legacy file the store lacks: refused before anything is pushed, dry run included; migrated, it goes", async () => {
-    const vm = createFakeVm();
-    try {
-      vm.acceptWrites();
-      // The bench's case: the 0.7 unit reads the legacy file, the store is empty.
-      const legacy = { "sample-store": [{ name: "sample-store.env", variables: ["SESSION_SECRET", "MAIL_API_KEY", "MAIL_REGION"], read: true }] };
-      vm.setStore({ legacy });
-      for (const asked of [["deploy", "--json"], ["deploy", "--dry-run", "--json"]]) {
-        const r = await run("projects/store-app", asked, { vm });
-        expect(r.code).toBe(1);
-        expect(jsonEvents(r.output).at(-1)).toMatchObject({
-          type: "error",
-          message: "migrate first: sitesolide secrets migrate --restart; the service reads SESSION_SECRET, MAIL_API_KEY, MAIL_REGION from legacy files this manifest no longer reads, and the store lacks them",
-          details: expect.arrayContaining(["SESSION_SECRET: in sample-store.env", "nothing was sent"]),
-          hint: expect.stringContaining("sitesolide secrets migrate --restart"),
-        });
-        // Never "every declared runtime secret is set", and nothing pushed.
-        expect(r.output).not.toContain("every declared runtime secret is set");
-      }
-      const logs = vm.logs();
-      expect(logs.filter((line) => line.startsWith("ACCEPTED") || line.startsWith("STORE-PREPARE") || line.includes("rsync") || line.startsWith("LOCK"))).toEqual([]);
-      // Migrated: the store holds every name the legacy file does, and the deployment goes.
-      vm.setStore({ legacy, variables: { "sample-store": ["SESSION_SECRET", "MAIL_API_KEY", "MAIL_REGION"] } });
-      const migrated = await run("projects/store-app", ["deploy", "--json"], { vm });
-      expect(jsonEvents(migrated.output).some((event) => String(event.message).startsWith("migrate first"))).toBe(false);
-      expect(vm.logs().some((line) => line.startsWith("ACCEPTED") && line.includes("systemctl restart sample-store"))).toBe(true);
-    } finally {
-      vm.cleanup();
-    }
-  }, 30_000);
-
-  test("a steward from before the store, or one that does not answer: what would be dropped cannot be told, a stop before anything is pushed", async () => {
+  test("a steward from before the store, or one that does not answer: what the store lacks cannot be told, said, and the deployment goes on", async () => {
     for (const state of ["old", "down"] as const) {
       const vm = createFakeVm();
       try {
         vm.acceptWrites();
         vm.setStore({ state });
-        for (const project of ["projects/store-app", "projects/bun-mixed"]) {
-          const r = await run(project, ["deploy", "--json"], { vm });
-          expect({ state, project, code: r.code }).toEqual({ state, project, code: 1 });
-          expect(jsonEvents(r.output).at(-1)).toMatchObject({
-            type: "error",
-            message: expect.stringContaining("cannot tell whether this deployment would drop values legacy files supply: "),
-            hint: expect.stringContaining("sitesolide upgrade"),
-          });
-        }
-        expect(vm.logs().filter((line) => line.startsWith("ACCEPTED") || line.includes("rsync") || line.startsWith("LOCK"))).toEqual([]);
+        const r = await run("projects/store-app", ["deploy", "--json"], { vm });
+        expect(jsonEvents(r.output)).toContainEqual(
+          expect.objectContaining({ type: "warning", message: expect.stringContaining("cannot tell which declared runtime secrets the store lacks: ") }),
+        );
+        // A missing secret never stops a deployment, nor does not knowing which: the run went on to the restart.
+        expect(vm.logs().some((line) => line.startsWith("ACCEPTED") && line.includes("systemctl restart sample-store"))).toBe(true);
+        // A project that declares no runtime secret never asks the store.
+        const plain = await run("projects/bun-mixed", ["deploy", "--dry-run", "--json"], { vm });
+        expect(plain.code).toBe(0);
+        expect(vm.logs().filter((line) => line.startsWith("STORE GET sample-bun"))).toEqual([]);
       } finally {
         vm.cleanup();
       }
@@ -1004,66 +977,6 @@ describe("deploy and the store of secrets", () => {
     }
   }, 30_000);
 
-  test("the legacy form deploys with its warning, and a missing legacy file is said, never a stop", async () => {
-    const dry = await run("projects/api-with-secret", ["deploy", "--dry-run", "--json"]);
-    expect(dry.code).toBe(0);
-    expect(jsonEvents(dry.output).find((event) => event.type === "warning")).toMatchObject({
-      message: "secrets: sample-secret.env is a file name, the old form: it keeps loading before the project's store; run sitesolide secrets migrate, then list the variable names",
-    });
-    const vm = createFakeVm();
-    try {
-      vm.acceptWrites();
-      vm.answer("if test -f /etc/sitesolide/sample-secret.env", "ABSENT\n");
-      const r = await run("projects/api-with-secret", ["deploy", "--json"], { vm });
-      const list = jsonEvents(r.output);
-      expect(list.find((event) => event.type === "warning" && String(event.message).startsWith("/etc/sitesolide/sample-secret.env"))).toMatchObject({
-        message: "/etc/sitesolide/sample-secret.env is missing: the service starts without its variables",
-      });
-      // Past it: the service restarted. The store is read for what deploying would drop, and nothing asked of it.
-      expect(vm.logs().some((line) => line.startsWith("ACCEPTED") && line.includes("systemctl restart sample-secret"))).toBe(true);
-      expect(vm.logs().filter((line) => line.startsWith("STORE ") && !line.startsWith("STORE-PREPARE"))).toEqual(["STORE GET sample-secret"]);
-    } finally {
-      vm.cleanup();
-    }
-  }, 30_000);
-
-  test("the old form that stops declaring a file the units read, whose values the store lacks: refused before anything is pushed; a steward before the store warns", async () => {
-    const vm = createFakeVm();
-    try {
-      vm.acceptWrites();
-      // The units read sample-secret.env and sample-secret-smtp.env; the manifest declares the first alone.
-      const legacy = {
-        "sample-secret": [
-          { name: "sample-secret.env", variables: ["API_KEY"], read: true },
-          { name: "sample-secret-smtp.env", variables: ["SMTP_URL"], read: true },
-        ],
-      };
-      vm.setStore({ legacy });
-      for (const asked of [["deploy", "--json"], ["deploy", "--dry-run", "--json"]]) {
-        const r = await run("projects/api-with-secret", asked, { vm });
-        expect(r.code).toBe(1);
-        expect(jsonEvents(r.output).at(-1)).toMatchObject({
-          type: "error",
-          message: "migrate first: sitesolide secrets migrate --restart; the service reads SMTP_URL from legacy files this manifest no longer reads, and the store lacks it",
-          details: expect.arrayContaining(["SMTP_URL: in sample-secret-smtp.env", "or keep sample-secret-smtp.env under secrets in sitesolide.json", "nothing was sent"]),
-          hint: expect.stringContaining("sitesolide secrets migrate --restart"),
-        });
-      }
-      expect(vm.logs().filter((line) => line.startsWith("ACCEPTED") || line.startsWith("STORE-PREPARE") || line.includes("rsync") || line.startsWith("LOCK"))).toEqual([]);
-      // Migrated, the store holds SMTP_URL: the deployment goes.
-      vm.setStore({ legacy, variables: { "sample-secret": ["SMTP_URL"] } });
-      const migrated = await run("projects/api-with-secret", ["deploy", "--dry-run", "--json"], { vm });
-      expect(migrated.code).toBe(0);
-      // A steward from before the store cannot tell: the old form deploys as it did, warned.
-      vm.setStore({ state: "old" });
-      const old = await run("projects/api-with-secret", ["deploy", "--dry-run", "--json"], { vm });
-      expect(old.code).toBe(0);
-      expect(jsonEvents(old.output)).toContainEqual(expect.objectContaining({ type: "warning", message: expect.stringContaining("cannot tell whether this deployment would drop values legacy files supply") }));
-    } finally {
-      vm.cleanup();
-    }
-  }, 30_000);
-
   test("a build secret missing from the environment and the workstation stops before anything is read on the machine; a dry run that does not build only warns", async () => {
     const parent = realpathSync(mkdtempSync(join(tmpdir(), "build-secret-")));
     const vm = createFakeVm();
@@ -1095,8 +1008,7 @@ describe("deploy and the store of secrets", () => {
 
 /**
  * A unit the generator made from the manifest the previous deployment left on
- * the machine is its own: a changed manifest replaces it without --force. The
- * case met migrating sitemedic: the old form's files turned into names (M5).
+ * the machine is its own: a changed manifest replaces it without --force (M5).
  */
 describe("a changed manifest replaces the unit its previous version made", () => {
   const UNIT = "/etc/systemd/system/sample-store.service";
@@ -1111,7 +1023,7 @@ describe("a changed manifest replaces the unit its previous version made", () =>
     return folder;
   }
 
-  test("M5: the old form's unit, laid by the previous deployment, is replaced by the names manifest's; a hand edit is kept; no previous manifest, as before", async () => {
+  test("M5: the unit the previous deployment laid is replaced by the changed manifest's; a hand edit is kept; no previous manifest, as before", async () => {
     const parent = realpathSync(mkdtempSync(join(tmpdir(), "previous-unit-")));
     try {
       for (const [label, edit, deposit, expected] of [
@@ -1123,25 +1035,21 @@ describe("a changed manifest replaces the unit its previous version made", () =>
         try {
           vm.acceptWrites();
           vm.keepUnits();
-          const legacy = before(parent, (manifest) => ({ ...manifest, secrets: ["sample-store.env"] }));
-          // The previous deployment, the old form: its unit laid as the machine keeps it.
-          await run(legacy, ["deploy"], { vm });
+          const earlier = before(parent, (manifest) => ({ ...manifest, memory: "384M" }));
+          // The previous deployment: its unit laid as the machine keeps it.
+          await run(earlier, ["deploy"], { vm });
           const laid = readFileSync(join(vm.root, UNIT.slice(1)), "utf8");
-          expect(laid).toContain("EnvironmentFile=-/etc/sitesolide/sample-store.env");
+          expect(laid).toContain("MemoryMax=384M");
           vm.writeFile(UNIT, edit(laid));
-          if (deposit) vm.writeManifest("sample-store", readFileSync(join(legacy, "sitesolide.json"), "utf8"));
+          if (deposit) vm.writeManifest("sample-store", readFileSync(join(earlier, "sitesolide.json"), "utf8"));
           else rmSync(join(vm.root, "srv", "sites", "sample-store", "sitesolide.json"), { force: true });
-          // Migrated: the store holds every name the legacy file does.
-          vm.setStore({
-            variables: { "sample-store": ["SESSION_SECRET", "MAIL_API_KEY"] },
-            legacy: { "sample-store": [{ name: "sample-store.env", variables: ["SESSION_SECRET", "MAIL_API_KEY"], read: true }] },
-          });
+          vm.setStore({ variables: { "sample-store": ["SESSION_SECRET", "MAIL_API_KEY"] } });
           const already = installs(vm.logs()).length;
           const r = await run("projects/store-app", ["deploy"], { vm });
           const installed = installs(vm.logs()).length - already;
           expect({ label, installed: installed > 0 ? "install" : "kept" }).toEqual({ label, installed: expected });
           if (expected === "kept") expect(r.output).toContain(`differs    ${UNIT}, left as it is`);
-          else expect(readFileSync(join(vm.root, UNIT.slice(1)), "utf8")).not.toContain("EnvironmentFile=-/etc/sitesolide/sample-store.env");
+          else expect(readFileSync(join(vm.root, UNIT.slice(1)), "utf8")).not.toContain("MemoryMax=384M");
         } finally {
           vm.cleanup();
         }
@@ -1352,43 +1260,6 @@ describe("deploy and a name a token holds", () => {
   });
 });
 
-describe("sitesolide remove and the secret files a project left behind", () => {
-  test("a project that names its secrets: the leftovers the steward attaches to it are read first, then deleted with their previous versions when they are its own", async () => {
-    const vm = createFakeVm();
-    try {
-      vm.writeManifest("sample-store", readFileSync(join(TESTS_ROOT, "projects", "store-app", "sitesolide.json"), "utf8"));
-      vm.setStore({ leftovers: { "sample-store": ["sample-store-ses.env", "sample-store-old.env"] } });
-      // One the project's account owns; one another account does: kept, and said.
-      vm.writeFile(SWITCHES.secretFiles, JSON.stringify({ "sample-store-ses.env": "site-sample-store", "sample-store-old.env": "site-other" }));
-      const r = await run("projects/store-app", ["remove", "--confirm", "sample-store", "--dry-run"], { vm });
-      expect(r.code).toBe(0);
-      expect(r.output).toContain("rm -f /etc/sitesolide/sample-store-ses.env");
-      expect(r.output).toContain("rm -f /var/lib/sitesolide-steward/precedents/sample-store-ses.env");
-      expect(r.output).not.toContain("rm -f /etc/sitesolide/sample-store-old.env");
-      expect(r.output).toContain("kept: /etc/sitesolide/sample-store-old.env is already on the machine and belongs to site-other, not site-sample-store");
-      // Asked before anything: nobody can tell whose they are once the folder is gone.
-      expect(vm.logs().slice(0, 3)).toEqual(["READ sample-store", "READ sample-store", "STORE LEFTOVERS sample-store"]);
-      expect(r.output.indexOf("rm -f /etc/sitesolide/sample-store-ses.env")).toBeLessThan(r.output.indexOf("rm -rf /etc/sitesolide/projects/sample-store"));
-    } finally {
-      vm.cleanup();
-    }
-  });
-
-  test("a steward that cannot say: said, and no leftover deleted", async () => {
-    const vm = createFakeVm();
-    try {
-      vm.writeManifest("sample-store", readFileSync(join(TESTS_ROOT, "projects", "store-app", "sitesolide.json"), "utf8"));
-      vm.setStore({ state: "old", leftovers: { "sample-store": ["sample-store-ses.env"] } });
-      const r = await run("projects/store-app", ["remove", "--confirm", "sample-store", "--dry-run"], { vm });
-      expect(r.code).toBe(0);
-      expect(r.error).toContain("!! cannot tell which leftover secret files are sample-store's");
-      expect(r.output).not.toContain("/etc/sitesolide/sample-store-ses.env");
-    } finally {
-      vm.cleanup();
-    }
-  });
-});
-
 /**
  * `sitesolide secrets` over SSH: the project's store, on the steward's owner
  * socket, as root. A value goes on standard input, never in a command line,
@@ -1463,7 +1334,7 @@ describe("sitesolide secrets, over SSH", () => {
     }
   });
 
-  test("a value on the command line is refused before anything is read or sent; --dry-run belongs to migrate alone", async () => {
+  test("a value on the command line is refused before anything is read or sent, and so is --dry-run, which no secrets action takes", async () => {
     const vm = createFakeVm();
     try {
       vm.acceptWrites();
@@ -1499,7 +1370,7 @@ describe("sitesolide secrets, over SSH", () => {
     try {
       const portal = join(parent, "portal");
       mkdirSync(portal);
-      writeFileSync(join(portal, "sitesolide.json"), JSON.stringify({ slug: "portal", start: "/usr/local/bin/bun run server.ts", port: 3001, secrets: ["portal.env"] }));
+      writeFileSync(join(portal, "sitesolide.json"), JSON.stringify({ slug: "portal", start: "/usr/local/bin/bun run server.ts", port: 3001 }));
       const r = await run(portal, ["secrets"], { vm });
       expect(r.code).toBe(1);
       expect(r.error).toContain("Secrets section of https://dashboard.");

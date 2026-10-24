@@ -90,10 +90,10 @@ describe("a person's writes to a store, relayed", () => {
     }
   });
 
-  test("no route reads a value back, nor merges or retires the old files: those are the owner's", () => {
+  test("no route reads a value back, nor writes the platform's files: those are the owner's", () => {
     const { relay, cleanup } = mount();
     try {
-      for (const name of ["revealStoreValue", "migrateStore", "retireStore", "readStore"]) expect(Object.hasOwn(relay, name)).toBe(false);
+      for (const name of ["revealStoreValue", "readStore", "readValue", "readContent", "setVariable", "removeVariable", "createFile", "restoreFile"]) expect(Object.hasOwn(relay, name)).toBe(false);
     } finally {
       cleanup();
     }

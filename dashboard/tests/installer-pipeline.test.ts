@@ -9,7 +9,7 @@ import { earlierGenerations, generatedAs, generateUnits } from "../borrowed/unit
 import type { InstallRequest, Scope } from "../src/control/protocol";
 import { finalManifest, replaceable, runPipeline, STABILITY_WINDOW_MS, type Outcome } from "../src/installer/pipeline";
 import { FIRST_CERTIFICATE_MS, parseZoneNames, ZONE_NAMES_PATH } from "../borrowed/zone-names";
-import { createBench as newBench, file, hostOf, OWN_UID, stageBundle as stage, storeMadeBy, zoneNames, ZONE, type Bench, type BenchOptions } from "./installer-bench";
+import { createBench as newBench, file, hostOf, stageBundle as stage, storeMadeBy, zoneNames, ZONE, type Bench, type BenchOptions } from "./installer-bench";
 
 /**
  * The installer's pipeline on a throwaway tree, with the real host: real
@@ -390,19 +390,6 @@ describe("a new project refused before anything is served leaves nothing behind"
 });
 
 describe("after the files are in place", () => {
-  test("a legacy file missing stops nothing: said in the log, the service restarted without its variables", async () => {
-    const bench = createBench();
-    stageBundle(bench, APP_FILES);
-    const outcome = await run(bench, request({ ...APP, secrets: ["shop.env"] }));
-    expect(outcome).toMatchObject({ ok: true, missingSecrets: { runtime: [], files: [] } });
-    expect(bench.events).toContain("log    !! /etc/sitesolide/shop.env missing: the service starts without its variables");
-    expect(bench.events).toContain("systemctl restart shop");
-    writeFileSync(join(bench.secrets, "shop.env"), "TOKEN=x\n");
-    stageBundle(bench, APP_FILES);
-    expect((await run(bench, request({ ...APP, secrets: ["shop.env"] }))).ok).toBe(true);
-    expect(bench.events).toContain(`log    present  /etc/sitesolide/shop.env`);
-  });
-
   test("a site whose root answers 404 fails, saying what to serve there", async () => {
     const bench = createBench({ probe: (host, path) => (host === `shop.${ZONE}` && path === "/" ? { code: 404, door: false, body: "" } : null) });
     stageBundle(bench, [file("public/about.html", "no index")]);
@@ -685,18 +672,19 @@ describe("workers, scheduled services and anchors", () => {
     }
   });
 
-  test("a unit whose secret files were repeated or reordered by hand stays, and says so: the previous manifest's unit or an earlier release's, the same lines in another order decide which value wins", async () => {
+  test("a unit whose store line was repeated, or given a file to read beside it, by hand stays, and says so: the previous manifest's unit or an earlier release's", async () => {
     const FLAT = "EnvironmentFile=-/etc/sitesolide/shop.env\n";
     const STORE = "EnvironmentFile=-/etc/sitesolide/projects/shop/env\n";
-    const previous = { ...APP, port: 3040, portal: true, secrets: ["shop.env"] } as Manifest;
+    const previous = { ...APP, port: 3040, portal: true, secrets: ["API_KEY"] } as Manifest;
     const [main] = generateUnits(previous);
-    expect(main!.text).toContain(`${FLAT}${STORE}`);
-    const repeated = (text: string) => text.replace(`${FLAT}${STORE}`, `${FLAT}${STORE}${FLAT}`);
-    const swapped = (text: string) => text.replace(`${FLAT}${STORE}`, `${STORE}${FLAT}`);
-    // The release before the system-call filter, store lines and all.
+    expect(main!.text).toContain(STORE);
+    expect(main!.text).not.toContain(FLAT);
+    const repeated = (text: string) => text.replace(STORE, `${STORE}${STORE}`);
+    const added = (text: string) => text.replace(STORE, `${FLAT}${STORE}`);
+    // The release before the system-call filter, its store line and all.
     const beforeFilter = earlierGenerations(main!.text)[3]!;
-    expect(beforeFilter).toContain(`${FLAT}${STORE}`);
-    for (const edited of [repeated(main!.text), swapped(main!.text), swapped(beforeFilter), repeated(beforeFilter)]) {
+    expect(beforeFilter).toContain(STORE);
+    for (const edited of [repeated(main!.text), added(main!.text), added(beforeFilter), repeated(beforeFilter)]) {
       const bench = createBench();
       deposit(bench, previous);
       writeFileSync(join(bench.units, "shop.service"), edited);
@@ -772,120 +760,6 @@ describe("workers, scheduled services and anchors", () => {
   });
 });
 
-describe("the secret files a token's project reads are its own", () => {
-  // Planted in every secret file these tests lay: no refusal may quote it.
-  const CANARY = "secret-value-canary-91c4";
-  const passwd = (bench: Bench) => readFileSync(join(bench.root, "passwd"), "utf8");
-  const account = (bench: Bench, slug: string, uid: number) => writeFileSync(join(bench.root, "passwd"), `${passwd(bench)}site-${slug}:x:${uid}:${uid}::/nonexistent:/usr/sbin/nologin\n`);
-  const lay = (bench: Bench, name: string) => writeFileSync(join(bench.secrets, name), `KEY=${CANARY}\n`, { mode: 0o600 });
-  /** Refused before anything was written: no account, no tree, no unit, no block of its own. */
-  function nothingLaid(bench: Bench, slug: string): void {
-    expect(passwd(bench)).not.toContain(`site-${slug}:`);
-    expect(readdirSync(bench.sites)).not.toContain(slug);
-    expect(readdirSync(bench.units).filter((name) => name.startsWith(`${slug}.`))).toEqual([]);
-    expect(readdirSync(bench.blocks).filter((name) => name.startsWith(`${slug}.`))).toEqual([]);
-    expect(bench.events.some((event) => event.startsWith("useradd") || event.startsWith("as "))).toBe(false);
-  }
-  const refusedFor = (outcome: Outcome, text: string) => {
-    expect(outcome).toMatchObject({ ok: false, code: "secret-taken" });
-    expect(outcome.ok === false && outcome.message).toContain(text);
-    expect(JSON.stringify(outcome)).not.toContain(CANARY);
-  };
-  const DASHBOARD = { slug: "dashboard", start: "/usr/local/bin/bun run server.ts", port: 3022, publicDir: "public", secrets: ["dashboard.env"] } as Manifest;
-  const appNamed = (slug: string, extra: object = {}) => ({ ...APP, slug, ...extra });
-
-  test("a new project named after a file of the machine, declaring it: refused before anything is laid, the file there or not, the dashboard deployed or not", async () => {
-    for (const slug of ["dashboard-backup", "dashboard-monitor"]) {
-      for (const present of [true, false]) {
-        for (const withDashboard of [true, false]) {
-          const bench = createBench();
-          if (withDashboard) deposit(bench, DASHBOARD);
-          if (present) lay(bench, `${slug}.env`);
-          stageBundle(bench, APP_FILES);
-          refusedFor(await run(bench, request(appNamed(slug, { secrets: [`${slug}.env`] }), PRIVATE, slug)), `${slug}.env belongs to the machine`);
-          nothingLaid(bench, slug);
-        }
-      }
-    }
-  });
-
-  test("a new project named after a file another project holds: refused, declared or not, the file there or not; cms keeps it", async () => {
-    const cms = (secrets: string[]) => ({ slug: "cms", start: "/usr/local/bin/bun run server.ts", port: 3048, publicDir: "public", portal: true, secrets }) as Manifest;
-    for (const [declaredByCms, present, declaredByToken] of [
-      [true, true, true],
-      [true, false, true],
-      [false, true, true],
-      [false, true, false],
-    ] as const) {
-      const bench = createBench();
-      deposit(bench, cms(declaredByCms ? ["cms.env", "cms-smtp.env"] : ["cms.env"]));
-      lay(bench, "cms.env");
-      if (present) lay(bench, "cms-smtp.env");
-      stageBundle(bench, APP_FILES);
-      const outcome = await run(bench, request(appNamed("cms-smtp", declaredByToken ? { secrets: ["cms-smtp.env"] } : {}), PRIVATE, "cms-smtp"));
-      refusedFor(outcome, "cms-smtp.env belongs to cms, which this deployment would take it from");
-      nothingLaid(bench, "cms-smtp");
-    }
-  });
-
-  test("a name that takes nothing from anyone is no reason to refuse: cms-blog beside cms, shop beside shop-api", async () => {
-    const bench = createBench();
-    deposit(bench, { slug: "cms", start: "/usr/local/bin/bun run server.ts", port: 3048, publicDir: "public", portal: true, secrets: ["cms.env"] } as Manifest);
-    deposit(bench, { slug: "shop-api", start: "/usr/local/bin/bun run server.ts", port: 3049, publicDir: "public", portal: true, secrets: ["shop-api.env"] } as Manifest);
-    lay(bench, "cms.env");
-    lay(bench, "shop-api.env");
-    for (const slug of ["cms-blog", "shop"]) {
-      stageBundle(bench, APP_FILES);
-      expect(await run(bench, request(appNamed(slug), PRIVATE, slug))).toMatchObject({ ok: true });
-    }
-  });
-
-  test("a declared file there before its account, another account's, or not a plain file: refused before anything changes; the project's own passes", async () => {
-    // A new project: the file is there before site-shop exists.
-    const fresh = createBench();
-    lay(fresh, "shop.env");
-    stageBundle(fresh, APP_FILES);
-    refusedFor(await run(fresh, request({ ...APP, secrets: ["shop.env"] })), "/etc/sitesolide/shop.env is already on the machine and does not belong to site-shop");
-    nothingLaid(fresh, "shop");
-
-    // An existing project, the file another account's, or a link.
-    for (const [uid, link] of [
-      [OWN_UID + 1, false],
-      [OWN_UID, true],
-    ] as const) {
-      const bench = createBench();
-      const previous = { ...APP, port: 3040, portal: true, secrets: ["shop.env"] } as Manifest;
-      deposit(bench, previous);
-      account(bench, "shop", uid);
-      if (link) symlinkSync(join(bench.root, "passwd"), join(bench.secrets, "shop.env"));
-      else lay(bench, "shop.env");
-      stageBundle(bench, APP_FILES);
-      refusedFor(await run(bench, request({ ...APP, port: 3040, secrets: ["shop.env"] })), link ? "/etc/sitesolide/shop.env is not a plain file" : "does not belong to site-shop");
-      expect(readdirSync(bench.units)).toEqual([]);
-      expect(bench.events.some((event) => event.startsWith("as ") || event === "manifest")).toBe(false);
-    }
-
-    // Its own: deployed.
-    const own = createBench();
-    deposit(own, { ...APP, port: 3040, portal: true, secrets: ["shop.env"] } as Manifest);
-    account(own, "shop", OWN_UID);
-    lay(own, "shop.env");
-    stageBundle(own, APP_FILES);
-    expect(await run(own, request({ ...APP, port: 3040, secrets: ["shop.env"] }))).toMatchObject({ ok: true });
-  });
-
-  test("a file that stopped being the project's while it deployed: the service is not restarted", async () => {
-    // The account's uid changes under the Caddy lock, after step 1 judged the file the project's own.
-    const bench = createBench({ onLock: (b) => writeFileSync(join(b.root, "passwd"), passwd(b).replace(`site-shop:x:${OWN_UID}:${OWN_UID}`, `site-shop:x:${OWN_UID + 1}:${OWN_UID + 1}`)) });
-    deposit(bench, { ...APP, port: 3040, portal: true, secrets: ["shop.env"] } as Manifest);
-    account(bench, "shop", OWN_UID);
-    lay(bench, "shop.env");
-    stageBundle(bench, APP_FILES);
-    refusedFor(await run(bench, request({ ...APP, port: 3040, secrets: ["shop.env"] })), "/etc/sitesolide/shop.env does not belong to site-shop");
-    expect(bench.events.some((event) => event.startsWith("systemctl restart"))).toBe(false);
-  });
-});
-
 describe("the project's store of secrets", () => {
   // Planted in every value the tests lay in a store: no log line, no outcome may carry it.
   const CANARY = "store-value-canary-3b7e";
@@ -908,8 +782,8 @@ describe("the project's store of secrets", () => {
     };
   }
 
-  test("laid before any unit, on every deployment of an app, root's three folders 0700, empty; the old form's apps get one too, a static site none", async () => {
-    for (const manifest of [APP, { ...APP, secrets: ["shop.env"] }, { ...APP, secrets: ["ADMIN_TOKEN"] }]) {
+  test("laid before any unit, on every deployment of an app, root's three folders 0700, empty; a static site none", async () => {
+    for (const manifest of [APP, { ...APP, secrets: ["ADMIN_TOKEN"] }]) {
       const bench = createBench();
       stageBundle(bench, APP_FILES);
       expect((await runPipeline(recorded(bench), request(manifest), { zone: ZONE, runFolder: bench.run })).ok).toBe(true);
@@ -1090,118 +964,11 @@ describe("the project's store of secrets", () => {
     expect(await run(other, request(APP))).toMatchObject({ ok: false, code: "service-failed", message: expect.stringContaining("did not come back active") });
   });
 
-  test("a foreign legacy file is still refused before anything is written, the store included; one that becomes foreign meanwhile, before the restart", async () => {
-    const bench = createBench();
-    deposit(bench, { ...APP, port: 3040, portal: true, secrets: ["shop.env"] } as Manifest);
-    writeFileSync(join(bench.root, "passwd"), `${readFileSync(join(bench.root, "passwd"), "utf8")}site-shop:x:${OWN_UID + 1}:${OWN_UID + 1}::/nonexistent:/usr/sbin/nologin\n`);
-    writeFileSync(join(bench.secrets, "shop.env"), "A=b\n", { mode: 0o600 });
-    stageBundle(bench, APP_FILES);
-    expect(await run(bench, request({ ...APP, port: 3040, secrets: ["shop.env"] }))).toMatchObject({ ok: false, code: "secret-taken" });
-    expect(existsSync(bench.store)).toBe(false);
-    const later = createBench({ onLock: (b) => writeFileSync(join(b.secrets, "shop.env"), "A=b\n", { mode: 0o600 }) });
-    writeFileSync(join(later.root, "passwd"), `${readFileSync(join(later.root, "passwd"), "utf8")}site-shop:x:${OWN_UID + 1}:${OWN_UID + 1}::/nonexistent:/usr/sbin/nologin\n`);
-    stageBundle(later, APP_FILES);
-    expect(await run(later, request({ ...APP, secrets: ["shop.env"] }))).toMatchObject({ ok: false, code: "secret-taken" });
-    expect(existsSync(join(storeOf(later), "files"))).toBe(true);
-    expect(later.events.some((event) => event.startsWith("systemctl restart"))).toBe(false);
-  });
 });
 
 describe("what the installer refuses a token whatever its client checked", () => {
-  const CANARY = "legacy-value-canary-6d2a";
+  const CANARY = "store-value-canary-6d2a";
   const direct = (bench: Bench, requested: InstallRequest) => runPipeline(hostOf(bench), requested, { zone: ZONE, runFolder: bench.run });
-
-  /** shop deployed in the old form: its unit reads shop.env, which holds API_KEY and SMTP_URL. */
-  function oldForm(bench: Bench): string {
-    const previous = { ...APP, port: 3040, portal: true, secrets: ["shop.env"] } as Manifest;
-    deposit(bench, previous);
-    const unit = generateUnits(previous)[0]!.text.replace(/EnvironmentFile=-\/etc\/sitesolide\/shop\.env/, `EnvironmentFile=-${bench.secrets}/shop.env`);
-    writeFileSync(join(bench.units, "shop.service"), unit);
-    writeFileSync(join(bench.secrets, "shop.env"), `API_KEY=${CANARY}\nSMTP_URL=smtp://mail\n`, { mode: 0o600 });
-    writeFileSync(join(bench.root, "passwd"), `${readFileSync(join(bench.root, "passwd"), "utf8")}site-shop:x:${OWN_UID}:${OWN_UID}::/nonexistent:/usr/sbin/nologin\n`);
-    return unit;
-  }
-
-  test("a manifest that reads the store alone over a unit that reads values the store lacks: migrate-first before anything is written, naming no variable", async () => {
-    for (const secrets of [["API_KEY"], undefined]) {
-      const bench = createBench();
-      const unit = oldForm(bench);
-      stageBundle(bench, APP_FILES);
-      const outcome = await run(bench, request({ ...APP, port: 3040, ...(secrets === undefined ? {} : { secrets }) }));
-      expect(outcome).toMatchObject({ ok: false, code: "migrate-first" });
-      expect(outcome.ok === false && outcome.message).toBe(
-        "migrate first: sitesolide secrets migrate --restart; the service reads 2 variables from legacy files this manifest no longer reads, and the store lacks them: deployed as it is, the service would start without them; nothing was changed",
-      );
-      expect(readFileSync(join(bench.units, "shop.service"), "utf8")).toBe(unit);
-      expect(existsSync(bench.store)).toBe(false);
-      expect(bench.events.some((event) => event.startsWith("systemctl") || event.startsWith("as shop"))).toBe(false);
-      expect(JSON.stringify(outcome)).not.toContain("API_KEY");
-      expect(bench.events.join("\n")).not.toContain(CANARY);
-    }
-  });
-
-  test("the old form, or a store that holds every name, deploys; a legacy file that does not read, or a store whose names do not, refuses", async () => {
-    const legacy = createBench();
-    oldForm(legacy);
-    stageBundle(legacy, APP_FILES);
-    expect((await run(legacy, request({ ...APP, port: 3040, secrets: ["shop.env"] }))).ok).toBe(true);
-
-    const migrated = createBench();
-    oldForm(migrated);
-    mkdirSync(join(migrated.store, "shop", "files"), { recursive: true });
-    writeFileSync(join(migrated.store, "shop", "env"), "API_KEY=a\nSMTP_URL=b\n", { mode: 0o600 });
-    stageBundle(migrated, APP_FILES);
-    expect((await run(migrated, request({ ...APP, port: 3040, secrets: ["API_KEY"] }))).ok).toBe(true);
-
-    const unmanaged = createBench();
-    oldForm(unmanaged);
-    writeFileSync(join(unmanaged.secrets, "shop.env"), "export API_KEY=x\n", { mode: 0o600 });
-    stageBundle(unmanaged, APP_FILES);
-    const refused = await run(unmanaged, request({ ...APP, port: 3040, secrets: ["API_KEY"] }));
-    expect(refused).toMatchObject({ ok: false, code: "migrate-first" });
-    expect(refused.ok === false && refused.message).toContain("a legacy file the dashboard does not manage");
-
-    const unreadable = createBench();
-    oldForm(unreadable);
-    mkdirSync(join(unreadable.store, "shop", "files"), { recursive: true });
-    writeFileSync(join(unreadable.store, "shop", "env"), "export A=b\n", { mode: 0o600 });
-    stageBundle(unreadable, APP_FILES);
-    expect(await run(unreadable, request({ ...APP, port: 3040, secrets: ["API_KEY"] }))).toMatchObject({ ok: false, code: "machine-unreadable" });
-  });
-
-  test("the old form naming fewer files than the unit reads: what the dropped file alone supplies stops the deployment, migrate-first; moved to the kept file, or in the store, it goes on", async () => {
-    const layout = () => {
-      const bench = createBench();
-      const previous = { ...APP, port: 3040, portal: true, secrets: ["shop.env", "smtp.env"] } as Manifest;
-      deposit(bench, previous);
-      const unit = generateUnits(previous)[0]!.text.replaceAll("EnvironmentFile=-/etc/sitesolide/", `EnvironmentFile=-${bench.secrets}/`);
-      writeFileSync(join(bench.units, "shop.service"), unit);
-      writeFileSync(join(bench.secrets, "shop.env"), "API_KEY=a\n", { mode: 0o600 });
-      writeFileSync(join(bench.secrets, "smtp.env"), `SMTP_URL=${CANARY}\n`, { mode: 0o600 });
-      writeFileSync(join(bench.root, "passwd"), `${readFileSync(join(bench.root, "passwd"), "utf8")}site-shop:x:${OWN_UID}:${OWN_UID}::/nonexistent:/usr/sbin/nologin\n`);
-      stageBundle(bench, APP_FILES);
-      return { bench, unit };
-    };
-    const dropped = layout();
-    const refused = await run(dropped.bench, request({ ...APP, port: 3040, secrets: ["shop.env"] }));
-    expect(refused).toMatchObject({ ok: false, code: "migrate-first" });
-    expect(refused.ok === false && refused.message).toContain("the service reads 1 variable from legacy files this manifest no longer reads");
-    expect(readFileSync(join(dropped.bench.units, "shop.service"), "utf8")).toBe(dropped.unit);
-    expect(JSON.stringify(refused)).not.toContain(CANARY);
-    // The names form over the same unit: both files dropped.
-    const names = layout();
-    expect(await run(names.bench, request({ ...APP, port: 3040, secrets: ["API_KEY"] }))).toMatchObject({ ok: false, code: "migrate-first" });
-
-    // SMTP_URL now in the kept file: nothing dropped.
-    const moved = layout();
-    writeFileSync(join(moved.bench.secrets, "shop.env"), "API_KEY=a\nSMTP_URL=moved\n", { mode: 0o600 });
-    expect((await run(moved.bench, request({ ...APP, port: 3040, secrets: ["shop.env"] }))).ok).toBe(true);
-    // SMTP_URL in the store: nothing dropped either.
-    const stored = layout();
-    mkdirSync(join(stored.bench.store, "shop", "files"), { recursive: true });
-    writeFileSync(join(stored.bench.store, "shop", "env"), "SMTP_URL=stored\n", { mode: 0o600 });
-    expect((await run(stored.bench, request({ ...APP, port: 3040, secrets: ["shop.env"] }))).ok).toBe(true);
-  });
 
   test("a creation that finds its project laid since it was accepted, its manifest or its tree: refused, the other's project untouched", async () => {
     const deposited = createBench();
@@ -1366,7 +1133,7 @@ describe("the zone's sites for the ask endpoint", () => {
 describe("finalManifest and replaceable, pure", () => {
   test("the scope is judged on the manifest the machine would carry", () => {
     expect(() => finalManifest(request({ ...APP, network: "outbound" }), new Map())).toThrow("network");
-    expect(() => finalManifest(request({ ...APP, secrets: ["dashboard.env"] }), new Map())).toThrow("secrets");
+    expect(() => finalManifest(request({ ...APP, lock: true }), new Map())).toThrow("lock");
     expect(() => finalManifest(request({ slug: "shop" }), new Map())).toThrow("publicDir");
     expect(() => finalManifest(request({ ...APP, slug: "cms" }), new Map())).toThrow("slug");
   });

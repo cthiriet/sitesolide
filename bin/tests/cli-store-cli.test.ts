@@ -5,13 +5,10 @@ import type { Failure, Output, Remote } from "../cli/remote";
 import {
   apiStore,
   handleMissing,
-  legacyLoss,
-  legacyLossRefusal,
   looksLikeValue,
   missingOf,
   missingWarning,
   NAME_MAX_HERE,
-  ownerLeftovers,
   verdictWords,
   readStoreArguments,
   runStore,
@@ -26,7 +23,6 @@ import {
   type StoreDependencies,
   type StoreTransport,
 } from "../cli/store-cli";
-import { STORE_PREVIOUS_ROOT } from "../cli/store";
 import type { StoreChangeResponse, StoreView } from "../cli/store-protocol";
 import { VALUE_LIKE_PREFIXES } from "../cli/variables";
 
@@ -52,14 +48,13 @@ function view(over: Partial<StoreView> = {}): StoreView {
     variables: [],
     missing: [],
     files: [],
-    legacy: [],
     build: [],
     public: [],
     unitReadsStore: true,
     modifiedAt: null,
     restartPending: false,
     previous: false,
-    may: { write: true, reveal: false, restore: true, migrate: true },
+    may: { write: true, reveal: false, restore: true },
     ...over,
   };
 }
@@ -107,11 +102,6 @@ describe("the arguments of secrets, read before anything is sent", () => {
     expect(read("remove", "A", "B", "--restart")).toEqual({ action: "remove", names: ["A", "B"], restart: true });
     expect(read("set-file", "gcp.json")).toEqual({ action: "set-file", name: "gcp.json", restart: false });
     expect(read("remove-file", "tls.key", "--restart")).toEqual({ action: "remove-file", name: "tls.key", restart: true });
-    expect(read("migrate")).toEqual({ action: "migrate", dryRun: false, restart: false });
-    expect(read("migrate", "--dry-run")).toEqual({ action: "migrate", dryRun: true, restart: false });
-    expect(read("migrate", "--restart")).toEqual({ action: "migrate", dryRun: false, restart: true });
-    expect(read("migrate", "--retire")).toEqual({ action: "retire", force: false });
-    expect(read("migrate", "--retire", "--force")).toEqual({ action: "retire", force: true });
   });
 
   test("a value on the line, however it stands, is refused and never quoted", () => {
@@ -162,11 +152,11 @@ describe("the arguments of secrets, read before anything is sent", () => {
       [["set-file", "sub/x"], "invalid"],
       [["set-file", "a..b"], "invalid"],
       [["set-file", "gcp.json", "other"], "usage"],
-      [["migrate", "shop.env"], "usage"],
-      [["migrate", "--retire", "--dry-run"], "usage"],
-      // --force lets the store's values stand over a legacy file's: with --retire alone.
-      [["migrate", "--force"], "usage"],
-      [["set", "API_KEY", "--force"], "usage"],
+      // No action merges or retires files any more: each is an action, or an option, the command does not take.
+      [["migrate"], "usage"],
+      [["migrate", "--dry-run"], "usage"],
+      [["migrate", "--retire"], "usage"],
+      [["remove", "A", "--retire"], "usage"],
     ];
     for (const [asked, code] of cases) {
       const refusal = read(...asked) as Failure;
@@ -195,7 +185,7 @@ const curl = (status: number, body: object) => ({ code: 0, output: `${JSON.strin
 
 describe("the owner's transport, over SSH to the steward's owner socket", () => {
   test("a listing: the read quoted, root on the owner's socket, nothing on standard input", async () => {
-    const { ran, transport } = machine(() => curl(200, { store: view({ variables: [{ name: "A", source: "store", file: null, shadows: [], declared: true }] }) }));
+    const { ran, transport } = machine(() => curl(200, { store: view({ variables: [{ name: "A", source: "store", declared: true }] }) }));
     const listed = await transport.list("shop");
     expect(listed.ok).toBe(true);
     expect(ran).toEqual([{ command: `sudo curl -sS --max-time 30 -w '\\n%{http_code}\\n' --unix-socket ${OWNER_SOCKET} 'http://steward/store?slug=shop'`, input: undefined }]);
@@ -228,25 +218,12 @@ describe("the owner's transport, over SSH to the steward's owner socket", () => 
     }
   });
 
-  test("restart, migrate and retire: their routes, curl waiting longer for them", async () => {
-    const { ran, transport } = machine((command) =>
-      command.endsWith("/restart")
-        ? curl(200, { verdict: { kind: "active", state: "active", subState: "running", restarts: 0 } })
-        : command.endsWith("/store/migrate")
-          ? curl(200, { store: view(), sources: ["shop.env"], skipped: [], merged: ["A"], already: [], overridden: [], shadowed: [], conflicts: [], written: true })
-          : curl(200, { store: view(), retired: ["shop.env"], forced: [], kept: [] }),
-    );
+  test("restart: its route, curl waiting longer for it, the slug on standard input", async () => {
+    const { ran, transport } = machine(() => curl(200, { verdict: { kind: "active", state: "active", subState: "running", restarts: 0 } }));
     expect((await transport.restart("shop")).ok).toBe(true);
-    expect((await transport.migrate!("shop", true)).ok).toBe(true);
-    expect((await transport.retire!("shop", ["shop.env"], false)).ok).toBe(true);
-    expect((await transport.retire!("shop", ["shop-old.env"], true)).ok).toBe(true);
-    expect(ran.map(({ input }) => JSON.parse(input!))).toEqual([
-      { slug: "shop" },
-      { slug: "shop", dryRun: true },
-      { slug: "shop", files: ["shop.env"] },
-      { slug: "shop", files: ["shop-old.env"], force: true },
-    ]);
-    for (const { command } of ran) expect(command).toContain("--max-time 120");
+    expect(ran.map(({ input }) => JSON.parse(input!))).toEqual([{ slug: "shop" }]);
+    expect(ran[0]!.command).toContain("--max-time 120");
+    expect(ran[0]!.command).toEndWith("http://steward/restart");
   });
 
   test("a steward from before the store, one with no owner's socket, an ssh that does not connect: each said, nothing changed", async () => {
@@ -257,26 +234,10 @@ describe("the owner's transport, over SSH to the steward's owner socket", () => 
     expect(socketless).toMatchObject({ ok: false, failure: { error: "steward-outdated" } });
     const unreachable = await machine(() => ({ code: 255, output: "", error: "ssh: connect to host" })).transport.list("shop");
     expect(unreachable).toMatchObject({ ok: false, failure: { error: "ssh-failed" } });
-    const refused = await machine(() => curl(400, { error: "invalid", message: "A is also in shop.env, which the service reads before the store" })).transport.change("shop", { set: [], remove: ["A"] });
-    expect(refused).toMatchObject({ ok: false, failure: { error: "invalid", message: "A is also in shop.env, which the service reads before the store: nothing was changed" } });
+    const refused = await machine(() => curl(400, { error: "invalid", message: "PORT is set by the deployment" })).transport.change("shop", { set: [["PORT", VALUE]], remove: [] });
+    expect(refused).toMatchObject({ ok: false, failure: { error: "invalid", message: "PORT is set by the deployment: nothing was changed" } });
     const garbled = await machine(() => curl(200, { store: { slug: "shop" } })).transport.list("shop");
     expect(garbled).toMatchObject({ ok: false, failure: { error: "unreadable" } });
-  });
-
-  test("a migration's conflicts come back refused with 409, its body the answer: said by name and files, never a value", async () => {
-    // The units read the files in different orders: which value is in effect cannot be told.
-    const conflicts = { error: "unmanaged", message: "AWS_ACCESS_KEY_ID: the units read a.env and b.env in different orders: sitesolide refresh shop, then migrate again; nothing was written" };
-    const body = { ...conflicts, store: view(), sources: ["a.env", "b.env"], skipped: [], merged: [], already: [], overridden: [], shadowed: [], conflicts: [{ name: "AWS_ACCESS_KEY_ID", files: ["a.env", "b.env"] }], written: false };
-    const { transport } = machine(() => curl(409, body));
-    const migrated = await transport.migrate!("shop", false);
-    expect(migrated).toMatchObject({ ok: true, value: { conflicts: [{ name: "AWS_ACCESS_KEY_ID", files: ["a.env", "b.env"] }], written: false } });
-    const record = recording();
-    expect(await runStore({ action: "migrate", dryRun: false, restart: true }, "shop", transport, dependencies(record.output))).toBe(1);
-    expect(record.failures[0]).toMatchObject({ error: "migrate-conflict", details: expect.arrayContaining(["AWS_ACCESS_KEY_ID: in a.env and b.env", "sitesolide refresh shop, so that every unit reads them in one order, then migrate again"]) });
-    expect(JSON.stringify(record.failures)).not.toContain("duplicate");
-    // Any other refusal stays one.
-    const refused = await machine(() => curl(409, { error: "unmanaged", message: "shop.env is not managed" })).transport.migrate!("shop", false);
-    expect(refused).toMatchObject({ ok: false, failure: { error: "unmanaged" } });
   });
 
   test("a slug that is not one never reaches a command", async () => {
@@ -329,9 +290,6 @@ describe("a token's transport, through the control API's store routes", () => {
       ["POST", "/api/v1/projects/shop/restart", null],
     ]);
     expect(seen.every(({ authorization }) => authorization === `Bearer ${remote.token}`)).toBe(true);
-    // Migrate and retire are the owner's alone.
-    expect(transport.migrate).toBeNull();
-    expect(transport.retire).toBeNull();
     expect(transport.owner).toBe(false);
   });
 
@@ -358,21 +316,20 @@ describe("a token's transport, through the control API's store routes", () => {
 // --- the listing --------------------------------------------------------------------------
 
 describe("the listing", () => {
-  test("names, where each value comes from, the files and their path, the legacy files, the build's names: never a value", () => {
+  test("names, whether the store holds each, the files and their path, the build's names: never a value", () => {
     const lines = storeLines(
       view({
         variables: [
-          { name: "ADMIN_TOKEN", source: "store", file: null, shadows: [], declared: true },
-          { name: "STRIPE_SECRET_KEY", source: "store", file: null, shadows: ["shop-stripe.env"], declared: true },
-          { name: "SMTP_URL", source: "legacy", file: "shop.env", shadows: [], declared: false },
-          { name: "STRIPE_WEBHOOK_SECRET", source: "none", file: null, shadows: [], declared: true },
+          { name: "ADMIN_TOKEN", source: "store", declared: true },
+          { name: "STRIPE_SECRET_KEY", source: "store", declared: true },
+          { name: "SMTP_URL", source: "store", declared: false },
+          { name: "STRIPE_WEBHOOK_SECRET", source: "none", declared: true },
         ],
         missing: ["STRIPE_WEBHOOK_SECRET"],
         files: [
           { name: "gcp.json", state: "set", declared: true, reason: null, bytes: 2048, modifiedAt: 1, restartPending: false },
           { name: "tls.key", state: "missing", declared: true, reason: null, bytes: null, modifiedAt: null, restartPending: false },
         ],
-        legacy: [{ name: "shop-stripe.env", state: "managed", reason: null, variables: ["STRIPE_SECRET_KEY"], read: true, leftover: false, covered: true }],
         build: ["CMS_TOKEN"],
         public: [{ name: "PUBLIC_URL", value: "https://shop.test-zone.invalid" }],
         restartPending: true,
@@ -380,11 +337,10 @@ describe("the listing", () => {
     );
     expect(lines).toEqual([
       "   ADMIN_TOKEN             set",
-      "   STRIPE_SECRET_KEY       set, overrides shop-stripe.env",
-      "   SMTP_URL                from shop.env, not declared in sitesolide.json",
+      "   STRIPE_SECRET_KEY       set",
+      "   SMTP_URL                set, not declared in sitesolide.json",
       "   STRIPE_WEBHOOK_SECRET   missing: sitesolide secrets set STRIPE_WEBHOOK_SECRET",
       "   files, read at $CREDENTIALS_DIRECTORY/files_<name>: gcp.json set (2048 bytes), tls.key missing (sitesolide secrets set-file tls.key < tls.key)",
-      "   legacy: shop-stripe.env, read by the service, covered by the store: sitesolide secrets migrate --retire",
       "   build, kept by whoever deploys: CMS_TOKEN",
       "   public, from sitesolide.json's env: PUBLIC_URL",
       "   restart pending: sitesolide secrets ... --restart, or the dashboard's Restart service",
@@ -431,16 +387,6 @@ function recordingTransport(over: Partial<StoreTransport> = {}) {
       calls.push({ what: "restart", slug, detail: null });
       return { ok: true, value: { verdict: { kind: "active", state: "active", subState: "running", restarts: 0 } } };
     },
-    migrate: async (slug, dryRun) => {
-      calls.push({ what: "migrate", slug, detail: dryRun });
-      return { ok: true, value: { store: view(), sources: ["shop.env"], skipped: [], merged: ["A"], already: ["B"], overridden: [], shadowed: [], conflicts: [], written: !dryRun } };
-    },
-    retire: async (slug, files, force) => {
-      calls.push({ what: "retire", slug, detail: force ? { files, force } : files });
-      return force
-        ? { ok: true, value: { store: view(), retired: files, forced: files.slice(1), kept: [] } }
-        : { ok: true, value: { store: view(), retired: files.slice(0, 1), forced: [], kept: files.slice(1).map((file) => ({ file, reason: "a value differs from the store's: retire it with force to let the store's value stand alone" })) } };
-    },
     ...over,
   };
   return { calls, transport };
@@ -475,9 +421,8 @@ describe("the missing names of deploy", () => {
   test("the local manifest's names, not the deployed one's: a name only the store supplies is not missing", () => {
     const listed = view({
       variables: [
-        { name: "A", source: "store", file: null, shadows: [], declared: true },
-        { name: "B", source: "legacy", file: "shop.env", shadows: [], declared: false },
-        { name: "OLD", source: "none", file: null, shadows: [], declared: true },
+        { name: "A", source: "store", declared: true },
+        { name: "OLD", source: "none", declared: true },
       ],
       missing: ["OLD"],
       files: [
@@ -486,79 +431,11 @@ describe("the missing names of deploy", () => {
       ],
     });
     const local = withDeclared(listed, declared({ runtime: ["A", "B", "C"], files: ["gcp.json", "tls.key"] }));
-    // B comes from a legacy file, which the units of this manifest no longer read.
+    // OLD the deployed manifest declared, this one does not: not missing any more.
     expect(missingOf(local)).toEqual({ runtime: ["B", "C"], files: ["tls.key"] });
+    expect(missingOf(withDeclared(listed, declared(["A", "B"]))).runtime).toEqual(["B"]);
     expect(local.files.find((file) => file.name === "gcp.json")?.declared).toBe(true);
     expect(local.files.some((file) => file.name === "gone.pem")).toBe(false);
-  });
-
-  test("a name a legacy file supplies is missing for a manifest that names its variables: its units read the store alone", () => {
-    const listed = view({
-      variables: [
-        { name: "EARLY_KEY", source: "legacy", file: "early.env", shadows: [], declared: false },
-        { name: "IN_STORE", source: "store", file: null, shadows: ["early.env"], declared: false },
-      ],
-    });
-    expect(missingOf(withDeclared(listed, declared({ runtime: ["EARLY_KEY", "IN_STORE"] }))).runtime).toEqual(["EARLY_KEY"]);
-    expect(missingOf(withDeclared(listed, declared(["EARLY_KEY", "IN_STORE"]))).runtime).toEqual(["EARLY_KEY"]);
-  });
-
-  test("what a names manifest would drop: names a legacy file the units read holds and the store lacks, and read files not managed", () => {
-    const file = (name: string, variables: string[], over: object = {}) => ({ name, state: "managed" as const, reason: null, variables, read: true, leftover: false, covered: null, ...over });
-    const listed = view({
-      variables: [{ name: "IN_STORE", source: "store", file: null, shadows: [], declared: true }],
-      legacy: [
-        file("early.env", ["EARLY_KEY", "IN_STORE", "SHARED"]),
-        file("early-ses.env", ["SHARED", "REGION"]),
-        file("early-old.env", ["UNREAD"], { read: false, leftover: true }),
-        file("early-gone.env", [], { state: "absent" }),
-        file("early-hand.env", [], { state: "unmanaged", reason: "owned by root" }),
-      ],
-    });
-    expect(legacyLoss(listed)).toEqual({
-      names: [
-        { name: "EARLY_KEY", files: ["early.env"] },
-        { name: "SHARED", files: ["early.env", "early-ses.env"] },
-        { name: "REGION", files: ["early-ses.env"] },
-      ],
-      unmanaged: ["early-hand.env"],
-    });
-    const refusal = legacyLossRefusal(listed, "nothing was sent")!;
-    expect(refusal.message).toBe("migrate first: sitesolide secrets migrate --restart; the service reads EARLY_KEY, SHARED, REGION from legacy files this manifest no longer reads, and the store lacks them");
-    expect(refusal.details).toContain("SHARED: in early.env, early-ses.env");
-    expect(refusal.details.at(-1)).toBe("nothing was sent");
-    // Once migrated, the store holds them: nothing is lost, nothing stops.
-    const migrated = view({
-      variables: ["EARLY_KEY", "IN_STORE", "SHARED", "REGION"].map((name) => ({ name, source: "store" as const, file: null, shadows: [], declared: true })),
-      legacy: [file("early.env", ["EARLY_KEY", "IN_STORE", "SHARED"]), file("early-ses.env", ["SHARED", "REGION"])],
-    });
-    expect(legacyLossRefusal(migrated, "nothing was sent")).toBeNull();
-    // A file no unit reads drops nothing; a store with no legacy file neither.
-    expect(legacyLossRefusal(view({ legacy: [file("early-old.env", ["UNREAD"], { read: false })] }), "x")).toBeNull();
-    expect(legacyLossRefusal(view(), "x")).toBeNull();
-  });
-
-  test("the old form drops what it stops declaring: a file the units read, not declared any more, whose names nothing else supplies", () => {
-    const file = (name: string, variables: string[], over: object = {}) => ({ name, state: "managed" as const, reason: null, variables, read: true, leftover: false, covered: null, ...over });
-    // The units read shop.env and shop-smtp.env; the new manifest declares shop.env alone.
-    const listed = view({
-      variables: [{ name: "IN_STORE", source: "store", file: null, shadows: [], declared: false }],
-      legacy: [file("shop.env", ["API_KEY", "SHARED"]), file("shop-smtp.env", ["SMTP_URL", "SHARED", "IN_STORE"]), file("shop-hand.env", [], { state: "unmanaged", reason: "owned by root" })],
-    });
-    const keeping = declared(["shop.env"]);
-    expect(keeping.form).toBe("legacy");
-    // What shop.env still supplies, or the store, is not lost; SMTP_URL is, and the unmanaged file dropped too.
-    expect(legacyLoss(listed, keeping.legacy)).toEqual({ names: [{ name: "SMTP_URL", files: ["shop-smtp.env"] }], unmanaged: ["shop-hand.env"] });
-    const refusal = legacyLossRefusal(listed, "nothing was sent", keeping)!;
-    expect(refusal.message).toBe("migrate first: sitesolide secrets migrate --restart; the service reads SMTP_URL from legacy files this manifest no longer reads, and the store lacks it");
-    expect(refusal.details).toContain("deployed as it is, the service would start without them: this manifest's units no longer read shop-smtp.env, shop-hand.env");
-    expect(refusal.details).toContain("or keep shop-smtp.env, shop-hand.env under secrets in sitesolide.json");
-    expect(refusal.details.at(-1)).toBe("nothing was sent");
-    // Declaring every file the units read drops nothing.
-    expect(legacyLossRefusal(listed, "x", declared(["shop.env", "shop-smtp.env", "shop-hand.env"]))).toBeNull();
-    // The names form keeps no legacy file: every file the units read is judged, as before.
-    expect(legacyLoss(listed).names.map(({ name }) => name)).toEqual(["API_KEY", "SHARED", "SMTP_URL"]);
-    expect(legacyLossRefusal(listed, "x", declared(["API_KEY"]))!.details).toContain("deployed as it is, the service would start without them: the units of a manifest that names its variables read the store alone");
   });
 
   test("at a terminal: set, typed without echo, then sent; generate, drawn on the server; leave; no restart asked", async () => {
@@ -749,165 +626,18 @@ describe("the commands", () => {
     }
   });
 
-  test("migrate: merged, already, overridden, said by name; a conflict names the name and its files, never a value", async () => {
-    const { calls, transport } = recordingTransport();
-    const dry = await run({ action: "migrate", dryRun: true, restart: false }, transport);
-    expect(dry.code).toBe(0);
-    expect(dry.lines).toContain("   would be merged: A");
-    expect(calls).toEqual([{ what: "migrate", slug: "shop", detail: true }]);
-    const conflicting = recordingTransport({
-      migrate: async () => ({ ok: true, value: { store: view(), sources: ["a.env", "b.env"], skipped: [], merged: [], already: [], overridden: [], shadowed: [], conflicts: [{ name: "AWS_ACCESS_KEY_ID", files: ["a.env", "b.env"] }], written: false } }),
-    });
-    const r = await run({ action: "migrate", dryRun: false, restart: true }, conflicting.transport);
-    expect(r.code).toBe(1);
-    expect(r.failures[0]).toMatchObject({ error: "migrate-conflict" });
-    expect(r.failures[0]!.message).toContain("in different orders");
-    expect(r.failures[0]!.details).toContain("AWS_ACCESS_KEY_ID: in a.env and b.env");
-    // No restart after a conflict.
-    expect(conflicting.calls).toEqual([]);
-    const restarted = recordingTransport();
-    expect((await run({ action: "migrate", dryRun: false, restart: true }, restarted.transport)).code).toBe(0);
-    expect(restarted.calls.map(({ what }) => what)).toEqual(["migrate", "restart"]);
-  });
-
-  test("migrate takes the value in effect of a name two legacy files set differently, and says whose it kept, by file, never a value", async () => {
-    const { transport } = recordingTransport({
-      migrate: async () => ({
-        ok: true,
-        value: {
-          store: view(),
-          sources: ["a.env", "b.env", "c.env"],
-          skipped: [],
-          merged: ["AWS_ACCESS_KEY_ID", "REGION"],
-          already: [],
-          overridden: [],
-          shadowed: [
-            { name: "AWS_ACCESS_KEY_ID", kept: "b.env", others: ["a.env"] },
-            { name: "REGION", kept: "c.env", others: ["a.env", "b.env"] },
-          ],
-          conflicts: [],
-          written: false,
-        },
-      }),
-    });
-    for (const dryRun of [true, false]) {
-      const r = await run({ action: "migrate", dryRun, restart: false }, transport);
-      expect(r.code).toBe(0);
-      expect(r.lines).toContain("   AWS_ACCESS_KEY_ID: kept b.env's value, in effect; a.env's differs");
-      expect(r.lines).toContain("   REGION: kept c.env's value, in effect; a.env's and b.env's differ");
-      expect(r.results.at(-1)).toMatchObject({ shadowed: [{ name: "AWS_ACCESS_KEY_ID", kept: "b.env", others: ["a.env"] }, { name: "REGION" }] });
-    }
-  });
-
-  test("retire sends every legacy file present, and says which were kept and why", async () => {
-    const { calls, transport } = recordingTransport({
-      list: async () => ({
-        ok: true,
-        value: view({
-          legacy: [
-            { name: "shop.env", state: "managed", reason: null, variables: ["A"], read: true, leftover: false, covered: true },
-            { name: "shop-ses.env", state: "managed", reason: null, variables: ["B"], read: true, leftover: false, covered: false },
-            { name: "shop-gone.env", state: "absent", reason: null, variables: [], read: false, leftover: false, covered: null },
-          ],
-        }),
-      }),
-    });
-    const r = await run({ action: "retire", force: false }, transport);
-    expect(r.code).toBe(0);
-    expect(calls).toEqual([{ what: "retire", slug: "shop", detail: ["shop.env", "shop-ses.env"] }]);
-    expect(r.lines).toContain("   kept: shop-ses.env, a value differs from the store's: retire it with force to let the store's value stand alone");
-    // With --force, the owner's choice: the store's values stand over the file's, and it is said apart.
-    const forced = await run({ action: "retire", force: true }, transport);
-    expect(forced.code).toBe(0);
-    expect(calls.at(-1)).toEqual({ what: "retire", slug: "shop", detail: { files: ["shop.env", "shop-ses.env"], force: true } });
-    expect(forced.lines).toContain("   retired with --force, the store's values standing over theirs, each kept as a copy: shop-ses.env");
-    expect(forced.results.at(-1)).toMatchObject({ action: "retire", force: true, retired: ["shop.env", "shop-ses.env"], forced: ["shop-ses.env"] });
-  });
-
-  test("migrate and retire through a token: the owner's, nothing sent", async () => {
-    const { transport } = recordingTransport({ migrate: null, retire: null });
-    for (const ask of [{ action: "migrate", dryRun: false, restart: false }, { action: "retire", force: false }] as StoreAsk[]) {
-      const r = await run(ask, transport);
-      expect(r.failures[0]).toMatchObject({ error: "needs-ssh" });
-    }
-  });
-
   test("a static site and the dashboard have no store, each said why", () => {
     expect(storelessRefusal({ slug: "blog", publicDir: "dist" } as Manifest).message).toContain("a static site");
     expect(storelessRefusal({ slug: "dashboard", start: "/x", port: 3000 } as Manifest).message).toContain("dashboard.env");
   });
 });
 
-describe("what the steward added for removal, migration, retirement and restarts", () => {
-  test("a project's leftover flat files, read as root on the owner's socket, before removal deletes anything", async () => {
-    const { ran } = machine(() => curl(200, {}));
-    const run = async (command: string, input?: string) => {
-      ran.push({ command, input });
-      return { code: 0, output: `${JSON.stringify({ slug: "shop", leftovers: ["shop-ses.env", "shop-old.env"] })}\n200\n`, error: "" };
-    };
-    expect(await ownerLeftovers(run, "shop")).toEqual({ ok: true, value: ["shop-ses.env", "shop-old.env"] });
-    expect(ran).toEqual([{ command: `sudo curl -sS --max-time 30 -w '\\n%{http_code}\\n' --unix-socket ${OWNER_SOCKET} 'http://steward/store/leftovers?slug=shop'`, input: undefined }]);
-    // A steward from before it, a name that is no flat file's, an answer for another slug: no leftover is taken.
-    const answer = (status: number, body: object) => async () => ({ code: 0, output: `${JSON.stringify(body)}\n${status}\n`, error: "" });
-    expect(await ownerLeftovers(answer(404, { error: "not-found", message: "no such route" }), "shop")).toMatchObject({ ok: false, failure: { error: "steward-outdated" } });
-    expect(await ownerLeftovers(answer(200, { slug: "shop", leftovers: ["../../etc/shadow"] }), "shop")).toMatchObject({ ok: false, failure: { error: "unreadable" } });
-    expect(await ownerLeftovers(answer(200, { slug: "other", leftovers: [] }), "shop")).toMatchObject({ ok: false, failure: { error: "unreadable" } });
-    expect(await ownerLeftovers(answer(400, { error: "invalid", message: "name one project" }), "shop")).toMatchObject({ ok: false, failure: { error: "invalid" } });
-    // A slug that is not one never reaches a command.
-    const never = async () => {
-      throw new Error("ran");
-    };
-    expect(await ownerLeftovers(never, "Shop; reboot")).toMatchObject({ ok: false, failure: { error: "invalid" } });
-  });
-
-  test("a steward from before shadowed and forced answers without them: none", async () => {
-    const migrated = await machine(() => curl(200, { store: view(), sources: [], skipped: [], merged: [], already: [], overridden: [], conflicts: [], written: false })).transport.migrate!("shop", true);
-    expect(migrated).toMatchObject({ ok: true, value: { shadowed: [] } });
-    const retired = await machine(() => curl(200, { store: view(), retired: ["shop.env"], kept: [] })).transport.retire!("shop", ["shop.env"], false);
-    expect(retired).toMatchObject({ ok: true, value: { forced: [] } });
-  });
-
-  test("a restart's verdict says why it did not come back when the steward can tell", () => {
+describe("a restart's verdict", () => {
+  test("it says why the service did not come back when the steward can tell", () => {
     const failed = { kind: "looping" as const, state: "activating", subState: "auto-restart", restarts: 4 };
     expect(verdictWords(failed)).toBe("activating, auto-restart, 4 restart(s) by systemd: the service restarts in a loop");
     const reason = "shop.service could not load its secret files (243/CREDENTIALS): the store's files folder is missing, or its files are too large; sitesolide refresh shop lays the folder again";
     expect(verdictWords({ ...failed, reason })).toBe(`activating, auto-restart, 4 restart(s) by systemd: the service restarts in a loop; ${reason}`);
-  });
-
-  test("a legacy file the store does not cover: --force only when the store holds every name, migrate or a set by hand when it lacks one", () => {
-    const file = (name: string, variables: string[], over: object) => ({ name, state: "managed" as const, reason: null, variables, read: false, leftover: false, covered: false, ...over });
-    const stored = (...names: string[]) => names.map((name) => ({ name, source: "store" as const, file: null, shadows: [], declared: true }));
-    const lines = storeLines(
-      view({
-        variables: stored("A"),
-        legacy: [
-          // Every name in the store, its value overriding the file's: force lets the store's stand.
-          file("shop-old.env", ["A"], { leftover: true }),
-          // R6: the store lacks STRIPE_SECRET_KEY, this leftover holds its only copy.
-          file("shop-keys.env", ["A", "STRIPE_SECRET_KEY"], { leftover: true }),
-          // A file the unit reads, a name the store lacks: migrate.
-          file("shop.env", ["SMTP_URL"], { read: true }),
-        ],
-      }),
-    );
-    expect(lines).toContain("   legacy: shop-old.env, no longer declared, its values differ from the store's, which overrides them: sitesolide secrets migrate --retire --force lets the store's stand alone");
-    expect(lines).toContain(
-      "   legacy: shop-keys.env, no longer declared, holds STRIPE_SECRET_KEY, which the store lacks and no unit reads: set it in the store first if the service needs it, the owner reads this file in the dashboard; --retire --force would delete the only copy",
-    );
-    expect(lines).toContain("   legacy: shop.env, read by the service, holds SMTP_URL, which the store lacks: sitesolide secrets migrate first, never --retire --force, which would drop it");
-    // Never pointed to --force while a name is missing from the store.
-    for (const line of lines.filter((one) => one.includes("shop-keys.env") || one.includes("shop.env,"))) expect(line).not.toContain("lets the store's stand alone");
-  });
-
-  test("a legacy file retired is said retired, with where its copy is kept; one absent for no such reason is still missing", () => {
-    const copy = `${STORE_PREVIOUS_ROOT}/shop/legacy/shop.env`;
-    const reason = `retired: a copy is kept at ${copy}; to put it back, sudo cp -p ${copy} /etc/sitesolide/shop.env, then sitesolide refresh shop`;
-    const absent = (name: string, over: object) => ({ name, state: "absent" as const, reason: null, variables: [], read: false, leftover: false, covered: null, ...over });
-    const lines = storeLines(view({ legacy: [absent("shop.env", { reason, read: true }), absent("shop-ses.env", { reason }), absent("shop-smtp.env", {})] }));
-    expect(lines).toContain(`   legacy: shop.env, read by the service, ${reason}`);
-    expect(lines).toContain(`   legacy: shop-ses.env, ${reason}`);
-    expect(lines).toContain("   legacy: shop-smtp.env, missing");
-    expect(lines.filter((line) => line.includes("missing"))).toEqual(["   legacy: shop-smtp.env, missing"]);
   });
 });
 

@@ -527,7 +527,7 @@ const SLUG = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
  * quoted, and a quote in it would end the quoting.
  */
 export function ownerReadCommand(
-  path: "/people" | `/access?slug=${string}` | `/store?slug=${string}` | `/store/leftovers?slug=${string}` | `/tokens/claim?slug=${string}`,
+  path: "/people" | `/access?slug=${string}` | `/store?slug=${string}` | `/tokens/claim?slug=${string}`,
 ): string {
   const slug = /\?slug=(.*)$/.exec(path)?.[1];
   if (slug !== undefined && !SLUG.test(slug)) throw new Error("not a project's slug: no read is built from it");
@@ -543,17 +543,15 @@ export type OwnerWritePath =
   | "/store/variable"
   | "/store/generate"
   | "/store/file"
-  | "/store/migrate"
-  | "/store/retire"
   | "/restart"
   | "/tokens/claim";
 
 /**
  * Those that wait for the steward's lock and then for a service: a restart
- * watches the service for a few seconds, migrate and retire read every unit
- * of the project. curl waits longer for them than for a write alone.
+ * watches the service for a few seconds. curl waits longer for them than for
+ * a write alone.
  */
-const SLOW_WRITES: readonly OwnerWritePath[] = ["/restart", "/store/migrate", "/store/retire"];
+const SLOW_WRITES: readonly OwnerWritePath[] = ["/restart"];
 
 /** A change, the JSON body on standard input: no address of the request, nor any value, ever goes through a shell. */
 export function ownerWriteCommand(method: "PUT" | "DELETE" | "POST" | "PATCH", path: OwnerWritePath): string {
@@ -579,8 +577,7 @@ export function ownerGeneralCommand(): string {
  * ssh that did not connect, a socket missing (a steward from before the
  * owner's socket), a route the steward does not carry yet (`outdated`), or
  * its refusal as it stands. `unchanged` adds that nothing was changed to a
- * refusal, which a read or a change that may have half happened leaves out;
- * `answers` takes a refusal's body as the answer, for the caller to read.
+ * refusal, which a read or a change that may have half happened leaves out.
  */
 export async function askSteward(
   run: RunOnMachine,
@@ -589,8 +586,6 @@ export async function askSteward(
   words: {
     outdated: string;
     unchanged: boolean;
-    /** A refusal whose body is an answer all the same: a migration's conflicts, which name what to fix. */
-    answers?: (status: number, body: Record<string, unknown>) => boolean;
   } = { outdated: "the steward on the server does not keep people with access yet: run sitesolide upgrade first", unchanged: true },
 ): Promise<Reading<Record<string, unknown>>> {
   const done = await run(command, input);
@@ -620,7 +615,7 @@ export async function askSteward(
   if (answer.status === 404 && body.message === "no such route") {
     return { ok: false, failure: { error: "steward-outdated", message: words.outdated } };
   }
-  if (answer.status >= 400 && words.answers?.(answer.status, body) !== true) {
+  if (answer.status >= 400) {
     const code = typeof body.error === "string" ? body.error : "failure";
     const said = typeof body.message === "string" ? body.message : `refused (${answer.status})`;
     return { ok: false, failure: { error: code, message: words.unchanged ? `${said}: nothing was changed` : said } };

@@ -12,7 +12,7 @@ import { createLimiter } from "../src/control/limiter";
 import { INSTALLER_TEMPLATE, MAX_SECRET_NAMES, MAX_SECRETS_BODY_BYTES, type Identity, type Scope, type TokenView } from "../src/control/protocol";
 import { FILE_NAME_REFUSAL } from "../src/control/secrets";
 import { createSpool } from "../src/control/spool";
-import { createControlSteward, isControlPath, STORE_FORM } from "../src/control/steward";
+import { createControlSteward, isControlPath } from "../src/control/steward";
 import { createControlStore } from "../src/control/store";
 import { createControlSystem, type ControlSystem } from "../src/control/system";
 import { MAX_UNCARRIED_NAMES } from "../src/control/tokens";
@@ -106,14 +106,13 @@ function viewOf(slug: string, exists: boolean): StoreView {
     variables: [],
     missing: [],
     files: [],
-    legacy: [],
     build: [],
     public: [],
     unitReadsStore: null,
     modifiedAt: null,
     restartPending: false,
     previous: false,
-    may: { write: true, reveal: false, restore: false, migrate: false },
+    may: { write: true, reveal: false, restore: false },
   };
 }
 
@@ -121,8 +120,7 @@ const protectedBlock = (slug: string) => `${slug}.${ZONE} {\n\tforward_auth @por
 
 /**
  * cms: restricted; blog: in the open; kanban: restricted, its manifest
- * listing names, the store's form; notes: a static site; the dashboard and
- * the portal.
+ * listing names; notes: a static site; the dashboard and the portal.
  */
 async function mount(options: { store?: boolean | "real"; secretChangesPerHour?: number } = {}): Promise<Bench> {
   const root = mkdtempSync(join(tmpdir(), "control-store-"));
@@ -149,15 +147,14 @@ async function mount(options: { store?: boolean | "real"; secretChangesPerHour?:
     writeFileSync(join(units, `${slug}.service`), `[Service]\nEnvironment=PORT=${port}\nExecStart=/usr/local/bin/bun run server.ts\n`);
     if (extra.portal === true) writeFileSync(join(caddy, `${slug}.caddy`), protectedBlock(slug));
   };
-  app("cms", 3048, { secrets: ["cms.env"], portal: true });
+  app("cms", 3048, { portal: true });
   app("blog", 3049);
   app("kanban", 3050, { secrets: ["API_KEY"], portal: true });
   manifest("notes", { publicDir: "public" });
-  app("dashboard", 3022, { secrets: ["dashboard.env"] });
-  app("portal", 3026, { secrets: ["portal.env"] });
+  app("dashboard", 3022);
+  app("portal", 3026);
   const hash = await Bun.password.hash(PASSWORD, { algorithm: "bcrypt", cost: 4 });
   writeFileSync(join(secrets, "dashboard.env"), `PASSWORD_HASH=${hash}\n`, { mode: 0o600 });
-  writeFileSync(join(secrets, "cms.env"), "A=b\n", { mode: 0o600 });
 
   const clock = { t: Date.now() };
   const real = createSystem({
@@ -614,18 +611,6 @@ describe("the steward: around the store", () => {
     expect(await body(await change(b, secret, "kanban"))).toEqual({ status: 404, error: "not-found", message: "no such route" });
   });
 
-  test("the old token route on a project whose manifest lists names: told to update, journaled, nothing written; a project still in the old form keeps it", async () => {
-    const b = await mount();
-    const { token, secret } = await b.ownerToken({ slugs: ["kanban", "cms"], secrets: true });
-    const refused = await b.call("PATCH", "/control/secrets", { bearer: secret, slug: "kanban", file: "kanban.env", set: { API_KEY: CANARY }, remove: [] });
-    expect(await body(refused)).toEqual({ status: 403, error: "out-of-scope", message: STORE_FORM });
-    expect(b.journal().at(-1)).toMatchObject({ operation: "set", result: "rejects", actor: `token:${token.id}`, slug: "kanban", detail: "kept in its store" });
-    expect(existsSync(join(b.secrets, "kanban.env"))).toBe(false);
-    const kept = await b.call("PATCH", "/control/secrets", { bearer: secret, slug: "cms", file: "cms.env", set: { API_KEY: "x" }, remove: [] });
-    expect(kept.status).toBe(200);
-    expect(b.everywhere()).not.toContain(CANARY);
-  });
-
   test("the preflight names what {zone} and {contact} become, from the steward's own settings", async () => {
     const b = await mount();
     const { secret } = await b.ownerToken({ create: true });
@@ -678,7 +663,7 @@ describe("end to end, with the secrets steward's real store", () => {
       expect(view.variables.find((variable) => variable.name === "SESSION_KEY")).toMatchObject({ source: "store", declared: false });
       expect(view.missing).toEqual([]);
       expect(view.files).toEqual([expect.objectContaining({ name: "gcp.json", state: "set", bytes: null })]);
-      expect(view.may).toEqual({ write: true, reveal: false, restore: false, migrate: false });
+      expect(view.may).toEqual({ write: true, reveal: false, restore: false });
 
       // Journaled under the token, names alone.
       expect(b.journal().filter((entry) => entry.actor === `token:${token.id}` && entry.result === "ok").length).toBeGreaterThan(0);
@@ -763,17 +748,16 @@ const STEWARD_STORE = {
   exists: true,
   state: "managed",
   reason: null,
-  variables: [{ name: "API_KEY", source: "store", file: null, shadows: ["kanban.env"], declared: true, value: LEAK }],
+  variables: [{ name: "API_KEY", source: "store", declared: true, value: LEAK }],
   missing: ["STRIPE_KEY"],
   files: [{ name: "gcp.json", state: "set", declared: true, reason: null, bytes: 120, modifiedAt: 1_760_000_000_000, restartPending: true }],
-  legacy: [{ name: "kanban.env", state: "managed", reason: null, variables: ["API_KEY"], read: true, leftover: false, covered: true }],
   build: ["CMS_TOKEN"],
   public: [{ name: "PUBLIC_URL", value: `https://kanban.${ZONE}` }],
   unitReadsStore: true,
   modifiedAt: 1_760_000_000_000,
   restartPending: true,
   previous: true,
-  may: { write: true, reveal: true, restore: true, migrate: true },
+  may: { write: true, reveal: true, restore: true },
   extra: LEAK,
 };
 
@@ -783,17 +767,16 @@ const TOKEN_STORE: StoreView = {
   exists: true,
   state: "managed",
   reason: null,
-  variables: [{ name: "API_KEY", source: "store", file: null, shadows: ["kanban.env"], declared: true }],
+  variables: [{ name: "API_KEY", source: "store", declared: true }],
   missing: ["STRIPE_KEY"],
   files: [{ name: "gcp.json", state: "set", declared: true, reason: null, bytes: null, modifiedAt: 1_760_000_000_000, restartPending: true }],
-  legacy: [{ name: "kanban.env", state: "managed", reason: null, variables: ["API_KEY"], read: true, leftover: false, covered: null }],
   build: ["CMS_TOKEN"],
   public: [{ name: "PUBLIC_URL", value: `https://kanban.${ZONE}` }],
   unitReadsStore: true,
   modifiedAt: 1_760_000_000_000,
   restartPending: true,
   previous: false,
-  may: { write: true, reveal: false, restore: false, migrate: false },
+  may: { write: true, reveal: false, restore: false },
 };
 
 let apiRoot: string;
@@ -899,7 +882,7 @@ async function read(response: Response): Promise<{ status: number; text: string;
 }
 
 describe("the API: a project's store", () => {
-  test("GET passes the bearer and the slug, and sends back a Developer's view from the known fields: no size, no cover, no previous version, never reveal, restore nor migrate", async () => {
+  test("GET passes the bearer and the slug, and sends back a Developer's view from the known fields: no size, no previous version, never reveal nor restore", async () => {
     const answer = await read(await send("GET", ""));
     expect(answer.status).toBe(200);
     expect(answer.json).toEqual({ store: TOKEN_STORE });
@@ -1344,63 +1327,6 @@ describe("a token never holds what the owner deployed or filled", () => {
     expect((await change(b, secret, "cafe", { API_KEY: "ahead" })).status).toBe(201);
     expect(await body(await b.ssh("PUT", "/store/variable", { slug: "cafe", name: "PATH", value: "x" }))).toMatchObject({ status: 400, takenBack: { variables: ["API_KEY"] } });
     expect(b.owners()).toEqual({ kanban: token.id });
-    expect(b.everywhere()).not.toContain(CANARY);
-  });
-});
-
-describe("a deployment never drops values legacy files supply", () => {
-  /** oldapp: deployed in the old form, its unit reading oldapp.env, which holds API_KEY and SMTP_URL. */
-  function oldApp(b: Bench): void {
-    mkdirSync(join(b.root, "sites", "oldapp"), { recursive: true });
-    writeFileSync(join(b.root, "sites", "oldapp", "sitesolide.json"), JSON.stringify({ slug: "oldapp", start: "/usr/local/bin/bun run server.ts", port: 3070, publicDir: "public", portal: true, secrets: ["oldapp.env"] }));
-    writeFileSync(join(b.root, "units", "oldapp.service"), `[Service]\nEnvironment=PORT=3070\nEnvironmentFile=-${b.secrets}/oldapp.env\nExecStart=/usr/local/bin/bun run server.ts\n`);
-    writeFileSync(join(b.root, "caddy", "oldapp.caddy"), protectedBlock("oldapp"));
-    writeFileSync(join(b.secrets, "oldapp.env"), `API_KEY=${CANARY}\nSMTP_URL=smtp://mail.${ZONE}\n`, { mode: 0o600 });
-  }
-  const send = (b: Bench, bearer: string, manifest: object) =>
-    b.call("POST", "/control/deploy", { bearer, deployment: DEPLOYMENT, slug: "oldapp", manifest: JSON.stringify({ slug: "oldapp", start: "/usr/local/bin/bun run server.ts", port: 3070, publicDir: "public", ...manifest }) });
-
-  test("a manifest that reads the store alone, over a unit that reads values the store lacks: refused migrate-first, nothing started, whatever the token may list; once migrated, accepted", async () => {
-    const b = await mount({ store: "real" });
-    oldApp(b);
-    for (const scope of [{ slugs: ["oldapp"], secrets: true }, { slugs: ["oldapp"] }]) {
-      const { secret } = await b.ownerToken(scope);
-      for (const manifest of [{ secrets: ["API_KEY"] }, {}]) {
-        const refused = await body(await send(b, secret, manifest));
-        expect(refused).toEqual({
-          status: 409,
-          error: "migrate-first",
-          message:
-            "migrate first: sitesolide secrets migrate --restart; the service reads 2 variables from legacy files this manifest no longer reads, and the store lacks them: deployed as it is, the service would start without them; nothing was changed",
-        });
-      }
-      // The old form still reads the file: nothing dropped.
-      expect((await send(b, secret, { secrets: ["oldapp.env"] })).status).toBe(202);
-      rmSync(join(b.state, "installs"), { recursive: true, force: true });
-    }
-    expect(existsSync(join(b.state, "installs", "oldapp.json"))).toBe(false);
-    // Carried over by the owner: the store holds both, the manifest that names them deploys.
-    expect((await b.ssh("PATCH", "/store", { slug: "oldapp", set: { API_KEY: CANARY, SMTP_URL: "smtp" }, remove: [] })).ok).toBe(true);
-    const { secret } = await b.ownerToken({ slugs: ["oldapp"] });
-    expect((await send(b, secret, { secrets: ["API_KEY", "SMTP_URL"] })).status).toBe(202);
-    expect(b.everywhere()).not.toContain(CANARY);
-  });
-});
-
-describe("a deployment in the old form dropping a file the unit reads", () => {
-  test("the steward's deploy route refuses it migrate-first, as for a manifest that lists names; the file's values in the store, accepted", async () => {
-    const b = await mount({ store: "real" });
-    mkdirSync(join(b.root, "sites", "oldapp"), { recursive: true });
-    writeFileSync(join(b.root, "sites", "oldapp", "sitesolide.json"), JSON.stringify({ slug: "oldapp", start: "/usr/local/bin/bun run server.ts", port: 3070, publicDir: "public", portal: true, secrets: ["oldapp.env", "oldapp-smtp.env"] }));
-    writeFileSync(join(b.root, "units", "oldapp.service"), `[Service]\nEnvironment=PORT=3070\nEnvironmentFile=-${b.secrets}/oldapp.env\nEnvironmentFile=-${b.secrets}/oldapp-smtp.env\nExecStart=/usr/local/bin/bun run server.ts\n`);
-    writeFileSync(join(b.root, "caddy", "oldapp.caddy"), protectedBlock("oldapp"));
-    writeFileSync(join(b.secrets, "oldapp.env"), "API_KEY=a\n", { mode: 0o600 });
-    writeFileSync(join(b.secrets, "oldapp-smtp.env"), `SMTP_URL=${CANARY}\n`, { mode: 0o600 });
-    const { secret } = await b.ownerToken({ slugs: ["oldapp"] });
-    const send = () => b.call("POST", "/control/deploy", { bearer: secret, deployment: DEPLOYMENT, slug: "oldapp", manifest: JSON.stringify({ slug: "oldapp", start: "/usr/local/bin/bun run server.ts", port: 3070, publicDir: "public", secrets: ["oldapp.env"] }) });
-    expect(await body(await send())).toMatchObject({ status: 409, error: "migrate-first", message: expect.stringContaining("the service reads 1 variable from legacy files this manifest no longer reads") });
-    expect((await b.ssh("PATCH", "/store", { slug: "oldapp", set: { SMTP_URL: "smtp" }, remove: [] })).ok).toBe(true);
-    expect((await send()).status).toBe(202);
     expect(b.everywhere()).not.toContain(CANARY);
   });
 });

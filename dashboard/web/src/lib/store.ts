@@ -7,24 +7,13 @@
  *
  * No rule of the store here, no name, no size, no scope: the steward judges a
  * request on send, and the page shows its refusal as it words it, as for the
- * files of before (lib/secrets.ts). A value never comes through this module:
+ * platform's own files (lib/secrets.ts). A value never comes through this module:
  * the listing carries names and states only, and a revealed value lives in the
  * row that shows it.
  */
 import { ago, size } from "./format"
 import type { Tone } from "./tones"
-import type {
-  GenerateFormat,
-  LegacyFileView,
-  ProjectView,
-  StoreChangeResponse,
-  StoreFileView,
-  StoreMigrateResponse,
-  StoreRestoreResponse,
-  StoreRetireResponse,
-  StoreVariableView,
-  StoreView,
-} from "./types"
+import type { GenerateFormat, ProjectView, StoreChangeResponse, StoreFileView, StoreRestoreResponse, StoreVariableView, StoreView } from "./types"
 
 // --- The project as it arrives ----------------------------------------------------
 
@@ -35,7 +24,6 @@ function isStoreView(value: unknown): value is StoreView {
     Array.isArray(store.variables) &&
     Array.isArray(store.missing) &&
     Array.isArray(store.files) &&
-    Array.isArray(store.legacy) &&
     Array.isArray(store.build) &&
     Array.isArray(store.public) &&
     typeof store.may === "object" &&
@@ -49,8 +37,7 @@ function isStoreView(value: unknown): value is StoreView {
  * store it could not read; the page holds it to that shape all the same,
  * since `sitesolide upgrade` brings the steward first but a dashboard
  * deployed alone may still face an older one, whose projects carry no
- * `store`: shown with none, they read as files, which is what that steward
- * serves. Never throws.
+ * `store`: they are shown with none. Never throws.
  */
 export function withStore(project: ProjectView): ProjectView {
   return isStoreView(project.store) ? project : { ...project, store: null }
@@ -72,37 +59,15 @@ export function credentialPath(name: string): string {
 
 // --- A variable -------------------------------------------------------------------
 
-export type SourceBadge = { text: string; tone: Tone }
-
-/**
- * Where the value in force comes from: the store (*Server*), a legacy file the
- * service reads (*Legacy file nis2-ses.env*), or nowhere yet (*Not set*), which
- * only a declared name can be.
- */
-export function sourceBadge(variable: Pick<StoreVariableView, "source" | "file">): SourceBadge {
-  switch (variable.source) {
-    case "store":
-      return { text: "Server", tone: "neutral" }
-    case "legacy":
-      return { text: variable.file === null ? "Legacy file" : `Legacy file ${variable.file}`, tone: "neutral" }
-    case "none":
-      return { text: "Not set", tone: "error" }
-  }
-}
+export type Badge = { text: string; tone: Tone }
 
 function list(names: readonly string[]): string {
   if (names.length <= 1) return names.join("")
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
 }
 
-/** "Overrides a.env and b.env": legacy files that hold the name too, and lose to the value in force. */
-export function overridesText(variable: Pick<StoreVariableView, "shadows">): string | null {
-  return variable.shadows.length === 0 ? null : `Overrides ${list(variable.shadows)}`
-}
-
-export function declaredText(declared: boolean): string {
-  return declared ? "Declared" : "Not declared"
-}
+/** Said beside a name the store holds that sitesolide.json does not declare; nothing beside one it does. */
+export const UNDECLARED = "Not in sitesolide.json"
 
 /**
  * What a variable's row offers, from the steward's `may` and the variable's
@@ -110,11 +75,9 @@ export function declaredText(declared: boolean): string {
  * authorising: the steward judges on send.
  *
  * - `set`, `generate`: whoever may write, on a store the steward manages;
- * - `replaces`: a value is in force already, the store's or a legacy file's,
- *   so generating replaces it, and the dialog says the old one stops working
- *   at the next restart;
- * - `remove`: only what the store holds; a legacy file's value is removed in
- *   its file, below;
+ * - `replaces`: the store holds a value already, so generating replaces it,
+ *   and the dialog says the old one stops working at the next restart;
+ * - `remove`: only what the store holds;
  * - `reveal`: the owner alone, on what the store holds.
  */
 export type StoreVariableOffer = { set: boolean; generate: boolean; replaces: boolean; remove: boolean; reveal: boolean }
@@ -133,9 +96,8 @@ export function storeVariableOffer(store: Pick<StoreView, "may" | "state">, vari
 // --- What is missing --------------------------------------------------------------
 
 /**
- * The declared names with no value anywhere, and the declared files the
- * server lacks, absent or empty, in the steward's order. A legacy-form
- * manifest declares no name: nothing is missing then.
+ * The declared names with no value in the store, and the declared files the
+ * server lacks, absent or empty, in the steward's order.
  */
 export function storeMissing(store: Pick<StoreView, "missing" | "files">): { variables: string[]; files: string[] } {
   return {
@@ -153,7 +115,7 @@ export function missingLabel(store: Pick<StoreView, "missing" | "files">): strin
 
 // --- The Overview -----------------------------------------------------------------
 
-export type OverviewRow = { label: string; detail: string; state: SourceBadge | null }
+export type OverviewRow = { label: string; detail: string; state: Badge | null }
 
 function count(number: number, word: string): string {
   return `${number} ${word}${number === 1 ? "" : "s"}`
@@ -161,8 +123,7 @@ function count(number: number, word: string): string {
 
 /**
  * A store in a few rows, for a site's Overview: its variables counted by
- * whether they hold a value, its files by name, the legacy files left. Names
- * of files only, never of variables: the inventory belongs to the Secrets
+ * whether they hold a value, its files by name. Names of files only, never of variables: the inventory belongs to the Secrets
  * section. Nothing at all for a store with nothing in it and nothing declared.
  */
 export function storeOverview(store: StoreView): OverviewRow[] {
@@ -175,7 +136,7 @@ export function storeOverview(store: StoreView): OverviewRow[] {
     )
     rows.push({
       label: count(store.variables.length, "variable"),
-      detail: missingNames.length === 0 ? "All set, on the server" : pieces.join(", "),
+      detail: missingNames.length === 0 ? "All set" : pieces.join(", "),
       state: missingNames.length > 0 ? { text: "Missing", tone: "error" } : null,
     })
   }
@@ -209,10 +170,11 @@ export function storeFileOffer(store: Pick<StoreView, "may" | "state">, file: Pi
   return { upload: write, remove: write && (file.state === "set" || isEmptyFile(file)) }
 }
 
-export function storeFileState(file: Pick<StoreFileView, "state" | "reason" | "declared">): SourceBadge {
+/** What a file's row flags: nothing for a file that is set, its state otherwise. */
+export function storeFileState(file: Pick<StoreFileView, "state" | "reason" | "declared">): Badge | null {
   switch (file.state) {
     case "set":
-      return { text: "Set", tone: "neutral" }
+      return null
     case "missing":
       // An undeclared file nobody reads is no error, even empty.
       return { text: isEmptyFile(file) ? "Empty" : "Missing", tone: file.declared ? "error" : "attention" }
@@ -244,57 +206,6 @@ export function encodeBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(start, start + chunk))
   }
   return btoa(binary)
-}
-
-// --- Legacy files -----------------------------------------------------------------
-
-/**
- * A legacy file *Retire* deleted, which is no fault: the steward's reason,
- * `retired: a copy is kept at ...`, says where the copy is and how it is put
- * back. Null for any other file.
- */
-export function retiredReason(legacy: Pick<LegacyFileView, "state" | "reason">): string | null {
-  return legacy.state === "absent" && legacy.reason !== null && legacy.reason.startsWith("retired:") ? legacy.reason : null
-}
-
-/** How a legacy file stands, in words, without its variables: retired, read, a leftover, and, to the owner, covered. */
-export function legacyLabels(legacy: Pick<LegacyFileView, "read" | "leftover" | "covered" | "state" | "reason">): string[] {
-  const labels: string[] = []
-  if (legacy.state === "absent") labels.push(retiredReason(legacy) === null ? "not on the server" : "retired")
-  if (legacy.leftover) labels.push("no longer declared")
-  else labels.push(legacy.read ? "read by the service" : "not read by the service")
-  if (legacy.covered === true) labels.push("covered by the store")
-  if (legacy.covered === false) labels.push("not covered by the store")
-  return labels
-}
-
-/** The same in one sentence: "Read by the service, covered by the store". */
-export function legacyLine(legacy: Pick<LegacyFileView, "read" | "leftover" | "covered" | "state" | "reason">): string {
-  const line = legacyLabels(legacy).join(", ")
-  return line.charAt(0).toUpperCase() + line.slice(1)
-}
-
-/**
- * *Retire*, the owner's alone: enabled once the steward says the store covers
- * the file. Otherwise why not, in the page's words, until the steward's own
- * reason comes back from an attempt. The steward checks every condition again.
- */
-export type LegacyOffer = { retire: boolean; reason: string | null }
-
-export function legacyOffer(store: Pick<StoreView, "may" | "unitReadsStore">, legacy: Pick<LegacyFileView, "state" | "covered" | "reason">): LegacyOffer | null {
-  if (!store.may.migrate) return null
-  const retired = retiredReason(legacy)
-  if (retired !== null) return { retire: false, reason: `${retired.charAt(0).toUpperCase()}${retired.slice(1)}.` }
-  if (legacy.state === "absent") return { retire: false, reason: "Not on the server: nothing to retire." }
-  if (legacy.state === "unmanaged") return { retire: false, reason: legacy.reason ?? "The server does not manage this file." }
-  if (store.unitReadsStore === false) return { retire: false, reason: "Its service does not read the store yet: deploy or refresh it first." }
-  if (legacy.covered !== true) return { retire: false, reason: "A variable of this file is not in the store with the same value: merge into the store first." }
-  return { retire: true, reason: null }
-}
-
-/** *Merge into the store*, the owner's alone, while a legacy file is left. The steward's dry run says what it would do. */
-export function mayMerge(store: Pick<StoreView, "may" | "legacy">): boolean {
-  return store.may.migrate && store.legacy.some((legacy) => !legacy.leftover)
 }
 
 // --- The restart a change waits for -----------------------------------------------
@@ -359,73 +270,4 @@ export function restoreSummary(answer: Pick<StoreRestoreResponse, "appeared" | "
     disappeared: [...answer.disappeared],
     empty: answer.appeared.length === 0 && answer.disappeared.length === 0,
   }
-}
-
-export type MigrationLine = { label: string; names: string[] }
-
-/**
- * A merge of legacy files into the store, dry or done, in names and files
- * only: the steward never says a value, and neither does the page.
- * `conflicts` worded as the CLI words them; `merge` says whether the dry run
- * leaves something to write.
- */
-export type MigrationReading = { lines: MigrationLine[]; conflicts: string[]; skipped: string[]; merge: boolean; nothing: boolean }
-
-export function readMigration(answer: Pick<StoreMigrateResponse, "merged" | "already" | "overridden" | "conflicts" | "skipped" | "sources" | "written">, dryRun: boolean): MigrationReading {
-  const lines: MigrationLine[] = []
-  if (answer.sources.length > 0) lines.push({ label: "From", names: [...answer.sources] })
-  if (answer.merged.length > 0) lines.push({ label: dryRun ? "Would merge" : "Merged", names: [...answer.merged] })
-  if (answer.already.length > 0) lines.push({ label: "Already in the store, same value", names: [...answer.already] })
-  if (answer.overridden.length > 0) lines.push({ label: "The store keeps its own value", names: [...answer.overridden] })
-  const conflicts = answer.conflicts.map((conflict) => `${conflict.name}: in ${list(conflict.files)}, with different values`)
-  const skipped = answer.skipped.map((skip) => `${skip.file}: ${skip.reason}`)
-  return {
-    lines,
-    conflicts,
-    skipped,
-    merge: dryRun && conflicts.length === 0 && answer.merged.length > 0,
-    nothing: conflicts.length === 0 && answer.merged.length === 0,
-  }
-}
-
-/**
- * A merge's answer, whatever its status: a refusal for a conflict may carry
- * the conflicts alone. Any list missing reads as empty; nothing to read, null.
- */
-export function migrationFrom(body: unknown, dryRun: boolean): MigrationReading | null {
-  if (typeof body !== "object" || body === null) return null
-  const answer = body as Partial<Record<keyof StoreMigrateResponse, unknown>>
-  if (!Array.isArray(answer.merged) && !Array.isArray(answer.conflicts)) return null
-  const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [])
-  const conflicts = Array.isArray(answer.conflicts)
-    ? answer.conflicts.flatMap((conflict) =>
-        typeof conflict === "object" && conflict !== null && typeof (conflict as { name?: unknown }).name === "string"
-          ? [{ name: (conflict as { name: string }).name, files: strings((conflict as { files?: unknown }).files) }]
-          : [],
-      )
-    : []
-  const skipped = Array.isArray(answer.skipped)
-    ? answer.skipped.flatMap((skip) =>
-        typeof skip === "object" && skip !== null && typeof (skip as { file?: unknown }).file === "string"
-          ? [{ file: (skip as { file: string }).file, reason: String((skip as { reason?: unknown }).reason ?? "") }]
-          : [],
-      )
-    : []
-  return readMigration(
-    {
-      sources: strings(answer.sources),
-      merged: strings(answer.merged),
-      already: strings(answer.already),
-      overridden: strings(answer.overridden),
-      conflicts,
-      skipped,
-      written: answer.written === true,
-    },
-    dryRun,
-  )
-}
-
-/** What a retire did: the files deleted, and those kept with the steward's reason. */
-export function readRetire(answer: Pick<StoreRetireResponse, "retired" | "kept">): { retired: string[]; kept: string[] } {
-  return { retired: [...answer.retired], kept: answer.kept.map((keep) => `${keep.file}: ${keep.reason}`) }
 }

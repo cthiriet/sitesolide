@@ -26,7 +26,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useAnnounce } from "@/components/copy"
 import { INPUT_DIALOG } from "@/components/page"
 import type { FocusReturn, OnRefusal } from "@/components/secrets-dialogs"
-import { generateStoreVariable, migrateStore, restoreStore, setStoreFile, setStoreVariable } from "@/lib/api"
+import { generateStoreVariable, restoreStore, setStoreFile, setStoreVariable } from "@/lib/api"
 import { size } from "@/lib/format"
 import { MAX_UPLOAD_BYTES, refusalOf, succeeded } from "@/lib/secrets"
 import {
@@ -36,9 +36,7 @@ import {
   credentialPath,
   encodeBase64,
   generatedSummary,
-  migrationFrom,
   restoreSummary,
-  type MigrationReading,
 } from "@/lib/store"
 import { TONE_BANNER, TONE_TEXT } from "@/lib/tones"
 import type { GenerateFormat, StoreChangeResponse } from "@/lib/types"
@@ -46,8 +44,7 @@ import { cn } from "@/lib/utils"
 
 /**
  * The dialogs of a project's store: a value typed or drawn on the server, a
- * file uploaded, the store's previous version restored, legacy files merged
- * into it. Each sends what is asked as it stands and shows the steward's
+ * file uploaded, the store's previous version restored. Each sends what is asked as it stands and shows the steward's
  * refusal under its fields: the page judges no name, no size and no value.
  *
  * A value typed here leaves with the request and is forgotten: the field
@@ -79,7 +76,7 @@ export type ValueTarget = {
   name: string | null
   /** How the dialog opens; the person may switch. */
   mode: "type" | "generate"
-  /** A value is in force already, the store's or a legacy file's: drawing one replaces it. */
+  /** The store holds a value already: drawing one replaces it. */
   replaces: boolean
   /** Remounts the form on every opening: nothing typed before comes back. */
   opening: number
@@ -776,168 +773,6 @@ function RestoreBody({
           {state.phase === "working" ? "Restoring…" : "Restore"}
         </AlertDialogAction>
       </AlertDialogFooter>
-    </>
-  )
-}
-
-// --- Merging legacy files into the store ------------------------------------------
-
-export type MigrateTarget = { slug: string; opening: number }
-
-/**
- * The owner's merge of a project's legacy files into its store, without
- * anyone seeing a value: a dry run on opening, then the merge, which never
- * restarts. A conflict, a name two files give different values, stops it:
- * the dialog names the files, and the owner fixes one of them first.
- */
-export function MigrateDialog({
-  target,
-  open,
-  onClose,
-  onMerged,
-  onRefusal,
-  focusReturn,
-}: {
-  target: MigrateTarget | null
-  open: boolean
-  onClose: () => void
-  onMerged: (written: boolean) => void
-  onRefusal: OnRefusal
-  focusReturn: FocusReturn
-}) {
-  const [busy, setBusy] = useState(false)
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!next && !busy) onClose()
-      }}
-    >
-      <DialogContent finalFocus={focusReturn} className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Merge into the store</DialogTitle>
-          <DialogDescription className="text-pretty">
-            Copies the variables of {target?.slug}&apos;s legacy files into its store on the server, where they take
-            precedence. No value is shown, the files stay as they are, and nothing restarts.
-          </DialogDescription>
-        </DialogHeader>
-        {target !== null && (
-          <MigrateBody key={target.opening} target={target} setBusy={setBusy} onMerged={onMerged} onRefusal={onRefusal} />
-        )}
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function MigrationText({ reading }: { reading: MigrationReading }) {
-  return (
-    <div className="grid gap-2 text-sm text-pretty">
-      {reading.lines.map((line) => (
-        <p key={line.label}>
-          <span className="text-muted-foreground">{line.label}: </span>
-          <NameList names={line.names} />
-        </p>
-      ))}
-      {reading.skipped.length > 0 && (
-        <ul className="grid gap-1 text-muted-foreground">
-          {reading.skipped.map((skip) => (
-            <li key={skip}>Skipped {skip}</li>
-          ))}
-        </ul>
-      )}
-      {reading.conflicts.length > 0 && (
-        <div className={cn("grid gap-1 rounded-lg border px-3 py-2", TONE_BANNER.error)}>
-          <p className="font-medium">Two files give these names different values:</p>
-          <ul className="grid gap-0.5 font-mono text-xs">
-            {reading.conflicts.map((conflict) => (
-              <li key={conflict}>{conflict}</li>
-            ))}
-          </ul>
-          <p className="text-muted-foreground">
-            Remove each one from the file whose value is wrong, in the legacy files below, then merge again.
-          </p>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function MigrateBody({
-  target,
-  setBusy,
-  onMerged,
-  onRefusal,
-}: {
-  target: MigrateTarget
-  setBusy: (busy: boolean) => void
-  onMerged: (written: boolean) => void
-  onRefusal: OnRefusal
-}) {
-  const [state, setState] = useState<Phase<MigrationReading> | { phase: "done"; reading: MigrationReading }>({ phase: "checking" })
-  const started = useRef(false)
-
-  // The dry run, once per opening: the body remounts on every one.
-  useEffect(() => {
-    if (started.current) return
-    started.current = true
-    void (async () => {
-      const { status, body } = await migrateStore({ slug: target.slug, dryRun: true })
-      const reading = migrationFrom(body, true)
-      if (succeeded(status) && reading !== null) return setState({ phase: "ready", reading })
-      // A conflict may come back as a refusal that lists the names and files: shown with its message.
-      const message = onRefusal(refusalOf(status, body))
-      setState({ phase: "error", message: message ?? "", reading })
-    })()
-  }, [target.slug, onRefusal])
-
-  async function merge() {
-    if (state.phase !== "ready") return
-    const before = state.reading
-    setState({ phase: "working", reading: before })
-    setBusy(true)
-    try {
-      const { status, body } = await migrateStore({ slug: target.slug, dryRun: false })
-      const reading = migrationFrom(body, false)
-      if (succeeded(status) && reading !== null) {
-        setState({ phase: "done", reading })
-        return onMerged(body?.written === true)
-      }
-      const message = onRefusal(refusalOf(status, body))
-      setState({ phase: "error", message: message ?? "", reading: reading ?? before })
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const reading = state.phase === "checking" ? null : state.reading
-  return (
-    <>
-      {state.phase === "checking" && <p className="text-sm text-muted-foreground">Reading the legacy files…</p>}
-      {reading !== null && <MigrationText reading={reading} />}
-      {reading !== null && reading.nothing && state.phase !== "done" && (
-        <p className="text-sm text-pretty text-muted-foreground">Nothing to merge: the store already holds every variable.</p>
-      )}
-      {state.phase === "done" && (
-        <p role="status" className="text-sm text-pretty">
-          Merged. {target.slug} reads them at its next restart, with the same values as before. Once it has restarted,
-          Retire deletes each legacy file the store covers.
-        </p>
-      )}
-      {state.phase === "error" && state.message !== "" && (
-        <p role="alert" className="text-sm text-destructive">
-          {state.message}
-        </p>
-      )}
-      <DialogFooter>
-        <DialogClose render={<Button variant="outline" className="max-sm:h-11" />} disabled={state.phase === "working"}>
-          {state.phase === "done" ? "Close" : "Cancel"}
-        </DialogClose>
-        {state.phase !== "done" && (
-          <Button disabled={state.phase !== "ready" || !reading?.merge} onClick={() => void merge()} className="max-sm:h-11">
-            {state.phase === "working" ? "Merging…" : "Merge"}
-          </Button>
-        )}
-      </DialogFooter>
     </>
   )
 }

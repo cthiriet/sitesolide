@@ -316,12 +316,6 @@ export type UnitCredential = { id: string; path: string | null };
 export type UnitEnvironment = {
   /** The names set by `Environment=`, in the [Service] section. */
   keys: string[];
-  /**
-   * The values set by `Environment=`, in order. A service that opens its own
-   * secrets itself finds them through one of them:
-   * `SECRETS_DIR=/etc/sitesolide/<slug>-secrets`.
-   */
-  values: string[];
   files: UnitEnvFile[];
   /** The `LoadCredential=` lines, in order: a project's store hands its files so. */
   credentials: UnitCredential[];
@@ -337,7 +331,6 @@ export type UnitEnvironment = {
  */
 export function unitEnvironment(text: string): UnitEnvironment {
   const keys = new Set<string>();
-  const values: string[] = [];
   const files: UnitEnvFile[] = [];
   const credentials: UnitCredential[] = [];
   let section = "";
@@ -364,14 +357,11 @@ export function unitEnvironment(text: string): UnitEnvironment {
     if (directive === "Environment") {
       if (value === "") {
         keys.clear();
-        values.length = 0;
         continue;
       }
       for (const word of words(value)) {
         const separator = word.indexOf("=");
-        if (separator <= 0) continue;
-        keys.add(word.slice(0, separator));
-        values.push(word.slice(separator + 1));
+        if (separator > 0) keys.add(word.slice(0, separator));
       }
     } else if (directive === "EnvironmentFile") {
       if (value === "") {
@@ -390,7 +380,7 @@ export function unitEnvironment(text: string): UnitEnvironment {
     }
   }
 
-  return { keys: [...keys], values, files, credentials };
+  return { keys: [...keys], files, credentials };
 }
 
 /** The words of a directive, single and double quotes removed, `\` taking the next letter. */

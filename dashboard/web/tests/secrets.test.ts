@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test"
 import {
-  MAX_UPLOAD_BYTES,
   UNREACHABLE,
   LOG_MAX,
   PENDING_LABEL,
@@ -13,7 +12,6 @@ import {
   clockOffset,
   splitReason,
   latestOperations,
-  filePath,
   cutsTheDashboard,
   unlockStatus,
   systemdState,
@@ -24,7 +22,6 @@ import {
   refusalOf,
   operationPlace,
   readService,
-  readLocalText,
   readVerdict,
   fileOffer,
   variableOffer,
@@ -40,7 +37,7 @@ import {
   sortProjects,
 } from "../src/lib/secrets"
 import { serviceState } from "../src/lib/sites"
-import { logEntry, secretFile, secretProject, service, secretService } from "./factory"
+import { logEntry, secretFile, secretProject, service, secretService, storeVariable, storeView } from "./factory"
 
 const SECONDE = 1000
 const MINUTE = 60 * SECONDE
@@ -175,69 +172,26 @@ describe("projects", () => {
     expect(fileSummary(secretFile({ state: "unmanaged", variables: [] }))).toBeNull()
   })
 
-  test("a file read in one go states its size, never a variable count", () => {
-    const key = secretFile({ name: "builder-ssh", kind: "content", variables: [], bytes: 411, readable: false })
-    expect(fileSummary(key)).toBe("411 B")
-    expect(fileSummary({ ...key, bytes: 3 * 1024 })).toBe("3.0 KB")
-    expect(fileSummary({ ...key, bytes: 0 })).toBe("Empty")
-    expect(fileSummary({ ...key, bytes: null })).toBeNull()
-    expect(fileSummary({ ...key, state: "absent", bytes: null })).toBeNull()
-  })
-
-  test("a file filed in a subfolder is cut between folder and name", () => {
-    expect(filePath("builder-secrets/registry")).toEqual({ folder: "builder-secrets/", base: "registry" })
-    expect(filePath("a/b/c")).toEqual({ folder: "a/b/", base: "c" })
-    expect(filePath("cms.env")).toEqual({ folder: null, base: "cms.env" })
-    expect(filePath("/cms.env")).toEqual({ folder: null, base: "/cms.env" })
-    expect(filePath("dossier/")).toEqual({ folder: null, base: "dossier/" })
-  })
 })
 
 describe("what is offered for a file", () => {
-  const variables = (partial = {}) => secretFile(partial)
-  const content = (partial = {}) => secretFile({ kind: "content", variables: [], bytes: 100, ...partial })
-
-  test("a managed variables file: add, and restore if it keeps a version", () => {
-    expect(fileOffer(variables())).toEqual({
-      create: false,
-      restore: false,
-      add: true,
-      replace: false,
-      reveal: false,
-      writeOnly: false,
-    })
-    expect(fileOffer(variables({ previous: true })).restore).toBe(true)
+  test("a managed file: add, and restore if it keeps a version", () => {
+    expect(fileOffer(secretFile())).toEqual({ create: false, restore: false, add: true })
+    expect(fileOffer(secretFile({ previous: true })).restore).toBe(true)
   })
 
-  test("a file read in one go: replace, and reveal only if it is readable", () => {
-    expect(fileOffer(content({ readable: true }))).toMatchObject({ replace: true, reveal: true, add: false, writeOnly: false })
-    expect(fileOffer(content({ readable: false }))).toMatchObject({ replace: true, reveal: false, writeOnly: true })
+  test("absent: only create it", () => {
+    expect(fileOffer(secretFile({ state: "absent", variables: [] }))).toEqual({ create: true, restore: false, add: false })
   })
 
-  test("absent: only create it, of either kind", () => {
-    for (const file of [variables({ state: "absent" }), content({ state: "absent", readable: false })]) {
-      expect(fileOffer(file)).toMatchObject({ create: true, add: false, replace: false, reveal: false })
-    }
-    expect(fileOffer(content({ state: "absent", readable: false })).writeOnly).toBe(true)
+  test("unmanaged: nothing, not even restore", () => {
+    expect(fileOffer(secretFile({ state: "unmanaged", previous: true, variables: [] }))).toEqual({ create: false, restore: false, add: false })
   })
 
-  test("unmanaged: nothing, not even restore, and write-only is not stated", () => {
-    expect(fileOffer(content({ state: "unmanaged", previous: true, readable: false }))).toEqual({
-      create: false,
-      restore: false,
-      add: false,
-      replace: false,
-      reveal: false,
-      writeOnly: false,
-    })
-  })
-
-  test("a password variable only offers Change password, readable or not", () => {
-    const dashboard = variables({ variables: ["PASSWORD_HASH", "COOKIE"], passwords: ["PASSWORD_HASH"] })
-    expect(variableOffer(dashboard, "PASSWORD_HASH")).toBe("password")
-    expect(variableOffer(dashboard, "COOKIE")).toBe("read-write")
-    expect(variableOffer({ ...dashboard, readable: false }, "PASSWORD_HASH")).toBe("password")
-    expect(variableOffer({ ...dashboard, readable: false }, "COOKIE")).toBe("write")
+  test("a password variable only offers Change password", () => {
+    const portal = secretFile({ variables: ["PASSWORD_HASH", "OIDC_CLIENT_SECRET"], passwords: ["PASSWORD_HASH"] })
+    expect(variableOffer(portal, "PASSWORD_HASH")).toBe("password")
+    expect(variableOffer(portal, "OIDC_CLIENT_SECRET")).toBe("read-write")
   })
 })
 
@@ -321,13 +275,14 @@ describe("service", () => {
 describe("restoring", () => {
   test("only the files that have a previous version, the most recently modified first", () => {
     const project = secretProject({
+      slug: "dashboard",
       files: [
-        secretFile({ name: "older.env", previous: true, modifiedAt: NOW - MINUTE }),
-        secretFile({ name: "plain.env", previous: false, modifiedAt: NOW }),
-        secretFile({ name: "recent.env", previous: true, modifiedAt: NOW }),
+        secretFile({ name: "dashboard-monitor.env", previous: true, modifiedAt: NOW - MINUTE }),
+        secretFile({ name: "dashboard.env", previous: false, modifiedAt: NOW }),
+        secretFile({ name: "dashboard-backup.env", previous: true, modifiedAt: NOW }),
       ],
     })
-    expect(restorableFiles(project).map((file) => file.name)).toEqual(["recent.env", "older.env"])
+    expect(restorableFiles(project).map((file) => file.name)).toEqual(["dashboard-backup.env", "dashboard-monitor.env"])
   })
 
   test("an unmanaged file is never offered", () => {
@@ -404,18 +359,19 @@ describe("what is wrong in a project", () => {
 
   test("errors first, then warnings, in the order service, missing, unmanaged, pending", () => {
     const project = secretProject({
+      slug: "dashboard",
       service: panne,
       files: [
-        secretFile({ name: "cms.env", restartPending: true }),
-        secretFile({ name: "cms-smtp.env", state: "unmanaged", variables: [] }),
-        secretFile({ name: "cms-api.env", state: "absent", variables: [], modifiedAt: null }),
+        secretFile({ name: "dashboard.env", restartPending: true }),
+        secretFile({ name: "dashboard-monitor.env", state: "unmanaged", variables: [] }),
+        secretFile({ name: "dashboard-backup.env", state: "absent", variables: [], modifiedAt: null }),
       ],
     })
     expect(projectProblems(project, NOW)).toEqual([
       { key: "service", tone: "error", label: "Restarting", systemd: "activating (auto-restart)" },
-      { key: "absent", tone: "error", label: "Missing", file: "cms-api.env" },
-      { key: "unmanaged", tone: "attention", label: "Unmanaged", file: "cms-smtp.env" },
-      { key: "pending", tone: "attention", label: PENDING_LABEL, files: ["cms.env"], variables: false },
+      { key: "absent", tone: "error", label: "Missing", file: "dashboard-backup.env" },
+      { key: "unmanaged", tone: "attention", label: "Unmanaged", file: "dashboard-monitor.env" },
+      { key: "pending", tone: "attention", label: PENDING_LABEL, files: ["dashboard.env"], variables: false },
     ])
     expect(fileProblems(project, NOW).map((problem) => problem.key)).toEqual(["absent", "unmanaged", "pending"])
   })
@@ -432,13 +388,14 @@ describe("what is wrong in a project", () => {
   /** The restart holds for the whole service: one single pending item, naming every file. */
   test("the pending restart is stated once for the project", () => {
     const project = secretProject({
+      slug: "dashboard",
       files: [
-        secretFile({ name: "cms.env", restartPending: true }),
-        secretFile({ name: "cms-smtp.env", restartPending: false }),
-        secretFile({ name: "cms-api.env", restartPending: true }),
+        secretFile({ name: "dashboard.env", restartPending: true }),
+        secretFile({ name: "dashboard-monitor.env", restartPending: false }),
+        secretFile({ name: "dashboard-backup.env", restartPending: true }),
       ],
     })
-    expect(pendingFiles(project)).toEqual(["cms.env", "cms-api.env"])
+    expect(pendingFiles(project)).toEqual(["dashboard.env", "dashboard-backup.env"])
     expect(projectProblems(project, NOW)).toHaveLength(1)
   })
 
@@ -446,7 +403,7 @@ describe("what is wrong in a project", () => {
     const project = secretProject({
       files: [
         secretFile({ restartPending: true }),
-        secretFile({ name: "cms-smtp.env", state: "absent", variables: [] }),
+        secretFile({ name: "dashboard-monitor.env", state: "absent", variables: [] }),
       ],
     })
     expect(fileProblems(project, NOW).map((problem) => problem.label)).toEqual(["Missing", PENDING_LABEL])
@@ -455,13 +412,13 @@ describe("what is wrong in a project", () => {
 
 describe("reason for an unmanaged file", () => {
   test("the command quoted after the colon is set apart", () => {
-    expect(splitReason("owned by uid 0, not site-cms: sudo chown site-cms /etc/sitesolide/cms.env")).toEqual({
-      text: "Owned by uid 0, not site-cms.",
-      command: "sudo chown site-cms /etc/sitesolide/cms.env",
+    expect(splitReason("owned by uid 0, not site-portal: sudo chown site-portal /etc/sitesolide/portal.env")).toEqual({
+      text: "Owned by uid 0, not site-portal.",
+      command: "sudo chown site-portal /etc/sitesolide/portal.env",
     })
-    expect(splitReason("mode 644 opens it beyond its owner: sudo chmod 600 /etc/sitesolide/cms.env")).toEqual({
+    expect(splitReason("mode 644 opens it beyond its owner: sudo chmod 600 /etc/sitesolide/portal.env")).toEqual({
       text: "Mode 644 opens it beyond its owner.",
-      command: "sudo chmod 600 /etc/sitesolide/cms.env",
+      command: "sudo chmod 600 /etc/sitesolide/portal.env",
     })
   })
 
@@ -514,12 +471,14 @@ describe("log", () => {
 
   test("every operation names its object, and the location does not repeat it", () => {
     expect(operationParts(logEntry({ operation: "set" }))).toEqual({ verb: "Set", object: "CMS_TOKEN", kind: "variable" })
-    expect(operationPlace(logEntry({ operation: "set" }))).toEqual({ project: "cms", file: "cms.env" })
+    expect(operationPlace(logEntry({ operation: "set" }))).toEqual({ project: "cms", file: "store" })
+    expect(operationPlace(logEntry({ operation: "set", slug: "portal", file: "portal.env" }))).toEqual({ project: "portal", file: "portal.env" })
     expect(operationParts(logEntry({ operation: "read" }))).toMatchObject({ verb: "Read", object: "CMS_TOKEN" })
     expect(operationParts(logEntry({ operation: "remove" }))).toMatchObject({ verb: "Remove", object: "CMS_TOKEN" })
-    expect(operationParts(logEntry({ operation: "create", variable: null }))).toMatchObject({ verb: "Create", object: "cms.env" })
-    expect(operationPlace(logEntry({ operation: "create", variable: null }))).toEqual({ project: "cms", file: null })
-    expect(operationParts(logEntry({ operation: "restore", variable: null }))).toMatchObject({ verb: "Restore", object: "cms.env" })
+    const platform = { slug: "portal", file: "portal.env", variable: null }
+    expect(operationParts(logEntry({ operation: "create", ...platform }))).toMatchObject({ verb: "Create", object: "portal.env" })
+    expect(operationPlace(logEntry({ operation: "create", ...platform }))).toEqual({ project: "portal", file: null })
+    expect(operationParts(logEntry({ operation: "restore", ...platform }))).toMatchObject({ verb: "Restore", object: "portal.env" })
     expect(operationParts(logEntry({ operation: "restart", file: null, variable: null }))).toMatchObject({
       verb: "Restart",
       object: "cms",
@@ -587,9 +546,9 @@ describe("log", () => {
       object: "CMS_TOKEN",
       kind: "variable",
     })
-    expect(operationParts(logEntry({ operation: "restore", variable: null }))).toEqual({
+    expect(operationParts(logEntry({ operation: "restore", file: "portal.env", variable: null }))).toEqual({
       verb: "Restore",
-      object: "cms.env",
+      object: "portal.env",
       kind: "file",
     })
     expect(operationParts(logEntry({ operation: "restart", file: null, variable: null }))).toEqual({
@@ -661,16 +620,16 @@ describe("secrets in the sites table", () => {
   test("the variables of every file, and the pending restart if a single file is pending", () => {
     const bySite = secretsBySite([
       secretProject({
-        slug: "cms",
+        slug: "dashboard",
         files: [
-          secretFile({ variables: ["CMS_TOKEN"] }),
-          secretFile({ name: "cms-smtp.env", variables: ["SMTP_PASSWORD"], restartPending: true }),
+          secretFile({ name: "dashboard-monitor.env", variables: ["HEARTBEAT_URL"] }),
+          secretFile({ name: "dashboard-backup.env", variables: ["RESTIC_PASSWORD"], restartPending: true }),
         ],
       }),
-      secretProject({ slug: "calendar", files: [secretFile({ name: "calendar.env", variables: ["MAIL_KEY"] })] }),
+      secretProject({ files: [secretFile({ variables: ["OIDC_CLIENT_SECRET"] })] }),
     ])
-    expect(bySite.get("cms")).toEqual({ variables: ["CMS_TOKEN", "SMTP_PASSWORD"], restartPending: true })
-    expect(bySite.get("calendar")).toEqual({ variables: ["MAIL_KEY"], restartPending: false })
+    expect(bySite.get("dashboard")).toEqual({ variables: ["HEARTBEAT_URL", "RESTIC_PASSWORD"], restartPending: true })
+    expect(bySite.get("portal")).toEqual({ variables: ["OIDC_CLIENT_SECRET"], restartPending: false })
   })
 
   test("before the first load, nothing", () => {
@@ -679,7 +638,7 @@ describe("secrets in the sites table", () => {
 
   test("every site receives its own, the others stay as they are", () => {
     const sites = [{ slug: "cms" }, { slug: "wheels" }]
-    const bySite = secretsBySite([secretProject({ slug: "cms" })])
+    const bySite = secretsBySite([secretProject({ slug: "cms", files: [], store: storeView({ variables: [storeVariable({ name: "CMS_TOKEN" })] }) })])
     const enriched = withSecrets(sites, bySite)
     expect(enriched[0]).toEqual({ slug: "cms", variables: ["CMS_TOKEN"], restartPending: false })
     expect(enriched[1]).toBe(sites[1]!)
@@ -726,25 +685,5 @@ describe("generated token", () => {
     expect(a).toHaveLength(43)
     expect(a).toMatch(ALPHABET)
     expect(a).not.toBe(b)
-  })
-})
-
-describe("file read in the browser", () => {
-  const bytes = (text: string) => new TextEncoder().encode(text)
-
-  test("a UTF-8 text is read as it is, line breaks included", () => {
-    expect(readLocalText(bytes("-----BEGIN KEY-----\nabc\n"))).toEqual({ text: "-----BEGIN KEY-----\nabc\n" })
-    expect(readLocalText(bytes("clé é"))).toEqual({ text: "clé é" })
-    expect(readLocalText(new Uint8Array())).toEqual({ text: "" })
-  })
-
-  test("a byte that is not UTF-8 rejects the file, with no replacement character", () => {
-    const read = readLocalText(new Uint8Array([0x61, 0xff, 0x62]))
-    expect("error" in read).toBe(true)
-  })
-
-  test("beyond one megabyte, the file is not read", () => {
-    expect("error" in readLocalText(new Uint8Array(MAX_UPLOAD_BYTES + 1))).toBe(true)
-    expect(readLocalText(new Uint8Array(MAX_UPLOAD_BYTES).fill(0x61))).toMatchObject({ text: expect.any(String) })
   })
 })

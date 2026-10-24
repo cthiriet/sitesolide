@@ -10,7 +10,6 @@
  */
 import type {
   WithToken,
-  ContentRequest,
   UnlockRequest,
   FileRequest,
   PasswordRequest,
@@ -24,10 +23,8 @@ import type {
   StoreFileRemoveRequest,
   StoreFileRequest,
   StoreGenerateRequest,
-  StoreMigrateRequest,
   StoreRemoveRequest,
   StoreRestoreRequest,
-  StoreRetireRequest,
   StoreRevealRequest,
   StoreSetRequest,
 } from "../../borrowed/store-protocol";
@@ -46,8 +43,6 @@ export type Steward = {
   removeVariable: (requested: VariableRequest) => Promise<Response>;
   createFile: (requested: FileRequest) => Promise<Response>;
   restoreFile: (requested: FileRequest) => Promise<Response>;
-  readContent: (requested: FileRequest) => Promise<Response>;
-  replaceContent: (requested: ContentRequest) => Promise<Response>;
   changePassword: (requested: PasswordRequest) => Promise<Response>;
   togglePortal: (requested: PortalRequest) => Promise<Response>;
   restart: (requested: ProjectRequest) => Promise<Response>;
@@ -62,8 +57,6 @@ export type Steward = {
   restoreStore: (requested: WithToken & StoreRestoreRequest) => Promise<Response>;
   /** The one route that answers a value: the owner's live unlock token alone. */
   revealStoreValue: (requested: WithToken & StoreRevealRequest) => Promise<Response>;
-  migrateStore: (requested: WithToken & StoreMigrateRequest) => Promise<Response>;
-  retireStore: (requested: WithToken & StoreRetireRequest) => Promise<Response>;
 };
 
 export type Timeouts = {
@@ -127,8 +120,6 @@ export function localSteward(socket: string, timeouts: Timeouts = DEFAULT_TIMEOU
     removeVariable: (requested) => call("DELETE", "/variable", requested, timeouts.longMs),
     createFile: (requested) => call("POST", "/file", requested, timeouts.longMs),
     restoreFile: (requested) => call("POST", "/restore", requested, timeouts.longMs),
-    readContent: (requested) => call("POST", "/content", requested, timeouts.longMs),
-    replaceContent: (requested) => call("PUT", "/content", requested, timeouts.longMs),
     changePassword: (requested) => call("POST", "/password", requested, timeouts.longMs),
     togglePortal: (requested) => call("POST", "/portal", requested, timeouts.longMs),
     restart: (requested) => call("POST", "/restart", requested, timeouts.longMs),
@@ -141,7 +132,5 @@ export function localSteward(socket: string, timeouts: Timeouts = DEFAULT_TIMEOU
     removeStoreFile: (requested) => call("DELETE", "/store/file", requested, timeouts.longMs),
     restoreStore: (requested) => call("POST", "/store/restore", requested, timeouts.longMs),
     revealStoreValue: (requested) => call("POST", "/store/value", requested, timeouts.longMs),
-    migrateStore: (requested) => call("POST", "/store/migrate", requested, timeouts.longMs),
-    retireStore: (requested) => call("POST", "/store/retire", requested, timeouts.longMs),
   };
 }

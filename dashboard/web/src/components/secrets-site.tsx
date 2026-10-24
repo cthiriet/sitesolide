@@ -7,7 +7,7 @@ import { ErrorState, Panel, RowsSkeleton, Status } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { SectionLink } from "@/components/site"
 import { ago } from "@/lib/format"
-import { UNREACHABLE, PENDING_LABEL, splitReason, pendingFiles, pendingVariables, pendingPhrase, fileOffer, fileSummary } from "@/lib/secrets"
+import { UNREACHABLE, PENDING_LABEL, splitReason, pendingFiles, pendingVariables, pendingPhrase, fileSummary } from "@/lib/secrets"
 import { storeOverview } from "@/lib/store"
 import type { ProjectView } from "@/lib/types"
 
@@ -66,13 +66,10 @@ function Content({ project }: { project: ProjectView }) {
           const reason = file.state === "unmanaged" ? splitReason(file.reason ?? "").text : null
           const detail =
             file.state === "absent"
-              ? "Declared, but not on the server"
+              ? "Read by its service, but not on the server"
               : reason !== null
                 ? reason
                 : [
-                    // Beside a store, a flat file is one of before: said first.
-                    project.store !== null ? "Legacy file" : null,
-                    fileOffer(file).writeOnly ? "Write-only" : null,
                     count,
                     file.modifiedAt !== null ? `changed ${ago(actions.serverNow - file.modifiedAt)}` : null,
                   ]
@@ -96,9 +93,9 @@ function Content({ project }: { project: ProjectView }) {
 
 /**
  * A site's secrets, on its Overview: its store in a few rows (variables,
- * files, legacy files), then its legacy files, what they hold in one sentence,
- * their state and the restart pending. No value: the inventory belongs to the
- * Secrets section. The only action is the restart; everything else is done in
+ * files), or, for the dashboard and the portal, their own files, what they
+ * hold in one sentence, their state and the restart pending. No value: the
+ * inventory belongs to the Secrets section. The only action is the restart; everything else is done in
  * the Secrets section, where *Manage* leads.
  *
  * Nothing for a site with no secret at all. As long as the secrets have not

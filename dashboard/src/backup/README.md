@@ -56,7 +56,7 @@ repositories, and the next deploy puts them back.
   folder is saved as its files, named too (`liveAsFiles`).
 
 **The machine's own state**, under the name `machine`, first in every run:
-`/etc/sitesolide`, every project's secret files; `/var/lib/sitesolide-steward`,
+`/etc/sitesolide`, every project's store and the platform's own files; `/var/lib/sitesolide-steward`,
 who may open which site, the previous versions of the secrets and the
 steward's log; `/etc/caddy`, the preview codes, the zone's settings, the DNS
 token and the table of the clients' domains. No repository gives them back:
@@ -517,7 +517,7 @@ by this version's `bun backup.ts decrypt <file> <output>`, as before.
 
 ### The machine's own state
 
-Never all at once: a secret file is put back where it is missing or wrong,
+Never all at once: a store is put back where it is missing or wrong,
 the access registry when it is lost. An old copy brings back old values,
 keys since rotated among them. From the server's repository, or from the
 bucket as above:
@@ -529,9 +529,9 @@ restic snapshots --path /machine.tar
 mkdir -m 700 /root/machine && restic dump <id> /machine.tar | tar -xf - -C /root/machine --no-same-owner
 ls -R /root/machine/data         # etc/sitesolide, var/lib/sitesolide-steward, etc/caddy
 
-# A project's secret file, owned by its account, root's for the dashboard's files:
-# the dashboard's Secrets page names a wrong owner and the command that sets it.
-install -m 600 -o site-cms -g site-cms /root/machine/data/etc/sitesolide/cms.env /etc/sitesolide/cms.env
+# A project's store, root's alone: its folders 0700, its files 0600.
+cp -a /root/machine/data/etc/sitesolide/projects/cms /etc/sitesolide/projects/
+chown -R root:root /etc/sitesolide/projects/cms
 systemctl restart cms
 
 # The access registry: the steward writes the portal's projection again as it starts.
@@ -544,8 +544,8 @@ rm -rf /root/machine
 ```
 
 On a new machine, `sitesolide init` and `sitesolide setup` first, then a
-deploy of each project, which creates its account; its secret files then
-follow, and the domains and preview codes come back as each project is
+deploy of each project, which creates its account; its store then
+follows, and the domains and preview codes come back as each project is
 deployed and its access set again. `/etc/caddy/cloudflare.env` holds the DNS
 token, as the copy found it.
 

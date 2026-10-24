@@ -20,12 +20,6 @@
  * to site-<slug> would demand CAP_FOWNER, hence the order `fchmod` then
  * `fchown`, and `link()` would demand it too under `protected_hardlinks`,
  * hence a creation by `O_EXCL` on the final name.
- *
- * A subdirectory such as `<slug>-secrets/` asks for nothing more: it belongs to
- * root, which creates and renames there by the owner's rights, and the 0400
- * mode of a file kept there is set on the descriptor already open for writing,
- * before the `fchown`. Reasoned, not yet measured: see the laboratory report to
- * come.
  */
 import {
   appendFileSync,
@@ -67,11 +61,8 @@ import {
   type AccessWindow,
 } from "./log";
 import {
-  nameRefusal,
   pathUnder,
   MAX_FILE_BYTES,
-  SUBFOLDER_SUFFIX,
-  subFolderOf,
   type ProjectEntry,
   type FolderInfo,
   type FileInfo,
@@ -126,17 +117,14 @@ export type System = {
   /** The directories of SITES_DIR, with the text of their manifest. */
   listProjects: () => Promise<ProjectEntry[]>;
   /**
-   * The files of the secrets directory, flat or one level down in a
-   * `<slug>-secrets` subdirectory, as `name` or `sub/name`. Hidden names are
-   * left out: they are this steward's own temporary files.
+   * The plain files of the secrets directory, flat. Hidden names are left
+   * out: they are this steward's own temporary files.
    */
   listSecrets: () => Promise<string[]>;
   /** The unit and its `.d/*.conf` extensions put end to end, null if the unit is missing. */
   readUnit: (unit: string) => Promise<string | null>;
-  /** `name` under the secrets directory, flat or in a subdirectory. */
+  /** A flat `name` under the secrets directory. */
   examineSecret: (name: string) => Promise<Examination>;
-  /** A subdirectory of the secrets directory, `<slug>-secrets`, without following a link. null if missing. */
-  examineFolder: (name: string) => Promise<FolderInfo | null>;
   account: (name: string) => Promise<Account | null>;
   /** Replaces the file, by rename. */
   writeSecret: (name: string, bytes: Uint8Array, permissions: Permissions) => Promise<void>;
@@ -225,32 +213,20 @@ export type System = {
   removeStoreFile: (slug: string, name: string) => Promise<void>;
   readStorePrevious: (slug: string, part: StorePreviousPart) => Promise<Examination>;
   /**
-   * A version kept, root's 0600 unless `owner` says whose: a retired legacy
-   * file keeps the account it had, so that putting it back by hand is one
-   * `cp -p`. Every part lies under the project's own folder of previous
-   * versions, which `sitesolide remove` deletes whole.
+   * A version kept, root's 0600. Every part lies under the project's own
+   * folder of previous versions, which `sitesolide remove` deletes whole.
    */
-  writeStorePrevious: (slug: string, part: StorePreviousPart, bytes: Uint8Array, owner?: Account | null) => Promise<void>;
-  /** The legacy files retire kept a copy of for this project, by name. */
-  listRetired: (slug: string) => Promise<string[]>;
-  /** A legacy flat file removed, fsync of the folder included: retire. */
-  removeLegacy: (name: string) => Promise<void>;
+  writeStorePrevious: (slug: string, part: StorePreviousPart, bytes: Uint8Array) => Promise<void>;
 };
 
 /** The store's three folders: `projects`, `projects/<slug>`, `projects/<slug>/files`. */
 export type StoreFolderPart = "root" | "folder" | "files";
 
 /**
- * A version the steward keeps of a store's env, of one of its files, or of a
- * legacy flat file retire deleted (`legacy/<name>`): all under
+ * A version the steward keeps of a store's env or of one of its files: under
  * `precedents/projects/<slug>/`, the project's own, which a removal deletes.
  */
-export type StorePreviousPart = "env" | `files/${string}` | `legacy/${string}`;
-
-/** A legacy flat file's name, as retire keeps a copy under it: one component, no dot first. */
-function isLegacyCopyName(name: string): boolean {
-  return nameRefusal(name) === null && !name.includes("/");
-}
+export type StorePreviousPart = "env" | `files/${string}`;
 
 /** A manifest, a unit, a hash: none of them has any reason to be bigger. */
 const MAX_TEXT_BYTES = 256 * 1024;
@@ -279,28 +255,13 @@ function toInfo(stat: Stats): FileInfo {
 }
 
 /**
- * The path of a name under a directory, or an exception. The steward has
- * already judged the name: this is the second lock, which holds even if the
- * first gives way. A subdirectory must be a real directory: `O_NOFOLLOW`
- * protects only the last component, and a link in the place of
- * `<slug>-secrets` would make it write elsewhere. Missing, it gets through: the
- * opening will fail by itself.
+ * The path of a flat name under a directory, or an exception. The steward
+ * has already judged the name: this is the second lock, which holds even if
+ * the first gives way.
  */
 function subState(folder: string, name: string): string {
   const path = pathUnder(folder, name);
-  if (path === null || name.split("/").some((component) => component.startsWith("."))) {
-    throw new Error("path outside its folder");
-  }
-  const subFolder = subFolderOf(name);
-  if (subFolder !== null) {
-    let isFolder = true;
-    try {
-      isFolder = lstatSync(join(folder, subFolder)).isDirectory();
-    } catch (error) {
-      if (errorCode(error) !== "ENOENT") throw error;
-    }
-    if (!isFolder) throw new Error("subfolder is not a plain folder");
-  }
+  if (path === null || name.startsWith(".")) throw new Error("path outside its folder");
   return path;
 }
 
@@ -707,24 +668,19 @@ export function createSystem(config: SystemConfig): System {
   /** The folders of the versions kept of a slug's store, the slug validated. */
   const previousFolders = (slug: string) => {
     const { folder, env, files } = storePaths(slug, storePreviousRoot);
-    return { root: storePreviousRoot, folder, env, files, legacy: join(folder, "legacy") };
+    return { root: storePreviousRoot, folder, env, files };
   };
-  /** The path of a kept version, its part validated: `env`, `files/<valid name>`, or `legacy/<flat legacy name>`. */
+  /** The path of a kept version, its part validated: `env`, or `files/<valid name>`. */
   const previousPath = (slug: string, part: StorePreviousPart): string => {
     const folders = previousFolders(slug);
     if (part === "env") return folders.env;
-    if (part.startsWith("legacy/")) {
-      const name = part.slice("legacy/".length);
-      if (!isLegacyCopyName(name)) throw new Error("not a legacy file's name");
-      return join(folders.legacy, name);
-    }
     if (!part.startsWith("files/")) throw new Error("not a part of a store");
     return storeFilePath(slug, part.slice("files/".length), storePreviousRoot);
   };
   /** The kept versions' folders a part lies in, judged real before anything below them is touched. */
   const previousChain = (slug: string, part: StorePreviousPart): string[] => {
     const folders = previousFolders(slug);
-    return [folders.root, folders.folder, ...(part === "env" ? [] : [part.startsWith("legacy/") ? folders.legacy : folders.files])];
+    return [folders.root, folders.folder, ...(part === "env" ? [] : [folders.files])];
   };
   const logFile = join(config.stateFolder, "journal.jsonl");
   const accessLogFile = join(config.stateFolder, ACCESS_LOG_NAME);
@@ -835,19 +791,14 @@ export function createSystem(config: SystemConfig): System {
       }
     };
     const folders: string[] = [];
-    for (const root of [config.secretsFolder, previousFolder]) {
-      folders.push(root);
-      for (const entry of read(root)) {
-        if (entry.isDirectory() && entry.name.endsWith(SUBFOLDER_SUFFIX)) folders.push(join(root, entry.name));
-      }
-    }
+    folders.push(config.secretsFolder, previousFolder);
     for (const root of [storeRoot, storePreviousRoot]) {
       for (const entry of read(root)) {
         if (!entry.isDirectory()) continue;
         const folder = join(root, entry.name);
         folders.push(folder);
         for (const inner of read(folder)) {
-          if (inner.isDirectory() && (inner.name === "files" || inner.name === "legacy")) folders.push(join(folder, inner.name));
+          if (inner.isDirectory() && inner.name === "files") folders.push(join(folder, inner.name));
         }
       }
     }
@@ -878,12 +829,7 @@ export function createSystem(config: SystemConfig): System {
         }
       };
       for (const entry of read(config.secretsFolder)) {
-        if (entry.name.startsWith(".")) continue;
-        if (entry.isFile()) names.push(entry.name);
-        if (!entry.isDirectory() || !entry.name.endsWith(SUBFOLDER_SUFFIX)) continue;
-        for (const inner of read(join(config.secretsFolder, entry.name))) {
-          if (!inner.name.startsWith(".") && inner.isFile()) names.push(`${entry.name}/${inner.name}`);
-        }
+        if (!entry.name.startsWith(".") && entry.isFile()) names.push(entry.name);
       }
       return names.sort();
     },
@@ -929,17 +875,6 @@ export function createSystem(config: SystemConfig): System {
       return readBounded(subState(config.secretsFolder, name), MAX_FILE_BYTES);
     },
 
-    async examineFolder(name) {
-      if (!/^[A-Za-z0-9_-][A-Za-z0-9._-]*$/.test(name)) throw new Error("not a subfolder name");
-      try {
-        const stat = lstatSync(join(config.secretsFolder, name));
-        return { link: stat.isSymbolicLink(), folder: stat.isDirectory(), uid: stat.uid, mode: stat.mode & 0o7777 };
-      } catch (error) {
-        if (errorCode(error) === "ENOENT") return null;
-        throw error;
-      }
-    },
-
     async account(name) {
       const text = boundedText(config.accountsFile);
       return text === null ? null : readAccount(text, name);
@@ -959,9 +894,6 @@ export function createSystem(config: SystemConfig): System {
 
     async writePrevious(name, bytes, owner) {
       prepareState();
-      // The subdirectory of a previous version is ours, closed like precedents/.
-      const subFolder = subFolderOf(name);
-      if (subFolder !== null) mkdirSync(join(previousFolder, subFolder), { recursive: true, mode: 0o700 });
       writeAtomically(previousFolder, name, bytes, { owner, mode: 0o600 });
     },
 
@@ -1159,8 +1091,7 @@ export function createSystem(config: SystemConfig): System {
         }
         if (path === folders.folder) {
           // A slug removed then created again must not find its
-          // predecessor's previous versions to restore (createFresh in
-          // steward.ts gives the same reason for a legacy file).
+          // predecessor's previous versions to restore.
           realFolders([storePreviousRoot]);
           rmSync(previousFolders(slug).folder, { recursive: true, force: true });
           created = true;
@@ -1246,36 +1177,14 @@ export function createSystem(config: SystemConfig): System {
     async readStorePrevious(slug, part) {
       const path = previousPath(slug, part);
       realFolders(previousChain(slug, part));
-      const max = part === "env" ? MAX_STORE_ENV_BYTES : part.startsWith("legacy/") ? MAX_FILE_BYTES : MAX_STORE_FILE_BYTES;
+      const max = part === "env" ? MAX_STORE_ENV_BYTES : MAX_STORE_FILE_BYTES;
       return readBounded(path, max);
     },
 
-    async writeStorePrevious(slug, part, bytes, owner = null) {
+    async writeStorePrevious(slug, part, bytes) {
       const path = previousPath(slug, part);
       preparePrevious(slug, part);
-      writeAtomically(dirname(path), basename(path), bytes, { owner, mode: 0o600 });
-    },
-
-    async listRetired(slug) {
-      const folders = previousFolders(slug);
-      realFolders([folders.root, folders.folder, folders.legacy]);
-      let names: string[];
-      try {
-        names = readdirSync(folders.legacy);
-      } catch (error) {
-        const code = errorCode(error);
-        if (code === "ENOENT" || code === "ENOTDIR") return [];
-        throw error;
-      }
-      return names.filter((name) => !isTemporary(name) && isLegacyCopyName(name)).sort();
-    },
-
-    async removeLegacy(name) {
-      // A flat name, as retire takes: never a subfolder's file, never a hidden one.
-      if (typeof name !== "string" || name.includes("/") || name.startsWith(".")) throw new Error("not a legacy file's name");
-      const path = subState(config.secretsFolder, name);
-      unlinkSync(path);
-      syncFolder(config.secretsFolder);
+      writeAtomically(dirname(path), basename(path), bytes, { owner: null, mode: 0o600 });
     },
 
     /**

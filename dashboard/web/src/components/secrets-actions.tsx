@@ -2,7 +2,6 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
 import { GeneralAccessDialog, type ChangeState } from "@/components/access-general"
-import { ContentDialog } from "@/components/secrets-content"
 import {
   ConfirmDialog,
   PersonUnlockDialog,
@@ -18,7 +17,6 @@ import { PasswordDialog } from "@/components/secrets-password"
 import type { ReadResult } from "@/components/secrets-variables"
 import {
   createSecretFile,
-  readSecretContent,
   readSecrets,
   readSecretValue,
   restartService,
@@ -45,8 +43,7 @@ import type { GeneralAccess } from "@/lib/types"
 /**
  * The actions on a site's secrets and general access, and their dialogs,
  * shared by every section: unlock, read, set, remove, create, restore,
- * replace a file, change a password, restart, change a site's general
- * access: Public, Restricted, Anyone with the code, a new code.
+ * change a password, restart, change a site's general access: Public, Restricted, Anyone with the code, a new code.
  *
  * Everything that writes goes through the steward, which judges. An action
  * asked while locked opens the unlock, then carries on once unlocked here;
@@ -102,13 +99,11 @@ export type SecretsActions = {
   /** A restart with no confirmation, its verdict in the dialog: after *Save & restart*. */
   restartNow: (slug: string) => void
   read: (target: VariableTarget) => Promise<ReadResult>
-  readContent: (target: FileTarget) => Promise<ReadResult>
   add: (target: FileTarget) => void
   modifier: (target: VariableTarget) => void
   remove: (target: VariableTarget) => void
   create: (target: FileTarget) => void
   restore: (target: FileTarget) => void
-  replace: (target: FileTarget) => void
   changePassword: (target: VariableTarget) => void
   restart: (slug: string) => void
   /** `warning`, said in the confirmation: who still opens a site restricted with nobody on its list. */
@@ -165,7 +160,6 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   const [confirmationInProgress, setConfirmationInProgress] = useState(false)
   const [confirmError, setConfirmError] = useState("")
   const [restartState, setRestartState] = useState<RestartState | null>(null)
-  const [replacement, setReplacement] = useState<Opening<FileTarget> | null>(null)
   const [password, setPassword] = useState<Opening<VariableTarget> | null>(null)
   const [accessChange, setAccessChange] = useState<ChangeState | null>(null)
   const [creation, setCreation] = useState<string | null>(null)
@@ -280,7 +274,6 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     setRemoval((before) => before && { ...before, open: false })
     setRestauration((before) => before && { ...before, open: false })
     setRestartState((before) => before && { ...before, open: false })
-    setReplacement((before) => before && { ...before, open: false })
     setPassword((before) => before && { ...before, open: false })
     setAccessChange((before) => before && { ...before, open: false })
   }
@@ -355,7 +348,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  // --- Reading a value or contents
+  // --- Reading a value
 
   async function readWith(call: () => Promise<{ status: number; body: unknown }>, extract: (body: unknown) => string | null) {
     const { status, body } = await call()
@@ -381,10 +374,6 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     return readWith(() => readSecretValue(target), textField("value"))
   }
 
-  function readContent(target: FileTarget): Promise<ReadResult> {
-    return readWith(() => readSecretContent(target), textField("content"))
-  }
-
   // --- Adding, editing
 
   function openEditor(target: FileTarget, variable: string | null) {
@@ -398,23 +387,6 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     if (restart) restartShown.current = true
     setEditing((before) => before && { ...before, open: false })
     announce(`Saved ${variable} in ${target.file}`)
-    afterAction()
-    if (restart) void runRestart(target.slug)
-  }
-
-  // --- Replacing a file read in one go
-
-  function replace(target: FileTarget) {
-    require(() => {
-      openings.current += 1
-      setReplacement({ ...target, opening: openings.current, open: true })
-    })
-  }
-
-  function replaced(target: FileTarget, restart: boolean) {
-    if (restart) restartShown.current = true
-    setReplacement((before) => before && { ...before, open: false })
-    announce(`Replaced ${target.file}`)
     afterAction()
     if (restart) void runRestart(target.slug)
   }
@@ -638,13 +610,11 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
       void runRestart(slug)
     },
     read,
-    readContent,
     add: (target) => openEditor(target, null),
     modifier: (target) => openEditor(target, target.variable),
     remove: askRemoval,
     create,
     restore: askRestore,
-    replace,
     changePassword,
     restart: askRestart,
     changeAccess,
@@ -652,7 +622,6 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   }
 
   const restartedProject = projects?.find((project) => project.slug === restartState?.slug) ?? null
-  const replacedProject = projects?.find((project) => project.slug === replacement?.slug) ?? null
 
   return (
     <ActionsContext.Provider value={actions}>
@@ -682,17 +651,6 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
         open={editing?.open ?? false}
         onClose={() => setEditing((before) => before && { ...before, open: false })}
         onSaved={saved}
-        onRefusal={onRefusal}
-        focusReturn={actionFocusReturn}
-      />
-
-      <ContentDialog
-        target={replacement}
-        open={replacement?.open ?? false}
-        writeOnly={replacedProject?.files.find((file) => file.name === replacement?.file)?.readable === false}
-        restartable={replacedProject?.service != null}
-        onClose={() => setReplacement((before) => before && { ...before, open: false })}
-        onReplaced={replaced}
         onRefusal={onRefusal}
         focusReturn={actionFocusReturn}
       />

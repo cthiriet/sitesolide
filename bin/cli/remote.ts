@@ -62,7 +62,6 @@ import {
   parserComplaint,
   readManifest,
   secretsOf,
-  secretsWarnings,
   servicesOf,
   type Manifest,
   type SecretsDeclaration,
@@ -620,7 +619,6 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
   const { manifest } = project;
   const slug = manifest.slug;
   output.say(`-> project ${slug}, through ${remote.api}`);
-  for (const warning of secretsWarnings(manifest)) warnOn(output, warning, []);
 
   // The build's secrets first, from whoever deploys: a missing one stops
   // here, before anything is sent, the manifest included.
@@ -646,47 +644,30 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
   const declares = hasStore(manifest) && (declaration.runtime.length > 0 || declaration.files.length > 0);
   let missing: StoreMissing | null = declares ? null : { runtime: [], files: [] };
   let deferred = false;
-  // A manifest that names its variables, or none, makes units that read the
-  // store alone: what legacy files the installed units read hold, and the
-  // store lacks, would be dropped. Read first, and a stop before anything is
-  // sent; then what the store lacks of the declared names. A listing this
-  // token may not make, or may not make again this hour, leaves the
-  // judgement to the machine, which refuses such a deployment itself
-  // (migrate-first); one that fails otherwise is a stop, what would be
-  // dropped not being told.
-  if (hasStore(manifest) && declaration.form !== "legacy") {
-    if (declares) output.say("-> runtime secrets");
+  // What the store lacks of the declared names. A listing this token may
+  // not make, or may not make again this hour, leaves it to the machine's
+  // log, which names what is missing; one that fails otherwise is said, and
+  // the deployment goes on, as a missing secret never stops one.
+  if (declares) {
+    output.say("-> runtime secrets");
     const listed = await transport.list(slug, true);
     if (listed.ok) {
-      const loss = store.legacyLossRefusal(listed.value, "nothing was sent", declaration);
-      if (loss !== null) return report(output, { error: "migrate-first", ...loss });
-      if (declares) {
-        missing = await store.handleMissing(store.withDeclared(listed.value, declaration), transport, io);
-        if (missing.runtime.length === 0 && missing.files.length === 0) output.say("   every declared runtime secret is set");
-      }
+      missing = await store.handleMissing(store.withDeclared(listed.value, declaration), transport, io);
+      if (missing.runtime.length === 0 && missing.files.length === 0) output.say("   every declared runtime secret is set");
     } else if (listed.failure.error === "out-of-scope") {
-      if (declares) output.say("   this token may not list the store: the machine judges what this deployment would drop, and its log names what is missing");
+      output.say("   this token may not list the store: the machine's log names what is missing");
     } else if (listed.failure.error === "too-many-attempts") {
-      // Not a refusal of the deployment: its own budget is the machine's to judge.
-      if (declares) output.say("   the store cannot be listed again this hour: the machine judges what this deployment would drop, and its log names what is missing");
+      output.say("   the store cannot be listed again this hour: the machine's log names what is missing");
     } else if (listed.failure.error === "not-found") {
       // A project not deployed yet whose store this token may not hold
-      // ahead: nothing installed reads a legacy file, and what the store
-      // lacks is asked for once the deployment made it.
-      deferred = declares;
-      if (declares) output.say("   not deployed yet: what its store lacks is said once the deployment is done");
+      // ahead: what the store lacks is asked for once the deployment made it.
+      deferred = true;
+      output.say("   not deployed yet: what its store lacks is said once the deployment is done");
     } else if (["unauthenticated", "unreachable"].includes(listed.failure.error)) {
       // What would refuse the deployment itself, said as it stands.
       return report(output, listed.failure);
     } else {
-      return report(output, {
-        error: "store-unlisted",
-        message: `cannot tell whether this deployment would drop values legacy files supply: ${listed.failure.message}`,
-        details: [
-          "a manifest that names its variables, or none, makes units that read the store alone: the store is read first, to stop a deployment that would drop a value",
-          "nothing was sent",
-        ],
-      });
+      warnOn(output, `cannot tell which declared runtime secrets the store lacks: ${listed.failure.message}`, ["sitesolide secrets lists them once the store answers"]);
     }
   }
 

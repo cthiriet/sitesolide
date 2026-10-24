@@ -82,10 +82,10 @@ describe("deploy reads the door on the VM", () => {
     // The site's door, what systemd knows of its unit, then every manifest
     // for the ports they declare, and nothing else was asked of the machine:
     // the other sites' blocks are not this deployment's business, and in a
-    // dry run there is no lock. The store's listing is a read too: it says
-    // what deploying would drop of the legacy files a unit reads; so is the
-    // claim on its name, which the machine does not carry yet.
-    expect(vm.logs()).toEqual(["READ sample-door", "UNITS sample-door", "READ *", "CLAIM GET sample-door", "STORE GET sample-door"]);
+    // dry run there is no lock. The claim on its name is a read too, which
+    // the machine does not carry yet; its store is not read, the project
+    // declaring no runtime secret.
+    expect(vm.logs()).toEqual(["READ sample-door", "UNITS sample-door", "READ *", "CLAIM GET sample-door"]);
   });
 
   test("the same value on both sides changes nothing", async () => {
@@ -183,15 +183,14 @@ describe("deploy reads the door on the VM", () => {
 
     // Nothing other than the readings went through, the site's door, its
     // block in service, what systemd knows of its unit, the manifests whose
-    // ports it checks, whether a token holds its name, and the store's
-    // listing: the preparation of the service is the first write, and the
-    // simulated VM refused it. The lock is only taken before the first
+    // ports it checks and whether a token holds its name: the preparation of
+    // the service is the first write, and the simulated VM refused it. The lock is only taken before the first
     // deposit of the manifest or of the block, much further on.
     expect(r.code).toBe(1);
     const logs = vm.logs();
-    expect(logs.slice(0, 6)).toEqual(["READ sample-door", "BLOCK sample-door", "UNITS sample-door", "READ *", "CLAIM GET sample-door", "STORE GET sample-door"]);
-    expect(logs.slice(6).every((line) => line.startsWith("REFUSED "))).toBe(true);
-    expect(logs).toHaveLength(7);
+    expect(logs.slice(0, 5)).toEqual(["READ sample-door", "BLOCK sample-door", "UNITS sample-door", "READ *", "CLAIM GET sample-door"]);
+    expect(logs.slice(5).every((line) => line.startsWith("REFUSED "))).toBe(true);
+    expect(logs).toHaveLength(6);
   });
 });
 
@@ -676,9 +675,8 @@ describe("sitesolide remove also removes the block laid from the dashboard", () 
     expect(publicDir).toBeGreaterThan(-1);
     expect(block).toBeGreaterThan(publicDir);
     expect(folder).toBeGreaterThan(block);
-    // Read before the Caddy lock, for a code to take away first, and under it;
-    // and the leftover secret files the steward attaches to it, a read too.
-    expect(vm.logs()).toEqual([`READ ${SHOWCASE.slug}`, `READ ${SHOWCASE.slug}`, `STORE LEFTOVERS ${SHOWCASE.slug}`]);
+    // Read before the Caddy lock, for a code to take away first, and under it.
+    expect(vm.logs()).toEqual([`READ ${SHOWCASE.slug}`, `READ ${SHOWCASE.slug}`]);
   });
 
   test("a site that opens with a code goes back to Public through the steward first, then is removed", async () => {

@@ -18,14 +18,11 @@ import {
   FRAMEWORK_PUBLIC_PREFIXES,
   hasStore,
   isFrameworkPublic,
-  isLegacySecretName,
   isValidFileName,
-  legacySecretFiles,
   MAX_DECLARED_FILES,
   NOT_A_PLACEHOLDER,
   RESERVED_ENV,
   secretsOf,
-  secretsWarnings,
   STORELESS_SLUGS,
   type Manifest,
 } from "../cli/manifest";
@@ -172,13 +169,13 @@ describe("validation", () => {
     );
   });
 
-  test("refuses a secret that would be a path", () => {
-    for (const secret of ["../ses.env", "sub/folder.env", "/etc/passwd"]) {
+  test("refuses a secret that would be a path or a file: a secret is a variable's name", () => {
+    for (const secret of ["../ses.env", "sub/folder.env", "/etc/passwd", "my-api.env"]) {
       expect(validate({ ...APP, secrets: [secret] })).toContainEqual(
         expect.stringContaining("secrets"),
       );
     }
-    expect(validate({ ...APP, secrets: ["my-api.env"] })).toEqual([]);
+    expect(validate({ ...APP, secrets: ["MY_API_KEY"] })).toEqual([]);
   });
 
   test("refuses a domain of the zone, already covered by the wildcard", () => {
@@ -647,12 +644,12 @@ describe("what reaches a Caddy block or a unit", () => {
     }
   });
 
-  test("a secret is a plain file name: nothing that adds a directive or expands", () => {
-    for (const secret of ["budget.env\nExecStartPre=+/bin/sh -c id", "a b.env", "%h.env", ".env", "-budget.env", "budget.env\\"]) {
+  test("a secret is a variable's name: nothing that adds a directive or expands", () => {
+    for (const secret of ["BUDGET\nExecStartPre=+/bin/sh -c id", "A B", "%h", ".env", "-BUDGET", "BUDGET\\"]) {
       expect(validate({ ...APP, secrets: [secret] })).toContainEqual(expect.stringContaining("secrets"));
     }
-    expect(validate({ ...APP, secrets: "budget.env" } as unknown as Manifest)).toContainEqual(expect.stringContaining("a list of variable names"));
-    expect(validate({ ...APP, secrets: ["budget.env", "Budget_2.env"] })).toEqual([]);
+    expect(validate({ ...APP, secrets: "BUDGET" } as unknown as Manifest)).toContainEqual(expect.stringContaining("a list of variable names"));
+    expect(validate({ ...APP, secrets: ["BUDGET", "Budget_2"] })).toEqual([]);
   });
 
   test("a domain that is no object is refused, never thrown", () => {
@@ -748,14 +745,13 @@ const BUILT: Manifest = { slug: "blog", build: "bun run build", publicDir: "dist
 describe("secrets, the forms", () => {
   test("none: absent, an empty list, an empty object", () => {
     for (const secrets of [undefined, [], {}]) {
-      expect(secretsOf({ ...APP, secrets } as Manifest)).toEqual({ form: "none", legacy: [], runtime: [], files: [], build: [] });
+      expect(secretsOf({ ...APP, secrets } as Manifest)).toEqual({ form: "none", runtime: [], files: [], build: [] });
     }
   });
 
   test("the short form lists runtime variables", () => {
     expect(secretsOf({ ...APP, secrets: ["ADMIN_TOKEN", "STRIPE_SECRET_KEY"] })).toEqual({
       form: "names",
-      legacy: [],
       runtime: ["ADMIN_TOKEN", "STRIPE_SECRET_KEY"],
       files: [],
       build: [],
@@ -764,38 +760,25 @@ describe("secrets, the forms", () => {
 
   test("the long form, each list optional", () => {
     const secrets = { runtime: ["POSTGRES_PASSWORD"], files: ["gcp.json", "tls.key"], build: ["CMS_TOKEN"] };
-    expect(secretsOf({ ...APP, secrets })).toEqual({ form: "names", legacy: [], ...secrets });
-    expect(secretsOf({ ...APP, secrets: { files: ["gcp.json"] } })).toEqual({ form: "names", legacy: [], runtime: [], files: ["gcp.json"], build: [] });
+    expect(secretsOf({ ...APP, secrets })).toEqual({ form: "names", ...secrets });
+    expect(secretsOf({ ...APP, secrets: { files: ["gcp.json"] } })).toEqual({ form: "names", runtime: [], files: ["gcp.json"], build: [] });
   });
 
-  test("the old form: file names, each with a dot, in the manifest's order", () => {
-    const secrets = ["nis2-ses.env", "nis2-stripe.env", "nis2-stats.env"];
-    expect(secretsOf({ ...APP, secrets })).toEqual({ form: "legacy", legacy: secrets, runtime: [], files: [], build: [] });
-  });
-
-  test("a mixed list reads as the old form, every entry a file, as the CLI that could deploy it read it", () => {
-    expect(secretsOf({ ...APP, secrets: ["crm.env", "API_KEY"] })).toMatchObject({ form: "legacy", legacy: ["crm.env", "API_KEY"], runtime: [] });
+  test("a list is names whatever it holds: a file's name in it is read as one, and validate refuses it", () => {
+    expect(secretsOf({ ...APP, secrets: ["crm.env", "API_KEY"] })).toEqual({ form: "names", runtime: ["crm.env", "API_KEY"], files: [], build: [] });
   });
 
   test("malformed input never throws, and keeps what parses", () => {
-    const empty = { legacy: [], runtime: [], files: [], build: [] };
+    const empty = { runtime: [], files: [], build: [] };
     for (const secrets of ["budget.env", 3, null, true, [3, null], [[]]]) {
       expect(secretsOf({ ...APP, secrets } as unknown as Manifest)).toEqual({ form: "none", ...empty });
     }
-    expect(secretsOf({ ...APP, secrets: ["a.env", 3] } as unknown as Manifest)).toMatchObject({ form: "legacy", legacy: ["a.env"] });
+    expect(secretsOf({ ...APP, secrets: ["A", 3] } as unknown as Manifest)).toEqual({ form: "names", ...empty, runtime: ["A"] });
     expect(secretsOf({ ...APP, secrets: { runtime: "A", files: [1, "x.pem"], other: ["B"] } } as unknown as Manifest)).toEqual({
       form: "names",
       ...empty,
       files: ["x.pem"],
     });
-  });
-
-  test("legacySecretFiles: the old list exactly for the old form, nothing for the others", () => {
-    expect(legacySecretFiles({ ...APP, secrets: ["budget.env", "budget-stripe.env"] })).toEqual(["budget.env", "budget-stripe.env"]);
-    expect(legacySecretFiles({ ...APP, secrets: ["../x.env"] })).toEqual(["../x.env"]);
-    for (const secrets of [undefined, [], ["API_KEY"], { files: ["gcp.json"] }, "budget.env", null]) {
-      expect(legacySecretFiles({ ...APP, secrets } as unknown as Manifest)).toEqual([]);
-    }
   });
 
   test("an app has a store, but a static site and the two storeless projects", () => {
@@ -806,11 +789,6 @@ describe("secrets, the forms", () => {
     expect(STORELESS_SLUGS).toEqual(["dashboard", "portal"]);
     for (const slug of STORELESS_SLUGS) expect(hasStore({ ...APP, slug })).toBe(false);
     for (const slug of ["../x", "", "Shop", 3]) expect(hasStore({ ...APP, slug } as unknown as Manifest)).toBe(false);
-  });
-
-  test("a legacy entry is a valid file name with a dot", () => {
-    for (const name of ["crm.env", "nis2-ses.env", ".env"]) expect(isLegacySecretName(name)).toBe(name !== ".env");
-    for (const name of ["API_KEY", "projects", "a/b.env", "../x.env", 3, null]) expect(isLegacySecretName(name)).toBe(false);
   });
 
   test("a store file's name: no leading dot, no slash, no .., 64 characters at most", () => {
@@ -831,15 +809,11 @@ describe("secrets, validation", () => {
     expect(refusals({ ...APP, secrets: { runtime: ["API_KEY"], files: ["gcp.json"] } })).toEqual([]);
   });
 
-  test("V2: file names and variable names are not mixed", () => {
-    expect(refusals({ ...APP, secrets: ["budget.env", PLANTED] })).toEqual([
-      "secrets: file names (with a dot) and variable names cannot be mixed: migrate the files first (sitesolide secrets migrate), then list the variable names",
+  test("V2: a file's name is no variable's: refused as any other entry that is not one, and never quoted", () => {
+    expect(refusals({ ...APP, secrets: ["budget.env", "API_KEY"] }, ["budget.env"])).toEqual([
+      "secrets: entry 1 is not a variable name: letters, digits and underscores, not starting with a digit, 128 characters at most",
     ]);
-  });
-
-  test("V3: the old form keeps its rule and its message", () => {
-    expect(refusals({ ...APP, secrets: ["budget.env", "a b.env"] })).toEqual(['secrets: "a b.env" must be a plain file name under /etc/sitesolide']);
-    expect(refusals({ ...APP, secrets: ["budget.env", "budget-stripe.env"] })).toEqual([]);
+    expect(refusals({ ...APP, secrets: ["API_KEY", "budget-stripe.env", "nis2-stats.env"] })).toHaveLength(2);
   });
 
   test("V4: runtime names have a variable's shape, and are never quoted when they have not", () => {
@@ -901,8 +875,7 @@ describe("secrets, validation", () => {
       expect(refusals({ ...BUILT, secrets })).toEqual([refusal]);
     }
     expect(refusals({ ...BUILT, secrets: { build: ["CMS_TOKEN"] } })).toEqual([]);
-    // The old form stays as it was on a static site: nothing reads it, nothing refused it.
-    expect(refusals({ ...STATIC, secrets: ["notes.env"] })).toEqual([]);
+    expect(refusals({ ...STATIC, secrets: ["notes.env"] })).toEqual([refusal]);
   });
 
   test("V7: build names, taken from whoever deploys: not sitesolide's, not inherited, not in env, only with a build", () => {
@@ -924,15 +897,15 @@ describe("secrets, validation", () => {
     expect(refusals({ ...APP, build: "bun run build", secrets: { runtime: ["CMS_TOKEN"], build: ["CMS_TOKEN", "NPM_TOKEN"] } })).toEqual([]);
   });
 
-  test("V8: the dashboard and the portal keep their flat files, for good and without a warning", () => {
+  test("V8: the dashboard and the portal declare no secret: their units read their own file", () => {
     for (const slug of STORELESS_SLUGS) {
       const app = { ...APP, slug };
-      expect(refusals({ ...app, secrets: ["API_KEY"] })).toEqual([
-        `secrets: ${slug} keeps its hash in ${slug}.env, read by its own unit: its secrets cannot move to a store`,
-      ]);
-      expect(refusals({ ...app, secrets: { files: ["x.pem"] } })).toHaveLength(1);
-      expect(refusals({ ...app, secrets: [`${slug}.env`] })).toEqual([]);
-      expect(secretsWarnings({ ...app, secrets: [`${slug}.env`] })).toEqual([]);
+      const refusal = `secrets: ${slug} keeps its password hash in ${slug}.env, which its unit reads: it declares no secret`;
+      expect(refusals({ ...app, secrets: ["API_KEY"] })).toEqual([refusal]);
+      expect(refusals({ ...app, secrets: { files: ["x.pem"] } })).toEqual([refusal]);
+      // Its own file named as before is refused alike: the unit names it, the manifest does not.
+      expect(refusals({ ...app, secrets: [`${slug}.env`] })).toEqual([refusal]);
+      expect(refusals(app)).toEqual([]);
     }
   });
 
@@ -1008,41 +981,12 @@ describe("secrets, validation", () => {
       }),
     ).toEqual([]);
     expect(refusals({ ...BUILT, env: { PUBLIC_SITE_URL: "https://{slug}.{zone}" }, secrets: { build: ["CMS_TOKEN"] } })).toEqual([]);
-    expect(refusals({ ...APP, secrets: ["nis2-ses.env", "nis2-stripe.env", "nis2-stats.env"] })).toEqual([]);
-    expect(refusals({ ...APP, slug: "dashboard", secrets: ["dashboard.env"] })).toEqual([]);
+    expect(refusals({ ...APP, slug: "dashboard" })).toEqual([]);
   });
 
   test("RESERVED_ENV lives in variables.ts, re-exported here", () => {
     expect(RESERVED_ENV).toBe(VARIABLES_RESERVED_ENV);
     expect(RESERVED_ENV).toEqual(["PORT", "DATA_DIR", "PUBLIC_DIR"]);
-  });
-});
-
-describe("secrets, warnings", () => {
-  test("the old form on a project that has a store warns, naming its files", () => {
-    expect(secretsWarnings({ ...APP, secrets: ["nis2-ses.env", "nis2-stripe.env"] })).toEqual([
-      "secrets: nis2-ses.env, nis2-stripe.env are file names, the old form: they keep loading before the project's store; run sitesolide secrets migrate, then list the variable names",
-    ]);
-    expect(secretsWarnings({ ...APP, secrets: ["crm.env"] })).toEqual([
-      "secrets: crm.env is a file name, the old form: it keeps loading before the project's store; run sitesolide secrets migrate, then list the variable names",
-    ]);
-  });
-
-  test("nothing for the new forms, a static site, a storeless project, or no secrets", () => {
-    for (const manifest of [APP, { ...APP, secrets: ["API_KEY"] }, { ...APP, secrets: { files: ["x.pem"] } }, { ...STATIC, secrets: ["notes.env"] }, { ...APP, slug: "portal", secrets: ["portal.env"] }]) {
-      expect(secretsWarnings(manifest as Manifest)).toEqual([]);
-    }
-  });
-
-  test("every known manifest still passes, and warns exactly when it keeps the old form with a store", () => {
-    for (const manifest of knownManifests()) {
-      const { slug } = manifest;
-      expect({ slug, errors: validate(manifest, ZONE) }).toEqual({ slug, errors: [] });
-      const legacy = secretsOf(manifest).form === "legacy";
-      expect({ slug, warnings: secretsWarnings(manifest).length }).toEqual({ slug, warnings: legacy && hasStore(manifest) ? 1 : 0 });
-      // What the code that predates the store read, exactly.
-      expect({ slug, files: legacySecretFiles(manifest) }).toEqual({ slug, files: Array.isArray(manifest.secrets) && legacy ? manifest.secrets : [] });
-    }
   });
 });
 

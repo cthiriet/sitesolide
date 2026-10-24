@@ -37,9 +37,9 @@ export type OutputEvent =
   /** What a dry run would have done, and did not. */
   | { type: "planned"; message: string }
   /**
-   * Something went wrong without stopping the run: the old form of `secrets`,
-   * runtime secrets the store lacks, a legacy file missing, a store that could
-   * not be listed. `details` name the commands that fix it, never a value.
+   * Something went wrong without stopping the run: runtime secrets the store
+   * lacks, a store that could not be listed. `details` name the commands that
+   * fix it, never a value.
    */
   | { type: "warning"; message: string; details: string[] }
   /** A line printed by a command the CLI launched: the build, rsync, a script of bin/. */

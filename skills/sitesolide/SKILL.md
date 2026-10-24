@@ -157,9 +157,8 @@ Every error carries a `hint`: follow it. The usual ones:
   conversation, and never with the value as an argument. A name that looks
   like a value is refused `looks-like-value`, never quoted: tell the user it
   may be in the shell's history and to change it at its source. No MCP tool
-  sets a value, on purpose. Never replace a live secret (`--replace`), nor
-  migrate a project's legacy files (`secrets migrate`): those are the
-  user's.
+  sets a value, on purpose. Never replace a live secret (`--replace`): that
+  is the user's.
 
 ## Status and other reads
 

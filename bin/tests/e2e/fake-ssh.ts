@@ -88,7 +88,6 @@ import { backupComponentCommand, BACKUP_COMPONENT_MARKER } from "../../cli/backu
 import { ownerGeneralCommand, ownerReadCommand, ownerWriteCommand, type EntryView, type PersonView, type Role } from "../../cli/access";
 import { ownershipReleaseCommand } from "../../cli/removal";
 import { STORE_READY, STORE_REFUSED, storePaths, storePrepareCommand } from "../../cli/store";
-import { OWNERS_DONE, secretOwnersCommand } from "../../cli/secrets";
 import { NOT_ON_DEMAND, TLS_ZONE_STATE_COMMAND, TLS_ZONE_STATES, ZONE_NAMES_COMMAND } from "../../cli/tls";
 import { ZONE_LABEL } from "../../../api/src/zone-names";
 
@@ -116,8 +115,6 @@ export const SWITCHES = {
   accounts: "accounts",
   refusedSchedules: "refused-schedules",
   standings: "standings.json",
-  /** The secret files /etc/sitesolide carries, `{ name: owner }`: see secretOwnersCommand in bin/cli/secrets.ts. */
-  secretFiles: "secret-files.json",
   keepUnits: "keep-units",
   tlsZoneState: "tls-zone-state",
   store: "store.json",
@@ -136,10 +133,6 @@ export type StoreState = {
   state: "current" | "old" | "down";
   variables: Record<string, string[]>;
   files: Record<string, string[]>;
-  /** The project's legacy flat files, by name: the variables each holds, whether an installed unit reads it, and its state. */
-  legacy?: Record<string, { name: string; variables: string[]; read: boolean; state?: "managed" | "absent" | "unmanaged" }[]>;
-  /** The flat files the steward attaches to the project as leftovers, which `remove` asks for. */
-  leftovers?: Record<string, string[]>;
 };
 
 export const DEFAULT_STORE: StoreState = { state: "current", variables: {}, files: {} };
@@ -417,19 +410,6 @@ if (import.meta.main) {
     record(`ACCOUNT ${accountName}`);
     const line = readAccounts(vm).find((entry) => entry.startsWith(`${accountName}:`));
     process.stdout.write(`${line ?? "missing"}\n`);
-    process.exit(0);
-  }
-  // Who owns the secret files a deployment declares, or a removal would
-  // delete, read before anything is written. A reading, hence always
-  // answered: from what the test lays in SWITCHES.secretFiles, `{ name:
-  // owner }`, every other file absent.
-  const secretFiles = /^sudo sh -c 'for f in ([A-Za-z0-9._ -]+); do p=\/etc\/sitesolide\/\$f; /.exec(command)?.[1];
-  if (secretFiles !== undefined && command === secretOwnersCommand(secretFiles.split(" "))) {
-    record(`SECRET-OWNERS ${secretFiles}`);
-    const laid = join(vm, SWITCHES.secretFiles);
-    const owners = existsSync(laid) ? (JSON.parse(readFileSync(laid, "utf8")) as Record<string, string>) : {};
-    for (const name of secretFiles.split(" ")) process.stdout.write(`${name} ${owners[name] ?? "absent"}\n`);
-    process.stdout.write(`${OWNERS_DONE}\n`);
     process.exit(0);
   }
   // Where the loopback rule stands, read before a project with several
@@ -756,23 +736,16 @@ if (import.meta.main) {
     exists: Object.hasOwn(current.variables, slug) || Object.hasOwn(current.files, slug),
     state: "managed",
     reason: null,
-    // The store's names, then those a legacy file the units read supplies, the last file read winning, as the steward lists them.
-    variables: [
-      ...(current.variables[slug] ?? []).map((name) => ({ name, source: "store", file: null, shadows: [], declared: false })),
-      ...[...new Set((current.legacy?.[slug] ?? []).filter((file) => file.read && (file.state ?? "managed") === "managed").flatMap((file) => file.variables))]
-        .filter((name) => !(current.variables[slug] ?? []).includes(name))
-        .map((name) => ({ name, source: "legacy", file: (current.legacy?.[slug] ?? []).filter((file) => file.read && file.variables.includes(name)).at(-1)!.name, shadows: [], declared: false })),
-    ],
+    variables: (current.variables[slug] ?? []).map((name) => ({ name, source: "store", declared: false })),
     missing: [],
     files: (current.files[slug] ?? []).map((name) => ({ name, state: "set", declared: false, reason: null, bytes: null, modifiedAt: null, restartPending: false })),
-    legacy: (current.legacy?.[slug] ?? []).map((file) => ({ name: file.name, state: file.state ?? "managed", reason: null, variables: file.variables, read: file.read, leftover: false, covered: null })),
     build: [],
     public: [],
     unitReadsStore: true,
     modifiedAt: null,
     restartPending: false,
     previous: false,
-    may: { write: true, reveal: false, restore: true, migrate: true },
+    may: { write: true, reveal: false, restore: true },
   });
   const storeSlug = /^sudo curl .*http:\/\/steward\/store\?slug=([a-z0-9-]+)'$/.exec(command)?.[1];
   if (storeSlug !== undefined && command === ownerReadCommand(`/store?slug=${storeSlug}`)) {
@@ -780,13 +753,6 @@ if (import.meta.main) {
     const current = stores();
     answerOwner(current.state);
     answer(200, { store: storeView(current, storeSlug) });
-  }
-  const leftoversOf = /^sudo curl .*http:\/\/steward\/store\/leftovers\?slug=([a-z0-9-]+)'$/.exec(command)?.[1];
-  if (leftoversOf !== undefined && command === ownerReadCommand(`/store/leftovers?slug=${leftoversOf}`)) {
-    record(`STORE LEFTOVERS ${leftoversOf}`);
-    const current = stores();
-    answerOwner(current.state);
-    answer(200, { slug: leftoversOf, leftovers: current.leftovers?.[leftoversOf] ?? [] });
   }
   // The names tokens hold, on the steward's owner socket: the read is a
   // reading; taking a name back is a write, refused unless the test accepts

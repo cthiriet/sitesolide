@@ -1,14 +1,12 @@
 import { type ReactNode } from "react"
-import { FileKey, FilePen, FilePlus, FileText, KeyRound, Lock, LockOpen, Plus, RotateCcw, Undo2 } from "lucide-react"
+import { FilePlus, FileText, KeyRound, Lock, LockOpen, Plus, RotateCcw, Undo2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Command } from "@/components/copy"
 import { EmptyState, SeverityIcon, Panel, Status } from "@/components/page"
-import { ContentReveal } from "@/components/secrets-content"
 import { fileKey, useSecretsActions, type FileTarget } from "@/components/secrets-actions"
 import { VariablesHeader, PasswordRow, VariableRow } from "@/components/secrets-variables"
 import { ago } from "@/lib/format"
 import {
-  filePath,
   splitReason,
   readService,
   fileOffer,
@@ -66,17 +64,6 @@ export function SecretsLockControl({ quiet = false }: { quiet?: boolean }) {
 
 // --- A file ----------------------------------------------------------------------
 
-/** A file's path under /etc/sitesolide, its folder set back: `<slug>-secrets/` then `token`. */
-function FileName({ name }: { name: string }) {
-  const { folder, base } = filePath(name)
-  return (
-    <h3 className="font-mono text-[0.8125rem] font-semibold wrap-anywhere">
-      {folder !== null && <span className="font-normal text-muted-foreground">{folder}</span>}
-      {base}
-    </h3>
-  )
-}
-
 function Terminal({ children }: { children: ReactNode }) {
   return <code className="font-mono text-xs whitespace-nowrap">{children}</code>
 }
@@ -86,7 +73,7 @@ function Terminal({ children }: { children: ReactNode }) {
  * table, two files read as one, the column header weighing more than the name
  * that starts the next file.
  */
-export function FileBlock({ slug, file, children }: { slug: string; file: FileView; children?: ReactNode }) {
+function FileBlock({ slug, file }: { slug: string; file: FileView }) {
   const actions = useSecretsActions()
   const target: FileTarget = { slug, file: file.name }
   const key = fileKey(target)
@@ -96,21 +83,15 @@ export function FileBlock({ slug, file, children }: { slug: string; file: FileVi
   const change = file.modifiedAt === null ? null : `changed ${ago(actions.serverNow - file.modifiedAt)}`
   const meta = [count, change].filter((piece): piece is string => piece !== null).join(", ")
   const reason = file.state === "unmanaged" ? splitReason(file.reason ?? "") : null
-  const Icon = file.kind === "content" ? FileKey : FileText
 
   return (
     <section aria-label={file.name} className="@container/file overflow-hidden rounded-lg border">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 bg-muted/60 px-4 py-3">
         <div className="flex min-w-0 flex-1 basis-56 flex-wrap items-center gap-x-2.5 gap-y-1">
-          <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-          <FileName name={file.name} />
+          <FileText aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+          <h3 className="font-mono text-[0.8125rem] font-semibold wrap-anywhere">{file.name}</h3>
           {file.state === "absent" && <Status tone="error">Missing</Status>}
           {file.state === "unmanaged" && <Status tone="attention">Unmanaged</Status>}
-          {offer.writeOnly && (
-            <Status tone="neutral" title="Replaced, never read back" className="text-muted-foreground">
-              Write-only
-            </Status>
-          )}
           {meta !== "" && <span className="text-xs text-muted-foreground tabular-nums">{meta}</span>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -144,20 +125,12 @@ export function FileBlock({ slug, file, children }: { slug: string; file: FileVi
               Add variable
             </Button>
           )}
-          {offer.replace && (
-            <Button variant="outline" size="sm" data-after-creation={key} onClick={() => actions.replace(target)} className="max-md:h-10">
-              <FilePen />
-              Replace
-            </Button>
-          )}
         </div>
       </div>
 
       {file.state === "absent" && (
         <p className="max-w-prose px-4 py-3 text-sm text-pretty text-muted-foreground">
-          Declared for {slug}, but not on the server, so {slug} starts without it. Create file makes it empty, owned by{" "}
-          <Terminal>{file.expected}</Terminal>
-          {file.kind === "content" ? ", then Replace fills it." : ", then add its variables."}
+          Not on the server: {slug} starts without it.
         </p>
       )}
 
@@ -166,26 +139,9 @@ export function FileBlock({ slug, file, children }: { slug: string; file: FileVi
           <p className="text-sm text-pretty">{reason.text}</p>
           {reason.command !== null && <Command text={reason.command} />}
           <p className="text-xs text-pretty text-muted-foreground">
-            The server expects <Terminal>{file.expected}</Terminal>. It lists this file but never rewrites it: fix
-            it on the server, then refresh this page.
+            Expected: <Terminal>{file.expected}</Terminal>. Fix it on the server, then refresh this page.
           </p>
         </div>
-      )}
-
-      {file.state === "managed" && file.kind === "content" && !file.readable && (
-        <p className="max-w-prose px-4 py-3 text-sm text-pretty text-muted-foreground">
-          The server replaces this file but never reads it back, so its content can't be shown or copied, not even
-          here. Keep the original where you made it.
-        </p>
-      )}
-
-      {offer.reveal && (
-        <ContentReveal
-          file={file.name}
-          unlocked={actions.state.open}
-          read={() => actions.readContent(target)}
-          onUnlock={actions.unlock}
-        />
       )}
 
       {offer.add && file.variables.length === 0 && (
@@ -206,7 +162,6 @@ export function FileBlock({ slug, file, children }: { slug: string; file: FileVi
                 <VariableRow
                   key={variable}
                   name={variable}
-                  readable={rowOffer === "read-write"}
                   unlocked={actions.state.open}
                   read={() => actions.read(variableTarget)}
                   onUnlock={actions.unlock}
@@ -224,8 +179,6 @@ export function FileBlock({ slug, file, children }: { slug: string; file: FileVi
           {error}
         </p>
       )}
-
-      {children}
     </section>
   )
 }
@@ -284,8 +237,7 @@ export function ProblemRow({ problem, slug }: { problem: Problem; slug: string }
     text = (
       <>
         <strong className="font-medium">Restart pending.</strong>{" "}
-        <ListState names={problem.files} lead={problem.variables ? "The variables on the server" : null} /> changed after {slug}{" "}
-        last started, so it still runs with the old values.
+        <ListState names={problem.files} lead={problem.variables ? "The variables" : null} /> changed since {slug} started.
       </>
     )
   } else if (problem.key === "store-unread") {
@@ -309,8 +261,9 @@ export function ProblemRow({ problem, slug }: { problem: Problem; slug: string }
 // --- A site's files --------------------------------------------------------------
 
 /**
- * A site's secret files: its service and its restart, what is wrong, then each
- * file, its actions and its variables. Changing site or section unmounts the
+ * The platform's own files, on the dashboard's and the portal's sites: the
+ * service and its restart, what is wrong, then each file, its actions and its
+ * variables. Changing site or section unmounts the
  * rows, and with them any revealed value.
  */
 export function FilesPanel({ project }: { project: ProjectView }) {

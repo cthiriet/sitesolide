@@ -653,11 +653,11 @@ describe("the machine's special cases", () => {
   });
 
   test("the secrets are named, never read", () => {
-    const manifest = { slug: "tool", port: 3030, start: "bun run server.ts", secrets: ["tool.env"] };
+    const manifest = { slug: "tool", port: 3030, start: "bun run server.ts", secrets: ["TOOL_KEY"] };
     const { sites } = buildSnapshot(
       raw([folder("tool", manifest, { unit: unit() })], { ports: [3030] }),
     );
-    expect(sites[0]?.secrets).toEqual(["tool.env"]);
+    expect(sites[0]?.secrets).toEqual(["TOOL_KEY"]);
   });
 
   test("a project whose values live in its store is named by its runtime variables, then its files; never its build secrets", () => {

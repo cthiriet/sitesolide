@@ -10,13 +10,13 @@ import { generateUnits } from "../borrowed/unit";
 import { encodeRegistry, type Registry } from "../src/access/registry";
 import { createAccessSystem } from "../src/access/system";
 import { openDatabase } from "../src/database";
-import { createApiRoutes, failure, secretsRoutes, storeRoutes } from "../src/control/api";
+import { createApiRoutes, failure, restartRoutes, storeRoutes } from "../src/control/api";
 import { CLAIMS_NAME } from "../src/control/claims";
 import { localControlSteward } from "../src/control/client";
 import { createLimiter } from "../src/control/limiter";
 import { INSTALLER_TEMPLATE, type Scope, type TokenView } from "../src/control/protocol";
 import { createSpool } from "../src/control/spool";
-import { createControlSteward, installerUnit, isControlPath, STORE_FORM } from "../src/control/steward";
+import { createControlSteward, installerUnit, isControlPath } from "../src/control/steward";
 import { createControlStore } from "../src/control/store";
 import { createControlSystem, type ControlSystem } from "../src/control/system";
 import { createTracker } from "../src/control/tracker";
@@ -43,11 +43,10 @@ import { readRegistryFile, registryOf, writeRegistry } from "./registry-fixtures
  * (systemctl, useradd, Caddy, the probes; see installer-bench.ts).
  *
  * The machine, every name in it fictional: shop, an app in the open,
- * `"network": "outbound"`, a domain not switched on, its secrets named, the
- * store's form; billing, in the open too, with legacy files and its own
- * domain switched on; notes, restricted, the store's form; the dashboard
- * and the portal. The owner filled the stores of shop and notes, and
- * billing's legacy file, before the token was minted.
+ * `"network": "outbound"`, a domain not switched on, its secrets named;
+ * billing, in the open too, its own domain switched on; notes, restricted;
+ * the dashboard and the portal. The owner filled the stores of shop, billing
+ * and notes before the token was minted.
  *
  * The token, minted by the owner for the owner as holder: shop alone,
  * no creation, outbound, a domain, public sites, and secrets.
@@ -100,7 +99,7 @@ const SHOP = {
  */
 const { install: _install, ...DEPLOYED } = SHOP;
 
-/** billing: in the open, legacy files, its own domain switched on. */
+/** billing: in the open, its own domain switched on. */
 const BILLING = {
   slug: "billing",
   port: 3041,
@@ -110,11 +109,11 @@ const BILLING = {
   env: { NODE_ENV: "production" },
   memory: "128M",
   network: "outbound",
-  secrets: ["billing-mail.env", "billing-stripe.env", "billing-stats.env"],
+  secrets: ["MAIL_SECRET", "STRIPE_SECRET_KEY", "STATS_TOKEN"],
   domain: { name: "billing.example.test", aliases: ["www.billing.example.test"], active: true },
 };
 
-/** notes: restricted, one path exempted, the store's form. */
+/** notes: restricted, one path exempted. */
 const NOTES = {
   slug: "notes",
   port: 3042,
@@ -130,8 +129,8 @@ const NOTES = {
   portalExempt: ["/agent/*"],
 };
 
-const DASHBOARD = { slug: "dashboard", start: "/usr/local/bin/bun run server.ts", port: 3022, publicDir: "public", secrets: ["dashboard.env"] };
-const PORTAL = { slug: "portal", start: "/usr/local/bin/bun run server.ts", port: 3026, publicDir: "public", secrets: ["portal.env"] };
+const DASHBOARD = { slug: "dashboard", start: "/usr/local/bin/bun run server.ts", port: 3022, publicDir: "public" };
+const PORTAL = { slug: "portal", start: "/usr/local/bin/bun run server.ts", port: 3026, publicDir: "public" };
 
 /** What every deployment sends: an app and its pages. */
 const ARCHIVE = bundle([file("app/server.ts", "Bun.serve({ fetch: () => new Response('shop') })"), file("public/index.html", "<h1>shop</h1>")]);
@@ -163,7 +162,7 @@ type Machine = {
   owners: () => Record<string, string>;
   env: (slug: string) => string;
   deposited: (slug: string) => Manifest;
-  /** Everything said, journaled, printed or recorded anywhere but the stores and the legacy files themselves. */
+  /** Everything said, journaled, printed or recorded anywhere but the stores themselves. */
   everything: () => string;
   stop: () => void;
 };
@@ -211,8 +210,8 @@ async function mount(): Promise<Machine> {
   const results = folder("installer");
   writeFileSync(join(bench.units, INSTALLER_TEMPLATE), "[Service]\n");
   for (const project of [SHOP, BILLING, NOTES, DASHBOARD, PORTAL]) deposit(bench, project);
-  // The stores the installer laid when each project in the store's form was deployed.
-  for (const slug of ["shop", "notes"]) mkdirSync(join(bench.store, slug, "files"), { recursive: true, mode: 0o700 });
+  // The stores the installer laid when each project was deployed.
+  for (const slug of ["shop", "billing", "notes"]) mkdirSync(join(bench.store, slug, "files"), { recursive: true, mode: 0o700 });
   const hash = await Bun.password.hash(PASSWORD, { algorithm: "bcrypt", cost: 4 });
   writeFileSync(join(bench.secrets, "dashboard.env"), `PASSWORD_HASH=${hash}\n`, { mode: 0o600 });
   // Signing in with a company account set up, acme.test the company's domain: a token's Can open is then the token's to give or not.
@@ -221,7 +220,7 @@ async function mount(): Promise<Machine> {
     `OIDC_ISSUER=https://id.acme.test\nOIDC_CLIENT_ID=sitesolide\nOIDC_CLIENT_SECRET=${OIDC_SECRET}\nOIDC_ALLOWED_DOMAINS=acme.test\n`,
     { mode: 0o600 },
   );
-  writeFileSync(join(bench.secrets, "billing-mail.env"), `MAIL_SECRET=${BILLING_VALUE}\n`, { mode: 0o600 });
+  writeFileSync(join(bench.store, "billing", "env"), `MAIL_SECRET=${BILLING_VALUE}\n`, { mode: 0o600 });
   writeRegistry(state, registryOf(PEOPLE));
 
   const clock = { t: Date.now() };
@@ -324,7 +323,7 @@ async function mount(): Promise<Machine> {
         PUT: (req) => api.putProjectAccess(req, req.params.slug),
         DELETE: (req) => api.removeProjectAccess(req, req.params.slug),
       },
-      ...secretsRoutes(api),
+      ...restartRoutes(api),
       ...storeRoutes(api),
       "/api/v1/*": () => failure("not-found", "no such route: see docs/access.md for the control API's routes"),
     },
@@ -524,9 +523,7 @@ describe("a colleague's token scoped to one project", () => {
     expect(view.variables.filter((variable) => variable.source === "store").map((variable) => variable.name).sort()).toEqual(["ADMIN_TOKEN", "STRIPE_SECRET_KEY"]);
     expect(view.missing.sort()).toEqual(["MAPS_API_KEY", "SEARCH_API_KEY", "SMTP_PASSWORD", "SMTP_USER", "STRIPE_WEBHOOK_SECRET"]);
     expect(view.files).toEqual([expect.objectContaining({ name: "owner.json", state: "set", bytes: null })]);
-    expect(view.may).toEqual({ write: true, reveal: false, restore: false, migrate: false });
-    // The route of before lists the files a legacy project reads: none here.
-    expect(await m.send(secret, "GET", "/api/v1/projects/shop/secrets")).toMatchObject({ status: 200, json: { secrets: { slug: "shop", files: [] } } });
+    expect(view.may).toEqual({ write: true, reveal: false, restore: false });
 
     expect(await m.send(secret, "PATCH", store("shop"), { set: { SEARCH_API_KEY: TYPED } })).toMatchObject({ status: 200, json: { created: false, set: ["SEARCH_API_KEY"] } });
     expect(m.env("shop")).toContain(`SEARCH_API_KEY=${TYPED}`);
@@ -553,10 +550,6 @@ describe("a colleague's token scoped to one project", () => {
     expect(withRestart).toMatchObject({ status: 200, json: { set: ["MAPS_API_KEY"], restart: { verdict: { kind: "active" } } } });
     expect(m.restarted.filter((line) => line.startsWith("restart "))).toEqual(["restart shop", "restart shop"]);
 
-    // The route of before, on a project that keeps its variables in its store: told to update, nothing written.
-    expect(await m.send(secret, "PATCH", "/api/v1/projects/shop/secrets/shop.env", { set: { SEARCH_API_KEY: TYPED } })).toMatchObject({ status: 403, json: { error: "out-of-scope", message: STORE_FORM } });
-    expect(existsSync(join(m.bench.secrets, "shop.env"))).toBe(false);
-
     const own = m.journal().filter((entry) => entry.actor === `token:${token.id}`);
     expect(own.filter((entry) => entry.result === "ok").length).toBeGreaterThanOrEqual(7);
     expect(own.every((entry) => entry.slug === "shop")).toBe(true);
@@ -572,14 +565,11 @@ describe("a colleague's token scoped to one project", () => {
       ["POST", `${store("shop")}/value`, { name: "ADMIN_TOKEN" }],
       ["GET", `${store("shop")}/variables/ADMIN_TOKEN`, undefined],
       ["POST", `${store("shop")}/restore`, {}],
-      ["POST", `${store("shop")}/migrate`, {}],
-      ["GET", "/api/v1/projects/shop/secrets/shop.env", undefined],
-      ["POST", "/api/v1/projects/shop/secrets/value", { name: "ADMIN_TOKEN" }],
     ] as const) {
       const answer = await m.send(secret, method, path, payload);
       expect([404, 405]).toContain(answer.status);
     }
-    for (const path of ["/control/store/value", "/control/secrets/value", "/control/store/restore"]) {
+    for (const path of ["/control/store/value", "/control/store/restore"]) {
       expect((await m.call("POST", path, { bearer: secret, slug: "shop", name: "ADMIN_TOKEN" })).status).toBe(404);
     }
     const listed = await m.send(secret, "GET", store("shop"));
@@ -587,16 +577,13 @@ describe("a colleague's token scoped to one project", () => {
     expectNoValue(m);
   });
 
-  test("the others: billing and notes are neither deployed, listed, written nor restarted, their stores and legacy files as the owner left them", async () => {
+  test("the others: billing and notes are neither deployed, listed, written nor restarted, their stores as the owner left them", async () => {
     const m = await mount();
     const { token, secret } = await m.mint(COLLEAGUE);
-    const before = { billing: readFileSync(join(m.bench.secrets, "billing-mail.env"), "utf8"), notes: m.env("notes"), journal: m.journal().length };
+    const before = { billing: m.env("billing"), notes: m.env("notes"), journal: m.journal().length };
 
-    // Deployed through the API: billing's own manifest is refused for its files before the steward is asked; stripped of them, and notes, by the steward.
-    const billing = await deploy(m, secret, BILLING);
-    expect(billing.created).toMatchObject({ status: 422, json: { error: "invalid-manifest", details: expect.arrayContaining([expect.stringContaining("billing-mail.env is not its own")]) } });
-    const { secrets: _files, ...billingBare } = BILLING;
-    for (const manifest of [billingBare, NOTES]) {
+    // Deployed through the API: refused by the steward, which the dashboard asks.
+    for (const manifest of [BILLING, NOTES]) {
       const refused = await deploy(m, secret, manifest);
       expect(refused.created).toMatchObject({ status: 403, json: { error: "out-of-scope", message: expect.stringContaining("already exists on the machine and your token may not deploy it") } });
       expect(refused.uploaded).toBeNull();
@@ -618,21 +605,14 @@ describe("a colleague's token scoped to one project", () => {
         ["POST", `${store(slug)}/generate`, { name: "AGENT_TOKEN", replace: true }],
         ["PUT", `${store(slug)}/files/gcp.json`, { content: base64(TYPED_FILE) }],
         ["DELETE", `${store(slug)}/files/gcp.json`, undefined],
-        ["GET", `/api/v1/projects/${slug}/secrets`, undefined],
-        ["PATCH", `/api/v1/projects/${slug}/secrets/${slug}.env`, { set: { MAIL_SECRET: TYPED } }],
-        ["PATCH", `/api/v1/projects/${slug}/secrets/billing-mail.env`, { set: { MAIL_SECRET: TYPED } }],
-        ["PATCH", `/api/v1/projects/${slug}/secrets/notes.env`, { remove: ["AGENT_TOKEN"] }],
         ["POST", `/api/v1/projects/${slug}/restart`, undefined],
       ] as const) {
         expect(await m.send(secret, method, path, payload)).toMatchObject({ status: 404, json: { error: "not-found" } });
       }
     }
-    expect(readFileSync(join(m.bench.secrets, "billing-mail.env"), "utf8")).toBe(before.billing);
+    expect(m.env("billing")).toBe(before.billing);
     expect(m.env("notes")).toBe(before.notes);
-    expect(readdirSync(join(m.bench.store, "notes", "files"))).toEqual([]);
-    expect(existsSync(join(m.bench.store, "billing"))).toBe(false);
-    expect(existsSync(join(m.bench.secrets, "billing.env"))).toBe(false);
-    expect(existsSync(join(m.bench.secrets, "notes.env"))).toBe(false);
+    for (const slug of ["billing", "notes"]) expect(readdirSync(join(m.bench.store, slug, "files"))).toEqual([]);
     expect(m.restarted).toEqual([]);
     // A project out of reach reads as unknown, and is never journaled: a guess learns nothing.
     expect(m.journal()).toHaveLength(before.journal);
@@ -664,7 +644,6 @@ describe("a colleague's token scoped to one project", () => {
     expect(platform.created).toMatchObject({ status: 403, json: { error: "reserved" } });
     for (const slug of ["dashboard", "portal"]) {
       expect(await m.send(secret, "PATCH", store(slug), { set: { PASSWORD_HASH: TYPED } })).toMatchObject({ status: 404, json: { error: "not-found" } });
-      expect(await m.send(secret, "PATCH", `/api/v1/projects/${slug}/secrets/${slug}.env`, { set: { PASSWORD_HASH: TYPED } })).toMatchObject({ status: 404, json: { error: "not-found" } });
     }
     expect(m.owners()).toEqual({});
     expect(m.started).toEqual([]);
@@ -789,8 +768,6 @@ describe("a colleague's token scoped to one project", () => {
       ["POST", `${store("shop")}/generate`, { name: "ADMIN_TOKEN", replace: true }],
       ["PUT", `${store("shop")}/files/gcp.json`, { content: base64(TYPED_FILE) }],
       ["DELETE", `${store("shop")}/files/owner.json`, undefined],
-      ["GET", "/api/v1/projects/shop/secrets", undefined],
-      ["PATCH", "/api/v1/projects/shop/secrets/shop.env", { set: { SEARCH_API_KEY: TYPED } }],
     ] as const) {
       expect(await m.send(secret, method, path, payload)).toMatchObject({ status: 403, json: { error: "out-of-scope", message: expect.stringContaining("this token may not manage secrets") } });
     }

@@ -12,7 +12,7 @@
  * A value travels in a body, never in a URL: a URL ends up in a log, a body
  * does not.
  */
-import type { StoreMigrateResponse, StoreRetireResponse, StoreView } from "../../borrowed/store-protocol";
+import type { StoreView } from "../../borrowed/store-protocol";
 
 /** The steward's Unix socket. The directory is 0750 root:site-dashboard. */
 export const DEFAULT_SOCKET = "/run/sitesolide-steward/secretaire.sock";
@@ -49,41 +49,27 @@ export const MAX_PORTAL_MS = 90_000;
 
 /**
  * `managed`: the steward knows how to re-read it and rewrite it.
- * `incomplete`: declared by the manifest or the registry, missing from
- * /etc/sitesolide.
+ * `absent`: one the platform expects, missing from /etc/sitesolide.
  * `unmanaged`: present but unreadable for it (unknown shape, unexpected
  * owner or mode, symbolic link). Listed, never rewritten, `reason` says why.
  */
 export type FileState = "managed" | "absent" | "unmanaged";
 
 /**
- * `variables`: an environment file that systemd reads through
- * `EnvironmentFile=`, managed variable by variable.
- * `content`: a file the service opens itself and reads as it stands (a private
- * key, a token pushed elsewhere), managed as one block.
+ * One of the platform's own environment files, which systemd reads through
+ * `EnvironmentFile=` and the steward manages variable by variable: the
+ * dashboard's and the portal's, and the machine's two the dashboard's site
+ * lists (src/secrets/scope.ts, PLATFORM_FILES).
  */
-export type FileKind = "variables" | "content";
-
 export type FileView = {
-  /**
-   * The path under /etc/sitesolide, `cms.env`, `landing-mail.env`, or
-   * `<slug>-secrets/<name>` for a file kept in a subdirectory. It is also what
-   * the requests name `file`.
-   */
+  /** The flat name under /etc/sitesolide, `dashboard.env`. It is also what the requests name `file`. */
   name: string;
-  kind: FileKind;
   state: FileState;
   /** In English, for the page. null except for `unmanaged`. */
   reason: string | null;
-  /** Owner and mode the steward demands, `site-cms:site-cms 0600`. */
+  /** Owner and mode the steward demands, `site-portal:site-portal 0600`. */
   expected: string;
-  /**
-   * False for a write-only file: it is replaced, it is never read back, neither
-   * by `/value` nor by `/content`. That is the case of a private key whose
-   * mode closes it to other accounts. The steward decides it, not the page.
-   */
-  readable: boolean;
-  /** The names of the variables, in the file's order. Empty except for a `managed` `variables` file. */
+  /** The names of the variables, in the file's order. Empty except for a `managed` file. */
   variables: string[];
   /**
    * The variables that change only through `/password`, never through
@@ -91,11 +77,6 @@ export type FileView = {
    * carries. The page offers "Change password" there in the value's place.
    */
   passwords: string[];
-  /**
-   * Size in bytes of a `content` file that is `managed` and `readable`, null
-   * otherwise: the size of a private key would already say what kind it is.
-   */
-  bytes: number | null;
   /** Modification date in milliseconds, null if the file is missing. */
   modifiedAt: number | null;
   /**
@@ -136,14 +117,13 @@ export type PortalView = {
 
 export type ProjectView = {
   /**
-   * The directory under /srv/sites, the one the sites page names:
-   * the zone's name for the landing, whose files nevertheless carry the
-   * `landing` prefix. Every deployed site is listed, static or app, whether it
-   * has secrets or not: an empty `files` says it has none.
+   * The directory under /srv/sites, the one the sites page names: the zone's
+   * name for the landing. Every deployed site is listed, static or app.
    */
   slug: string;
   /** null for a static site, or when systemd could say nothing of the unit. */
   service: ServiceView | null;
+  /** The platform's own files, for the dashboard's and the portal's sites; empty for every other. */
   files: FileView[];
   portal: PortalView;
   /** The project's store, null for a static site and a storeless project. */
@@ -161,6 +141,7 @@ export type Operation =
   | "remove"
   | "create"
   | "restore"
+  // A file set in a project's store, its content replaced.
   | "replace"
   | "password"
   | "portal"
@@ -190,6 +171,11 @@ export type Operation =
   | "sharing"
   | "guest.create"
   | "guest.revoke"
+  // A project's flat files merged into its store, and one deleted once the
+  // store covered it: what the steward did before projects kept their
+  // secrets in their store alone. Read, never written.
+  | "migrate"
+  | "retire"
   // A person's restore refused by the steward before it reached the backups,
   // which record those that go through.
   | "backup.restore"
@@ -203,11 +189,7 @@ export type Operation =
   | "project.remove"
   // A value drawn on the machine into a project's store, never shown: the
   // name alone is journaled.
-  | "generate"
-  // A project's legacy files merged into its store, values never shown; and
-  // a legacy file deleted once the store covers it.
-  | "migrate"
-  | "retire";
+  | "generate";
 
 export type OperationResult = "ok" | "rejects" | "failure";
 
@@ -297,8 +279,6 @@ export type Failure = { error: ErrorCode; message: string; wait?: number };
 //   DELETE /variable       VariableRequest       -> FileResponse
 //   POST   /file        FileRequest        -> FileResponse
 //   POST   /restore      FileRequest        -> FileResponse
-//   POST   /content        FileRequest        -> ContentResponse      (readable only)
-//   PUT    /content        ContentRequest        -> FileResponse
 //   POST   /password     PasswordRequest     -> PasswordResponse
 //   POST   /portal        PortalRequest        -> PortalResponse
 //   POST   /restart     ProjectRequest         -> RestartResponse
@@ -316,14 +296,10 @@ export type Failure = { error: ErrorCode; message: string; wait?: number };
 //   DELETE /store/file       WithToken & StoreFileRemoveRequest -> StoreChangeResponse
 //   POST   /store/restore    WithToken & StoreRestoreRequest   -> StoreRestoreResponse
 //   POST   /store/value      WithToken & StoreRevealRequest    -> StoreRevealResponse
-//   POST   /store/migrate    WithToken & StoreMigrateRequest   -> StoreMigrateResponse
-//   POST   /store/retire     WithToken & StoreRetireRequest    -> StoreRetireResponse
 //
 // A write answers 201 when it made the store's folder. The owner's socket,
 // root's alone, answers the same routes without a token, but `/store/value`,
-// and `POST /restart { slug }`, and
-//
-//   GET    /store/leftovers?slug=<s>          -> StoreLeftoversResponse
+// and `POST /restart { slug }`.
 //
 // Any error returns `Failure`.
 
@@ -333,7 +309,6 @@ export type ProjectRequest = WithToken & { slug: string };
 export type FileRequest = ProjectRequest & { file: string };
 export type VariableRequest = FileRequest & { variable: string };
 export type SetRequest = VariableRequest & { value: string };
-export type ContentRequest = FileRequest & { content: string };
 
 /**
  * Changing a password demands retyping the dashboard's own, checked by the
@@ -358,26 +333,11 @@ export type LogResponse = { entries: LogEntry[]; paged?: true };
 export type UnlockResponse = { token: string; expiresAt: number };
 export type ValueResponse = { value: string };
 export type FileResponse = { file: FileView };
-export type ContentResponse = { content: string };
 /** `password`: the one the steward drew, null if the request carried one. */
 export type PasswordResponse = { file: FileView; password: string | null };
 /** `detail`: what the gatekeeper did and checked, in English, for the page. */
 export type PortalResponse = { portal: PortalView; detail: string };
 export type RestartResponse = { verdict: Verdict };
-
-/**
- * What `GET /store/leftovers` answers, what `POST /store/migrate` and `POST
- * /store/retire` answer: the shapes live in bin/cli/store-protocol.ts with
- * the rest of the store's, which the CLI reads too. The leftovers are the
- * flat files a project's store left behind (src/secrets/scope.ts,
- * `Site.leftovers`), which `sitesolide remove` reads before it deletes the
- * served folder and judges again before deleting each; `shadowed`, the
- * names two legacy files set differently, the value in effect merged;
- * `forced`, the files retired only because the owner asked with `force`.
- */
-export type { StoreLeftoversResponse } from "../../borrowed/store-protocol";
-export type StoreMigrateAnswer = StoreMigrateResponse;
-export type StoreRetireAnswer = StoreRetireResponse;
 
 // --- The dashboard's routes, under /api/secrets ------------------------------
 //
@@ -393,8 +353,6 @@ export type StoreRetireAnswer = StoreRetireResponse;
 //   DELETE /api/secrets/variable       { slug, file, variable } -> FileResponse
 //   POST   /api/secrets/file        { slug, file } -> FileResponse
 //   POST   /api/secrets/restore      { slug, file } -> FileResponse
-//   POST   /api/secrets/content        { slug, file } -> ContentResponse
-//   PUT    /api/secrets/content        { slug, file, content } -> FileResponse
 //   POST   /api/secrets/password     { slug, file, variable, dashboardPassword, newPassword } -> PasswordResponse
 //   POST   /api/secrets/portal        { slug, active, confirmation } -> PortalResponse
 //   POST   /api/secrets/restart     { slug } -> RestartResponse

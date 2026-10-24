@@ -51,7 +51,7 @@ const LAB: Manifest = {
   slug: "lab",
   install: "/usr/local/bin/uv sync --frozen --no-dev",
   env: { LAB_DB: "/srv/sites/{slug}/data/lab.db", LAB_URL: "https://{slug}.{zone}" },
-  secrets: ["lab.env"],
+  secrets: ["LAB_TOKEN"],
   memory: "512M",
   services: {
     platform: { start: "/srv/sites/lab/app/.venv/bin/python -m lab.platform --port 3050", port: 3050 },
@@ -397,7 +397,7 @@ describe("the units of a project with several services", () => {
       expect(text(unit)).toInclude(`--port ${port}\n`);
       expect(text(unit)).toInclude("User=site-lab\nGroup=site-lab");
       expect(text(unit)).toInclude("ReadWritePaths=/srv/sites/lab/data");
-      expect(text(unit)).toInclude("EnvironmentFile=-/etc/sitesolide/lab.env");
+      expect(text(unit)).toInclude("EnvironmentFile=-/etc/sitesolide/projects/lab/env");
       expect(text(unit)).toInclude("Environment=LAB_DB=/srv/sites/lab/data/lab.db");
       expect(text(unit)).toInclude("Environment=LAB_URL=https://lab.test-zone.invalid");
       expect(text(unit)).toInclude("IPAddressAllow=localhost");
@@ -757,7 +757,6 @@ describe("removing a project with several services", () => {
     const [unit] = removalActions({
       slug: "lab",
       isApplication: true,
-      secrets: [],
       units: servicesOf(LAB).map((service) => service.unit),
     });
     expect(unit!.command).toBe(
@@ -768,9 +767,9 @@ describe("removing a project with several services", () => {
   });
 
   test("a single service keeps the command it always had", () => {
-    const [unit] = removalActions({ slug: "budget", isApplication: true, secrets: [], units: ["budget"] });
-    const [legacy] = removalActions({ slug: "budget", isApplication: true, secrets: [] });
-    expect(unit!.command).toBe(legacy!.command);
+    const [unit] = removalActions({ slug: "budget", isApplication: true, units: ["budget"] });
+    const [unnamed] = removalActions({ slug: "budget", isApplication: true });
+    expect(unit!.command).toBe(unnamed!.command);
     expect(unit!.command).toBe(
       "sudo systemctl disable --now budget 2>/dev/null || true && sudo rm -f /etc/systemd/system/budget.service && sudo systemctl daemon-reload && " +
         "{ sudo systemctl reset-failed budget 2>/dev/null || true; }",
@@ -866,7 +865,7 @@ describe("the units of workers and scheduled services, on the machine", () => {
   });
 
   test("removing the project takes every unit, the timers first", () => {
-    const [unit] = removalActions({ slug: "lab", isApplication: true, secrets: [], units: unitNames(MIXED) });
+    const [unit] = removalActions({ slug: "lab", isApplication: true, units: unitNames(MIXED) });
     expect(unit!.command).toBe(
       "sudo systemctl disable --now lab.sync.timer lab lab.sync.service lab.queue.service 2>/dev/null || true && " +
         "sudo rm -f /etc/systemd/system/lab.sync.timer /etc/systemd/system/lab.service /etc/systemd/system/lab.sync.service /etc/systemd/system/lab.queue.service && " +
@@ -874,7 +873,7 @@ describe("the units of workers and scheduled services, on the machine", () => {
     );
     // An anchored project: its anchor goes with its services and timers.
     const anchored = lab({ report: { start: "/x", schedule: "daily" } });
-    const [anchor] = removalActions({ slug: "lab", isApplication: true, secrets: [], units: unitNames(anchored) });
+    const [anchor] = removalActions({ slug: "lab", isApplication: true, units: unitNames(anchored) });
     expect(anchor!.command).toStartWith("sudo systemctl disable --now lab.report.timer lab lab.report.service 2>/dev/null || true");
   });
 });

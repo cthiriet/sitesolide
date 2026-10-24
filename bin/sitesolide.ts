@@ -13,7 +13,7 @@
  *   sitesolide share [<email|@domain>...]   general access and people with access
  *   sitesolide people               everyone with access, and who may create projects
  *   sitesolide remove --confirm <slug>  take the project off the machine
- *   sitesolide secrets [set|generate|remove|set-file|remove-file|migrate]
+ *   sitesolide secrets [set|generate|remove|set-file|remove-file]
  *                                   the project's store of secrets, see bin/cli/store-cli.ts
  *   sitesolide run -- <command>     the workstation's own credentials for it, then run
  *   sitesolide mcp                  the same commands, as tools for an agent
@@ -112,6 +112,7 @@ import {
   adoptLegacyKeys,
   composeConfig,
   configPath,
+  dashboardAddress,
   deploymentAccount,
   OPTIONAL_SETTINGS,
   writeConfig,
@@ -136,9 +137,7 @@ import {
   isProtected,
   isSystemName,
   isValidSlug,
-  legacySecretFiles,
   secretsOf,
-  secretsWarnings,
   mainPort,
   missingExclusions,
   NEVER_SENT,
@@ -184,26 +183,14 @@ import {
   REMOVAL_WARNING,
   ownershipReleaseCommand,
   readOwnershipRelease,
-  removableSecrets,
   removalSteps,
   leftToDo,
 } from "./cli/removal";
-import {
-  dashboardAddress,
-  ownerRefusal,
-  readPresenceAnswer,
-  readSecretOwners,
-  secretFileRefusal,
-  secretOwnersCommand,
-  type SecretOwner,
-  type PresenceRead,
-} from "./cli/secrets";
 import { CREDENTIALS_EXIT_STATUS, credentialsFailure, readStorePrepareAnswer, slugHasStore, storePaths, storePrepareCommand, workstationSecretsPath } from "./cli/store";
 import { envValue, keys, parseEnv } from "./cli/envfile";
 import { gatherBuildSecrets, missingBuildSecrets, readWorkstationSecrets, sourceLine, unreadableWorkstation, type BuildSecretsResolution } from "./cli/build-secrets";
-import { handleMissing, legacyLossRefusal, ownerLeftovers, readStoreArguments, runStore, sshStore, STORE_USAGE, storelessRefusal, takenBackWarning, withDeclared, type StoreTransport } from "./cli/store-cli";
+import { handleMissing, readStoreArguments, runStore, sshStore, STORE_USAGE, storelessRefusal, takenBackWarning, withDeclared, type StoreTransport } from "./cli/store-cli";
 import {
-  secretPath,
   projectPaths,
   decideUnit,
   generateUnits,
@@ -214,6 +201,8 @@ import {
   type UnitRead,
   MARKER_ABSENT,
   MARKER_PRESENT,
+  readPresenceAnswer,
+  type PresenceRead,
   isTimerUnit,
   runningUnits,
   systemUser,
@@ -234,7 +223,6 @@ import {
 import {
   changedMeanwhile,
   emptyReport,
-  foreignSecretFiles,
   foreignUnits,
   notDeployed,
   parseRefreshArguments,
@@ -1002,55 +990,32 @@ async function buildSecretsFor(project: Project, config: Config, executor: Execu
 }
 
 /**
- * The store, read over the owner's socket before the build and the Caddy
- * lock, for every app but the dashboard and the portal.
- *
- * First, what deploying would drop: a value a legacy file the installed
- * units read holds, that the new units no longer read, and that the store
- * lacks, would be gone at the next start. A manifest that names its
- * variables, or none, makes units that read the store alone; one in the old
- * form, units that read the files it declares, so a file it stopped
- * declaring is dropped too. That stops the deployment before anything is
- * sent, saying to migrate first, and so does a listing that fails: what
- * would be dropped cannot be told. In the old form, a steward from before
- * the store is warned of instead, as before it. A read, hence in a dry run
- * too.
- *
- * Then, for a manifest that names them, the declared runtime secrets the
- * store lacks. At a terminal, each is asked for: set, typed without echo,
+ * The declared runtime secrets the store lacks, read over the owner's socket
+ * before the build and the Caddy lock, for every app but the dashboard and
+ * the portal. At a terminal, each is asked for: set, typed without echo,
  * generated on the server, or left unset; otherwise one warning names them,
  * with the commands. A missing secret never stops a deployment: an app that
- * cannot live without one stops at start, which the stability check
- * reports. Not in a dry run, which asks the machine nothing it would write.
+ * cannot live without one stops at start, which the stability check reports,
+ * and a store that cannot be listed is warned of the same way. Not in a dry
+ * run, which asks the machine nothing it would write.
  */
 async function runtimeSecrets(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
   if (!hasStore(manifest)) return;
   const declaration = secretsOf(manifest);
-  // The old form keeps reading the files it declares, and declares no name of the store's.
-  const legacyForm = declaration.form === "legacy";
-  const declares = !legacyForm && (declaration.runtime.length > 0 || declaration.files.length > 0);
-  if (declares) step("runtime secrets");
+  if (declaration.runtime.length === 0 && declaration.files.length === 0) return;
+  step("runtime secrets");
+  if (executor.simulated) {
+    say("   [dry-run] the declared runtime secrets the store lacks asked for at a terminal, warned of otherwise");
+    note({ missingSecrets: null });
+    return;
+  }
   const transport = ownerStore(config, executor);
   const listed = await transport.list(manifest.slug);
   if (!listed.ok) {
-    const said = `cannot tell whether this deployment would drop values legacy files supply: ${listed.failure.message}`;
-    if (legacyForm && listed.failure.error === "steward-outdated") {
-      warn(said, [...(listed.failure.details ?? []), "a legacy file the units read and this manifest no longer declares would be dropped: check secrets in sitesolide.json"]);
-      return;
-    }
-    die(said, [
+    warn(`cannot tell which declared runtime secrets the store lacks: ${listed.failure.message}`, [
       ...(listed.failure.details ?? []),
-      legacyForm
-        ? "the units of the old form read the legacy files the manifest declares: the store is read first, to stop a deployment that would drop a file the units read today"
-        : "a manifest that names its variables, or none, makes units that read the store alone: the store is read first, to stop a deployment that would drop a value",
-      "nothing was sent",
+      "sitesolide secrets lists them once the store answers",
     ]);
-  }
-  const loss = legacyLossRefusal(listed.value, "nothing was sent", declaration);
-  if (loss !== null) die(loss.message, loss.details);
-  if (!declares) return;
-  if (executor.simulated) {
-    say("   [dry-run] the declared runtime secrets the store lacks asked for at a terminal, warned of otherwise");
     note({ missingSecrets: null });
     return;
   }
@@ -1304,8 +1269,6 @@ async function deploy(
     missingSecrets: { runtime: [], files: [] },
     buildSecrets: [],
   });
-  // The old form of `secrets` keeps working, and says how to leave it.
-  for (const warning of secretsWarnings(rawProject.manifest)) warn(warning);
   // The build's secrets, from whoever deploys, before anything is read on
   // the machine or sent: a missing one stops here.
   const buildSecrets = await buildSecretsFor(rawProject, config, executor);
@@ -1328,10 +1291,6 @@ async function deploy(
   if (isApplication) await checkRemoteBlock(manifest, config, executor, replace, doorConfirmed);
   if (isApplication) await checkUnitNames(manifest, config, executor);
   if (isApplication) await checkPorts(manifest, config, executor);
-  if (isApplication) {
-    const refusal = await secretFilesRefusal(manifest, config, executor);
-    if (refusal !== null) die(refusal.message, refusal.details);
-  }
   if (scheduledServices(manifest).length > 0) await checkSchedules(manifest, config, executor);
   // A backup command reaches its service on its port, through the same set.
   if (reachesOwnPorts(manifest)) await requireProjectSet(config, executor);
@@ -1422,12 +1381,6 @@ async function deploy(
   // Caddy step and the verify are done: see STABILITY_WINDOW.
   let stability: Standings | null = null;
   if (isApplication) {
-    // The old form's files, after prepareService, which creates site-<slug>,
-    // and after depositManifest: the Secrets section of the dashboard creates
-    // a missing one in that user's name once it reads the manifest on the
-    // machine. Said, never a stop.
-    await ensureSecrets(manifest, config, executor);
-
     if (manifest.install !== undefined) {
       step(`dependencies (${manifest.install}), as ${systemUser(slug)} in its service's walls`);
       await installAsProject(manifest, config, executor);
@@ -1776,48 +1729,6 @@ async function remotePresence(
     `sudo sh -c "if test -f ${destination}; then echo ${MARKER_PRESENT}; else echo ${MARKER_ABSENT}; fi"`,
   );
   return readPresenceAnswer(output);
-}
-
-/**
- * Says whether each legacy file the manifest declares is on the machine. A
- * missing one stops nothing: the unit reads it with `EnvironmentFile=-`, the
- * service starts without its variables, and one that cannot live without
- * them stops at start, which the stability check reports. Presence alone is
- * read, never a content.
- *
- * Every presence is read before anything is said, so that the warning names
- * all the missing files at once. A store-form manifest declares no file.
- */
-async function ensureSecrets(
-  manifest: Manifest,
-  config: Config,
-  executor: Executor,
-): Promise<void> {
-  const secrets = legacySecretFiles(manifest);
-  if (secrets.length === 0) return;
-  step("declared secret files");
-
-  // In a dry run, nothing is asked of the VM: an end-to-end test must be able
-  // to run without it, and without a forgotten path talking to production.
-  if (executor.simulated) {
-    for (const name of secrets) say(`   [dry-run] check that ${secretPath(name)} is on the server`);
-    return;
-  }
-
-  const dashboard = dashboardAddress(config.zone);
-  const missing: string[] = [];
-  for (const name of secrets) {
-    const presence = await remotePresence(config, executor, secretPath(name));
-    if (presence.kind === "unreadable") {
-      warn(`cannot tell whether ${secretPath(name)} is there: the server answered neither an absence nor a presence`);
-    } else if (presence.kind === "absent") {
-      missing.push(name);
-      warn(`${secretPath(name)} is missing: the service starts without its variables`, [
-        `set them in the Secrets section of ${dashboard}, or move to the store: list the variable names in sitesolide.json, then sitesolide secrets set NAME`,
-      ]);
-    } else say(`   present  ${secretPath(name)}`);
-  }
-  if (missing.length > 0) note({ missingLegacy: missing.map((name) => secretPath(name)) });
 }
 
 /**
@@ -2461,70 +2372,6 @@ async function checkPorts(manifest: Manifest, config: Config, executor: Executor
   }
 }
 
-/** The sites deployed on the machine, by the label their files carry: `landing` for the zone's folder. */
-function siteLabels(folders: Iterable<string>, zone: string): string[] {
-  return [...folders].map((folder) => (folder === zone ? "landing" : folder));
-}
-
-/**
- * Refuses, before anything is pushed, a secret file the project may not
- * read: the machine's own, another site's by its name, or one a more
- * specific site deployed on the machine holds. The unit reads each declared
- * file as root, so `deploy` checking that it was there handed it to whoever
- * wrote the manifest. See secretFileRefusal in bin/cli/secrets.ts. The old
- * form's files alone: a project whose manifest names its secrets reads no
- * flat file at all.
- *
- * The rule without the machine first, then with the sites it carries: a
- * read, hence done in a dry run too. The refusal is returned, deploy dying
- * on it and refresh refusing that project alone; a read that fails stops.
- */
-async function secretFilesRefusal(manifest: Manifest, config: Config, executor: Executor): Promise<{ message: string; details: string[] } | null> {
-  const declared = legacySecretFiles(manifest);
-  if (declared.length === 0) return null;
-  const refusal = (refusals: string[]): { message: string; details: string[] } | null =>
-    refusals.length === 0
-      ? null
-      : {
-          message: "secrets: a file that is not this project's",
-          details: [...refusals, `nothing was pushed: a project declares ${manifest.slug}.env or ${manifest.slug}-<name> files alone, which its unit reads as root`],
-        };
-  const named = refusal(declared.map((name) => secretFileRefusal(manifest.slug, name)).filter((one): one is string => one !== null));
-  if (named !== null) return named;
-  const reading = readDepositedManifests(await executor.read(config, readManifestsCommand("*")));
-  if (reading.kind === "unreadable") {
-    die("cannot read the manifests on the server to check the secret files", [
-      reading.reason,
-      "nothing was pushed: a file of a project deployed there could be read by this one",
-    ]);
-  }
-  const labels = siteLabels(reading.manifests.keys(), config.zone);
-  const held = refusal(declared.map((name) => secretFileRefusal(manifest.slug, name, labels)).filter((one): one is string => one !== null));
-  if (held !== null) return held;
-  const owners = await readOwners(declared, config, executor, "nothing was pushed: a file another account owns could be read by this project");
-  return refusal(declared.map((name) => ownerRefusal(manifest.slug, name, owners.get(name)!)).filter((one): one is string => one !== null));
-}
-
-/**
- * The leftover flat files the steward attaches to a project that names its
- * secrets: asked of its owner socket, a read, so in a dry run too. A steward
- * that cannot say, one from before the store included, is said, and no
- * leftover is deleted: the files stay for the owner to look at.
- */
-async function leftoverSecretFiles(slug: string, config: Config, executor: Executor): Promise<string[]> {
-  const read = await ownerLeftovers((command, input) => executor.execute(config, command, input), slug);
-  if (read.ok) return read.value;
-  warn(`cannot tell which leftover secret files are ${slug}'s: ${read.failure.message}`, ["none of them is removed: the owner looks at /etc/sitesolide by hand"]);
-  return [];
-}
-
-/** Who owns each declared secret file on the machine; an unreadable answer stops the command, `why` saying what that spares. */
-async function readOwners(names: readonly string[], config: Config, executor: Executor, why: string): Promise<Map<string, SecretOwner>> {
-  const owners = readSecretOwners(await executor.read(config, secretOwnersCommand(names)), names);
-  if (owners === null) die("cannot read who owns the secret files on the server", ["the server answered something other than an owner for each file", why]);
-  return owners;
-}
-
 /**
  * Refuses, before anything is pushed, a machine whose loopback rule would cut
  * this project's services off from each other: one laid before the project set
@@ -2854,47 +2701,13 @@ function restartFromDashboard(config: Config): never {
  * command-line tool sends for instance, and nothing that only the machine
  * uses, which lives there alone.
  *
- * A manifest of the old form names its files, sourced from the vault by bash
- * as before: nothing of their contents goes through the CLI. Any other reads
- * `<vault>/<slug>.env` with the strict parser the steward uses, and hands
- * every variable it holds to the command in its environment, never through a
- * shell: sourcing a file runs what it holds. A line that does not parse is
- * refused by its number and reason, never its content.
+ * It reads `<vault>/<slug>.env` with the strict parser the steward uses, and
+ * hands every variable it holds to the command in its environment, never
+ * through a shell: sourcing a file runs what it holds. A line that does not
+ * parse is refused by its number and reason, never its content.
  */
-async function runWithSecret(
-  project: Project,
-  config: Config,
-  command: string[],
-): Promise<void> {
+async function runWithSecret(project: Project, config: Config, command: string[]): Promise<void> {
   if (command.length === 0) die("usage: sitesolide run -- <command>");
-  const declaration = secretsOf(project.manifest);
-  if (declaration.form !== "legacy") return runWithVariables(project, config, command);
-
-  const files = declaration.legacy.map((name) => join(config.vault, name));
-  for (const file of files) {
-    if (!existsSync(file)) {
-      die(`missing from the vault: ${file}`, [
-        "the vault holds what this workstation needs to reach production, and only that",
-        `put the file there yourself; its values are the ones in the Secrets section of ${dashboardAddress(config.zone)}`,
-      ]);
-    }
-  }
-
-  const proc = Bun.spawn(
-    [
-      "bash",
-      "-c",
-      `set -a; ${files.map((f) => `. "${f}"`).join("; ")}; set +a; exec "$@"`,
-      "bash",
-      ...command,
-    ],
-    { cwd: project.code, env: projectEnvironment(), stdout: "inherit", stderr: "inherit", stdin: "inherit" },
-  );
-  process.exit(await proc.exited);
-}
-
-/** `run` for a manifest that names its secrets, or none: `<vault>/<slug>.env`, parsed strictly, in the command's environment. */
-async function runWithVariables(project: Project, config: Config, command: string[]): Promise<void> {
   const path = workstationSecretsPath(config.vault, project.manifest.slug);
   const read = await readWorkstationSecrets(path);
   if (read.kind === "absent") {
@@ -3401,31 +3214,8 @@ async function remove(
   // stopped service.
   const hasBlock = isApplication || behindPortal;
 
-  // The secret files this folder's manifest names, and the leftovers the
-  // steward attaches to the project, flat files a project that moved to its
-  // store never retired: read now, before the served folder goes, after
-  // which nobody can tell whose they are. Each is deleted only when it is
-  // this project's: see removableSecrets. The sites on the machine are read
-  // before any gesture, an unreadable reading deleting nothing.
-  const declared = legacySecretFiles(manifest);
-  const leftovers = await leftoverSecretFiles(slug, config, executor);
-  const named = [...new Set([...declared, ...leftovers])];
-  let secrets: string[] = [];
-  let leftoversRemoved: string[] = [];
-  if (named.length > 0) {
-    const sites = readDepositedManifests(await executor.read(config, readManifestsCommand("*")));
-    if (sites.kind === "unreadable") {
-      die("cannot read the manifests on the server to tell whose secret files these are", [sites.reason, "nothing was removed"]);
-    }
-    const owners = await readOwners(named, config, executor, "nothing was removed: a file another account owns could have been deleted");
-    const chosen = removableSecrets(slug, named, siteLabels(sites.manifests.keys(), config.zone), owners);
-    for (const line of chosen.kept) say(`   ${line}`);
-    secrets = chosen.removed.filter((name) => declared.includes(name));
-    leftoversRemoved = chosen.removed.filter((name) => !declared.includes(name));
-  }
-
   for (const removalStep of removalSteps(
-    { slug, isApplication, secrets, leftovers: leftoversRemoved, units: unitNames(manifest) },
+    { slug, isApplication, units: unitNames(manifest) },
     { block: hasBlock, isProtected: behindPortal },
   )) {
     if (removalStep.kind === "action") {
@@ -3567,16 +3357,10 @@ async function refreshProject(folder: string, raw: string, run: RefreshRun, conf
     const paths = (list: readonly { path: string }[]): string[] => list.map((unit) => unit.path);
     const report: ProjectReport = { ...emptyReport(slug, plan.state), write: paths(plan.write), current: paths(plan.current), kept: paths(plan.kept) };
 
-    // Before any unit is written, as deploy: a legacy file the project may
-    // not read refuses it, then the store's folders are laid, for a current
-    // project too, so that a files/ folder deleted by hand comes back and
-    // its units start again (they fail with 243/CREDENTIALS without it).
-    const legacy = await secretFilesRefusal(manifest, config, executor);
-    if (legacy !== null) {
-      stopContext = null;
-      refuseProject(run, foreignSecretFiles(slug), legacy.details);
-      return { ...report, state: "refused", write: [], reasons: legacy.details };
-    }
+    // Before any unit is written, as deploy: the store's folders are laid,
+    // for a current project too, so that a files/ folder deleted by hand
+    // comes back and its units start again (they fail with 243/CREDENTIALS
+    // without it).
     if (hasStore(manifest)) {
       const refusal = await prepareStore(slug, config, executor);
       if (refusal !== null) {
@@ -4028,7 +3812,6 @@ function usage(zone: string | null): string {
     "     remove <NAME>...             take variables out of the store",
     "     set-file <NAME> < path       a file read whole, at $CREDENTIALS_DIRECTORY/files_<NAME>",
     "     remove-file <NAME>           take a file out of the store",
-    "     migrate [--dry-run]          merge the legacy files into the store; --retire deletes those it covers, --force those it overrides",
     "     --restart                    with a change: then restart the service, and say whether it holds",
     "  sitesolide run -- <command>     the workstation's own credentials for this project, from the vault, then run",
     "  sitesolide mcp                  serve these commands to an agent, over MCP on stdio",

@@ -140,9 +140,10 @@ export const STEWARD_ACTIONS: Readonly<Record<string, string>> = {
   restore: "secrets.restore",
   replace: "secrets.replace",
   password: "secrets.password",
-  // A project's store: a value drawn on the machine, legacy files merged
-  // into it, and a legacy file deleted once it covers it. Names only.
+  // A project's store: a value drawn on the machine. Names only.
   generate: "secrets.generate",
+  // A project's flat files merged into its store, and one deleted once the
+  // store covered it: lines from before the store alone, read, never written.
   migrate: "secrets.migrate",
   retire: "secrets.retire",
   portal: "access.general",

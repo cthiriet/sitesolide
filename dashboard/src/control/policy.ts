@@ -12,17 +12,10 @@
  * deployment.
  *
  * **A token never reaches what is not its own.** The platform's projects are
- * reserved whatever the scope says, and so are new names of the shape of
- * their files, `dashboard-*`; a slug another token created is refused;
- * and a manifest in the old form may only declare the secret file named
- * after its own slug, for the unit reads it with `EnvironmentFile=`, as
- * root, before dropping privileges: a manifest naming `dashboard.env` would
- * hand the dashboard's hash to whoever wrote it. The slug names that file, so
- * the installer checks it is the project's own on the machine
- * (src/installer/claims.ts). A manifest that lists names reads no flat file
- * at all, only its project's store, `/etc/sitesolide/projects/<slug>/`, which
- * the slug alone designates: there is nothing more to judge in it, validate()
- * has judged the names.
+ * reserved whatever the scope says, and a slug another token created is
+ * refused. A project's secrets are its store's,
+ * `/etc/sitesolide/projects/<slug>/`, which the slug alone designates: there
+ * is nothing more to judge in them, validate() has judged the names.
  *
  * **Nor what a removed project left under its name.** `sitesolide remove`
  * releases the name for any token to create again, and its creator is made
@@ -44,14 +37,12 @@ import {
   isProtected,
   isValidMemory,
   isValidSlug,
-  legacySecretFiles,
   readManifest,
   servicesOf,
   SERVICE_PORTS,
   type Manifest,
 } from "../../borrowed/manifest";
 import { reservedPorts } from "../../borrowed/services";
-import type { StoreView } from "../../borrowed/store-protocol";
 import {
   MAX_TOKEN_MEMORY_BYTES,
   MAX_TOKEN_SERVICES,
@@ -93,17 +84,6 @@ export function decideSlug(identity: Identity, slug: unknown, machine: { exists:
   }
   const reserved = reservedReason(slug, machine.zone);
   if (reserved !== null) return refused("reserved", reserved);
-  // The platform's own files are named after its projects,
-  // `dashboard-backup.env` among them, and a project reads the file named
-  // after it: a new project of that shape would be handed one the platform
-  // lays later. The installer refuses a file that exists already
-  // (src/installer/claims.ts); this keeps the names free for those to come.
-  // A project of such a name already on the machine was the owner's, and
-  // stays deployable by the tokens granted it.
-  const platform = machine.exists ? undefined : RESERVED_SLUGS.find((name) => slug.startsWith(`${name}-`));
-  if (platform !== undefined) {
-    return refused("reserved", `${slug} starts with ${platform}-, which names the platform's own files on the machine: a token never creates such a project; pick another slug`);
-  }
 
   const granted = identity.scope.slugs.includes(slug);
   const own = machine.owner === identity.id;
@@ -206,11 +186,6 @@ export function scopeRefusals(manifest: Manifest, scope: Scope, slug: string): s
   }
   if (manifest.lock !== undefined) {
     refusals.push("lock: a preview code is chosen in the site's Access section, by its Admin or the owner, never by a deployment; remove the key");
-  }
-  for (const name of legacySecretFiles(manifest)) {
-    if (name !== `${slug}.env`) {
-      refusals.push(`secrets: a token's project reads ${slug}.env and no other file; ${String(name)} is not its own`);
-    }
   }
   const services = servicesOf(manifest);
   if (services.length > MAX_TOKEN_SERVICES) refusals.push(`services: ${MAX_TOKEN_SERVICES} at most for a token's project`);
@@ -390,68 +365,4 @@ export function leavesPorts(object: Record<string, unknown>): boolean {
     return Object.values(object.services as Record<string, unknown>).some((service) => wantsPort(service));
   }
   return typeof object.start === "string" && object.start.length > 0 && !("port" in object);
-}
-
-
-// --- legacy values a deployment would drop ---------------------------------------------
-
-/**
- * A legacy file as the steward or the installer read it, its variables'
- * names alone: one an installed unit of the project reads, or, `read`
- * false, one the new manifest declares that no unit reads yet.
- */
-export type LegacyRead = { name: string; state: "managed" | "absent" | "unmanaged"; variables: string[]; read?: boolean };
-
-/** What would be dropped: the names legacy files supply that the store lacks, and the files that cannot be told. */
-export type LegacyLoss = { names: string[]; unmanaged: string[] };
-
-/**
- * What a deployment would drop of what the service runs with today: the
- * variables that the legacy files its installed units read and the new
- * manifest no longer declares (`kept`, its old form's files; none for a
- * manifest that lists names) supply, and that neither the store nor a kept
- * file supplies; and the dropped files whose variables cannot be told. A
- * missing file supplies nothing.
- */
-export function legacyLoss(read: readonly LegacyRead[], inStore: ReadonlySet<string>, kept: readonly string[] = []): LegacyLoss {
-  const supplied = new Set(inStore);
-  for (const file of read) if (kept.includes(file.name) && file.state === "managed") for (const name of file.variables) supplied.add(name);
-  const names = new Set<string>();
-  const unmanaged: string[] = [];
-  for (const file of read) {
-    if (file.read === false || kept.includes(file.name) || file.state === "absent") continue;
-    if (file.state === "unmanaged") {
-      unmanaged.push(file.name);
-      continue;
-    }
-    for (const name of file.variables) if (!supplied.has(name)) names.add(name);
-  }
-  return { names: [...names], unmanaged };
-}
-
-/** The same from a store's listing: its legacy files, read by an installed unit or not, and the names the store holds. */
-export function legacyLossOfView(view: Pick<StoreView, "legacy" | "variables">, kept: readonly string[] = []): LegacyLoss {
-  const read = view.legacy.map((file) => ({ name: file.name, state: file.state, variables: file.variables, read: file.read }));
-  return legacyLoss(read, new Set(view.variables.filter((variable) => variable.source === "store").map((variable) => variable.name)), kept);
-}
-
-/** How a refusal of the kind begins: the command that carries the values over first. */
-export const MIGRATE_FIRST = "migrate first: sitesolide secrets migrate --restart";
-
-/**
- * The refusal of a deployment that would drop values, or null. It names
- * neither a variable nor a file, but counts them: the installer's log and a
- * token without Manage secrets read it, and `sitesolide secrets migrate
- * --dry-run` names them to the owner.
- */
-export function legacyLossRefusal(loss: LegacyLoss): string | null {
-  if (loss.names.length > 0) {
-    const [variables, them] = loss.names.length === 1 ? ["1 variable", "it"] : [`${loss.names.length} variables`, "them"];
-    return `${MIGRATE_FIRST}; the service reads ${variables} from legacy files this manifest no longer reads, and the store lacks ${them}: deployed as it is, the service would start without ${them}; nothing was changed`;
-  }
-  if (loss.unmanaged.length > 0) {
-    const files = loss.unmanaged.length === 1 ? "a legacy file" : `${loss.unmanaged.length} legacy files`;
-    return `${MIGRATE_FIRST}; the service reads ${files} the dashboard does not manage, which this manifest no longer reads, and what they hold cannot be told; nothing was changed`;
-  }
-  return null;
 }

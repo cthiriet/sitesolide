@@ -307,7 +307,7 @@ describe("Token activity", () => {
     action: "secrets.set",
     target: "cms",
     site: null,
-    detail: { result: "ok", file: "cms.env", variable: "API_KEY" },
+    detail: { result: "ok", file: "store", variable: "API_KEY" },
     ...partial,
   })
 
@@ -329,7 +329,7 @@ describe("Token activity", () => {
       [
         work(ms, { action: "service.restart", detail: { result: "ok", note: "active, active/running, 0 restarts" } }),
         work(ms - 2000, {}),
-        work(ms - 3000, { actor: "token:bbbbbbbbbbbb", target: "shop", detail: { result: "rejects", file: "shop.env", note: "no secrets permission", member: "alice@example.com" } }),
+        work(ms - 3000, { actor: "token:bbbbbbbbbbbb", target: "shop", detail: { result: "rejects", file: "store", note: "no secrets permission", member: "alice@example.com" } }),
       ],
       tokens,
       "owner",

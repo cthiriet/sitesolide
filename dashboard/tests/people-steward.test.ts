@@ -93,8 +93,8 @@ async function mount(): Promise<Bench> {
   project("blog", app);
   project("shop", { ...app, port: 3041 });
   project("notes", { publicDir: "public" });
-  project("dashboard", { ...app, port: 3022, secrets: ["dashboard.env"] });
-  project("portal", { ...app, port: 3026, secrets: ["portal.env"] });
+  project("dashboard", { ...app, port: 3022 });
+  project("portal", { ...app, port: 3026 });
   writeFileSync(join(units, "blog.service"), "[Service]\nExecStart=/usr/local/bin/bun run server.ts\n");
   writeFileSync(join(units, "shop.service"), "[Service]\nExecStart=/usr/local/bin/bun run server.ts\n");
 

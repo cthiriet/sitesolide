@@ -1,6 +1,6 @@
 /**
- * A token's change of secrets, read: the dashboard reads it to refuse early,
- * the steward again before anything is judged. Pure.
+ * A change of a project's store, read: the dashboard reads it to refuse
+ * early, the steward again before anything is judged. Pure.
  *
  * **Never a value in a message.** A refusal names a variable only when the
  * name already has a variable name's shape, and says "entry 3" otherwise: a
@@ -25,9 +25,6 @@ export { isVariableName };
 
 /** The change, judged: every pair and every name once, set and removed never the same one. */
 export type SecretsChange = { set: [string, string][]; remove: string[] };
-
-/** A change as the steward hands it to the secrets routes, its project and file named. */
-export type TokenSecretsChange = SecretsChange & { slug: string; file: string };
 
 /** Does this start like a provider's key, or Stripe's publishable one? A value, never a name. */
 export function isValueLike(name: string): boolean {
@@ -60,13 +57,12 @@ const LIKE_A_KEY = "starts like a secret key, not a variable name: a value never
  * is written; which names a project may set (reserved, set by its unit, a
  * password hash) is the steward's to judge, on the machine.
  *
- * `store`: a change of the project's store, whose names are listed to every
- * Developer of the project and journaled for good. A name that starts like a
- * key is refused there, as the manifest refuses it (bin/cli/manifest.ts): a
- * value pasted in a name's place would become a name. The old file keeps
- * accepting it, as it always did; neither ever quotes it.
+ * A store's names are listed to every Developer of the project and
+ * journaled for good: a name that starts like a key is refused, as the
+ * manifest refuses it (bin/cli/manifest.ts), since a value pasted in a
+ * name's place would become a name. It is never quoted.
  */
-export function readSecretsChange(set: unknown, remove: unknown, store = false): SecretsChange | { refusal: string } {
+export function readSecretsChange(set: unknown, remove: unknown): SecretsChange | { refusal: string } {
   if (set !== undefined && !isObject(set)) return { refusal: "set: an object of variable names and their values" };
   if (remove !== undefined && !Array.isArray(remove)) return { refusal: "remove: a list of variable names" };
   const pairs = set === undefined ? [] : Object.entries(set);
@@ -78,7 +74,7 @@ export function readSecretsChange(set: unknown, remove: unknown, store = false):
   const written: [string, string][] = [];
   for (const [index, [name, value]] of pairs.entries()) {
     if (!isVariableName(name)) return { refusal: `set: entry ${index + 1} is not a variable name: ${NOT_A_NAME}` };
-    if (store && isValueLike(name)) return { refusal: `set: entry ${index + 1} ${LIKE_A_KEY}` };
+    if (isValueLike(name)) return { refusal: `set: entry ${index + 1} ${LIKE_A_KEY}` };
     if (typeof value !== "string") return { refusal: `set: ${label(name, index)}: the value must be a string` };
     const reason = checkValue(value);
     if (reason !== null) return { refusal: variableRefusal("set", label(name, index), reason) };

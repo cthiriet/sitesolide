@@ -7,7 +7,7 @@ import { createSessionReader, createRoutes, type Store } from "../src/routes";
 import { DEFAULT_TIMEOUTS, RELAY_MARGIN_MS, localSteward, type Steward } from "../src/secrets/client";
 import { createTokens, type Tokens } from "../src/secrets/tokens";
 import { UNLOCK_DURATION_MS, MAX_PORTAL_MS, MAX_RESTART_MS, type FileView, type ProjectView } from "../src/secrets/protocol";
-import { MAX_CONTENT_BODY_BYTES, MAX_BODY_BYTES, MAX_LOG_SLUG, createSecretsRoutes, type SecretsRoutes } from "../src/secrets/routes";
+import { MAX_BODY_BYTES, MAX_LOG_SLUG, createSecretsRoutes, type SecretsRoutes } from "../src/secrets/routes";
 import { tokenHash, generateToken, type Session } from "../src/sessions";
 
 // No database is opened here, but the redirection is checked rather than
@@ -23,15 +23,12 @@ const PASSWORD = "Xith-G4r4-nRJs-uDMV-KhsD-mzuK";
 const EXPIRE_A = NOW + UNLOCK_DURATION_MS;
 
 const FILE: FileView = {
-  name: "cms.env",
-  kind: "variables",
+  name: "dashboard-monitor.env",
   state: "managed",
   reason: null,
-  expected: "site-cms:site-cms 0600",
-  readable: true,
-  variables: ["API_KEY"],
+  expected: "root:root 0600",
+  variables: ["HEARTBEAT_URL"],
   passwords: [],
-  bytes: null,
   modifiedAt: NOW,
   previous: true,
   restartPending: true,
@@ -39,16 +36,16 @@ const FILE: FileView = {
 
 const PORTAL = { requested: true, installed: true, modifiable: true, reason: null };
 
-/** cms in the old form: no store. Not a literal of the type, which gains `store` with the steward's view of it. */
-const CMS_PROJECT = {
-  slug: "cms",
-  service: { unit: "site-cms.service", state: "active", subState: "running", startedAt: NOW - 60_000 },
+/** The dashboard: a platform file, no store. Not a literal of the type, which gains `store` with the steward's view of it. */
+const DASHBOARD_PROJECT = {
+  slug: "dashboard",
+  service: { unit: "dashboard.service", state: "active", subState: "running", startedAt: NOW - 60_000 },
   files: [FILE],
   portal: PORTAL,
   store: null,
 };
 
-const PROJECTS: ProjectView[] = [CMS_PROJECT];
+const PROJECTS: ProjectView[] = [DASHBOARD_PROJECT];
 
 /** The dashboard's password retyped, and a brand new one: neither comes back out. */
 const NEW_PASSWORD = "a-brand-new-password-for-the-portal";
@@ -62,17 +59,16 @@ const STORE = {
   exists: true,
   state: "managed",
   reason: null,
-  variables: [{ name: "API_KEY", source: "store", file: null, shadows: [], declared: true }],
+  variables: [{ name: "API_KEY", source: "store", declared: true }],
   missing: [],
   files: [{ name: "gcp.json", state: "set", declared: true, reason: null, bytes: 120, modifiedAt: NOW, restartPending: false }],
-  legacy: [],
   build: [],
   public: [],
   unitReadsStore: true,
   modifiedAt: NOW,
   restartPending: true,
   previous: true,
-  may: { write: true, reveal: true, restore: true, migrate: true },
+  may: { write: true, reveal: true, restore: true },
 };
 const STORE_CHANGE = { store: STORE, created: false, set: ["API_KEY"], generated: [], removed: [], absent: [], files: { set: [], removed: [] } };
 /** The one answer of the store that carries a value: a reveal, the owner's. */
@@ -97,7 +93,7 @@ function fakeSteward() {
     readProjects: () => Response.json({ projects: PROJECTS }),
     readLog: () =>
       Response.json({
-        entries: [{ a: NOW, operation: "set", result: "ok", slug: "cms", file: "cms.env", variable: "API_KEY", detail: null }],
+        entries: [{ a: NOW, operation: "set", result: "ok", slug: "cms", file: "store", variable: "API_KEY", detail: null }],
       }),
     unlock: () => {
       const token = generateToken();
@@ -110,8 +106,6 @@ function fakeSteward() {
     removeVariable: () => Response.json({ file: FILE }),
     createFile: () => Response.json({ file: FILE }),
     restoreFile: () => Response.json({ file: FILE }),
-    readContent: () => Response.json({ content: "ssh-ed25519 AAAA public-key" }),
-    replaceContent: () => Response.json({ file: FILE }),
     changePassword: () => Response.json({ file: FILE, password: DRAWN_PASSWORD }),
     togglePortal: () => Response.json({ portal: PORTAL, detail: "portal installed" }),
     restart: () => Response.json({ verdict: VERDICT }),
@@ -123,8 +117,6 @@ function fakeSteward() {
     removeStoreFile: () => Response.json(STORE_CHANGE),
     restoreStore: () => Response.json({ ...STORE_CHANGE, appeared: [], disappeared: [], restored: true }),
     revealStoreValue: () => Response.json({ value: REVEALED }),
-    migrateStore: () => Response.json({ store: STORE, sources: ["cms.env"], skipped: [], merged: ["API_KEY"], already: [], overridden: [], conflicts: [], written: true }),
-    retireStore: () => Response.json({ store: STORE, retired: ["cms.env"], kept: [] }),
   };
 
   async function call(method: Method, requested: unknown): Promise<Response> {
@@ -142,8 +134,6 @@ function fakeSteward() {
     removeVariable: (requested) => call("removeVariable", requested),
     createFile: (requested) => call("createFile", requested),
     restoreFile: (requested) => call("restoreFile", requested),
-    readContent: (requested) => call("readContent", requested),
-    replaceContent: (requested) => call("replaceContent", requested),
     changePassword: (requested) => call("changePassword", requested),
     togglePortal: (requested) => call("togglePortal", requested),
     restart: (requested) => call("restart", requested),
@@ -155,8 +145,6 @@ function fakeSteward() {
     removeStoreFile: (requested) => call("removeStoreFile", requested),
     restoreStore: (requested) => call("restoreStore", requested),
     revealStoreValue: (requested) => call("revealStoreValue", requested),
-    migrateStore: (requested) => call("migrateStore", requested),
-    retireStore: (requested) => call("retireStore", requested),
   };
 
   return { steward, calls, issued, responses };
@@ -279,8 +267,6 @@ type TokenRouteName =
   | "removeVariable"
   | "createFile"
   | "restoreFile"
-  | "readContent"
-  | "replaceContent"
   | "changePassword"
   | "togglePortal"
   | "restart"
@@ -290,21 +276,17 @@ type TokenRouteName =
   | "setStoreFile"
   | "removeStoreFile"
   | "restoreStore"
-  | "revealStoreValue"
-  | "migrateStore"
-  | "retireStore";
+  | "revealStoreValue";
 
 type TokenRoute = { route: TokenRouteName; http: string; path: string; body: Record<string, unknown>; texts?: string[] };
 
 /** `texts`: the fields that have to be strings, and whose absence reads "Missing or non-text field". */
 const TOKEN_ROUTES: Required<TokenRoute>[] = ([] as TokenRoute[]).concat([
-  { route: "readValue", http: "POST", path: "/value", body: { slug: "cms", file: "cms.env", variable: "API_KEY" } },
-  { route: "setVariable", http: "PUT", path: "/variable", body: { slug: "cms", file: "cms.env", variable: "API_KEY", value: "sk_new" } },
-  { route: "removeVariable", http: "DELETE", path: "/variable", body: { slug: "cms", file: "cms.env", variable: "API_KEY" } },
-  { route: "createFile", http: "POST", path: "/file", body: { slug: "cms", file: "cms.env" } },
-  { route: "restoreFile", http: "POST", path: "/restore", body: { slug: "cms", file: "cms.env" } },
-  { route: "readContent", http: "POST", path: "/content", body: { slug: "builder", file: "builder-ssh.pub" } },
-  { route: "replaceContent", http: "PUT", path: "/content", body: { slug: "builder", file: "builder-ssh", content: "-----BEGIN-----\r\nkey\n" } },
+  { route: "readValue", http: "POST", path: "/value", body: { slug: "dashboard", file: "dashboard-monitor.env", variable: "HEARTBEAT_URL" } },
+  { route: "setVariable", http: "PUT", path: "/variable", body: { slug: "dashboard", file: "dashboard-monitor.env", variable: "HEARTBEAT_URL", value: "https://hc.example.test/new" } },
+  { route: "removeVariable", http: "DELETE", path: "/variable", body: { slug: "dashboard", file: "dashboard-monitor.env", variable: "HEARTBEAT_URL" } },
+  { route: "createFile", http: "POST", path: "/file", body: { slug: "dashboard", file: "dashboard-monitor.env" } },
+  { route: "restoreFile", http: "POST", path: "/restore", body: { slug: "dashboard", file: "dashboard-monitor.env" } },
   {
     route: "changePassword",
     http: "POST",
@@ -321,8 +303,6 @@ const TOKEN_ROUTES: Required<TokenRoute>[] = ([] as TokenRoute[]).concat([
   { route: "removeStoreFile", http: "DELETE", path: "/store/file", body: { slug: "cms", name: "gcp.json" } },
   { route: "restoreStore", http: "POST", path: "/store/restore", body: { slug: "cms", dryRun: true }, texts: ["slug"] },
   { route: "revealStoreValue", http: "POST", path: "/store/value", body: { slug: "cms", name: "API_KEY" } },
-  { route: "migrateStore", http: "POST", path: "/store/migrate", body: { slug: "cms", dryRun: false }, texts: ["slug"] },
-  { route: "retireStore", http: "POST", path: "/store/retire", body: { slug: "cms", files: ["cms.env"] }, texts: ["slug"] },
 ]).map((route) => ({ ...route, texts: route.texts ?? Object.keys(route.body) }));
 
 const EXPECTED_RESPONSES: Record<TokenRouteName, unknown> = {
@@ -331,8 +311,6 @@ const EXPECTED_RESPONSES: Record<TokenRouteName, unknown> = {
   removeVariable: { file: FILE },
   createFile: { file: FILE },
   restoreFile: { file: FILE },
-  readContent: { content: "ssh-ed25519 AAAA public-key" },
-  replaceContent: { file: FILE },
   changePassword: { file: FILE, password: DRAWN_PASSWORD },
   togglePortal: { portal: PORTAL, detail: "portal installed" },
   restart: { verdict: VERDICT },
@@ -343,8 +321,6 @@ const EXPECTED_RESPONSES: Record<TokenRouteName, unknown> = {
   removeStoreFile: STORE_CHANGE,
   restoreStore: { ...STORE_CHANGE, appeared: [], disappeared: [], restored: true },
   revealStoreValue: { value: REVEALED },
-  migrateStore: { store: STORE, sources: ["cms.env"], skipped: [], merged: ["API_KEY"], already: [], overridden: [], conflicts: [], written: true },
-  retireStore: { store: STORE, retired: ["cms.env"], kept: [] },
 };
 
 /** Every route that is not a GET, with a valid body. */
@@ -453,7 +429,7 @@ describe("the body, of which only the shape is judged", () => {
     await unlock(open);
     fake.calls.length = 0;
 
-    const base = { slug: "cms", file: "cms.env", variable: "API_KEY", value: "" };
+    const base = { slug: "dashboard", file: "dashboard-monitor.env", variable: "HEARTBEAT_URL", value: "" };
     // Two-byte characters: the limit really does count in bytes.
     const remaining = MAX_BODY_BYTES - new TextEncoder().encode(JSON.stringify(base)).byteLength;
     const value = "é".repeat(Math.floor(remaining / 2)) + "x".repeat(remaining % 2);
@@ -894,138 +870,12 @@ describe("a site's journal", () => {
   });
 });
 
-describe("replacing a content file", () => {
-  test("the cap is a content file's, not a variable's", async () => {
-    const open = await openSession();
-    await unlock(open);
-    fake.calls.length = 0;
-
-    const base = { slug: "builder", file: "builder-ssh", content: "" };
-    const remaining = MAX_CONTENT_BODY_BYTES - new TextEncoder().encode(JSON.stringify(base)).byteLength;
-    const exact = JSON.stringify({ ...base, content: "x".repeat(remaining) });
-    expect(new TextEncoder().encode(exact).byteLength).toBe(MAX_CONTENT_BODY_BYTES);
-    expect((await read(secrets.replaceContent(requested("/content", { method: "PUT", raw: exact, cookie: open.cookie })))).status).toBe(200);
-    expect((await read(secrets.replaceContent(requested("/content", { method: "PUT", raw: `${exact} `, cookie: open.cookie })))).status).toBe(400);
-    expect(fake.calls).toHaveLength(1);
-
-    // The other routes keep their own.
-    const variable = JSON.stringify({ slug: "cms", file: "cms.env", variable: "A", value: "x".repeat(MAX_BODY_BYTES) });
-    expect((await read(secrets.setVariable(requested("/variable", { method: "PUT", raw: variable, cookie: open.cookie })))).status).toBe(400);
-    expect(fake.calls).toHaveLength(1);
-  });
-});
-
-describe("changing a password", () => {
-  const body = (others: Record<string, unknown> = {}) => ({
-    slug: "portal",
-    file: "portal.env",
-    variable: "PASSWORD_HASH",
-    dashboardPassword: PASSWORD,
-    newPassword: NEW_PASSWORD,
-    ...others,
-  });
-
-  test("the shapes: the dashboard password submittable, the new one a string or null", async () => {
-    const open = await openSession();
-    const token = await unlock(open);
-    fake.calls.length = 0;
-
-    const refusal: [Record<string, unknown>, string][] = [
-      [{ dashboardPassword: "" }, "Dashboard password missing or too long."],
-      [{ dashboardPassword: "x".repeat(257) }, "Dashboard password missing or too long."],
-      [{ dashboardPassword: 42 }, "Dashboard password missing or too long."],
-      [{ dashboardPassword: undefined }, "Dashboard password missing or too long."],
-      [{ newPassword: 42 }, "Missing or non-text field: newPassword."],
-      [{ newPassword: undefined }, "Missing or non-text field: newPassword."],
-      [{ newPassword: ["x"] }, "Missing or non-text field: newPassword."],
-    ];
-    for (const [others, message] of refusal) {
-      const parsed = await read(secrets.changePassword(requested("/password", { body: body(others), cookie: open.cookie })));
-      expect(parsed.status).toBe(400);
-      expect(parsed.body).toEqual({ error: "invalid", message });
-    }
-    expect(fake.calls).toEqual([]);
-
-    // Too short: a rule, and the steward is the one that judges it.
-    for (const newPassword of [null, "court"]) {
-      const parsed = await read(secrets.changePassword(requested("/password", { body: body({ newPassword }), cookie: open.cookie })));
-      expect(parsed.status).toBe(200);
-    }
-    expect(fake.calls.map((call) => call.requested)).toEqual([
-      { ...body({ newPassword: null }), token },
-      { ...body({ newPassword: "court" }), token },
-    ]);
-  });
-
-  test("the drawn password goes back out, once only, in the answer meant for it", async () => {
-    const open = await openSession();
-    await unlock(open);
-    const parsed = await read(secrets.changePassword(requested("/password", { body: body({ newPassword: null }), cookie: open.cookie })));
-    expect(parsed.body).toEqual({ file: FILE, password: DRAWN_PASSWORD });
-  });
-
-  test("an answer that copies back the dashboard password or the new one does not come out", async () => {
-    const open = await openSession();
-    await unlock(open);
-    const leaks: ((received: any) => Response)[] = [
-      (received) => Response.json({ error: "invalid", message: `bad password ${received.dashboardPassword}` }, { status: 400 }),
-      (received) => Response.json({ file: FILE, password: received.newPassword }),
-      (received) => Response.json({ file: { ...FILE, reason: JSON.stringify(received) }, password: null }),
-    ];
-    for (const leak of leaks) {
-      fake.responses.changePassword = leak;
-      const parsed = await read(secrets.changePassword(requested("/password", { body: body(), cookie: open.cookie })));
-      expect(parsed).toMatchObject({ status: 502, body: { error: "failure", message: "The server sent an unreadable answer." } });
-    }
-    // In its JSON form too, quote and backslash escaped.
-    const special = `pass "wor" d ${String.fromCharCode(92)} of the dashboard`;
-    fake.responses.changePassword = () => Response.json({ error: "invalid", message: `bad ${special}` }, { status: 400 });
-    const escaped = await read(secrets.changePassword(requested("/password", { body: body({ dashboardPassword: special }), cookie: open.cookie })));
-    expect(escaped.status).toBe(502);
-  });
-});
-
-describe("setting or removing the portal", () => {
-  test("active is a boolean, the confirmation a string; the rest is judged at the steward", async () => {
-    const open = await openSession();
-    const token = await unlock(open);
-    fake.calls.length = 0;
-
-    for (const active of ["true", 1, null, undefined]) {
-      const parsed = await read(secrets.togglePortal(requested("/portal", { body: { slug: "cms", active, confirmation: "" }, cookie: open.cookie })));
-      expect(parsed).toMatchObject({ status: 400, body: { error: "invalid", message: "Missing or non-boolean field: active." } });
-    }
-    expect(fake.calls).toEqual([]);
-
-    // Removing with no confirmation: the rule is the steward's, the relay passes it on.
-    fake.responses.togglePortal = () => Response.json({ error: "invalid", message: "type cms to confirm removing the portal" }, { status: 400 });
-    const parsed = await read(secrets.togglePortal(requested("/portal", { body: { slug: "cms", active: false, confirmation: "" }, cookie: open.cookie })));
-    expect(parsed).toMatchObject({ status: 400, body: { message: "type cms to confirm removing the portal" } });
-    expect(fake.calls).toEqual([{ method: "togglePortal", requested: { slug: "cms", active: false, confirmation: "", token } }]);
-  });
-
-  test("the gatekeeper's 409 refusal and 500 failure go back out as they are", async () => {
-    const open = await openSession();
-    await unlock(open);
-    for (const [status, error, message] of [
-      [409, "unmanaged", "caddy validate rejected the block"],
-      // Caddy's lock held by a deployment from the workstation: to be retried, and the message says so.
-      [409, "unmanaged", "Caddy is being changed from the workstation (deploy-caddy, since 14:32:05): try again in a moment"],
-      [500, "failure", "the site did not answer, previous block restored"],
-    ] as const) {
-      fake.responses.togglePortal = () => Response.json({ error, message }, { status: status });
-      const parsed = await read(secrets.togglePortal(requested("/portal", { body: { slug: "cms", active: true, confirmation: "" }, cookie: open.cookie })));
-      expect(parsed).toMatchObject({ status, body: { error, message } });
-    }
-  });
-});
-
 /**
  * The routes the relay waits on with the long timeout: everything that goes
  * through the steward's exclusion lock or through its queue of argon2id
  * verifications.
  */
-const LONG_ROUTES = ["/unlock", "/value", "/variable", "/file", "/restore", "/content", "/password", "/portal", "/restart"];
+const LONG_ROUTES = ["/unlock", "/value", "/variable", "/file", "/restore", "/password", "/portal", "/restart"];
 
 describe("localSteward, on a real Unix socket", () => {
   let folder = "";
@@ -1064,10 +914,6 @@ describe("localSteward, on a real Unix socket", () => {
         },
         "/file": { POST: note(() => Response.json({ file: FILE })) },
         "/restore": { POST: note(() => Response.json({ file: FILE })) },
-        "/content": {
-          POST: note(() => Response.json({ content: "key" })),
-          PUT: note(() => Response.json({ file: FILE })),
-        },
         "/password": { POST: note(() => Response.json({ file: FILE, password: null })) },
         "/portal": { POST: note(() => Response.json({ portal: PORTAL, detail: "done" })) },
         "/restart": { POST: note(() => Response.json({ verdict: VERDICT })) },
@@ -1092,7 +938,7 @@ describe("localSteward, on a real Unix socket", () => {
   test("every method aims at its route, with its verb, and the body as JSON", async () => {
     const steward = localSteward(socket);
     const token = "token";
-    const variable = { token, slug: "cms", file: "cms.env", variable: "API_KEY" };
+    const variable = { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "HEARTBEAT_URL" };
     const password = { slug: "portal", file: "portal.env", variable: "PASSWORD_HASH", dashboardPassword: PASSWORD, newPassword: null };
 
     const responses = [
@@ -1103,17 +949,15 @@ describe("localSteward, on a real Unix socket", () => {
       await steward.readValue(variable),
       await steward.setVariable({ ...variable, value: "a b\\c\"é" }),
       await steward.removeVariable(variable),
-      await steward.createFile({ token, slug: "cms", file: "cms.env" }),
-      await steward.restoreFile({ token, slug: "cms", file: "cms.env" }),
+      await steward.createFile({ token, slug: "dashboard", file: "dashboard-monitor.env" }),
+      await steward.restoreFile({ token, slug: "dashboard", file: "dashboard-monitor.env" }),
       await steward.restart({ token, slug: "cms" }),
       await steward.readLog("test-zone.invalid"),
       await steward.readLog("cms&slug=x/../y"),
-      await steward.readContent({ token, slug: "builder", file: "builder-ssh.pub" }),
-      await steward.replaceContent({ token, slug: "builder", file: "builder-secrets/registry", content: "key\r\n" }),
       await steward.changePassword({ ...password, token }),
       await steward.togglePortal({ token, slug: "cms", active: true, confirmation: "" }),
     ];
-    expect(responses.map((r) => r.status)).toEqual([200, 200, 200, 204, 200, 201, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200]);
+    expect(responses.map((r) => r.status)).toEqual([200, 200, 200, 204, 200, 201, 200, 200, 200, 200, 200, 200, 200, 200]);
     expect(await responses[4]!.json()).toEqual({ value: "fake_live_value" });
 
     const json = "application/json";
@@ -1125,14 +969,12 @@ describe("localSteward, on a real Unix socket", () => {
       { method: "POST", path: "/value", type: json, body: JSON.stringify(variable) },
       { method: "PUT", path: "/variable", type: json, body: JSON.stringify({ ...variable, value: "a b\\c\"é" }) },
       { method: "DELETE", path: "/variable", type: json, body: JSON.stringify(variable) },
-      { method: "POST", path: "/file", type: json, body: JSON.stringify({ token, slug: "cms", file: "cms.env" }) },
-      { method: "POST", path: "/restore", type: json, body: JSON.stringify({ token, slug: "cms", file: "cms.env" }) },
+      { method: "POST", path: "/file", type: json, body: JSON.stringify({ token, slug: "dashboard", file: "dashboard-monitor.env" }) },
+      { method: "POST", path: "/restore", type: json, body: JSON.stringify({ token, slug: "dashboard", file: "dashboard-monitor.env" }) },
       { method: "POST", path: "/restart", type: json, body: JSON.stringify({ token, slug: "cms" }) },
       { method: "GET", path: "/log", type: null, body: "", query: "?slug=test-zone.invalid" },
       // Encoded: the name changes neither the path nor the parameters.
       { method: "GET", path: "/log", type: null, body: "", query: "?slug=cms%26slug%3Dx%2F..%2Fy" },
-      { method: "POST", path: "/content", type: json, body: JSON.stringify({ token, slug: "builder", file: "builder-ssh.pub" }) },
-      { method: "PUT", path: "/content", type: json, body: JSON.stringify({ token, slug: "builder", file: "builder-secrets/registry", content: "key\r\n" }) },
       { method: "POST", path: "/password", type: json, body: JSON.stringify({ ...password, token }) },
       { method: "POST", path: "/portal", type: json, body: JSON.stringify({ token, slug: "cms", active: true, confirmation: "" }) },
     ]);
@@ -1150,8 +992,8 @@ describe("localSteward, on a real Unix socket", () => {
 
     // A write can wait its turn behind a restart: cutting at the short
     // timeout would return a 502 for a request that ran to completion.
-    const variable = { token: "j", slug: "cms", file: "cms.env", variable: "API_KEY" };
-    const file = { token: "j", slug: "cms", file: "cms.env" };
+    const variable = { token: "j", slug: "dashboard", file: "dashboard-monitor.env", variable: "HEARTBEAT_URL" };
+    const file = { token: "j", slug: "dashboard", file: "dashboard-monitor.env" };
     const responses = await Promise.all([
       // An unlock waits on the argon2id of the password changes.
       steward.unlock({ password: PASSWORD }),
@@ -1161,8 +1003,6 @@ describe("localSteward, on a real Unix socket", () => {
       steward.createFile(file),
       steward.restoreFile(file),
       steward.restart({ token: "j", slug: "cms" }),
-      steward.readContent(file),
-      steward.replaceContent({ ...file, content: "x" }),
       steward.changePassword({ ...variable, dashboardPassword: "m", newPassword: null }),
       steward.togglePortal({ token: "j", slug: "cms", active: true, confirmation: "" }),
     ]);
@@ -1197,7 +1037,7 @@ describe("localSteward, on a real Unix socket", () => {
   test("a redirect is not followed: the token does not go off elsewhere", async () => {
     redirected.add("/value");
     const steward = localSteward(socket);
-    await expect(steward.readValue({ token: "j", slug: "cms", file: "cms.env", variable: "API_KEY" })).rejects.toThrow();
+    await expect(steward.readValue({ token: "j", slug: "dashboard", file: "dashboard-monitor.env", variable: "HEARTBEAT_URL" })).rejects.toThrow();
     expect(received.map((r) => r.path)).toEqual(["/value"]);
   });
 
@@ -1220,7 +1060,7 @@ describe("localSteward, on a real Unix socket", () => {
       await secrets.unlock(requested("/unlock", { body: { password: PASSWORD }, cookie: open.cookie })),
       await secrets.dashboard(requested("", { method: "GET", cookie: open.cookie })),
       await secrets.removeVariable(
-        requested("/variable", { method: "DELETE", body: { slug: "cms", file: "cms.env", variable: "API_KEY" }, cookie: open.cookie }),
+        requested("/variable", { method: "DELETE", body: { slug: "dashboard", file: "dashboard-monitor.env", variable: "HEARTBEAT_URL" }, cookie: open.cookie }),
       ),
       await secrets.lock(requested("/lock", { cookie: open.cookie })),
     ];
@@ -1230,7 +1070,7 @@ describe("localSteward, on a real Unix socket", () => {
     expect(JSON.parse(texts[1]!).until).toBe(EXPIRE_A);
 
     expect(received.map((r) => r.path)).toEqual(["/unlock", "/projects", "/variable", "/lock"]);
-    expect(JSON.parse(received[2]!.body)).toEqual({ slug: "cms", file: "cms.env", variable: "API_KEY", token: serverToken });
+    expect(JSON.parse(received[2]!.body)).toEqual({ slug: "dashboard", file: "dashboard-monitor.env", variable: "HEARTBEAT_URL", token: serverToken });
     expect(JSON.parse(received[3]!.body)).toEqual({ token: serverToken });
   });
 });
@@ -1270,8 +1110,6 @@ describe("a project's store, the owner's", () => {
       ["generateStoreVariable", "/store/generate", "POST", { slug: "cms", name: "A", bytes: "32" }, "Non-number field: bytes."],
       ["generateStoreVariable", "/store/generate", "POST", { slug: "cms", name: "A", replace: "true" }, "Non-boolean field: replace."],
       ["restoreStore", "/store/restore", "POST", { slug: "cms", dryRun: 1 }, "Non-boolean field: dryRun."],
-      ["migrateStore", "/store/migrate", "POST", { slug: "cms", dryRun: "no" }, "Non-boolean field: dryRun."],
-      ["retireStore", "/store/retire", "POST", { slug: "cms" }, "Missing or non-list field: files."],
     ] as const) {
       const parsed = await read(secrets[route](requested(path, { method, body, cookie: open.cookie })));
       expect({ route, status: parsed.status, body: parsed.body }).toEqual({ route, status: 400, body: { error: "invalid", message } });
@@ -1288,7 +1126,7 @@ describe("a project's store, the owner's", () => {
     expect((await read(secrets.setStoreVariable(requested("/store/variable", { method: "PUT", body: { slug: "cms", name: "A", value: content }, cookie: open.cookie })))).status).toBe(400);
   });
 
-  test("server.ts: reading a value back, merging and retiring the old files answer a person 403 before any handler; the writes and the restore are relayed for a person too, each with the long delay", () => {
+  test("server.ts: reading a store's value back and the platform's own files answer a person 403 before any handler; the store's writes and its restore are relayed for a person too, each with the long delay", () => {
     const source = readFileSync(join(import.meta.dir, "..", "server.ts"), "utf8");
     const entry = (path: string) => {
       const start = source.indexOf(`"/api/secrets${path}": {`);
@@ -1297,11 +1135,17 @@ describe("a project's store, the owner's", () => {
       const finish = tail.search(/\n\s*"\/api\/|\n\s*\},\n/);
       return tail.slice(0, finish === -1 ? undefined : finish);
     };
-    for (const path of ["/store/value", "/store/migrate", "/store/retire"]) {
+    for (const path of ["/store/value", "/value", "/file", "/restore", "/password"]) {
       const text = entry(path);
       expect(text).toContain("POST: owner((req, server) => long(req, server, secrets.");
       expect(text).not.toContain("memberRelay");
     }
+    const variable = entry("/variable");
+    expect(variable).toContain("PUT: owner((req, server) => long(req, server, secrets.setVariable))");
+    expect(variable).toContain("DELETE: owner((req, server) => long(req, server, secrets.removeVariable))");
+    expect(variable).not.toContain("memberRelay");
+    // A file's whole content is no route any more.
+    expect(source).not.toContain(`"/api/secrets/content"`);
     for (const [path, verbs] of [
       ["/store/variable", 2],
       ["/store/generate", 1],
@@ -1344,10 +1188,8 @@ describe("localSteward's store routes, on a real Unix socket", () => {
         steward.removeStoreFile({ token, slug: "cms", name: "gcp.json" }),
         steward.restoreStore({ token, slug: "cms", dryRun: true }),
         steward.revealStoreValue({ token, slug: "cms", name: "A" }),
-        steward.migrateStore({ token, slug: "cms", dryRun: false }),
-        steward.retireStore({ token, slug: "cms", files: ["cms.env"] }),
       ];
-      expect((await Promise.all(calls)).map((response) => response.status)).toEqual(Array(9).fill(200));
+      expect((await Promise.all(calls)).map((response) => response.status)).toEqual(Array(7).fill(200));
       expect((await steward.readStore("cms&slug=x/../y")).status).toBe(200);
       expect(received.map(({ method, path }) => `${method} ${path}`).sort()).toEqual(
         [
@@ -1358,8 +1200,6 @@ describe("localSteward's store routes, on a real Unix socket", () => {
           "DELETE /store/file",
           "POST /store/restore",
           "POST /store/value",
-          "POST /store/migrate",
-          "POST /store/retire",
           "GET /store",
         ].sort(),
       );

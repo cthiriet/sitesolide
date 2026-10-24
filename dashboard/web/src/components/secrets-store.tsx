@@ -8,7 +8,6 @@ import {
   EyeOff,
   FileKey,
   FileUp,
-  GitMerge,
   LoaderCircle,
   Pencil,
   Plus,
@@ -20,47 +19,39 @@ import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Command, CopyFallback, useAnnounce, useCopy } from "@/components/copy"
 import { Banner, EmptyState, Panel, Status } from "@/components/page"
-import { FileBlock, ProblemRow } from "@/components/secrets"
+import { ProblemRow } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { ConfirmDialog, type FocusReturn } from "@/components/secrets-dialogs"
 import {
-  MigrateDialog,
   StoreFileDialog,
   StoreRestoreDialog,
   StoreValueDialog,
   type FileTarget,
-  type MigrateTarget,
   type RestoreTarget,
   type ValueTarget,
 } from "@/components/secrets-store-dialogs"
 import { writeClipboard, writeClipboardLater, useRevealedValue, type ReadResult } from "@/components/secrets-variables"
-import { removeStoreFile, removeStoreVariables, retireLegacyFiles, revealStoreValue } from "@/lib/api"
+import { removeStoreFile, removeStoreVariables, revealStoreValue } from "@/lib/api"
 import { copyShortcut } from "@/lib/signin"
 import { REVEAL_MS, hideCountdown, projectProblems, readService, refusalOf, splitReason, succeeded } from "@/lib/secrets"
 import {
   changeSummary,
   credentialPath,
-  declaredText,
   isEmptyFile,
-  legacyLine,
-  legacyOffer,
-  mayMerge,
-  overridesText,
-  readRetire,
-  sourceBadge,
   storeFileOffer,
   storeFileState,
   storeFileSummary,
   storeMissing,
   storeVariableOffer,
+  UNDECLARED,
 } from "@/lib/store"
-import type { LegacyFileView, ProjectView, StoreChangeResponse, StoreFileView, StoreVariableView, StoreView } from "@/lib/types"
+import type { ProjectView, StoreChangeResponse, StoreFileView, StoreVariableView, StoreView } from "@/lib/types"
 
 /*
  * A project's store, on its Secrets page: one list of variables, what the
  * manifest declares and the server lacks at the top, the files read whole,
- * the build's names and the public values for reference, then the legacy
- * files while there are any. Every write goes to the steward, which judges;
+ * the build's names and the public values for reference. Every write goes to
+ * the steward, which judges;
  * a value is typed into a dialog and leaves with the request, and only the
  * owner's unlocked dashboard ever reads one back, for thirty seconds.
  */
@@ -75,19 +66,16 @@ function Code({ children }: { children: string }) {
 
 const ICON_BUTTON = "text-muted-foreground hover:text-foreground max-md:size-11"
 
-type Confirm =
-  | { kind: "variable"; slug: string; name: string; open: boolean }
-  | { kind: "file"; slug: string; name: string; open: boolean }
-  | { kind: "retire"; slug: string; name: string; open: boolean }
+type Confirm = { kind: "variable" | "file"; slug: string; name: string; open: boolean }
 
 // --- A variable --------------------------------------------------------------------
 
 /**
- * A variable of the project: its name, where its value comes from, the legacy
- * files it overrides, whether the manifest declares it, and what the viewer
- * may do with it. The owner reveals a value the store holds for thirty
- * seconds, masked again on locking, tab hidden, page left or row unmounted,
- * like the rows of the legacy files; nobody else has a reveal control.
+ * A variable the store holds: its name, a word when the manifest does not
+ * declare it, and what the viewer may do with it. The
+ * owner reveals a value the store holds for thirty seconds, masked again on
+ * locking, tab hidden, page left or row unmounted; nobody else has a reveal
+ * control.
  */
 function StoreVariableRow({
   store,
@@ -110,8 +98,6 @@ function StoreVariableRow({
 }) {
   const announce = useAnnounce()
   const offer = storeVariableOffer(store, variable)
-  const badge = sourceBadge(variable)
-  const overrides = overridesText(variable)
   const { value, fallback, remainingMs, hide, show, canShow, closeFallback } = useRevealedValue(unlocked)
   const [reading, setReading] = useState<"reveal" | "copy" | null>(null)
   const [copied, setCopied] = useState(false)
@@ -200,13 +186,7 @@ function StoreVariableRow({
             {remainingMs !== null && <span className="tabular-nums">{hideCountdown(remainingMs)}</span>}
           </div>
         ) : (
-          <>
-            <Status tone={badge.tone} className={badge.tone === "neutral" ? "text-secondary-foreground" : undefined}>
-              {badge.text}
-            </Status>
-            {overrides !== null && <span className="wrap-anywhere">{overrides}</span>}
-            <span>{declaredText(variable.declared)}</span>
-          </>
+          !variable.declared && <span>{UNDECLARED}</span>
         )}
       </div>
 
@@ -254,34 +234,7 @@ function StoreVariableRow({
             Set
           </Button>
         )}
-        {offer.generate && (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={busy}
-            onClick={onGenerate}
-            aria-label={`Generate ${name}`}
-            className="hidden text-muted-foreground hover:text-foreground @2xl/store:inline-flex"
-          >
-            <Dices />
-            Generate
-          </Button>
-        )}
-        {offer.remove && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            title="Remove from the store"
-            aria-label={`Remove ${name}`}
-            disabled={busy}
-            onClick={onRemove}
-            className="hidden text-muted-foreground hover:bg-destructive/10 hover:text-destructive @2xl/store:inline-flex dark:hover:bg-destructive/15"
-          >
-            <Trash2 />
-          </Button>
-        )}
-
-        {/* In a narrow panel, the writes go into a menu: three 44 px targets would crush the name. */}
+        {/* Set stays in sight in a wide panel; the rarer writes, and every write in a narrow one, are in the menu. */}
         {writes && (
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -291,7 +244,7 @@ function StoreVariableRow({
                   size="icon-sm"
                   aria-label={`More actions for ${name}`}
                   disabled={busy}
-                  className={`${ICON_BUTTON} @2xl/store:hidden`}
+                  className={ICON_BUTTON}
                 />
               }
             >
@@ -348,9 +301,8 @@ function MissingBlock({
   return (
     <div className="border-b bg-destructive/4 dark:bg-destructive/6">
       <p className="px-4 pt-3 text-sm text-pretty">
-        <strong className="font-medium text-destructive">Not set.</strong> {slug}&apos;s sitesolide.json declares{" "}
-        {variables.length + files.length === 1 ? "this, and the server has no value for it" : "these, and the server has no value for them"}:{" "}
-        {slug} starts without {variables.length + files.length === 1 ? "it" : "them"}, and may fail.
+        <strong className="font-medium text-destructive">Not set.</strong> {slug} starts without{" "}
+        {variables.length + files.length === 1 ? "it" : "them"}.
       </p>
       <ul aria-label={`Not set for ${slug}`} className="divide-y divide-divider">
         {variables.map((name) => (
@@ -436,10 +388,8 @@ function StoreFileRow({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <FileKey aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
         <Mono>{file.name}</Mono>
-        <Status tone={state.tone} className={state.tone === "neutral" ? "text-secondary-foreground" : undefined}>
-          {state.text}
-        </Status>
-        <span className="text-xs text-muted-foreground">{declaredText(file.declared)}</span>
+        {state !== null && <Status tone={state.tone}>{state.text}</Status>}
+        {!file.declared && <span className="text-xs text-muted-foreground">{UNDECLARED}</span>}
         {summary !== "" && <span className="text-xs text-muted-foreground tabular-nums">{summary}</span>}
         <div className="ml-auto flex items-center gap-1">
           {offer.upload && (
@@ -470,56 +420,6 @@ function StoreFileRow({
         </div>
       )}
     </li>
-  )
-}
-
-// --- Legacy files ------------------------------------------------------------------
-
-/** What a legacy file says of itself beside the store: read or a leftover, covered or not, and *Retire* for the owner. */
-function LegacyFooter({
-  store,
-  legacy,
-  onRetire,
-}: {
-  store: StoreView
-  legacy: LegacyFileView
-  onRetire: () => void
-}) {
-  const offer = legacyOffer(store, legacy)
-  return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t px-4 py-2.5 text-xs text-muted-foreground">
-      <span>{legacyLine(legacy)}</span>
-      {offer !== null && (
-        <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1">
-          {offer.reason !== null && <span className="max-w-md text-pretty">{offer.reason}</span>}
-          <Button variant="outline" size="sm" disabled={!offer.retire} onClick={onRetire} className="max-md:h-10">
-            <Trash2 />
-            Retire
-          </Button>
-        </div>
-      )}
-    </div>
-  )
-}
-
-/** A leftover: a flat file no manifest declares any more, which only *Retire* reaches. Never written. */
-function LeftoverBlock({ store, legacy, onRetire }: { store: StoreView; legacy: LegacyFileView; onRetire: () => void }) {
-  return (
-    <section aria-label={legacy.name} className="overflow-hidden rounded-lg border">
-      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 bg-muted/60 px-4 py-3">
-        <h3 className="font-mono text-[0.8125rem] font-semibold wrap-anywhere">{legacy.name}</h3>
-        {legacy.state === "unmanaged" && <Status tone="attention">Unmanaged</Status>}
-        {legacy.variables.length > 0 && (
-          <span className="text-xs text-muted-foreground">
-            {legacy.variables.length} {legacy.variables.length === 1 ? "variable" : "variables"}
-          </span>
-        )}
-      </div>
-      {legacy.variables.length > 0 && (
-        <p className="px-4 py-2.5 font-mono text-xs wrap-anywhere text-secondary-foreground">{legacy.variables.join(", ")}</p>
-      )}
-      <LegacyFooter store={store} legacy={legacy} onRetire={onRetire} />
-    </section>
   )
 }
 
@@ -558,7 +458,6 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
   const [value, setValue] = useState<(ValueTarget & { open: boolean }) | null>(null)
   const [file, setFile] = useState<(FileTarget & { open: boolean }) | null>(null)
   const [restore, setRestore] = useState<(RestoreTarget & { open: boolean }) | null>(null)
-  const [migrate, setMigrate] = useState<(MigrateTarget & { open: boolean }) | null>(null)
   const [confirm, setConfirm] = useState<Confirm | null>(null)
   const [confirming, setConfirming] = useState(false)
   const [confirmError, setConfirmError] = useState("")
@@ -570,8 +469,6 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
   )
   const waiting = problems.some((problem) => problem.key === "pending")
   const byName = new Map(store.variables.map((variable) => [variable.name, variable]))
-  const legacyByName = new Map(store.legacy.map((legacy) => [legacy.name, legacy]))
-  const leftovers = store.legacy.filter((legacy) => !project.files.some((one) => one.name === legacy.name))
 
   /** A new number per opening, read when the dialog opens, which may be after an unlock: never a stale one. */
   function next(): number {
@@ -624,22 +521,6 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
     setConfirming(true)
     setConfirmError("")
     try {
-      if (confirm.kind === "retire") {
-        const { status, body } = await retireLegacyFiles({ slug, files: [confirm.name] })
-        if (succeeded(status) && body !== null && Array.isArray(body.retired)) {
-          const { retired, kept } = readRetire(body)
-          if (retired.includes(confirm.name)) {
-            setConfirm({ ...confirm, open: false })
-            announce(`Retired ${confirm.name}`)
-            return actions.changed()
-          }
-          actions.changed()
-          return setConfirmError(kept.join(" ") || `${confirm.name} was kept.`)
-        }
-        const message = actions.refusal(refusalOf(status, body))
-        if (message !== null) setConfirmError(message)
-        return
-      }
       const { status, body } =
         confirm.kind === "variable"
           ? await removeStoreVariables({ slug, names: [confirm.name] })
@@ -728,8 +609,7 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
 
         {nothing ? (
           <EmptyState icon={FileKey} title={`${slug} has no secrets yet`} compact>
-            Name the variables it reads under <Code>secrets</Code> in its <Code>sitesolide.json</Code>, then run{" "}
-            <Code>sitesolide deploy</Code>: the names it lacks show here, to set or generate.
+            Name them under <Code>secrets</Code> in its <Code>sitesolide.json</Code>, then deploy.
           </EmptyState>
         ) : (
           <div className="@container/store">
@@ -753,41 +633,37 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t px-4 py-3">
-          <p className="min-w-0 flex-1 basis-64 text-xs text-pretty text-muted-foreground">
-            {store.may.reveal
-              ? "Values never show here unless you reveal one, for thirty seconds. Set or generate, then restart, to apply."
-              : "Values never show here: only the owner of the server reads one back. Set or generate, then restart, to apply."}
-          </p>
-          {write && (
+        {write && (
+          <div className="flex flex-wrap items-center justify-end gap-2 border-t px-4 py-3">
+            {store.files.length === 0 && (
+              <Button variant="outline" size="sm" onClick={() => openFile(null)} className="max-md:h-10">
+                <FileUp />
+                Upload file
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={() => openValue(null, "type")} className="max-md:h-10">
               <Plus />
               Add variable
             </Button>
-          )}
-        </div>
+          </div>
+        )}
       </Panel>
 
-      <Panel
-        title="Files"
-        count={store.files.length}
-        full
-        description="Each read whole by every service of the project, at the path under its name: a copy only the service can read."
-        actions={
-          write ? (
-            <Button variant="outline" size="sm" onClick={() => openFile(null)} className="max-md:h-10">
-              <FileUp />
-              Upload file
-            </Button>
-          ) : undefined
-        }
-      >
-        {store.files.length === 0 ? (
-          <p className="px-4 py-3 text-sm text-pretty text-muted-foreground">
-            No file. A key or a certificate an app reads from a path goes here, and is declared under{" "}
-            <Code>secrets.files</Code>.
-          </p>
-        ) : (
+      {store.files.length > 0 && (
+        <Panel
+          title="Files"
+          count={store.files.length}
+          full
+          description="Read whole by every service, at the path under each name."
+          actions={
+            write ? (
+              <Button variant="outline" size="sm" onClick={() => openFile(null)} className="max-md:h-10">
+                <FileUp />
+                Upload file
+              </Button>
+            ) : undefined
+          }
+        >
           <ul aria-label={`Files of ${slug}`} className="divide-y divide-divider">
             {store.files.map((one) => (
               <StoreFileRow
@@ -800,18 +676,18 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
               />
             ))}
           </ul>
-        )}
-      </Panel>
+        </Panel>
+      )}
 
       {store.build.length > 0 && (
         <Panel
-          title="Build, kept by whoever deploys"
+          title="Build secrets"
           count={store.build.length}
           full
           description={
             <>
-              The build reads these on the workstation that deploys, from its environment or{" "}
-              <code className="font-mono">~/.config/sitesolide/secrets/{slug}.env</code>. The server never holds them.
+              Read where you deploy, from the environment or{" "}
+              <code className="font-mono">~/.config/sitesolide/secrets/{slug}.env</code>. Never on the server.
             </>
           }
         >
@@ -827,13 +703,12 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
 
       {store.public.length > 0 && (
         <Panel
-          title="Public, from the repository"
+          title="Public variables"
           count={store.public.length}
           full
           description={
             <>
-              Written in <Code>sitesolide.json</Code> under <Code>env</Code>, so anyone with the repository reads them. Change
-              them there, then deploy.
+              From <Code>env</Code> in <Code>sitesolide.json</Code>: change them there, then deploy.
             </>
           }
         >
@@ -845,60 +720,6 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
               </li>
             ))}
           </ul>
-        </Panel>
-      )}
-
-      {(project.files.length > 0 || store.legacy.length > 0) && (
-        <Panel
-          title="Legacy files"
-          count={project.files.length + leftovers.length}
-          full
-          description={
-            store.may.migrate
-              ? "Read before the store, which wins on a name both hold. Merge them into the store, restart, then retire each file the store covers."
-              : "Read before the store, which wins on a name both hold. The owner of the server merges them into the store."
-          }
-          actions={
-            mayMerge(store) ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  remember()
-                  setMigrate({ slug, opening: next(), open: true })
-                }}
-                className="max-md:h-10"
-              >
-                <GitMerge />
-                Merge into the store
-              </Button>
-            ) : undefined
-          }
-        >
-          <div className="grid gap-3 p-3">
-            {project.files.map((legacyFile) => {
-              const legacy = legacyByName.get(legacyFile.name) ?? null
-              return (
-                <FileBlock key={legacyFile.name} slug={slug} file={legacyFile}>
-                  {legacy !== null && (
-                    <LegacyFooter
-                      store={store}
-                      legacy={legacy}
-                      onRetire={() => askConfirm({ kind: "retire", slug, name: legacy.name, open: true })}
-                    />
-                  )}
-                </FileBlock>
-              )
-            })}
-            {leftovers.map((legacy) => (
-              <LeftoverBlock
-                key={legacy.name}
-                store={store}
-                legacy={legacy}
-                onRetire={() => askConfirm({ kind: "retire", slug, name: legacy.name, open: true })}
-              />
-            ))}
-          </div>
         </Panel>
       )}
 
@@ -936,32 +757,15 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
         focusReturn={focusReturn}
       />
 
-      <MigrateDialog
-        target={migrate}
-        open={migrate?.open ?? false}
-        onClose={() => setMigrate((before) => before && { ...before, open: false })}
-        onMerged={(written) => {
-          announce(written ? `Merged the legacy files of ${slug} into its store` : `Nothing to merge for ${slug}`)
-          actions.changed()
-        }}
-        onRefusal={actions.refusal}
-        focusReturn={focusReturn}
-      />
-
       <ConfirmDialog
         open={confirm?.open ?? false}
         title={
           <>
-            {confirm?.kind === "retire" ? "Retire" : "Remove"} <span className="font-mono">{confirm?.name}</span>?
+            Remove <span className="font-mono">{confirm?.name}</span>?
           </>
         }
         description={
-          confirm?.kind === "retire" ? (
-            <>
-              The server keeps it as its previous version, then deletes it: every variable it holds is in the store with the
-              same value, and {slug} already runs with the store&apos;s.
-            </>
-          ) : confirm?.kind === "file" ? (
+          confirm?.kind === "file" ? (
             <>
               It goes out of the store. {slug} keeps its copy until it restarts, then starts without it.
             </>
@@ -972,8 +776,8 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
             </>
           )
         }
-        action={confirm?.kind === "retire" ? "Retire" : "Remove"}
-        actionInProgress={confirm?.kind === "retire" ? "Retiring…" : "Removing…"}
+        action="Remove"
+        actionInProgress="Removing…"
         destructive
         inProgress={confirming}
         error={confirmError}

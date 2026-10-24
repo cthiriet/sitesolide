@@ -38,7 +38,6 @@ export type Reading =
  */
 export type {
   ErrorCode,
-  ContentRequest,
   FileRequest,
   PasswordRequest,
   SetRequest,
@@ -47,12 +46,10 @@ export type {
   Failure as SecretsError,
   FileState,
   FileView,
-  FileKind,
   LogEntry,
   Operation,
   PortalView,
   ProjectView,
-  ContentResponse,
   DashboardUnlockResponse,
   FileResponse,
   LogResponse,
@@ -76,15 +73,11 @@ export type {
  * reveal returns to the owner.
  */
 export type {
-  LegacyFileView,
-  MigrateConflict,
   StoreChangeResponse,
   StoreFileView,
   StoreMay,
-  StoreMigrateResponse,
   StoreMissing,
   StoreRestoreResponse,
-  StoreRetireResponse,
   StoreRevealResponse,
   StoreVariableView,
   StoreView,

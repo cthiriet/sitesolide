@@ -113,7 +113,7 @@ export function SecretsLog({ slug = null }: { slug?: string | null }) {
   const caption = withSite ? "Recent operations, most recent first" : `Recent operations on ${slug}, most recent first`
 
   return (
-    <Panel title="Activity" description="Newest first. Values never appear here." full>
+    <Panel title="Activity" full>
       {list.state === "loading" && (
         <div aria-busy="true" aria-label="Loading activity">
           <RowsSkeleton lines={4} />

@@ -4,6 +4,6 @@
   "install": "bun install --production",
   "start": "/usr/local/bin/bun run server.ts",
   "exclude": ["node_modules"],
-  "secrets": ["sample-secret.env"],
+  "secrets": ["API_KEY"],
   "network": "outbound"
 }

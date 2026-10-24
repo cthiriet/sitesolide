@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { encodeValue } from "../cli/envfile";
-import { isLegacySecretName, isValidFileName, isValidSecretName, MAX_DECLARED_FILES } from "../cli/manifest";
+import { isValidFileName, MAX_DECLARED_FILES } from "../cli/manifest";
 import {
   CREDENTIAL_ID,
   credentialBudgetRefusal,
@@ -91,46 +91,22 @@ describe("where the store lives", () => {
   });
 });
 
-describe("disjoint from every name of the old form, by construction", () => {
-  /** The old form's names: a flat file, or one level under a folder ending in -secrets (scope.ts's nameRefusal). */
-  const legacyShape = (name: string): boolean =>
-    isValidSecretName(name) || /^[A-Za-z0-9][A-Za-z0-9._-]*-secrets\/[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name);
+describe("the platform's own files beside the stores, by construction", () => {
+  /** The flat files the dashboard's and the portal's units, the monitor and the backups read. */
+  const platform = ["dashboard.env", "dashboard-monitor.env", "dashboard-backup.env", "portal.env"];
 
-  const legacy = [
-    "crm.env",
-    "nis2-ses.env",
-    "nis2-stripe.env",
-    "dashboard.env",
-    "dashboard-monitor.env",
-    "landing-ses.env",
-    "projects.env",
-    "projects-x.env",
-    "shop-secrets/gcp.json",
-    "projects-secrets/env",
-    "projects-secrets/files",
-  ];
-
-  test("no legacy name resolves under the store's root", () => {
-    for (const name of legacy) {
-      expect(legacyShape(name)).toBe(true);
-      expect(`${SECRETS_FOLDER}/${name}`.startsWith(`${STORE_ROOT}/`)).toBe(false);
-    }
-    // `projects` itself is a folder, and no longer reads as a file of the old form.
-    expect(isLegacySecretName("projects")).toBe(false);
+  test("none resolves under the store's root", () => {
+    for (const name of platform) expect(`${SECRETS_FOLDER}/${name}`.startsWith(`${STORE_ROOT}/`)).toBe(false);
   });
 
-  test("no store path has a legacy name's shape", () => {
-    for (const slug of ["shop", "nis2-ses", "projects", "a"]) {
+  test("every store path lies under the store's root, never flat beside the platform's files", () => {
+    for (const slug of ["shop", "dashboard-backup", "projects", "a"]) {
       const { folder, env, files } = storePaths(slug);
-      for (const path of [STORE_ROOT, folder, env, files, storeFilePath(slug, "gcp.json"), storeFilePath(slug, "x.env")]) {
-        const name = path.slice(SECRETS_FOLDER.length + 1);
-        expect({ name, legacy: name !== "projects" && legacyShape(name) }).toEqual({ name, legacy: false });
+      for (const path of [folder, env, files, storeFilePath(slug, "gcp.json"), storeFilePath(slug, "x.env")]) {
+        expect({ path, under: path.startsWith(`${STORE_ROOT}/`) }).toEqual({ path, under: true });
+        expect(platform.map((name) => `${SECRETS_FOLDER}/${name}`)).not.toContain(path);
       }
     }
-  });
-
-  test("the journal's labels are no legacy name either", () => {
-    for (const label of ["store/gcp.json", "store/x.env"]) expect(legacyShape(label)).toBe(false);
   });
 });
 

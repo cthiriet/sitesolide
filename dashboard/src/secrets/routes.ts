@@ -30,10 +30,8 @@ import type {
   StoreFileRemoveRequest,
   StoreFileRequest,
   StoreGenerateRequest,
-  StoreMigrateRequest,
   StoreRemoveRequest,
   StoreRestoreRequest,
-  StoreRetireRequest,
   StoreRevealRequest,
   StoreSetRequest,
 } from "../../borrowed/store-protocol";
@@ -42,7 +40,6 @@ import type { RestoreRequest } from "../backup/protocol";
 import type {
   WithToken,
   ErrorCode,
-  ContentRequest,
   FileRequest,
   PasswordRequest,
   PortalRequest,
@@ -76,8 +73,6 @@ export type SecretsRoutes = {
   removeVariable: Handler;
   createFile: Handler;
   restoreFile: Handler;
-  readContent: Handler;
-  replaceContent: Handler;
   changePassword: Handler;
   togglePortal: Handler;
   restart: Handler;
@@ -90,8 +85,6 @@ export type SecretsRoutes = {
   restoreStore: Handler;
   /** The one route whose answer is a value: the owner's alone, server.ts refuses it to a person. */
   revealStoreValue: Handler;
-  migrateStore: Handler;
-  retireStore: Handler;
   /** A site's snapshots and its restore, read with the session alone, like the projects. */
   backups: Handler;
   /** Starts a restore, under the session's token, the slug retyped. */
@@ -118,15 +111,15 @@ export type SecretsRoutes = {
 const NO_CACHE = { "Cache-Control": "no-store" };
 
 /**
- * The biggest legitimate request outside a content carries a value of 8 KiB,
- * which the JSON escaping can double. This cap is not the size rule, which the
+ * The biggest legitimate request outside a store's file carries a value of
+ * 8 KiB, which the JSON escaping can double. This cap is not the size rule, which the
  * steward applies: it only prevents an enormous body from tying up the process.
  */
 export const MAX_BODY_BYTES = 64 * 1024;
 
 /**
- * A replacement of content: 64 KiB of text, which one control character takes
- * to six bytes in JSON. The same cap as the steward's.
+ * A store's file: 64 KiB in base64, and a change of many values at once,
+ * which the JSON escaping can swell. The same cap as the steward's.
  */
 export const MAX_CONTENT_BODY_BYTES = 512 * 1024;
 
@@ -147,7 +140,6 @@ const PROJECT_FIELDS = ["slug"] as const satisfies readonly (keyof WithoutToken<
 const FILE_FIELDS = ["slug", "file"] as const satisfies readonly (keyof WithoutToken<FileRequest>)[];
 const VARIABLE_FIELDS = ["slug", "file", "variable"] as const satisfies readonly (keyof WithoutToken<VariableRequest>)[];
 const SET_FIELDS = ["slug", "file", "variable", "value"] as const satisfies readonly (keyof WithoutToken<SetRequest>)[];
-const CONTENT_FIELDS = ["slug", "file", "content"] as const satisfies readonly (keyof WithoutToken<ContentRequest>)[];
 
 /**
  * `fatal`: a byte that is not UTF-8 refuses the request rather than entering a
@@ -313,12 +305,6 @@ export const STORE_EXTRACTIONS = {
     return dryRun === undefined ? named : { ...named, dryRun };
   }) as Extraction<StoreRestoreRequest>,
   reveal: fields(["slug", "name"] as const) as Extraction<StoreRevealRequest>,
-  retire: ((body) => {
-    const named = fields(["slug"] as const)(body);
-    if (named instanceof Response) return named;
-    const files = strings(body!, "files");
-    return files instanceof Response ? files : { slug: named.slug, files };
-  }) as Extraction<StoreRetireRequest>,
 };
 
 /** What a store's request must never get back: the value set, the file's content. */
@@ -540,10 +526,6 @@ export function createSecretsRoutes(dependencies: SecretsDependencies, clock: ()
     removeVariable: withToken(fields(VARIABLE_FIELDS), (requested) => steward.removeVariable(requested)),
     createFile: withToken(fields(FILE_FIELDS), (requested) => steward.createFile(requested)),
     restoreFile: withToken(fields(FILE_FIELDS), (requested) => steward.restoreFile(requested)),
-    readContent: withToken(fields(FILE_FIELDS), (requested) => steward.readContent(requested)),
-    replaceContent: withToken(fields(CONTENT_FIELDS), (requested) => steward.replaceContent(requested), {
-      max: MAX_CONTENT_BODY_BYTES,
-    }),
     changePassword: withToken(extractPassword, (requested) => steward.changePassword(requested), {
       secrets: (requested) => [requested.dashboardPassword, ...(requested.newPassword === null ? [] : [requested.newPassword])],
     }),
@@ -557,8 +539,6 @@ export function createSecretsRoutes(dependencies: SecretsDependencies, clock: ()
     removeStoreFile: withToken(STORE_EXTRACTIONS.fileRemove, (requested) => steward.removeStoreFile(requested)),
     restoreStore: withToken(STORE_EXTRACTIONS.restore, (requested) => steward.restoreStore(requested)),
     revealStoreValue: withToken(STORE_EXTRACTIONS.reveal, (requested) => steward.revealStoreValue(requested)),
-    migrateStore: withToken(STORE_EXTRACTIONS.restore as Extraction<StoreMigrateRequest>, (requested) => steward.migrateStore(requested)),
-    retireStore: withToken(STORE_EXTRACTIONS.retire, (requested) => steward.retireStore(requested)),
 
     async backups(req) {
       const open = await check(req, false);

@@ -9,25 +9,17 @@
  *   where the session, the unlock and the role are asked again.
  *
  * **The operations are the owner's, with the person as actor.** Writing a
- * variable, reading one, changing general access, starting a restore: the
- * very code of src/secrets/steward.ts and src/backup/routes.ts, handed over
- * here with `who`, the email this steward verified, which its journal and
- * the backups' audit record. A Developer is the same code with nothing read
- * back: the listing hides every value, size and previous version from them,
- * and a read is refused before any file is opened.
+ * variable of the project's store, changing general access, starting a
+ * restore: the very code of src/secrets/steward.ts and src/backup/routes.ts,
+ * handed over here with `who`, the email this steward verified, which its
+ * journal and the backups' audit record. Nobody but the owner reads a value
+ * back: the listing shows names alone.
  *
  * Their people with access are the access routes' (src/access/steward.ts).
  *
  * The routes, on the dashboard's socket:
  *
  *   POST   /people/secrets/projects  { session }                                      -> MemberProjectsResponse
- *   POST   /people/secrets/value     { session, token, slug, file, variable }         -> ValueResponse     Admin
- *   PUT    /people/secrets/variable  { session, token, slug, file, variable, value }  -> FileResponse      Developer
- *   DELETE /people/secrets/variable  { session, token, slug, file, variable }         -> FileResponse      Developer
- *   POST   /people/secrets/file      { session, token, slug, file }                   -> FileResponse      Developer
- *   POST   /people/secrets/restore   { session, token, slug, file }                   -> FileResponse      Admin
- *   POST   /people/secrets/content   { session, token, slug, file }                   -> ContentResponse   Admin
- *   PUT    /people/secrets/content   { session, token, slug, file, content }          -> FileResponse      Developer
  *   POST   /people/portal            { session, token?, slug, active, confirmation }  -> PortalResponse    Admin, the unlock to make it public
  *   POST   /people/general           { session, token?, slug, access, renew?, confirmation } -> GeneralResponse  Admin, the unlock but to restrict
  *   POST   /people/backups/restore   { session, token, slug, snapshot, confirmation } -> 202 RestoreResponse  Admin
@@ -42,9 +34,7 @@
  *   DELETE /people/store/file        { session, token, slug, name }                   -> StoreChangeResponse   Developer
  *   POST   /people/store/restore     { session, token, slug, dryRun? }                -> StoreRestoreResponse  Admin
  *
- * `/people/secrets/value` and `/people/secrets/content` stay and refuse
- * everyone: reading a value back is the owner's alone (powers.ts). No route
- * here reads a store's value, migrates or retires: the owner's too.
+ * No route here reads a store's value: the owner's alone (powers.ts).
  */
 import type { ProjectView } from "../secrets/protocol";
 import { generalNeedsUnlock, machineRefusal, may, needsUnlock, powerRefusal, roleDetail, type Power } from "./powers";
@@ -57,28 +47,19 @@ export type Routes = Record<string, Record<string, Handler>>;
 
 /**
  * Who the steward acts for: the email it verified, as the journal writes it.
- * `readsBack`: a member whose role reads values back, which no role does any
- * more (src/people/powers.ts): every person's answers show every file
- * write-only. `restores`: a member whose role puts a previous version back,
- * an Admin, who is told one is kept. `token`: the id of the
+ * `restores`: a member whose role puts a previous version back, an Admin,
+ * who is told one is kept. `token`: the id of the
  * token the control routes judged (src/control/steward.ts), `actor` then
  * `token:<id>` and `member` the person it belongs to, null for the owner's
  * own. A token is held to what a person is held to, the owner's own
- * included: never the machine's files, never a value read back.
+ * included: never the machine's projects, never a value read back.
  */
-export type Who = { actor: string; member: string | null; readsBack?: boolean; restores?: boolean; token?: string };
+export type Who = { actor: string; member: string | null; restores?: boolean; token?: string };
 
 /** The owner's operations, taken with the member as `who`. They run under the steward's lock. */
 export type MemberOps = {
-  /** The projects whose files this member may list, in the shape the page knows, what they may not read hidden. */
+  /** The projects whose secrets this member may list, in the shape the page knows. */
   projects: (roles: Roles) => Promise<ProjectView[]>;
-  readValue: (req: Request, body: Body, who: Who) => Promise<Response>;
-  setVariable: (req: Request, body: Body, who: Who) => Promise<Response>;
-  removeVariable: (req: Request, body: Body, who: Who) => Promise<Response>;
-  createFile: (req: Request, body: Body, who: Who) => Promise<Response>;
-  restoreFile: (req: Request, body: Body, who: Who) => Promise<Response>;
-  readContent: (req: Request, body: Body, who: Who) => Promise<Response>;
-  replaceContent: (req: Request, body: Body, who: Who) => Promise<Response>;
   portal: (req: Request, body: Body, who: Who) => Promise<Response>;
   /** General access, any of the three, or a new code: `access`, `renew`, `confirmation`. */
   general: (req: Request, body: Body, who: Who) => Promise<Response>;
@@ -101,7 +82,7 @@ export type MemberActionsDependencies = {
   /** The backup routes' restore, the requester given: absent, a steward built without backups. */
   startRestore: ((req: Request, body: Body) => Promise<Response>) | null;
   zone: string;
-  /** The biggest body, a whole file's content. */
+  /** The biggest body, a store's file. */
   maxContentBytes: number;
 };
 
@@ -179,7 +160,7 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
       if (refusal !== null) return refusal;
       const slug = body.slug as string;
       const role = roleOn(principal, slug);
-      const who: Who = { actor: principal.email, member: principal.email, readsBack: may(role, "secrets.read"), restores: may(role, "secrets.restore") };
+      const who: Who = { actor: principal.email, member: principal.email, restores: may(role, "secrets.restore") };
       // Asked again once the turn has come: removed, locked or demoted while
       // the request waited behind a restart, nothing is done.
       const still = async (): Promise<Response | null> => {
@@ -191,9 +172,6 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
       return underLock(req, still, () => spec.run(req, only(body, fields), who));
     };
   }
-
-  const FILE = ["slug", "file"] as const;
-  const VARIABLE = ["slug", "file", "variable"] as const;
 
   async function projects(req: Request): Promise<Response> {
     const body = await readBody(req, ["session"]);
@@ -210,17 +188,6 @@ export function createMemberActions(dependencies: MemberActionsDependencies): Ro
 
   return {
     "/people/secrets/projects": { POST: projects },
-    "/people/secrets/value": { POST: action({ operation: "read", power: "secrets.read", texts: VARIABLE, run: ops.readValue }) },
-    "/people/secrets/variable": {
-      PUT: action({ operation: "set", power: "secrets.write", texts: [...VARIABLE, "value"], run: ops.setVariable }),
-      DELETE: action({ operation: "remove", power: "secrets.write", texts: VARIABLE, run: ops.removeVariable }),
-    },
-    "/people/secrets/file": { POST: action({ operation: "create", power: "secrets.write", texts: FILE, run: ops.createFile }) },
-    "/people/secrets/restore": { POST: action({ operation: "restore", power: "secrets.restore", texts: FILE, run: ops.restoreFile }) },
-    "/people/secrets/content": {
-      POST: action({ operation: "read", power: "secrets.read", texts: FILE, run: ops.readContent }),
-      PUT: action({ operation: "replace", power: "secrets.write", texts: [...FILE, "content"], max: dependencies.maxContentBytes, run: ops.replaceContent }),
-    },
     "/people/portal": {
       POST: action({
         operation: "portal",

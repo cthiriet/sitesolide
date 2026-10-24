@@ -26,7 +26,7 @@
  *
  * The routes are described in src/secrets/protocol.ts.
  */
-import { hasStore, isAnchored, isApp, isProtected, isValidFileName, isValidSlug, legacySecretFiles, servicesOf, type Manifest } from "../../borrowed/manifest";
+import { hasStore, isApp, isProtected, isValidFileName, isValidSlug, servicesOf, type Manifest } from "../../borrowed/manifest";
 import { CREDENTIAL_ID, MAX_STORE_ENV_BYTES, MAX_STORE_FILE_BYTES, storePaths } from "../../borrowed/store";
 import { egressUnitLines } from "../../borrowed/egress";
 import { RESERVED_ENV } from "../../borrowed/variables";
@@ -73,17 +73,12 @@ import {
 } from "./envfile";
 import { createHistory, latest, page, readPageQuery, RETURNED_ENTRIES, encodeEntry, isAccessChange, MAX_FIELD } from "./log";
 import {
-  HASH_ONLY,
   MAX_FILE_BYTES,
   PASSWORD_VARIABLE,
-  ROOT_FILES,
   expectedText,
-  isStoreForm,
-  kindOf,
   pathUnder,
   isSiteFolder,
   isPassword,
-  readContent,
   readSites,
   folderReason,
   outsideHashReason,
@@ -93,11 +88,8 @@ import {
   outsideHashRefusal,
   nameRefusal,
   restoreRefusal,
-  subFolderOf,
-  checkContent,
   checkFile,
   checkSite,
-  tokenFileRefusal,
   type Declaration,
   type FileInfo,
   type Owner,
@@ -112,22 +104,15 @@ import {
   fileNameRefusal,
   filesRefusal,
   generateRefusal,
-  legacyWriteRefusal,
   readGenerateAsk,
-  removalRefusal,
-  restoreRemovalRefusal,
-  retiredReason,
   storeMay,
   storeNameRefusal,
   storeSlugRefusal,
   storeValueRefusal,
   storeView,
-  type LegacyHolder,
-  type LegacyState,
   type StoreFileState,
   type StoreState,
 } from "./store";
-import { planMigration, retireDecision, type MigrationSource } from "./migrate";
 import {
   judgeGatekeeperResult,
   GATEKEEPER_MARGIN_MS,
@@ -144,7 +129,6 @@ import type {
   Operation,
   PortalView,
   ProjectView,
-  ContentResponse,
   UnlockResponse,
   FileResponse,
   LogResponse,
@@ -152,9 +136,6 @@ import type {
   PortalResponse,
   ProjectsResponse,
   RestartResponse,
-  StoreLeftoversResponse,
-  StoreMigrateAnswer,
-  StoreRetireAnswer,
   ValueResponse,
   ServiceView,
   Verdict,
@@ -171,8 +152,7 @@ import type { MembersSystem } from "../people/system";
 import { OWNER_ACTOR, type Roles } from "../people/protocol";
 import { createMemberActions, type Who } from "../people/actions";
 import type { MemberAuthority, SecretsForToken } from "../control/steward";
-import type { ProjectSecrets, SecretsListResponse, StewardSecretsChange, TokenFileView } from "../control/protocol";
-import { isVariableName, readSecretsChange, variableRefusal, type TokenSecretsChange } from "../control/secrets";
+import { readSecretsChange } from "../control/secrets";
 import type { StoreForToken } from "./store-api";
 import { machineRefusal, may } from "../people/powers";
 import { portalReading, type PortalAdmin } from "../people/portal";
@@ -315,14 +295,15 @@ export type StewardHandler = Handler & {
 };
 
 /**
- * The biggest legitimate body outside a content is a set: a name, a value of
+ * The biggest legitimate body outside a store's file is a set: a name, a value of
  * 8 KiB at most in UTF-8, which JSON can swell with escapes.
  */
 export const MAX_BODY_BYTES = 64 * 1024;
 
 /**
- * A replacement of content: 64 KiB of text, which one control character takes
- * to six bytes in JSON (`\u0001`). Only `PUT /content` accepts it.
+ * A store's file, 64 KiB in base64, or a change of many values at once,
+ * which one control character takes to six bytes in JSON (`\u0001`). Only
+ * the routes that carry one accept it.
  */
 export const MAX_CONTENT_BODY_BYTES = 512 * 1024;
 
@@ -488,16 +469,13 @@ type Target = { site: Site; declaration: Declaration; path: string };
  */
 type ServiceState = { view: ServiceView | null; startedUs: number | null; reads: ((name: string) => boolean) | null };
 
-/** A file that is present and managed, with what its kind read from it. */
+/** A file that is present and managed, with its variables read. */
 type Managed = {
   bytes: Uint8Array;
   info: FileInfo;
   /** The expected account as /etc/passwd gives it, null with no check. */
   real: Owner | null;
-  /** The document of a `variables` file, null for a `content`. */
-  document: EnvDocument | null;
-  /** The text of a `content` file, null for a `variables`. */
-  text: string | null;
+  document: EnvDocument;
 };
 
 type TargetState =
@@ -741,19 +719,14 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /**
-   * Which managed files a unit reads: through `EnvironmentFile=`, or by the
-   * service itself when `Environment=` gives it the file's path, or that of its
-   * subdirectory. A restart applies those, and only those.
+   * Which managed files a unit reads through `EnvironmentFile=`. A restart
+   * applies those, and only those.
    */
   function unitReads(text: string): (name: string) => boolean {
-    const unitEnv = unitEnvironment(text);
-    const readFiles = new Set(unitEnv.files.map((file) => file.path));
-    const values = new Set(unitEnv.values.map((value) => value.replace(/\/+$/, "")));
+    const readFiles = new Set(unitEnvironment(text).files.map((file) => file.path));
     return (name) => {
       const path = pathUnder(secretsFolder, name);
-      const subFolder = subFolderOf(name);
-      const folder = subFolder === null ? null : pathUnder(secretsFolder, subFolder);
-      return path !== null && (readFiles.has(path) || values.has(path) || (folder !== null && values.has(folder)));
+      return path !== null && readFiles.has(path);
     };
   }
 
@@ -787,17 +760,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return system.account(declaration.expected.owner);
   }
 
-  /** A file's subdirectory: missing, to be refused, or traversable. */
-  async function subFolderState(name: string): Promise<{ kind: "ok" } | { kind: "absent"; path: string } | { kind: "rejects"; reason: string }> {
-    const subFolder = subFolderOf(name);
-    if (subFolder === null) return { kind: "ok" };
-    const path = pathUnder(secretsFolder, subFolder) ?? subFolder;
-    const info = await system.examineFolder(subFolder);
-    if (info === null) return { kind: "absent", path };
-    const reason = folderReason(info, checked ? uidRoot : null, path);
-    return reason === null ? { kind: "ok" } : { kind: "rejects", reason };
-  }
-
   async function judge({ declaration, path }: Target, info: FileInfo, bytes: Uint8Array | null): Promise<Managed | { reason: string }> {
     const account = await realAccount(declaration);
     if (account === null) return { reason: `account ${declaration.expected.owner} does not exist` };
@@ -807,16 +769,11 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     if (reason !== null) return { reason };
     if (bytes === null) return { reason: "could not be read" };
 
-    if (declaration.kind === "variables") {
-      const parsed = parseEnvBytes(bytes);
-      if (!parsed.ok) return { reason: parsed.line > 0 ? `line ${parsed.line}: ${parsed.reason}` : parsed.reason };
-      const foreign = outsideHashReason(declaration.name, keys(parsed.document), path);
-      if (foreign !== null) return { reason: foreign };
-      return { bytes, info, real, document: parsed.document, text: null };
-    }
-    const parsed = readContent(bytes);
-    if ("reason" in parsed) return parsed;
-    return { bytes, info, real, document: null, text: parsed.text };
+    const parsed = parseEnvBytes(bytes);
+    if (!parsed.ok) return { reason: parsed.line > 0 ? `line ${parsed.line}: ${parsed.reason}` : parsed.reason };
+    const foreign = outsideHashReason(declaration.name, keys(parsed.document), path);
+    if (foreign !== null) return { reason: foreign };
+    return { bytes, info, real, document: parsed.document };
   }
 
   /**
@@ -824,10 +781,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
    * out of management, with the reason read on the file itself.
    */
   async function examineTarget(c: Target): Promise<TargetState> {
-    const folder = await subFolderState(c.declaration.name);
-    if (folder.kind === "rejects") return { kind: "unmanaged", reason: folder.reason, info: null };
-
-    const examination = folder.kind === "absent" ? ({ kind: "absent" } as const) : await system.examineSecret(c.declaration.name);
+    const examination = await system.examineSecret(c.declaration.name);
     if (examination.kind === "absent") return { kind: "absent" };
 
     const judgement = await judge(c, examination.info, examination.bytes);
@@ -848,16 +802,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return parsed.managed;
   }
 
-  /** The kind a route demands, or the refusal that sends you to the right one. */
-  function kindRefusal(c: Target, expected: Declaration["kind"]): Refusal | null {
-    if (c.declaration.kind === expected) return null;
-    const message =
-      expected === "variables"
-        ? `${c.declaration.name} is managed as a whole, replace its content instead`
-        : `${c.declaration.name} is an environment file, change its variables instead`;
-    return { error: "invalid", message };
-  }
-
   /** Expected owner and mode, the ones a write sets. */
   function expectedPermissions(declaration: Declaration, real: Owner | null): Permissions {
     return { owner: checked ? real : null, mode: declaration.expected.mode };
@@ -866,24 +810,21 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   async function fileView(c: Target, service: ServiceState): Promise<FileView> {
     const { declaration } = c;
     const parsed = await examineTarget(c);
-    const variables = parsed.kind === "managed" && parsed.managed.document !== null ? keys(parsed.managed.document) : [];
+    const variables = parsed.kind === "managed" ? keys(parsed.managed.document) : [];
     const previous = await system.examinePrevious(declaration.name);
     const base: FileView = {
       name: declaration.name,
-      kind: declaration.kind,
       state: "absent",
       reason: null,
       expected: expectedText(declaration.expected),
-      readable: declaration.readable,
       variables: [],
       passwords: [],
-      bytes: null,
       modifiedAt: null,
       // What `/restore` would accept: the page does not offer an action that is refused.
       previous:
         previous.kind === "present" &&
         restoreRefusal(declaration, variables) === null &&
-        restoreRefusal(declaration, previousKeys(declaration, previous)) === null,
+        restoreRefusal(declaration, previousKeys(previous)) === null,
       restartPending: false,
     };
     if (parsed.kind === "absent") return base;
@@ -895,16 +836,13 @@ export function createSteward(system: System, options: StewardOptions): StewardH
         : {
             // The page receives whole milliseconds; the comparison keeps the fraction.
             modifiedAt: Math.floor(info.modifiedAt),
-            // A variables file the unit does not read waits for no restart:
-            // the monitor's and the backups' files are the dashboard site's,
-            // and other units read them, each at its own next pass.
-            restartPending:
-              (declaration.kind !== "variables" || service.reads === null || service.reads(declaration.name)) &&
-              restartPending(info.modifiedAt, service.startedUs),
+            // A file the unit does not read waits for no restart: the
+            // monitor's and the backups' files are the dashboard site's, and
+            // other units read them, each at its own next pass.
+            restartPending: (service.reads === null || service.reads(declaration.name)) && restartPending(info.modifiedAt, service.startedUs),
           };
     if (parsed.kind === "unmanaged") return { ...base, ...dates, state: "unmanaged", reason: parsed.reason };
 
-    const { managed } = parsed;
     return {
       ...base,
       ...dates,
@@ -912,15 +850,12 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       variables,
       // The ones the file carries: the page offers them in a value's place.
       passwords: variables.filter((name) => isPassword(declaration, name)),
-      // Not even the size of a write-only file comes out: that of a key says
-      // its algorithm, that of a token its shape.
-      bytes: managed.document === null && declaration.readable ? managed.bytes.length : null,
     };
   }
 
   /** The variable names of a previous version, none if it cannot be read back as such. */
-  function previousKeys(declaration: Declaration, examination: Examination): string[] {
-    if (declaration.kind !== "variables" || examination.kind !== "present" || examination.bytes === null) return [];
+  function previousKeys(examination: Examination): string[] {
+    if (examination.kind !== "present" || examination.bytes === null) return [];
     const parsed = parseEnvBytes(examination.bytes);
     return parsed.ok ? keys(parsed.document) : [];
   }
@@ -929,45 +864,20 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   function unreadableView(declaration: Declaration): FileView {
     return {
       name: declaration.name,
-      kind: declaration.kind,
       state: "unmanaged",
       reason: "could not be read",
       expected: expectedText(declaration.expected),
-      readable: declaration.readable,
       variables: [],
       passwords: [],
-      bytes: null,
       modifiedAt: null,
       previous: false,
       restartPending: false,
     };
   }
 
-  /** A file as someone who never reads it back sees it: no size, no previous version, write-only. */
-  const writeOnly = (file: FileView): FileView => ({ ...file, readable: false, previous: false, bytes: null });
-
-  /**
-   * The file's view after a write. To a member who may not read it back, or
-   * any token, as the listing shows it: no size, no previous version,
-   * write-only.
-   */
-  async function fileAfter(c: Target, who: Who): Promise<FileView> {
-    const service = await readService(c.site);
-    const file = await fileView(c, service);
-    return asSeenBy(file, who);
-  }
-
-  /**
-   * A file as a requester sees it: the owner whole; anyone else write-only,
-   * but told a previous version is kept when they may restore it, an Admin.
-   */
-  function asSeenBy(file: FileView, who: Who): FileView {
-    if (!restricted(who) || who.readsBack === true) return file;
-    return who.restores === true ? { ...writeOnly(file), previous: file.previous } : writeOnly(file);
-  }
-
-  async function fileResponse(c: Target, who: Who = OWNER): Promise<Response> {
-    const body: FileResponse = { file: await fileAfter(c, who) };
+  /** The file's view after a write, the owner's. */
+  async function fileResponse(c: Target): Promise<Response> {
+    const body: FileResponse = { file: await fileView(c, await readService(c.site)) };
     return Response.json(body);
   }
 
@@ -980,18 +890,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   const encoder = new TextEncoder();
-
-  /**
-   * S2: the names a site's store holds, read for a write to one of its legacy
-   * files; empty for a site with no store, null when its store cannot be read.
-   */
-  async function storeNamesFor(site: Site): Promise<ReadonlySet<string> | null> {
-    const { manifest } = site;
-    if (manifest === null || manifest.slug !== site.folder || !hasStore(manifest)) return new Set();
-    const reading = await readStore(site.folder);
-    if (storeStateRefusal(site.folder, reading) !== null) return null;
-    return new Set(storeValues(reading).keys());
-  }
 
   /**
    * Keeps the current state as the previous version, with its owner, then
@@ -1182,9 +1080,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
 
   /**
    * What a member lists of their projects: those where their role lets them
-   * see the files, never a platform project nor a file kept for root. To a
-   * Developer every file is write-only: no value, no size, no previous version
-   * offered, since none of it is theirs to read back.
+   * see the secrets, never a platform project, whose files are the owner's
+   * alone. Their store as their role sees it, never a value.
    */
   async function memberProjects(roles: Roles): Promise<ProjectView[]> {
     const all = await sites();
@@ -1194,48 +1091,9 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       if (site === undefined || !may(role, "secrets.list") || machineRefusal(slug, null, memberZone) !== null) continue;
       const restores = may(role, "secrets.restore");
       const actor: StoreActor = { who: { actor: OWNER_ACTOR, member: OWNER_ACTOR }, kind: "person", creating: false, restores };
-      const view = await projectView(site, site.files.filter((declaration) => machineRefusal(slug, declaration, memberZone) === null), actor);
-      // Nobody but the owner reads a value back: every file write-only, a
-      // previous version said to whoever may put it back.
-      views.push({ ...view, files: view.files.map((file) => (restores ? { ...writeOnly(file), previous: file.previous } : writeOnly(file))) });
+      views.push(await projectView(site, [], actor));
     }
     return views;
-  }
-
-  /**
-   * One project's files as a token lists them, the control routes having
-   * judged the token, its role and its flag: a Developer's listing, every
-   * file write-only whatever the role, never a platform project nor a file
-   * kept for root, and `writable` on the one file a token changes. No portal:
-   * a token reads general access through its own route.
-   */
-  async function tokenProject(slug: string, who: Who): Promise<Response> {
-    const found = checkSite(await sites(), slug);
-    if ("refusal" in found) return error("not-found", `${slug} is not a site deployed on this machine`);
-    const { site } = found;
-    const machine = machineRefusal(site.folder, null, memberZone);
-    if (machine !== null) {
-      await writeLog("list", "rejects", { slug }, "out-of-scope", null, who);
-      return error("out-of-scope", machine);
-    }
-    const declarations = site.files.filter((declaration) => machineRefusal(site.folder, declaration, memberZone) === null);
-    const service = await readService(site);
-    const files: TokenFileView[] = [];
-    for (const declaration of declarations) {
-      const path = pathUnder(secretsFolder, declaration.name) ?? declaration.name;
-      let file: FileView;
-      try {
-        file = await fileView({ site, declaration, path }, service);
-      } catch (e) {
-        // An unreadable file does not bring the whole list down.
-        console.error(`projects: ${declaration.name} unreadable (${errorName(e)})`);
-        file = unreadableView(declaration);
-      }
-      files.push({ ...writeOnly(file), writable: tokenFileRefusal(site, declaration.name) === null });
-    }
-    const secrets: ProjectSecrets = { slug: site.folder, service: service.view, files };
-    const body: SecretsListResponse = { secrets };
-    return Response.json(body);
   }
 
   /** The journal and a window of the access log as one history, read one request at a time and kept by none (log.ts). */
@@ -1376,28 +1234,26 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   async function readValue(req: Request): Promise<Response> {
     const body = await bodyWithToken(req, ["slug", "file", "variable"]);
     if (body instanceof Response) return body;
-    return underLock(req, body, () => readValueTask(req, body, OWNER));
+    return underLock(req, body, () => readValueTask(body));
   }
 
-  /** A variable's value, under the lock, for the owner or an Admin. */
-  async function readValueTask(_req: Request, body: Body, who: Who): Promise<Response> {
-    const found = await target("read", body, who);
+  /** A variable's value, under the lock, for the owner. */
+  async function readValueTask(body: Body): Promise<Response> {
+    const found = await target("read", body);
     if (found instanceof Response) return found;
-    const kind = kindRefusal(found, "variables");
-    if (kind !== null) return refuse("read", body, kind, null, who);
     // Before any reading of the file: a hash is never read back.
     if (isPassword(found.declaration, body.variable)) {
       const message = `${body.variable as string} is never read back, change it with Change password`;
-      return refuse("read", body, { error: "out-of-scope", message }, body.variable as string, who);
+      return refuse("read", body, { error: "out-of-scope", message }, body.variable as string);
     }
-    const managed = await managedFile("read", body, found, null, who);
+    const managed = await managedFile("read", body, found);
     if (managed instanceof Response) return managed;
 
-    const value = envValue(managed.document!, body.variable as string);
+    const value = envValue(managed.document, body.variable as string);
     if (value === null) {
-      return refuse("read", body, { error: "not-found", message: `no such variable in ${found.declaration.name}` }, null, who);
+      return refuse("read", body, { error: "not-found", message: `no such variable in ${found.declaration.name}` });
     }
-    await writeLog("read", "ok", body, null, body.variable as string, who);
+    await writeLog("read", "ok", body, null, body.variable as string);
     const response: ValueResponse = { value };
     return Response.json(response);
   }
@@ -1411,225 +1267,88 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   async function setVariable(req: Request): Promise<Response> {
     const body = await bodyWithToken(req, ["slug", "file", "variable", "value"]);
     if (body instanceof Response) return body;
-    return underLock(req, body, () => setVariableTask(req, body, OWNER));
+    return underLock(req, body, () => setVariableTask(body));
   }
 
   /** Sets a variable, under the lock. The answer is the file's view, never the value written. */
-  async function setVariableTask(_req: Request, body: Body, who: Who): Promise<Response> {
-    const found = await target("set", body, who);
+  async function setVariableTask(body: Body): Promise<Response> {
+    const found = await target("set", body);
     if (found instanceof Response) return found;
-    const kind = kindRefusal(found, "variables");
-    if (kind !== null) return refuse("set", body, kind, null, who);
     const password = passwordRefusal(found, body.variable);
-    if (password !== null) return refuse("set", body, password, body.variable as string, who);
+    if (password !== null) return refuse("set", body, password, body.variable as string);
     const foreign = outsideHashRefusal(found.declaration.name, body.variable);
-    if (foreign !== null) return refuse("set", body, foreign, null, who);
-    const managed = await managedFile("set", body, found, null, who);
+    if (foreign !== null) return refuse("set", body, foreign);
+    const managed = await managedFile("set", body, found);
     if (managed instanceof Response) return managed;
 
     const variable = body.variable as string;
     const value = body.value as string;
     const known = knownVariable(managed.document, body);
     const keyReason = checkKey(variable, await setKeys(found.site));
-    if (keyReason !== null) return refuse("set", body, { error: "invalid", message: keyReason }, known, who);
+    if (keyReason !== null) return refuse("set", body, { error: "invalid", message: keyReason }, known);
     const valueReason = checkValue(value);
-    if (valueReason !== null) return refuse("set", body, { error: "invalid", message: valueReason }, known, who);
-    // S2: the store is read after every legacy file, and a name it holds
-    // would make this write change nothing the service gets.
-    const shadowed = legacyWriteRefusal(variable, await storeNamesFor(found.site), found.declaration.name);
-    if (shadowed !== null) return refuse("set", body, shadowed, known, who);
+    if (valueReason !== null) return refuse("set", body, { error: "invalid", message: valueReason }, known);
 
-    const refusal = await rewrite(found, managed, set(managed.document!, variable, value));
+    const refusal = await rewrite(found, managed, set(managed.document, variable, value));
     if (refusal !== null) {
-      await writeLog("set", "rejects", body, "invalid", known, who);
+      await writeLog("set", "rejects", body, "invalid", known);
       return refusal;
     }
-    await writeLog("set", "ok", body, null, variable, who);
-    return fileResponse(found, who);
+    await writeLog("set", "ok", body, null, variable);
+    return fileResponse(found);
   }
 
   async function removeVariable(req: Request): Promise<Response> {
     const body = await bodyWithToken(req, ["slug", "file", "variable"]);
     if (body instanceof Response) return body;
-    return underLock(req, body, () => removeVariableTask(req, body, OWNER));
+    return underLock(req, body, () => removeVariableTask(body));
   }
 
-  async function removeVariableTask(_req: Request, body: Body, who: Who): Promise<Response> {
-    const found = await target("remove", body, who);
+  async function removeVariableTask(body: Body): Promise<Response> {
+    const found = await target("remove", body);
     if (found instanceof Response) return found;
-    const kind = kindRefusal(found, "variables");
-    if (kind !== null) return refuse("remove", body, kind, null, who);
     const password = passwordRefusal(found, body.variable);
-    if (password !== null) return refuse("remove", body, password, body.variable as string, who);
-    const managed = await managedFile("remove", body, found, null, who);
+    if (password !== null) return refuse("remove", body, password, body.variable as string);
+    const managed = await managedFile("remove", body, found);
     if (managed instanceof Response) return managed;
 
     const variable = body.variable as string;
-    if (envValue(managed.document!, variable) === null) {
-      return refuse("remove", body, { error: "not-found", message: `no such variable in ${found.declaration.name}` }, null, who);
+    if (envValue(managed.document, variable) === null) {
+      return refuse("remove", body, { error: "not-found", message: `no such variable in ${found.declaration.name}` });
     }
     // A reserved key that is already present can be removed: that is repairing, not setting.
-    await rewrite(found, managed, remove(managed.document!, variable));
-    await writeLog("remove", "ok", body, null, variable, who);
-    return fileResponse(found, who);
+    await rewrite(found, managed, remove(managed.document, variable));
+    await writeLog("remove", "ok", body, null, variable);
+    return fileResponse(found);
   }
 
   async function createFile(req: Request): Promise<Response> {
     const body = await bodyWithToken(req, ["slug", "file"]);
     if (body instanceof Response) return body;
-    return underLock(req, body, () => createFileTask(req, body, OWNER));
+    return underLock(req, body, () => createFileTask(body));
   }
 
-  async function createFileTask(_req: Request, body: Body, who: Who): Promise<Response> {
-    const found = await target("create", body, who);
+  async function createFileTask(body: Body): Promise<Response> {
+    const found = await target("create", body);
     if (found instanceof Response) return found;
     const { declaration } = found;
 
-    // The steward never creates a directory in /etc/sitesolide: a
-    // subdirectory is put in place by hand, as root, as the deployment does.
-    const folder = await subFolderState(declaration.name);
-    if (folder.kind === "absent") {
-      return refuse("create", body, { error: "not-found", message: `${folder.path} does not exist on the server` }, null, who);
-    }
-    if (folder.kind === "rejects") {
-      return refuse("create", body, { error: "unmanaged", message: `${declaration.name} is not managed here: ${folder.reason}` }, null, who);
-    }
-
     if ((await system.examineSecret(declaration.name)).kind !== "absent") {
-      return refuse("create", body, { error: "already-present", message: `${declaration.name} already exists` }, null, who);
+      return refuse("create", body, { error: "already-present", message: `${declaration.name} already exists` });
     }
 
     const account = await realAccount(declaration);
     if (account === null) {
       const message = `account ${declaration.expected.owner} does not exist, deploy the site first`;
-      return refuse("create", body, { error: "not-found", message }, null, who);
+      return refuse("create", body, { error: "not-found", message });
     }
 
     const created = await createFresh(declaration.name, expectedPermissions(declaration, account ?? null));
     if (!created) {
-      return refuse("create", body, { error: "already-present", message: `${declaration.name} already exists` }, null, who);
+      return refuse("create", body, { error: "already-present", message: `${declaration.name} already exists` });
     }
-    await writeLog("create", "ok", body, null, null, who);
-    return fileResponse(found, who);
-  }
-
-  /**
-   * A token's change of `<slug>.env`, under the lock, the token judged by the
-   * control routes and judged again once the turn came. All or nothing: every
-   * name and every value judged first, and the whole file measured, before
-   * anything is created or written; then one write, one previous version, and
-   * one journal line per name, under `token:<id>`.
-   *
-   * The file is created when its project's manifest declares it and it is
-   * missing, unless the request only removes. A name removed that the file
-   * does not carry is said in `absent`, and nothing is journaled for it. A set
-   * is always written and journaled: the answer never says whether a value
-   * changed, which would tell whoever holds the token what the file holds.
-   *
-   * The file a request names is never journaled nor quoted until it is the one
-   * a token manages, and a name is never journaled when the request is
-   * refused but for `PASSWORD_HASH`: a value pasted in its place would stay.
-   */
-  async function changeVariablesTask(change: TokenSecretsChange, who: Who): Promise<Response> {
-    const removing = change.set.length === 0 && change.remove.length > 0;
-    const operation: Operation = removing ? "remove" : "set";
-    const asked: Body = { slug: change.slug };
-    const found = checkSite(await sites(), change.slug);
-    if ("refusal" in found) return refuse(operation, asked, found.refusal, null, who);
-    const machine = machineRefusal(found.site.folder, null, memberZone);
-    if (machine !== null) return refuse(operation, asked, { error: "out-of-scope", message: machine }, null, who);
-    const foreignFile = tokenFileRefusal(found.site, change.file);
-    if (foreignFile !== null) return refuse(operation, asked, foreignFile, null, who);
-
-    const body: Body = { slug: change.slug, file: change.file };
-    const c = await target(operation, body, who);
-    if (c instanceof Response) return c;
-    const name = c.declaration.name;
-
-    const keysOfUnit = await setKeys(c.site);
-    const storeNames = change.set.length === 0 ? new Set<string>() : await storeNamesFor(c.site);
-    for (const [variable, value] of change.set) {
-      if (!isVariableName(variable)) return refuse("set", body, { error: "invalid", message: "set: a name is not a variable name" }, null, who);
-      const password = passwordRefusal(c, variable);
-      if (password !== null) return refuse("set", body, password, variable, who);
-      const hashOnly = outsideHashRefusal(name, variable);
-      if (hashOnly !== null) return refuse("set", body, hashOnly, null, who);
-      const keyReason = checkKey(variable, keysOfUnit);
-      if (keyReason !== null) return refuse("set", body, { error: "invalid", message: variableRefusal("set", variable, keyReason) }, null, who);
-      const valueReason = checkValue(value);
-      if (valueReason !== null) return refuse("set", body, { error: "invalid", message: variableRefusal("set", variable, valueReason) }, null, who);
-      const shadowed = legacyWriteRefusal(variable, storeNames, name);
-      if (shadowed !== null) return refuse("set", body, shadowed, null, who);
-    }
-    for (const variable of change.remove) {
-      if (!isVariableName(variable)) return refuse("remove", body, { error: "invalid", message: "remove: a name is not a variable name" }, null, who);
-      const password = passwordRefusal(c, variable);
-      if (password !== null) return refuse("remove", body, password, variable, who);
-    }
-
-    /** The change applied to a document: what is set, what is removed, what was not there to remove. */
-    const apply = (document: EnvDocument) => {
-      let next = document;
-      const written: string[] = [];
-      const removed: string[] = [];
-      const absent: string[] = [];
-      for (const [variable, value] of change.set) {
-        next = set(next, variable, value);
-        written.push(variable);
-      }
-      for (const variable of change.remove) {
-        if (envValue(next, variable) === null) {
-          absent.push(variable);
-          continue;
-        }
-        next = remove(next, variable);
-        removed.push(variable);
-      }
-      return { document: next, written, removed, absent };
-    };
-    const tooBigRefused = async () => {
-      await writeLog(operation, "rejects", body, "invalid", null, who);
-      return tooBig();
-    };
-
-    let state = await examineTarget(c);
-    let created = false;
-    if (state.kind === "absent") {
-      if (removing) return refuse("remove", body, { error: "not-found", message: `${name} does not exist: there is nothing to remove` }, null, who);
-      // Measured before the file is created: a file created, then the change
-      // refused, would not be all or nothing.
-      if (boundedBytes(apply({ lines: [] }).document) === null) return tooBigRefused();
-      const account = await realAccount(c.declaration);
-      if (account === null) {
-        return refuse("create", body, { error: "not-found", message: `account ${c.declaration.expected.owner} does not exist, deploy the site first` }, null, who);
-      }
-      created = await createFresh(name, expectedPermissions(c.declaration, account ?? null));
-      if (created) await writeLog("create", "ok", body, null, null, who);
-      // Created here or, in a race, by someone else a moment before: read as it stands.
-      state = await examineTarget(c);
-    }
-    if (state.kind === "absent") return refuse(operation, body, { error: "not-found", message: `${name} could not be created` }, null, who);
-    if (state.kind === "unmanaged") {
-      return refuse(operation, body, { error: "unmanaged", message: `${name} is not managed here: ${state.reason}` }, null, who);
-    }
-
-    const { managed } = state;
-    const applied = apply(managed.document!);
-    if (applied.written.length + applied.removed.length > 0) {
-      const bytes = boundedBytes(applied.document);
-      if (bytes === null) return tooBigRefused();
-      await writeKeepingPrevious(c, managed, bytes);
-      for (const variable of applied.written) await writeLog("set", "ok", body, null, variable, who);
-      for (const variable of applied.removed) await writeLog("remove", "ok", body, null, variable, who);
-    }
-    const answer: StewardSecretsChange = {
-      file: { ...(await fileAfter(c, who)), writable: true },
-      created,
-      set: applied.written,
-      removed: applied.removed,
-      absent: applied.absent,
-    };
-    return Response.json(answer, { status: created ? 201 : 200 });
+    await writeLog("create", "ok", body, null, null);
+    return fileResponse(found);
   }
 
   /**
@@ -1638,97 +1357,45 @@ export function createSteward(system: System, options: StewardOptions): StewardH
    * may be the key that leaked.
    *
    * Never for a file that carries a password, in its current version or in the
-   * previous one: after a Change password following a leak, a token would
-   * otherwise be enough to make the old one valid again.
+   * previous one: after a Change password following a leak, a stolen unlock
+   * token would otherwise be enough to make the old one valid again.
    */
   async function restore(req: Request): Promise<Response> {
     const body = await bodyWithToken(req, ["slug", "file"]);
     if (body instanceof Response) return body;
-    return underLock(req, body, () => restoreTask(req, body, OWNER));
+    return underLock(req, body, () => restoreTask(body));
   }
 
-  async function restoreTask(_req: Request, body: Body, who: Who): Promise<Response> {
-    const found = await target("restore", body, who);
+  async function restoreTask(body: Body): Promise<Response> {
+    const found = await target("restore", body);
     if (found instanceof Response) return found;
     const { declaration } = found;
     // A hash-only file, before even reading it.
     const fixed = restoreRefusal(declaration, []);
-    if (fixed !== null) return refuse("restore", body, fixed, null, who);
-    const managed = await managedFile("restore", body, found, null, who);
+    if (fixed !== null) return refuse("restore", body, fixed);
+    const managed = await managedFile("restore", body, found);
     if (managed instanceof Response) return managed;
     const { name } = declaration;
 
-    const current = restoreRefusal(declaration, managed.document === null ? [] : keys(managed.document));
-    if (current !== null) return refuse("restore", body, current, null, who);
+    const current = restoreRefusal(declaration, keys(managed.document));
+    if (current !== null) return refuse("restore", body, current);
 
     const kept = await system.examinePrevious(name);
     if (kept.kind === "absent") {
-      return refuse("restore", body, { error: "not-found", message: `no previous version of ${name}` }, null, who);
+      return refuse("restore", body, { error: "not-found", message: `no previous version of ${name}` });
     }
-    const keptRefusal = restoreRefusal(declaration, previousKeys(declaration, kept));
-    if (keptRefusal !== null) return refuse("restore", body, keptRefusal, null, who);
+    const keptRefusal = restoreRefusal(declaration, previousKeys(kept));
+    if (keptRefusal !== null) return refuse("restore", body, keptRefusal);
     const reason = previousReason(kept.info, managed.real, found.declaration.expected.owner);
-    const readable =
-      kept.bytes !== null &&
-      (found.declaration.kind === "variables" ? parseEnvBytes(kept.bytes).ok : "text" in readContent(kept.bytes));
+    const readable = kept.bytes !== null && parseEnvBytes(kept.bytes).ok;
     if (reason !== null || !readable) {
       const message = reason ?? `the previous version of ${name} is not in a form managed here`;
-      return refuse("restore", body, { error: "unmanaged", message }, null, who);
+      return refuse("restore", body, { error: "unmanaged", message });
     }
 
     await writeKeepingPrevious(found, managed, kept.bytes!);
-    await writeLog("restore", "ok", body, null, null, who);
-    return fileResponse(found, who);
-  }
-
-  /**
-   * The content of a file managed as one block. Refused before any reading for
-   * a write-only file: a private key is replaced, it never comes back to the
-   * screen.
-   */
-  async function readFileContent(req: Request): Promise<Response> {
-    const body = await bodyWithToken(req, ["slug", "file"]);
-    if (body instanceof Response) return body;
-    return underLock(req, body, () => readContentTask(req, body, OWNER));
-  }
-
-  async function readContentTask(_req: Request, body: Body, who: Who): Promise<Response> {
-    const found = await target("read", body, who);
-    if (found instanceof Response) return found;
-    const kind = kindRefusal(found, "content");
-    if (kind !== null) return refuse("read", body, kind, null, who);
-    if (!found.declaration.readable) {
-      const message = `${found.declaration.name} is write-only, it can be replaced but never read back`;
-      return refuse("read", body, { error: "out-of-scope", message }, null, who);
-    }
-    const managed = await managedFile("read", body, found, null, who);
-    if (managed instanceof Response) return managed;
-
-    await writeLog("read", "ok", body, null, null, who);
-    const response: ContentResponse = { content: managed.text! };
-    return Response.json(response);
-  }
-
-  /** Replaces a file managed as one block, byte for byte, and keeps the previous version. */
-  async function replaceContent(req: Request): Promise<Response> {
-    const body = await bodyWithToken(req, ["slug", "file", "content"], [], MAX_CONTENT_BODY_BYTES);
-    if (body instanceof Response) return body;
-    return underLock(req, body, () => replaceContentTask(req, body, OWNER));
-  }
-
-  async function replaceContentTask(_req: Request, body: Body, who: Who): Promise<Response> {
-    const found = await target("replace", body, who);
-    if (found instanceof Response) return found;
-    const kind = kindRefusal(found, "content");
-    if (kind !== null) return refuse("replace", body, kind, null, who);
-    const reason = checkContent(body.content as string);
-    if (reason !== null) return refuse("replace", body, { error: "invalid", message: reason }, null, who);
-    const managed = await managedFile("replace", body, found, null, who);
-    if (managed instanceof Response) return managed;
-
-    await writeKeepingPrevious(found, managed, encoder.encode(body.content as string));
-    await writeLog("replace", "ok", body, null, null, who);
-    return fileResponse(found, who);
+    await writeLog("restore", "ok", body, null, null);
+    return fileResponse(found);
   }
 
   /**
@@ -2042,14 +1709,13 @@ export function createSteward(system: System, options: StewardOptions): StewardH
         return refuse("restart", body, { error: "out-of-scope", message });
       }
 
-      // Restarting a unit that reads none of the managed files would apply
-      // nothing, and would cut the service for nothing. A file is read through
-      // `EnvironmentFile=`, or by the service itself when the unit gives it its
-      // path, or that of its subdirectory, through `Environment=`.
+      // Restarting a unit that reads none of the managed files nor its
+      // project's store would apply nothing, and would cut the service for
+      // nothing.
       const readsFile = unitReads(text);
       const reads = site.files.some(({ name }) => readsFile(name)) || unitTouchesStore(text, site.folder);
       if (!reads) {
-        const message = `${unit}.service reads none of the managed files nor its project's store, by EnvironmentFile=, LoadCredential= or Environment=, a restart would apply nothing`;
+        const message = `${unit}.service reads none of the managed files nor its project's store, by EnvironmentFile= or LoadCredential=, a restart would apply nothing`;
         return refuse("restart", body, { error: "out-of-scope", message });
       }
 
@@ -2145,11 +1811,11 @@ export function createSteward(system: System, options: StewardOptions): StewardH
 
   // --- A project's store -------------------------------------------------------
 
-  // `/etc/sitesolide/projects/<slug>/`: its env, read last by every unit of
-  // the project, and its files, loaded whole by `LoadCredential=`. Root's
-  // alone: no `site-<slug>` account is needed to hold one, so a slug not yet
-  // deployed can have one. The decisions are store.ts's and migrate.ts's;
-  // here, the order of the checks (spec §6.4), the reads and the writes.
+  // `/etc/sitesolide/projects/<slug>/`: its env, read by every unit of the
+  // project, and its files, loaded whole by `LoadCredential=`. Root's alone:
+  // no `site-<slug>` account is needed to hold one, so a slug not yet
+  // deployed can have one. The decisions are store.ts's; here, the order of
+  // the checks (spec §6.4), the reads and the writes.
   //
   // **No answer of this section carries a value** but `/store/value`, the
   // owner's, unlocked. A set is always written and journaled under its name:
@@ -2165,32 +1831,17 @@ export function createSteward(system: System, options: StewardOptions): StewardH
 
   /**
    * Does this unit read the project's store, its env file last, as every
-   * generated unit does? Then a name the store holds wins over every legacy
-   * file the unit reads (I4), and the merge of a migration keeps what is in
-   * effect today.
+   * generated unit does? Then no other file the unit names overrides a name
+   * the store holds.
    */
   function unitReadsStoreLast(text: string, slug: string): boolean {
     const files = unitEnvironment(text).files;
     return files.length > 0 && files.at(-1)!.path === storeLocation(slug).env;
   }
 
-  /**
-   * The files a unit reads with `EnvironmentFile=`, each at the last place
-   * it is named: systemd reads a file named twice twice, so A, B, A runs
-   * with A's value of a name both set, and the order in effect is B, A.
-   */
-  function readOrder(text: string): string[] {
-    const order: string[] = [];
-    for (const { path } of unitEnvironment(text).files) {
-      const at = order.indexOf(path);
-      if (at !== -1) order.splice(at, 1);
-      order.push(path);
-    }
-    return order;
-  }
-
-  /** Does this unit read anything of the project's store, its env or its files? A restart then applies something. */
+  /** Does this unit read anything of the project's store, its env or its files? A restart then applies something. Never for a folder that is no slug, the landing's. */
   function unitTouchesStore(text: string, slug: string): boolean {
+    if (!isValidSlug(slug)) return false;
     const environment = unitEnvironment(text);
     const { env, files } = storeLocation(slug);
     return environment.files.some((file) => file.path === env) || environment.credentials.some((credential) => credential.id === CREDENTIAL_ID && credential.path === files);
@@ -2415,85 +2066,11 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return null;
   }
 
-  /** A legacy file of the project, as the rules of a store read it. */
-  type LegacyFile = {
-    declaration: Declaration;
-    read: boolean;
-    declared: boolean;
-    leftover: boolean;
-    state: TargetState;
-    /** Its assignments when they can be read, whatever its owner or mode: systemd reads it as root all the same. */
-    holder: LegacyHolder;
-  };
-
-  /**
-   * The project's legacy environment files and leftovers: read first, in the
-   * order of the main unit's `EnvironmentFile=` lines, then the others in
-   * the site's order. The machine's own files are never a project's.
-   */
-  async function legacyFilesOf(project: StoreProject, units: readonly InstalledUnit[]): Promise<LegacyFile[]> {
-    const { site } = project;
-    if (site === null) return [];
-    const order: string[] = [];
-    for (const unit of units) {
-      for (const path of readOrder(unit.text)) if (!order.includes(path)) order.push(path);
-    }
-    const declared = project.manifest === null ? [] : legacySecretFiles(project.manifest);
-    const candidates = [
-      ...site.files.map((declaration) => ({ declaration, leftover: false })),
-      ...site.leftovers.map((declaration) => ({ declaration, leftover: true })),
-    ].filter(({ declaration }) => declaration.kind === "variables" && !ROOT_FILES.includes(declaration.name) && !HASH_ONLY.includes(declaration.name));
-
-    const files: LegacyFile[] = [];
-    for (const { declaration, leftover } of candidates) {
-      const path = pathUnder(secretsFolder, declaration.name) ?? declaration.name;
-      let state: TargetState;
-      try {
-        state = await examineTarget({ site, declaration, path });
-      } catch {
-        state = { kind: "unmanaged", reason: "could not be read", info: null };
-      }
-      let holder: LegacyHolder;
-      const read = order.includes(path);
-      if (state.kind === "absent") holder = { file: declaration.name, read, known: true, values: new Map() };
-      else if (state.kind === "managed") holder = { file: declaration.name, read, known: true, values: documentValues(state.managed.document!) };
-      else holder = await rawHolder(declaration.name, read);
-      files.push({ declaration, read, declared: declared.includes(declaration.name), leftover, state, holder });
-    }
-    const rank = (file: LegacyFile) => {
-      const at = order.indexOf(pathUnder(secretsFolder, file.declaration.name) ?? "");
-      return at === -1 ? order.length : at;
-    };
-    return files.map((file, index) => ({ file, index })).sort((a, b) => rank(a.file) - rank(b.file) || a.index - b.index).map(({ file }) => file);
-  }
-
-  /** A legacy file that is not managed, read as systemd would read it when it is a plain file that parses: else unknown. */
-  async function rawHolder(name: string, read: boolean): Promise<LegacyHolder> {
-    try {
-      const examination = await system.examineSecret(name);
-      if (examination.kind === "absent") return { file: name, read, known: true, values: new Map() };
-      if (examination.bytes === null) return { file: name, read, known: false };
-      const parsed = parseEnvBytes(examination.bytes);
-      return parsed.ok ? { file: name, read, known: true, values: documentValues(parsed.document) } : { file: name, read, known: false };
-    } catch {
-      return { file: name, read, known: false };
-    }
-  }
-
   function documentValues(document: EnvDocument): Map<string, string> {
     return new Map(keys(document).map((name) => [name, envValue(document, name)!]));
   }
 
-  /**
-   * The legacy files whose names a store removal may bring back (S1): every
-   * one attached to the project, but a leftover the steward does not manage,
-   * which no unit of the project reads and a redeploy could not claim.
-   */
-  function holdersOf(legacy: readonly LegacyFile[]): LegacyHolder[] {
-    return legacy.filter((file) => !file.leftover || file.state.kind === "managed").map((file) => file.holder);
-  }
-
-  /** The store's state as store.ts reads it: names, sizes, dates, never a value but for the coverage, computed there and never answered. */
+  /** The store's state as store.ts reads it: names, sizes, dates, never a value. */
   function storeState(reading: StoreReading): StoreState {
     const env: StoreState["env"] =
       reading.env.kind === "absent"
@@ -2509,51 +2086,15 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return { exists: reading.exists, refusal: reading.refusal, env, files, previous: reading.previous };
   }
 
-  function legacyStates(legacy: readonly LegacyFile[]): LegacyState[] {
-    return legacy.map((file) => ({
-      file: file.declaration.name,
-      state: file.state.kind,
-      reason: file.state.kind === "unmanaged" ? file.state.reason : null,
-      values: file.state.kind === "managed" ? documentValues(file.state.managed.document!) : null,
-      read: file.read,
-      leftover: file.leftover,
-    }));
-  }
-
-  /**
-   * The legacy files retire deleted and kept a copy of, as the listing shows
-   * them: absent, where the copy is and how it is put back. One the project
-   * still names stays in its place in the list, its reason said; the others
-   * follow. Never a holder of anything for S1: nothing reads a copy.
-   */
-  async function withRetired(project: StoreProject, states: LegacyState[], units: readonly InstalledUnit[]): Promise<LegacyState[]> {
-    let retired: string[];
-    try {
-      retired = await system.listRetired(project.slug);
-    } catch (e) {
-      console.error(`store: the retired files of ${project.slug} unreadable (${errorName(e)})`);
-      return states;
-    }
-    if (retired.length === 0) return states;
-    const read = new Set(units.flatMap((unit) => unitEnvironment(unit.text).files.map((file) => file.path)));
-    const listed = states.map((state) => (state.state === "absent" && retired.includes(state.file) ? { ...state, reason: retiredReason(project.slug, state.file) } : state));
-    const others = retired
-      .filter((name) => !states.some((state) => state.file === name))
-      .map((name): LegacyState => ({ file: name, state: "absent", reason: retiredReason(project.slug, name), values: null, read: read.has(pathUnder(secretsFolder, name) ?? ""), leftover: false }));
-    return [...listed, ...others];
-  }
-
   /** The store as `actor` may see it (spec §6.11). */
-  async function buildStoreView(project: StoreProject, actor: StoreActor, known?: { reading: StoreReading; units: InstalledUnit[]; legacy: LegacyFile[] }): Promise<StoreView> {
-    const units = known?.units ?? (await installedUnits(project));
-    const reading = known?.reading ?? (await readStore(project.slug));
-    const legacy = known?.legacy ?? (await legacyFilesOf(project, units));
+  async function buildStoreView(project: StoreProject, actor: StoreActor): Promise<StoreView> {
+    const units = await installedUnits(project);
+    const reading = await readStore(project.slug);
     const service = project.site === null || project.manifest === null ? null : await readService(project.site);
     return storeView({
       slug: project.slug,
       manifest: project.manifest,
       store: storeState(reading),
-      legacy: await withRetired(project, legacyStates(legacy), units),
       unitReadsStore: unitsReadStore(project, units),
       startedUs: service?.startedUs ?? null,
       may: storeMay({ kind: actor.kind, restore: actor.restores }),
@@ -2633,13 +2174,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       names.push(name as string);
     }
 
-    const values = storeValues(reading);
-    if (names.length > 0) {
-      const legacy = await legacyFilesOf(project, units);
-      const resurrects = removalRefusal(names, values, holdersOf(legacy), isOwnerKind(actor));
-      if (resurrects !== null) return storeRefuse("remove", project.slug, resurrects, actor);
-    }
-
     let document: EnvDocument = reading.env.kind === "managed" ? reading.env.document : { lines: [] };
     const removed: string[] = [];
     const absent: string[] = [];
@@ -2686,8 +2220,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     if (named !== null) return storeRefuse("generate", project.slug, named, actor);
     const name = body.name as string;
 
-    const legacy = await legacyFilesOf(project, units);
-    const already = generateRefusal(name, new Set(storeValues(reading).keys()), legacy.map((file) => file.holder), body.replace === true);
+    const already = generateRefusal(name, new Set(storeValues(reading).keys()), body.replace === true);
     if (already !== null) return storeRefuse("generate", project.slug, already, actor);
 
     const document = set(reading.env.kind === "managed" ? reading.env.document : { lines: [] }, name, drawValue(random, ask));
@@ -2803,11 +2336,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     if (current.has(PASSWORD_VARIABLE) || previous.has(PASSWORD_VARIABLE)) {
       return storeRefuse("restore", project.slug, { error: "out-of-scope", message: "a password is only changed with Change password" }, actor);
     }
-    const units = await installedUnits(project);
-    const legacy = await legacyFilesOf(project, units);
-    const resurrects = restoreRemovalRefusal(current, previous, holdersOf(legacy), isOwnerKind(actor));
-    if (resurrects !== null) return storeRefuse("restore", project.slug, resurrects, actor);
-
     const appeared = [...previous.keys()].filter((name) => !current.has(name));
     const disappeared = [...current.keys()].filter((name) => !previous.has(name));
     if (body.dryRun === true) {
@@ -2841,215 +2369,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return Response.json(answer);
   }
 
-  /** A deployed app with a manifest that names it: what migrate and retire work on. */
-  function deployedApp(project: StoreProject): Refusal | null {
-    if (project.site === null || project.manifest === null) {
-      return { error: "out-of-scope", message: `${project.slug} is not an app deployed with its sitesolide.json on this machine: deploy it first` };
-    }
-    return null;
-  }
-
-  /**
-   * The order in effect of a project's legacy files: those no installed unit
-   * reads first, in the manifest's order, then those the units read, in the
-   * order they read them, the later winning as systemd reads them.
-   * `orderAgreed` false: two units read them in different orders, and no
-   * single value is in effect for every service of a name they disagree on.
-   */
-  function inEffectOrder(files: readonly LegacyFile[], units: readonly InstalledUnit[], declared: readonly string[]): { legacy: LegacyFile[]; orderAgreed: boolean } {
-    const pathOf = (file: LegacyFile) => pathUnder(secretsFolder, file.declaration.name) ?? file.declaration.name;
-    const paths = new Set(files.map(pathOf));
-    const orders = units.map((unit) => readOrder(unit.text).filter((path) => paths.has(path)));
-    const first = orders[0] ?? [];
-    const orderAgreed = orders.every((order) => order.length === first.length && order.every((path, index) => path === first[index]));
-    const read = first.map((path) => files.find((file) => pathOf(file) === path)!);
-    const rank = (file: LegacyFile) => {
-      const at = declared.indexOf(file.declaration.name);
-      return at === -1 ? declared.length : at;
-    };
-    const unread = files.filter((file) => !first.includes(pathOf(file))).sort((a, b) => rank(a) - rank(b));
-    return { legacy: [...unread, ...read], orderAgreed };
-  }
-
-  /**
-   * A project's legacy files merged into its store, owner only, without
-   * anyone seeing a value (spec §6.8): idempotent, never restarting, the
-   * legacy files untouched. A conflict, two files giving one name two
-   * values, refuses the whole migration, naming the name and the files.
-   */
-  async function storeMigrateTask(body: Body, actor: StoreActor): Promise<Response> {
-    const project = await storeProject(body.slug, actor);
-    if (!("slug" in project)) return storeRefuse("migrate", body.slug, project, actor);
-    if (body.dryRun !== undefined && typeof body.dryRun !== "boolean") return storeRefuse("migrate", project.slug, { error: "invalid", message: "dryRun must be a boolean" }, actor);
-    const deployed = deployedApp(project);
-    if (deployed !== null) return storeRefuse("migrate", project.slug, deployed, actor);
-    const units = await installedUnits(project);
-    if (unitsReadStore(project, units) !== true) {
-      return storeRefuse("migrate", project.slug, { error: "out-of-scope", message: `deploy or refresh ${project.slug} first, so that its units read the store: sitesolide refresh ${project.slug}` }, actor);
-    }
-    const reading = await readStore(project.slug);
-    const state = storeStateRefusal(project.slug, reading);
-    if (state !== null) return storeRefuse("migrate", project.slug, state, actor);
-
-    // The sources: the legacy files the deployed manifest declares or a unit
-    // reads, in the order in effect. A leftover is read by no unit: merging
-    // it would add variables the service does not have today.
-    const declared = legacySecretFiles(project.manifest!);
-    const attached = await legacyFilesOf(project, units);
-    const { legacy, orderAgreed } = inEffectOrder(
-      attached.filter((file) => !file.leftover && (file.read || declared.includes(file.declaration.name))),
-      units,
-      declared,
-    );
-    const sources: MigrationSource[] = legacy.map((file) =>
-      file.state.kind === "absent"
-        ? { file: file.declaration.name, state: "absent" }
-        : file.state.kind === "unmanaged"
-          ? { file: file.declaration.name, state: "unmanaged", reason: file.state.reason }
-          : { file: file.declaration.name, state: "managed", assignments: [...documentValues(file.state.managed.document!)] },
-    );
-    const setKeys = storeSetKeys(project, units);
-    const plan = planMigration({
-      sources,
-      store: storeValues(reading),
-      keyRefusal: (name) => checkKey(name),
-      setElsewhere: new Set(setKeys),
-      setByUnit: generatedUnitKeys(project.manifest!),
-      orderAgreed,
-    });
-    if (plan.kind === "refused") return storeRefuse("migrate", project.slug, plan.refusal, actor);
-
-    const outcome = (written: boolean, store: StoreView): StoreMigrateAnswer => ({
-      store,
-      sources: plan.sources,
-      skipped: plan.skipped,
-      merged: plan.merged,
-      already: plan.already,
-      overridden: plan.overridden,
-      shadowed: plan.shadowed,
-      conflicts: plan.conflicts,
-      written,
-    });
-    if (plan.conflicts.length > 0 && body.dryRun !== true) {
-      await writeLog("migrate", "rejects", { slug: project.slug }, "conflicts", null, actor.who, STORE_LABEL);
-      const message = `${plan.conflicts.map((conflict) => `${conflict.name}: in ${conflict.files.join(" and ")}, with different values, which the units of ${project.slug} read in different orders`).join("; ")}. sitesolide refresh ${project.slug}, then migrate again; nothing was written`;
-      const answer = { error: "unmanaged", message, ...outcome(false, await buildStoreView(project, actor, { reading, units, legacy: attached })) };
-      return Response.json(answer, { status: 409 });
-    }
-    if (body.dryRun === true || plan.writes.length === 0) {
-      return Response.json(outcome(false, await buildStoreView(project, actor)));
-    }
-
-    let document: EnvDocument = reading.env.kind === "managed" ? reading.env.document : { lines: [] };
-    for (const [name, value] of plan.writes) document = set(document, name, value);
-    const bytes = encoder.encode(serialise(document));
-    const tooLarge = envBytesRefusal(bytes);
-    if (tooLarge !== null) return storeRefuse("migrate", project.slug, tooLarge, actor);
-    const laid = await ensureStoreFor(project, actor, "migrate");
-    if (laid instanceof Response) return laid;
-    await writeStoreEnvKeeping(project.slug, reading.env, bytes);
-    const shadowedDetail = plan.shadowed.length === 0 ? "" : `; ${plan.shadowed.length} taken from the file in effect over another value`;
-    await writeLog("migrate", "ok", { slug: project.slug }, bounded(`${plan.writes.length} merged from ${plan.sources.join(", ")}${shadowedDetail}`), null, actor.who, STORE_LABEL);
-    return Response.json(outcome(true, await buildStoreView(project, actor)));
-  }
-
-  /** The most files a retire names at once. */
-  const MAX_RETIRED = 64;
-
-  /**
-   * Legacy files deleted once the store makes them useless, owner only (spec
-   * §6.9): each one judged alone, by retireDecision, kept as its previous
-   * version with its owner, then unlinked. One failing a rule stays, with
-   * its reason.
-   */
-  async function storeRetireTask(body: Body, actor: StoreActor): Promise<Response> {
-    const project = await storeProject(body.slug, actor);
-    if (!("slug" in project)) return storeRefuse("retire", body.slug, project, actor);
-    if (body.force !== undefined && typeof body.force !== "boolean") return storeRefuse("retire", project.slug, { error: "invalid", message: "force must be a boolean" }, actor);
-    const force = body.force === true;
-    const asked = body.files;
-    if (!Array.isArray(asked) || asked.length === 0 || asked.length > MAX_RETIRED) {
-      return storeRefuse("retire", project.slug, { error: "invalid", message: `files: a list of 1 to ${MAX_RETIRED} legacy file names` }, actor);
-    }
-    for (const [index, name] of asked.entries()) {
-      if (nameRefusal(name) !== null) return storeRefuse("retire", project.slug, { error: "invalid", message: `files: entry ${index + 1} is not a legacy file's name` }, actor);
-      if (asked.indexOf(name) !== index) return storeRefuse("retire", project.slug, { error: "invalid", message: `files: ${name as string} is named twice` }, actor);
-    }
-    const deployed = deployedApp(project);
-    if (deployed !== null) return storeRefuse("retire", project.slug, deployed, actor);
-    const reading = await readStore(project.slug);
-    const state = storeStateRefusal(project.slug, reading);
-    if (state !== null) return storeRefuse("retire", project.slug, state, actor);
-
-    const site = project.site!;
-    const units = await installedUnits(project);
-    const readsStore = unitsReadStore(project, units) === true;
-    const legacy = await legacyFilesOf(project, units);
-    const service = await readService(site);
-    const allScheduled = isAnchored(project.manifest!);
-    const envModifiedMs = reading.env.kind === "managed" ? reading.env.info.modifiedAt : null;
-    const values = reading.env.kind === "managed" ? storeValues(reading) : reading.env.kind === "absent" ? new Map<string, string>() : null;
-
-    const retired: string[] = [];
-    const forced: string[] = [];
-    const kept: { file: string; reason: string }[] = [];
-    for (const name of asked as string[]) {
-      const attached = [...site.files, ...site.leftovers].find((declaration) => declaration.name === name);
-      const file = legacy.find((one) => one.declaration.name === name);
-      let fileState: TargetState = file?.state ?? { kind: "absent" };
-      if (file === undefined && attached !== undefined) {
-        try {
-          fileState = await examineTarget({ site, declaration: attached, path: pathUnder(secretsFolder, name) ?? name });
-        } catch {
-          fileState = { kind: "unmanaged", reason: "could not be read", info: null };
-        }
-      }
-      const decision = retireDecision({
-        file: name,
-        attached: attached !== undefined,
-        flat: subFolderOf(name) === null,
-        variables: kindOf(name) === "variables",
-        machine: ROOT_FILES.includes(name) || HASH_ONLY.includes(name),
-        state:
-          fileState.kind === "managed" && fileState.managed.document !== null
-            ? { kind: "managed", assignments: [...documentValues(fileState.managed.document)] }
-            : fileState.kind === "managed"
-              ? { kind: "unmanaged", reason: "not an environment file" }
-              : fileState.kind === "unmanaged"
-                ? { kind: "unmanaged", reason: fileState.reason }
-                : { kind: "absent" },
-        read: file?.read ?? false,
-        force,
-        store: values,
-        unitsReadStore: readsStore,
-        allScheduled,
-        main: { active: service.view?.state === "active", startedUs: service.startedUs },
-        envModifiedMs,
-        slug: project.slug,
-      });
-      if (!decision.retire) {
-        kept.push({ file: name, reason: decision.reason });
-        continue;
-      }
-      const managed = (fileState as Extract<TargetState, { kind: "managed" }>).managed;
-      // Kept first, under the project's own previous versions, its owner with
-      // it: `sitesolide remove` deletes that folder whole, and the owner puts
-      // the file back by hand with the command the listing gives
-      // (retiredReason). Not in precedents/<name>, which nothing deletes
-      // with a project whose manifest no longer names the file. The version
-      // the dashboard kept there of it goes too, for the same reason.
-      await system.writeStorePrevious(project.slug, `legacy/${name}`, managed.bytes, checked ? managed.real : null);
-      await system.removePrevious(name);
-      await system.removeLegacy(name);
-      await writeLog("retire", "ok", { slug: project.slug }, decision.forced ? "forced: the store's values stand" : null, null, actor.who, name);
-      retired.push(name);
-      if (decision.forced) forced.push(name);
-    }
-    const answer: StoreRetireAnswer = { store: await buildStoreView(project, actor), retired, forced, kept };
-    return Response.json(answer);
-  }
-
-  /** The store's listing, for any surface; a token's refusal journaled as its listing's. */
   async function storeListTask(slug: unknown, actor: StoreActor): Promise<Response> {
     const project = await storeProject(slug, actor);
     if (!("slug" in project)) {
@@ -3088,8 +2407,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     setFile: storeFileTask,
     removeFile: storeFileRemoveTask,
     restore: storeRestoreTask,
-    migrate: storeMigrateTask,
-    retire: storeRetireTask,
   };
 
   type StoreTask = (body: Body, actor: StoreActor) => Promise<Response>;
@@ -3214,31 +2531,9 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       "/store/generate": { POST: route(["slug", "name"], ["format", "bytes", "replace"], storeTasks.generate) },
       "/store/file": { PUT: route(["slug", "name", "content"], [], storeTasks.setFile, MAX_CONTENT_BODY_BYTES), DELETE: route(["slug", "name"], [], storeTasks.removeFile) },
       "/store/restore": { POST: route(["slug"], ["dryRun"], storeTasks.restore) },
-      "/store/migrate": { POST: route(["slug"], ["dryRun"], storeTasks.migrate) },
-      "/store/retire": { POST: route(["slug"], ["files", "force"], storeTasks.retire) },
       // A value read back: the owner's unlocked dashboard alone, never over SSH.
       ...(ssh ? {} : { "/store/value": { POST: ownerStoreRoute(["slug", "name"], [], (body) => storeRevealTask(body)) } }),
     };
-  }
-
-  /**
-   * `GET /store/leftovers?slug=<slug>` on the owner's socket: the flat files a
-   * store-form project left under /etc/sitesolide, for `sitesolide remove`,
-   * which deletes them with the project once it has judged them its own
-   * (removableSecrets in bin/cli/removal.ts). Read while the project is
-   * still deployed: once its folder is gone, its leftovers are nobody's.
-   * The machine's own files never are one; a subfolder's never is either.
-   */
-  async function ownerLeftovers(req: Request): Promise<Response> {
-    const wanted = new URL(req.url).searchParams.getAll("slug");
-    if (wanted.length !== 1 || !isValidSlug(wanted[0]!)) return error("invalid", "name one project: ?slug=<slug>");
-    const slug = wanted[0]!;
-    const site = (await sites()).get(slug);
-    const leftovers = (site?.leftovers ?? [])
-      .map((declaration) => declaration.name)
-      .filter((name) => subFolderOf(name) === null && !ROOT_FILES.includes(name) && !HASH_ONLY.includes(name));
-    const answer: StoreLeftoversResponse = { slug, leftovers };
-    return Response.json(answer);
   }
 
   /** `POST /restart { slug }` on the owner's socket: the restart a person's is, with root as who and no refusal for want of a managed file. */
@@ -3365,13 +2660,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
           underLock: underLockWith,
           ops: {
             projects: memberProjects,
-            readValue: readValueTask,
-            setVariable: setVariableTask,
-            removeVariable: removeVariableTask,
-            createFile: createFileTask,
-            restoreFile: restoreTask,
-            readContent: readContentTask,
-            replaceContent: replaceContentTask,
             portal: portalTask,
             general: (req, body, who) => generalTask(req, body, who),
             storeSet: personStore(storeTasks.set),
@@ -3427,8 +2715,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   const secretsForToken: SecretsForToken = {
-    list: (slug, who) => tokenProject(slug, who),
-    change: (req, change, who, still) => underLockWith(req, still, () => changeVariablesTask(change, who)),
     restart: (req, slug, who, still) => restartFor(req, slug, who, still, tokenRestartTurn(slug)),
     refuse: (event) => journalEvent(event),
     restricted: restrictedForToken,
@@ -3458,7 +2744,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     "/variable": { PUT: setVariable, DELETE: removeVariable },
     "/file": { POST: createFile },
     "/restore": { POST: restore },
-    "/content": { POST: readFileContent, PUT: replaceContent },
     "/password": { POST: changePassword },
     "/portal": { POST: togglePortal },
     "/general": { POST: setGeneral },
@@ -3508,7 +2793,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     owner: serve({
       ...(access?.owner ?? {}),
       ...storeRoutes(true),
-      "/store/leftovers": { GET: ownerLeftovers },
       "/general": { POST: ownerGeneral },
       "/restart": { POST: ownerRestart },
     }),

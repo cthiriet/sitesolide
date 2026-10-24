@@ -274,13 +274,13 @@ describe("refusals an agent can act on", () => {
   test("a manifest the scope refuses: every reason in details, before any upload", async () => {
     const response = await api("/api/v1/deployments", {
       method: "POST",
-      body: JSON.stringify({ manifest: { slug: "blog", start: "x", publicDir: "public", network: "outbound", secrets: ["dashboard.env"] } }),
+      body: JSON.stringify({ manifest: { slug: "blog", start: "x", publicDir: "public", network: "outbound", lock: true } }),
     });
     expect(response.status).toBe(422);
     const body = (await response.json()) as { error: string; details: string[] };
     expect(body.error).toBe("invalid-manifest");
     expect(body.details.join(" ")).toContain("network");
-    expect(body.details.join(" ")).toContain("dashboard.env");
+    expect(body.details.join(" ")).toContain("lock:");
   });
 
   test("a manifest validate() refuses, as the CLI would", async () => {
@@ -314,7 +314,7 @@ describe("refusals an agent can act on", () => {
     try {
       for (const manifest of [
         { slug: "dashboard", start: "x", publicDir: "public" },
-        { slug: "dashboard", publicDir: "public", secrets: ["dashboard.env"] },
+        { slug: "dashboard", publicDir: "public" },
       ]) {
         const response = await api("/api/v1/deployments", { method: "POST", body: JSON.stringify({ manifest }) });
         expect(response.status).toBe(403);

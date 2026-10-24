@@ -705,28 +705,9 @@ build secret does, before anything is sent.
 under `secrets`, never a value, and those of a static site's build under
 `secrets.build`.
 
-**The old form, file names.** A list whose every entry holds a dot names
-flat files of `/etc/sitesolide`, as before the store:
-
-```json
-"secrets": ["shop.env", "shop-stripe.env"]
-```
-
-It is still read, the files loaded before the store, and `deploy` warns that
-it is the old form. A list mixing file names and variable names is refused:
-migrate the files first, `sitesolide secrets migrate`, then list the names.
-**A project declares its own files alone**, since root reads whatever it
-declares: `<slug>.env` and `<slug>-<name>`, never the machine's own,
-`dashboard.env`, `dashboard-monitor.env`, `dashboard-backup.env`, nor one a
-more specific site deployed on the machine holds, `acme-crm.env` for `acme`
-when `acme-crm` is there; and a file already on the machine must be a plain
-file of `site-<slug>`. `deploy` refuses the others before anything is pushed,
-naming them. An entry without a dot now reads as a variable name: no known
-manifest has one, and [upgrading.md](upgrading.md) says what to check.
-
-`dashboard` and `portal` keep `["dashboard.env"]` and `["portal.env"]` for
-good, with no warning: their password hashes stay in their own files, and the
-names form is refused for them.
+`dashboard` and `portal` declare no secret: their units read
+`/etc/sitesolide/dashboard.env` and `/etc/sitesolide/portal.env`, which hold
+their password hashes, by themselves, and `secrets` is refused for them.
 
 ### `domain`
 
@@ -867,8 +848,7 @@ the same `app/` and `public/` read-only and `data/` writable, the same working
 directory, `app/`, and its service's environment, `PORT`, `DATA_DIR`,
 `PUBLIC_DIR` and `env` with its placeholders replaced, plus `BACKUP_DIR`,
 which `env` may not set beside a backup command. Its secrets arrive as its
-service's do, read by systemd as root: the legacy files, then the project's
-store, and its files at `${CREDENTIALS_DIRECTORY}/files_<name>`, the folder
+service's do, read by systemd as root: the project's store, and its files at `${CREDENTIALS_DIRECTORY}/files_<name>`, the folder
 itself hidden from it. `CREDENTIALS_DIRECTORY` is expanded on its command
 line like any `$NAME`, and `{credentials}` is refused there, no placeholder. It reaches the loopback alone, whatever `network` says: enough to
 talk to its service on its port, which the machine's loopback rule lets a

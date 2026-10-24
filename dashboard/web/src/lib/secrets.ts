@@ -10,7 +10,7 @@
  * the browser would protect nothing and would end up diverging from the one
  * that counts.
  */
-import { duration, size } from "./format"
+import { duration } from "./format"
 import { serviceWord } from "./sites"
 import { missingLabel, storeMissing, storePending, withStore } from "./store"
 import type { Tone } from "./tones"
@@ -184,70 +184,42 @@ export function readService(service: ServiceView | null, serverNow: number): Ser
   return { tone, text: label, systemd: raw, detail: null }
 }
 
-/**
- * "2 variables", "No variables yet" for a variables file, its size for a file
- * read in one go; nothing for a file the steward does not read, whose contents
- * nobody knows.
- */
+/** "2 variables", "No variables yet"; nothing for a file the steward does not read, whose contents nobody knows. */
 export function fileSummary(file: FileView): string | null {
   if (file.state !== "managed") return null
-  if (file.kind === "content") return file.bytes === null ? null : file.bytes === 0 ? "Empty" : size(file.bytes)
   return file.variables.length === 0 ? "No variables yet" : plural(file.variables.length, "variable")
 }
 
 /**
- * A file's path under /etc/sitesolide, cut between its folder and its name:
- * `cms-secrets/token` reads "token" inside "cms-secrets/".
- */
-export function filePath(name: string): { folder: string | null; base: string } {
-  const slash = name.lastIndexOf("/")
-  if (slash <= 0 || slash === name.length - 1) return { folder: null, base: name }
-  return { folder: name.slice(0, slash + 1), base: name.slice(slash + 1) }
-}
-
-/**
  * What the page offers for a file, from what the steward says of it and nothing
- * else: its kind, its state, `readable` and the previous version. Offering an
- * action is not authorising it: the steward judges on send.
+ * else: its state and the previous version. Offering an action is not
+ * authorising it: the steward judges on send.
  */
 export type FileOffer = {
-  /** Declared and missing: create it empty. */
+  /** Expected and missing: create it empty. */
   create: boolean
   /** A previous version is kept, on a file the steward rewrites. */
   restore: boolean
-  /** A managed variables file: add one. */
+  /** A managed file: add a variable. */
   add: boolean
-  /** A managed file read in one go: replace it whole. */
-  replace: boolean
-  /** The same, and readable: display it for thirty seconds. */
-  reveal: boolean
-  /** The steward never reads it back: it gets replaced, it does not get read. */
-  writeOnly: boolean
 }
 
 export function fileOffer(file: FileView): FileOffer {
-  const managed = file.state === "managed"
-  const content = file.kind === "content"
   return {
     create: file.state === "absent",
     restore: file.previous && file.state !== "unmanaged",
-    add: managed && !content,
-    replace: managed && content,
-    reveal: managed && content && file.readable,
-    writeOnly: !file.readable && file.state !== "unmanaged",
+    add: file.state === "managed",
   }
 }
 
 /**
  * What a variable offers. `password`: no value, no reveal, no change, only
- * *Change password*. `write`: a write-only file, where it can be changed and
- * removed without ever being read back. `read-write`: everything.
+ * *Change password*. `read-write`: everything.
  */
-export type VariableOffer = "password" | "write" | "read-write"
+export type VariableOffer = "password" | "read-write"
 
-export function variableOffer(file: Pick<FileView, "readable" | "passwords">, variable: string): VariableOffer {
-  if (file.passwords.includes(variable)) return "password"
-  return file.readable ? "read-write" : "write"
+export function variableOffer(file: Pick<FileView, "passwords">, variable: string): VariableOffer {
+  return file.passwords.includes(variable) ? "password" : "read-write"
 }
 
 /**
@@ -263,12 +235,12 @@ export function restorableFiles(project: ProjectView): FileView[] {
 
 /**
  * The files changed since the last startup, which the next one will apply:
- * the legacy files, then the store's own files, by name.
+ * the platform's own files, then the store's files, by name.
  */
 export function pendingFiles(project: ProjectView): string[] {
-  const legacy = project.files.filter((file) => file.restartPending).map((file) => file.name)
+  const platform = project.files.filter((file) => file.restartPending).map((file) => file.name)
   const store = project.store === null ? [] : storePending(project.store, project.service?.startedAt ?? null).files
-  return [...legacy, ...store]
+  return [...platform, ...store]
 }
 
 /** The store's variables changed since the last startup: said beside the files, since they have no file name of their own. */
@@ -276,7 +248,7 @@ export function pendingVariables(project: ProjectView): boolean {
   return project.store !== null && storePending(project.store, project.service?.startedAt ?? null).variables
 }
 
-/** "The variables on the server and gcp.json", "cms.env": what a restart applies, in one phrase. */
+/** "The variables on the server and gcp.json", "portal.env": what a restart applies, in one phrase. */
 export function pendingPhrase(files: readonly string[], variables: boolean): string {
   const pieces = [...(variables ? ["the variables on the server"] : []), ...files]
   if (pieces.length <= 1) return pieces.join("")
@@ -302,7 +274,7 @@ const TONE_RANK: Record<Tone, number> = { error: 0, attention: 1, neutral: 2, ok
 /**
  * What makes a project worth looking at, the most serious first: its service if
  * it is not running, what it declares and lacks (its store's names and files,
- * once for the store, then each legacy file), the unmanaged ones, a unit that
+ * once for the store, then each platform file), the unmanaged ones, a unit that
  * does not read its store yet, and the restart pending, stated once for the
  * whole project since it is the service that restarts. At equal severity, the
  * order of this list.
@@ -355,8 +327,8 @@ export function fileProblems(project: ProjectView, serverNow: number): Problem[]
 
 /**
  * The reason a file is unmanaged, and the command it quotes when it quotes one:
- * the steward writes it after a colon, "owned by uid 0, not site-cms: sudo
- * chown site-cms /etc/sitesolide/cms.env". The page shows it separately, so it
+ * the steward writes it after a colon, "owned by uid 0, not site-portal: sudo
+ * chown site-portal /etc/sitesolide/portal.env". The page shows it separately, so it
  * can be copied, and leaves the reason whole if it does not have that shape:
  * nothing is invented.
  */
@@ -516,6 +488,8 @@ const OPERATION_NAMES: Record<Operation, string> = {
   "project.create": "Create project",
   "project.remove": "Remove project",
   generate: "Generate",
+  // Written by the steward before projects kept their secrets in their store
+  // alone, and still read from the journals that carry them.
   migrate: "Merge into the store",
   retire: "Retire",
 }
@@ -535,8 +509,8 @@ function generalVerb(detail: string | null): string {
 
 /**
  * The journal's place for a project's store: `store` for its variables,
- * `store/<name>` for one of its files. Never a legacy name, which is flat or
- * under a folder ending in `-secrets`.
+ * `store/<name>` for one of its files. Never a platform file's name, which is
+ * flat.
  */
 export const STORE_PLACE = "store"
 
@@ -673,7 +647,7 @@ export type SiteSecretsPanel = { variables: string[]; restartPending: boolean }
 
 /**
  * What the sites table learns from the page: the names of the variables, the
- * legacy files' and the store's, which the search knows, and the restart
+ * platform files' and the store's, which the search knows, and the restart
  * pending, which shows on the row. Never a value, which the page does not have
  * anyway.
  */
@@ -731,20 +705,3 @@ export function generateToken(random: RandomBytes = RANDOM): string {
  * send.
  */
 export const MAX_UPLOAD_BYTES = 1024 * 1024
-
-export type LocalText = { text: string } | { error: string }
-
-/**
- * The text of a chosen or dropped file, read in the browser without sending
- * anything. Strict UTF-8: a byte that is not valid rejects the file rather than
- * slipping a replacement character into it, which would change a key without a
- * word.
- */
-export function readLocalText(bytes: Uint8Array): LocalText {
-  if (bytes.byteLength > MAX_UPLOAD_BYTES) return { error: "This file is too large to be a secret. Choose a text file under 1 MB." }
-  try {
-    return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) }
-  } catch {
-    return { error: "This file isn't text. Choose a text file, such as a key or a token." }
-  }
-}

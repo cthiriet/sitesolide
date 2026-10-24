@@ -32,23 +32,19 @@ describe("reserved slugs", () => {
     for (const slug of ["dashboard", "portal", "api", "analytics", "landing", "www", ZONE]) {
       for (const onMachine of [false, true, null]) {
         expect(decideManifest(app({ slug }), NONE, onMachine, ZONE)).toMatchObject({ kind: "refused", error: "reserved" });
-        expect(decideManifest(site({ slug, secrets: ["dashboard.env"] }), NONE, onMachine, ZONE)).toMatchObject({ kind: "refused", error: "reserved" });
+        expect(decideManifest(site({ slug, secrets: ["API_KEY"] }), NONE, onMachine, ZONE)).toMatchObject({ kind: "refused", error: "reserved" });
       }
     }
     const refused = decideManifest(app({ slug: "dashboard" }), NONE, false, ZONE);
     expect(refused.kind === "refused" && refused.error === "reserved" && refused.message).toContain("pick another slug");
   });
 
-  test("a new project of the shape of the platform's files, dashboard-backup above all, whatever the scope; one already on the machine stays deployable", () => {
+  test("a name that begins like the platform's is an ordinary slug: a project reads its own store, never a flat file named after it", () => {
     const everything = (slug: string) => identity({ slugs: [slug], create: true, public: true });
-    for (const slug of ["dashboard-backup", "dashboard-monitor", "dashboard-next", "portal-x", "api-gateway", "analytics-2", "landing-old", "www-blog"]) {
-      const refusal = decideSlug(everything(slug), slug, { exists: false, owner: null, zone: ZONE });
-      expect(refusal).toMatchObject({ kind: "refused", error: "reserved" });
-      expect(refusal.kind === "refused" && refusal.message).toContain("pick another slug");
+    for (const slug of ["dashboard-backup", "dashboard-monitor", "portal-x", "api-gateway", "dashboards", "apiary"]) {
+      expect(decideSlug(everything(slug), slug, { exists: false, owner: null, zone: ZONE })).toEqual({ kind: "allowed", creating: true });
       expect(decideSlug(everything(slug), slug, { exists: true, owner: null, zone: ZONE })).toEqual({ kind: "allowed", creating: false });
     }
-    // A name that only begins like one is free.
-    for (const slug of ["dashboards", "apiary", "portals-x"]) expect(decideSlug(everything(slug), slug, { exists: false, owner: null, zone: ZONE })).toEqual({ kind: "allowed", creating: true });
   });
 });
 
@@ -151,10 +147,9 @@ describe("scopeRefusals", () => {
     expect(scopeRefusals(app({ connectors: ["slack"] }), NONE, "shop")).toEqual([]);
   });
 
-  test("the secret file named after its slug, and no other: the unit would hand it over as root", () => {
-    expect(scopeRefusals(app({ secrets: ["shop.env"] }), NONE, "shop")).toEqual([]);
-    for (const name of ["dashboard.env", "portal.env", "shop-mail.env", "shop2.env", "cms.env"]) {
-      expect(scopeRefusals(app({ secrets: [name] }), { ...NONE, public: true, outbound: true }, "shop")[0]).toContain("secrets");
+  test("a manifest's secrets are its store's names: the scope has nothing to judge in them", () => {
+    for (const secrets of [["API_KEY", "SESSION_KEY"], { runtime: ["API_KEY"], files: ["tls.key"], build: ["NPM_TOKEN"] }]) {
+      expect(scopeRefusals(app({ secrets }), NONE, "shop")).toEqual([]);
     }
   });
 

@@ -380,15 +380,15 @@ describe("refresh and the store of secrets", () => {
     expect(accepted(on)).toEqual([]);
   });
 
-  test("a legacy secret file the project may not read refuses it before any unit is written, as deploy refuses it", async () => {
+  test("a manifest on the server that names a file under secrets is one this release refuses: nothing laid, nothing written", async () => {
     const on = machine();
     on.acceptWrites();
     lay(on, app("sample-refresh", 3061, { secrets: ["dashboard-backup.env"] }), "previous");
     const r = await refresh(on, ["sample-refresh", "--json"]);
     expect(r.code).toBe(1);
     const error = ended(r, "error");
-    expect(error.message).toBe("sample-refresh declares a secret file that is not its own, which its units would read as root: nothing was changed for it");
-    expect((error.details as string[]).join(" ")).toContain("dashboard-backup.env belongs to the machine");
+    expect(error.message).toBe("sample-refresh's manifest on the server does not read: nothing was changed for it");
+    expect((error.details as string[]).join(" ")).toContain("secrets: entry 1 is not a variable name");
     expect(accepted(on)).toEqual([]);
     expect(on.logs().filter((line) => line.startsWith("STORE-PREPARE"))).toEqual([]);
   });
@@ -406,14 +406,16 @@ describe("refresh and the store of secrets", () => {
     expect(logs.filter((line) => line.startsWith("STORE ") && !line.startsWith("STORE GET"))).toEqual([]);
   });
 
-  test("a manifest that names its variables over a unit that reads a legacy file: the unit is kept, nothing written nor restarted", async () => {
+  test("a unit in service that reads a flat file of /etc/sitesolide is no release's: kept, nothing written nor restarted", async () => {
     const on = machine();
     on.acceptWrites();
-    // The bench's case: the deposited manifest names its variables, the unit
-    // in service is the one 0.7 made from the old form, which reads the file.
-    const old = app("sample-refresh", 3061, { secrets: ["sample-refresh.env"] });
-    on.writeManifest("sample-refresh", `${JSON.stringify(app("sample-refresh", 3061, { secrets: ["EARLY_KEY"] }), null, 2)}\n`);
-    on.writeFile(UNIT_PATH, asInstalled(generated(old)[0]!.text, "previous")!);
+    // No release writes such a line any more: one in service was added by hand.
+    const manifest = app("sample-refresh", 3061, { secrets: ["EARLY_KEY"] });
+    on.writeManifest("sample-refresh", `${JSON.stringify(manifest, null, 2)}\n`);
+    const store = "EnvironmentFile=-/etc/sitesolide/projects/sample-refresh/env\n";
+    const text = generated(manifest)[0]!.text;
+    expect(text).toContain(store);
+    on.writeFile(UNIT_PATH, text.replace(store, `EnvironmentFile=-/etc/sitesolide/sample-refresh.env\n${store}`));
     const r = await refresh(on, ["sample-refresh", "--json"]);
     expect(r.code).toBe(0);
     expect(ended(r, "result")).toMatchObject({ kept: ["sample-refresh"], refreshed: [] });
