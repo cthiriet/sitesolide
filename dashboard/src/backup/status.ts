@@ -31,8 +31,8 @@
  * which may quote a repository's paths: restic.ts gives fixed sentences.
  * tests/backup-run.test.ts holds the failures to that.
  */
-import { closeSync, fchmodSync, fsyncSync, openSync, renameSync, unlinkSync, writeSync, constants } from "node:fs";
-import { join } from "node:path";
+import { closeSync, fsyncSync, openSync, constants } from "node:fs";
+import { writeAtomically } from "../secrets/system";
 
 export const STATUS_NAME = "last-run.json";
 
@@ -107,37 +107,14 @@ export function readStatus(text: string | null): RunStatus | null {
 }
 
 /**
- * A file written whole: a temporary beside it, created exclusively, synced,
- * renamed, and the folder synced so that the rename survives a power cut.
+ * A file written whole, through the steward's atomic write
+ * (src/secrets/system.ts): a temporary beside it, created exclusively, its
+ * mode set on the descriptor, which the unit's umask (0077) would otherwise
+ * close to a file meant to be read, synced, renamed, and the folder synced so
+ * that the rename survives a power cut.
  */
 export function writeFileAtomically(folder: string, name: string, content: string | Uint8Array, mode: number): void {
-  const final = join(folder, name);
-  const temporary = join(folder, `.${name}.${crypto.getRandomValues(new Uint32Array(2)).join("")}.tmp`);
-  const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
-  const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode);
-  let placed = false;
-  try {
-    try {
-      // The umask of the unit (0077) would otherwise close a file meant to be read.
-      fchmodSync(fd, mode);
-      let written = 0;
-      while (written < bytes.byteLength) written += writeSync(fd, bytes, written, bytes.byteLength - written);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    renameSync(temporary, final);
-    placed = true;
-    syncFolder(folder);
-  } finally {
-    if (!placed) {
-      try {
-        unlinkSync(temporary);
-      } catch {
-        // already gone
-      }
-    }
-  }
+  writeAtomically(folder, name, typeof content === "string" ? new TextEncoder().encode(content) : content, { owner: null, mode });
 }
 
 export function syncFolder(folder: string): void {
