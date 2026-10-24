@@ -46,6 +46,13 @@ export function identityRefusal(env: ChildEnvironment, uid: number | undefined =
   return null;
 }
 
+/** True, and the refusal reported, when this child does not run as the uid its parent expects. */
+function wrongIdentity(env: ChildEnvironment): boolean {
+  const refusal = identityRefusal(env);
+  if (refusal !== null) emit({ event: "error", message: refusal });
+  return refusal !== null;
+}
+
 /** Standard output as a sink, waiting for the reader: memory stays bounded whatever the archive's size. */
 function stdoutSink(): Sink {
   const writer = Bun.stdout.writer({ highWaterMark: 1024 * 1024 });
@@ -103,11 +110,7 @@ export function liveArgument(live: LiveFolder): string {
  * archive's description, which the parent reads back.
  */
 export async function copyMain(args: string[], env: ChildEnvironment): Promise<number> {
-  const refusal = identityRefusal(env);
-  if (refusal !== null) {
-    emit({ event: "error", message: refusal });
-    return 2;
-  }
+  if (wrongIdentity(env)) return 2;
   const [dataDir, stagingDir, folder, takenAt, room, ...options] = args;
   const live = options.filter((option) => option.startsWith("live:")).map(readLiveArgument);
   const raw = options.includes("raw");
@@ -155,11 +158,7 @@ export async function copyMain(args: string[], env: ChildEnvironment): Promise<n
 
 /** `measure <data>`: the weight of a data folder, as its project, for a restore to count its room. */
 export function measureMain(args: string[], env: ChildEnvironment): number {
-  const refusal = identityRefusal(env);
-  if (refusal !== null) {
-    emit({ event: "error", message: refusal });
-    return 2;
-  }
+  if (wrongIdentity(env)) return 2;
   const [dataDir] = args;
   if (dataDir === undefined || args.length !== 1) {
     emit({ event: "error", message: "usage: backup.js measure <data folder>" });
@@ -270,11 +269,7 @@ async function downloadLegacy(folder: string, name: string, setting: Exclude<Ret
 }
 
 export async function extractMain(args: string[], env: ChildEnvironment): Promise<number> {
-  const refusal = identityRefusal(env);
-  if (refusal !== null) {
-    emit({ event: "error", message: refusal });
-    return 2;
-  }
+  if (wrongIdentity(env)) return 2;
   const [destination, maxBytes, folder, takenAt] = args;
   if (destination === undefined || !isCount(maxBytes) || !isBackupFolder(folder) || !isCount(takenAt) || args.length !== 4) {
     emit({ event: "error", message: "usage: backup.js extract <destination folder> <maximum bytes> <folder> <taken at>" });
@@ -390,11 +385,7 @@ export async function hookMain(args: string[], env: ChildEnvironment): Promise<n
     emit({ event: "error", message: "usage: backup.js hook <expected uid | -> <backup folder> <time, ms> <program> [<argument>...]" });
     return 2;
   }
-  const refusal = expected === "-" ? null : identityRefusal({ BACKUP_EXPECTED_UID: expected });
-  if (refusal !== null) {
-    emit({ event: "error", message: refusal });
-    return 2;
-  }
+  if (expected !== "-" && wrongIdentity({ BACKUP_EXPECTED_UID: expected })) return 2;
   process.umask(0o077);
   // What a previous run left, a run cut short for one, goes first: the
   // command must find its folder empty, and the archive hold only its copy.
@@ -466,11 +457,7 @@ export async function hookMain(args: string[], env: ChildEnvironment): Promise<n
  * parent, the staging folder, is the root of that repair.
  */
 export function discardMain(args: string[], env: ChildEnvironment): number {
-  const refusal = identityRefusal(env);
-  if (refusal !== null) {
-    emit({ event: "error", message: refusal });
-    return 2;
-  }
+  if (wrongIdentity(env)) return 2;
   const [folder] = args;
   if (folder === undefined || !folder.startsWith("/") || args.length !== 1) {
     emit({ event: "error", message: "usage: backup.js discard <folder>" });

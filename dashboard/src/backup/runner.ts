@@ -320,6 +320,16 @@ export async function boundedText(stream: ReadableStream<Uint8Array>): Promise<s
   return new TextDecoder().decode(kept.byteLength > MAX_REPORT_BYTES ? kept.subarray(kept.byteLength - MAX_REPORT_BYTES) : kept);
 }
 
+/** SIGKILL to a child's unit, by name, under systemd; nothing with no isolation. */
+function killUnit(job: Job, config: BackupConfig, suffix: string): void {
+  if (config.isolation !== "systemd") return;
+  try {
+    Bun.spawn([config.systemctl, "kill", "--signal=SIGKILL", unitName(job, suffix)], { stdin: "ignore", stdout: "ignore", stderr: "ignore", timeout: 10_000 });
+  } catch {
+    // RuntimeMaxSec will do it
+  }
+}
+
 /**
  * A child that another program starts: restic runs the copy's command line
  * itself (`--stdin-from-command`, snapshot.ts). The command, and how to stop
@@ -327,17 +337,7 @@ export async function boundedText(stream: ReadableStream<Uint8Array>): Promise<s
  */
 export function preparedChild(job: Job, config: BackupConfig): { command: string[]; stop: () => void } {
   const suffix = hex(4);
-  return {
-    command: childCommand(job, config, suffix),
-    stop: () => {
-      if (config.isolation !== "systemd") return;
-      try {
-        Bun.spawn([config.systemctl, "kill", "--signal=SIGKILL", unitName(job, suffix)], { stdin: "ignore", stdout: "ignore", stderr: "ignore", timeout: 10_000 });
-      } catch {
-        // RuntimeMaxSec will do it
-      }
-    },
-  };
+  return { command: childCommand(job, config, suffix), stop: () => killUnit(job, config, suffix) };
 }
 
 export function startChild(job: Job, config: BackupConfig): Child {
@@ -366,13 +366,7 @@ export function startChild(job: Job, config: BackupConfig): Child {
     return { code, report: readReport(text) };
   })();
   const stop = () => {
-    if (config.isolation === "systemd") {
-      try {
-        Bun.spawn([config.systemctl, "kill", "--signal=SIGKILL", unitName(job, suffix)], { stdin: "ignore", stdout: "ignore", stderr: "ignore", timeout: 10_000 });
-      } catch {
-        // RuntimeMaxSec will do it
-      }
-    }
+    killUnit(job, config, suffix);
     process.kill("SIGKILL");
   };
   return { stdout, result, stop };
