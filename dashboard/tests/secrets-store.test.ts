@@ -145,7 +145,7 @@ describe("names and values (rules 3 and 4)", () => {
   });
 });
 
-describe("sizes and files (rules 8 and 9)", () => {
+describe("sizes and files (rules 5 and 6)", () => {
   const encoder = new TextEncoder();
 
   test("the env: 256 KiB at most, and every line within what systemd starts with", () => {
@@ -189,7 +189,7 @@ describe("sizes and files (rules 8 and 9)", () => {
   });
 });
 
-describe("generate (spec §6.6)", () => {
+describe("generate", () => {
   const counting = () => (n: number) => Uint8Array.from({ length: n }, (_, i) => (i * 37 + 11) % 256);
 
   test("hex by default, 32 bytes; base64url without padding; 16 to 64 bytes", () => {
@@ -219,7 +219,7 @@ describe("generate (spec §6.6)", () => {
   });
 });
 
-describe("the listing (spec §6.11)", () => {
+describe("the listing", () => {
   const manifest = (secrets: unknown, extra: Record<string, unknown> = {}): Manifest =>
     readManifest(JSON.stringify({ slug: "shop", ...APP, env: { NODE_ENV: "production", PUBLIC_URL: "https://shop.example.test" }, secrets, ...extra })).manifest!;
   const T = 1_800_000_000_000;
@@ -311,7 +311,7 @@ describe("the listing (spec §6.11)", () => {
     expect(storeView(input({ store: kept, may: storeMay({ kind: "token", restore: false }), owner: false })).previous).toBe(false);
   });
 
-  test("what may be done, by requester (spec §6.3)", () => {
+  test("what may be done, by requester", () => {
     expect(storeMay({ kind: "owner", restore: true })).toEqual({ write: true, reveal: true, restore: true });
     expect(storeMay({ kind: "ssh", restore: true })).toEqual({ write: true, reveal: false, restore: true });
     expect(storeMay({ kind: "person", restore: true })).toEqual({ write: true, reveal: false, restore: true });

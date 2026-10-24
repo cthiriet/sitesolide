@@ -506,7 +506,7 @@ describe("an Admin's project", () => {
   });
 });
 
-describe("a project's store, by role (spec §6.3)", () => {
+describe("a project's store, by role", () => {
   const STORE_VALUE = "a-store-value-no-person-reads-3c1f";
   const b64 = (text: string) => new TextEncoder().encode(text).toBase64();
   const storeEnv = (bench: Bench, slug: string) => readFileSync(join(bench.root, "secrets", "projects", slug, "env"), "utf8");

@@ -4,9 +4,9 @@
  * belongs to `routes.ts`, which is judged that way without a socket, with a
  * simulated steward.
  *
- * See `protocol.ts` for the shapes, and PLAN-SECRETS.md for the reason for a
- * Unix socket rather than a port: it is guarded by the permissions of its
- * file, without a second exception to the loopback rule.
+ * See `protocol.ts` for the shapes. A Unix socket rather than a port: it is
+ * guarded by the permissions of its file, without a second exception to the
+ * loopback rule.
  */
 import type {
   WithToken,

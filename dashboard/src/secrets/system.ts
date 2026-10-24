@@ -153,8 +153,7 @@ export type System = {
    * pruned.
    */
   prepareAccessLog: (now: number) => Promise<void>;
-  /** Does the access log hold as many rows younger than its retention as it keeps? Pruned first when due. */
-  /** Does the access log, pruned, hold `share` of the rows and bytes it keeps, 1 for all of them, `reserve` rows more counted? */
+  /** Does the access log, pruned first when due, hold `share` of the rows and bytes it keeps, 1 for all of them, `reserve` rows more counted? */
   accessLogFull: (now: number, share?: number, reserve?: number) => Promise<boolean>;
   readRateLimit: () => Promise<RateLimitRead>;
   writeRateLimit: (text: string) => Promise<void>;
@@ -208,7 +207,7 @@ export type System = {
   examineStoreFile: (slug: string, name: string) => Promise<FileInfo | null>;
   /** Written through a dot-named temporary in files/, renamed: LoadCredential= skips dot files (bench Q1). */
   writeStoreFile: (slug: string, name: string, bytes: Uint8Array) => Promise<void>;
-  /** Unlinks that file alone; never the folder (I3'). */
+  /** Unlinks that file alone; never the folder, which every start of the project needs. */
   removeStoreFile: (slug: string, name: string) => Promise<void>;
   readStorePrevious: (slug: string, part: StorePreviousPart) => Promise<Examination>;
   /**
@@ -611,10 +610,9 @@ export function readGroup(text: string, name: string): number | null {
 }
 
 /**
- * The path of a folder of the store, after checking it and every store folder
- * above it is a real folder or missing, never a link nor a file: the second
- * lock, which holds even if the steward's own judgement gave way. Throws
- * otherwise.
+ * Checks that the folders of a store, from its root down, are real folders
+ * or missing, never a link nor a file: the second lock, which holds even if
+ * the steward's own judgement gave way. Throws otherwise.
  */
 function realFolders(paths: readonly string[]): void {
   for (const path of paths) {
@@ -978,7 +976,6 @@ export function createSystem(config: SystemConfig): System {
       const count = accessCount ?? { lines: 0, bytes: 0 };
       return isAccessLogFull({ lines: count.lines + reserve, bytes: count.bytes }, Math.floor(ACCESS_MAX_LINES * share), Math.floor(ACCESS_PRUNE_BYTES * share));
     },
-
 
     async readRateLimit() {
       try {

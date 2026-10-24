@@ -15,7 +15,9 @@
  * owner's `/store/value`, which never comes through this module.
  *
  * A refusal is a value, never an exception, as in scope.ts. A refusal quotes
- * a name only when it has a variable name's shape, and never a value.
+ * a name only when it has a variable name's shape, and never a value. The
+ * rules are numbered as dashboard/README.md, "A project's store", numbers
+ * them.
  */
 import { MACHINE_FOLDER } from "../../borrowed/backups";
 import { isSystemName, isValidFileName, isValidSlug, secretsOf, STORELESS_SLUGS, type Manifest } from "../../borrowed/manifest";
@@ -151,7 +153,7 @@ export function storeValueRefusal(name: string, value: unknown): Refusal | null 
 // --- Sizes -------------------------------------------------------------------
 
 /**
- * Rule 9: the env file after a write, 256 KiB at most, every line under what
+ * Rule 6: the env file after a write, 256 KiB at most, every line under what
  * systemd starts with (bench Q7: a line of 131,072 bytes fails with 203/EXEC).
  * The 8 KiB a value holds keeps every line far below: a second lock.
  */
@@ -169,7 +171,7 @@ export function envBytesRefusal(bytes: Uint8Array): Refusal | null {
 
 // --- Files -------------------------------------------------------------------
 
-/** Rule 8: a file name the store writes, never quoted when it is not one. */
+/** Rule 5: a file name the store writes, never quoted when it is not one. */
 export function fileNameRefusal(name: unknown): Refusal | null {
   return isValidFileName(name) ? null : invalid(`name: not a file name the store takes: ${FILE_NAME_RULE}`);
 }
@@ -199,7 +201,7 @@ export function decodeFileContent(content: unknown): { bytes: Uint8Array } | { r
 }
 
 /**
- * Rule 8, after the write: 32 files and 512 KiB of content at most, then, as
+ * Rule 5, after the write: 32 files and 512 KiB of content at most, then, as
  * a second lock, systemd's own budget for a unit's credentials, past which
  * every start of the project fails with 243 (bench Q7). `after` is every
  * regular file systemd would load, written or present. The refusal says no
@@ -288,8 +290,8 @@ export type StoreViewInput = {
 const SHOWN_FILE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,248}$/;
 
 /**
- * The store as the requester may see it (spec §6.11): names, sources,
- * states, and what may be done. Never a store value; the public `env` of the
+ * The store as the requester may see it: names, sources, states, and what
+ * may be done. Never a store value; the public `env` of the
  * manifest is in git already.
  */
 export function storeView(input: StoreViewInput): StoreView {

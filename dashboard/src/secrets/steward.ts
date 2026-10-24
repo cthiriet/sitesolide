@@ -1350,8 +1350,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
 
   /**
    * Swaps the file and its previous version: restoring twice comes back to the
-   * starting point. Never automatic, see PLAN-SECRETS.md: the previous version
-   * may be the key that leaked.
+   * starting point. Never automatic: the previous version may be the key that
+   * leaked.
    *
    * Never for a file that carries a password, in its current version or in the
    * previous one: after a Change password following a leak, a stolen unlock
@@ -1812,7 +1812,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   // project, and its files, loaded whole by `LoadCredential=`. Root's alone:
   // no `site-<slug>` account is needed to hold one, so a slug not yet
   // deployed can have one. The decisions are store.ts's; here, the order of
-  // the checks (spec §6.4), the reads and the writes.
+  // the checks, the rules numbered as dashboard/README.md, "A project's
+  // store", numbers them, the reads and the writes.
   //
   // **No answer of this section carries a value** but `/store/value`, the
   // owner's, unlocked. A set is always written and journaled under its name:
@@ -1849,7 +1850,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     who: Who;
     /** The owner in the dashboard, root over its socket, a person, a token. */
     kind: "owner" | "ssh" | "person" | "token";
-    /** A token the control routes let create this slug (spec §6.5). */
+    /** A token the control routes let create this slug: its store may be written ahead of its first deployment. */
     creating: boolean;
     /** May put a previous version back: the owner, an Admin. */
     restores: boolean;
@@ -1868,7 +1869,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     manifest: Manifest | null;
   };
 
-  /** Rule 1 (spec §6.4): the slug, for this requester, or the refusal. */
+  /** Rule 1: the slug, for this requester, or the refusal. */
   async function storeProject(slug: unknown, actor: StoreActor): Promise<StoreProject | Refusal> {
     const all = await sites();
     const site = typeof slug === "string" && isSiteFolder(slug) ? (all.get(slug) ?? null) : null;
@@ -2068,7 +2069,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return { exists: reading.exists, refusal: reading.refusal, env, files, previous: reading.previous };
   }
 
-  /** The store as `actor` may see it (spec §6.11). */
+  /** The store as `actor` may see it. */
   async function buildStoreView(project: StoreProject, actor: StoreActor): Promise<StoreView> {
     const units = await installedUnits(project);
     const reading = await readStore(project.slug);
@@ -2125,9 +2126,10 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   const noChange = (): ChangeAnswer => ({ created: false, set: [], generated: [], removed: [], absent: [], files: { set: [], removed: [] } });
 
   /**
-   * Set and remove variables of a store, all or nothing (rules 1 to 9): the
-   * slug, the store's state, every name and value, S1 for every removal and
-   * the size of the result judged before the store is created or written.
+   * Set and remove variables of a store, all or nothing (rules 1 to 6): the
+   * slug, the store's state, every name and value, the shape of every name
+   * removed and the size of the result judged before the store is created or
+   * written.
    * One write, one previous version, one journal line per name.
    */
   async function storeChangeTask(slug: unknown, setting: readonly (readonly [unknown, unknown])[], removing: readonly unknown[], actor: StoreActor): Promise<Response> {
@@ -2184,7 +2186,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /**
-   * A value drawn on the machine into the store (spec §6.6). The answer
+   * A value drawn on the machine into the store. The answer
    * names it, never the value, which no journal line nor log carries either:
    * only the owner may read it back, in the dashboard.
    */
@@ -2217,7 +2219,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /**
-   * A file of the store set whole (rule 8): a valid name, its content base64
+   * A file of the store set whole (rule 5): a valid name, its content base64
    * decoded strictly, 64 KiB at most, and every file of the folder after it
    * within what systemd loads for a unit. A file declared or not: every unit
    * loads the whole folder. Written through a dot-named temporary, which
@@ -2266,7 +2268,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return { bytes: examined.bytes! };
   }
 
-  /** A file of the store removed, its last version kept for the owner; the folder never (I3'). */
+  /** A file of the store removed, its last version kept for the owner; the folder never (rule 7). */
   async function storeFileRemoveTask(body: Body, actor: StoreActor): Promise<Response> {
     const project = await storeProject(body.slug, actor);
     if (!("slug" in project)) return storeRefuse("remove", body.slug, project, actor);
@@ -2291,10 +2293,10 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /**
-   * The store's env swapped with its previous version (spec §6.10): twice
-   * comes back to the start. `dryRun` says which names would appear and
-   * disappear, for the confirmation. Refused when either version does not
-   * parse or carries a password hash, or by S1'.
+   * The store's env swapped with its previous version: twice comes back to
+   * the start. `dryRun` says which names would appear and disappear, for the
+   * confirmation. Refused when either version does not parse or carries a
+   * password hash, or when the previous one is past the size of rule 6.
    */
   async function storeRestoreTask(body: Body, actor: StoreActor): Promise<Response> {
     const project = await storeProject(body.slug, actor);
@@ -2331,7 +2333,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /**
-   * A store value read back (spec §6.7): the owner's, in the dashboard, under
+   * A store value read back: the owner's, in the dashboard, under
    * the live unlock alone. Journaled `read` with its name.
    */
   async function storeRevealTask(body: Body): Promise<Response> {

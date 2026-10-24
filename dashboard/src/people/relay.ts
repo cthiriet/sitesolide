@@ -202,7 +202,7 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
     };
   }
 
-  /** A route of the member's session alone, no unlock: sharing, guests, a role taken away. */
+  /** A route of the member's session alone, no unlock: a token of theirs revoked. */
   async function withSession(open: Open, method: "POST" | "PUT" | "DELETE", path: string, body: object): Promise<Response> {
     const received = await reach(() => steward.act(method, path, { ...body, session: open.token }), null, [open.token]);
     return answer(open, received);

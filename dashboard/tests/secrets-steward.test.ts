@@ -3576,7 +3576,7 @@ describe("a project's store: the owner's routes on the dashboard's socket", () =
       expect(removed.status).toBe(200);
       expect(((await removed.json()) as StoreChangeResponse).files.removed).toEqual([name]);
     }
-    // The last file gone, files/ stays, empty: every start of the project needs it (I3').
+    // The last file gone, files/ stays, empty: every start of the project needs it (rule 7).
     expect(readdirSync(store.files)).toEqual([]);
     expect(existsSync(store.folder)).toBe(true);
     expect(log(bench).at(-1)).toMatchObject({ operation: "remove", result: "ok", file: "store/extra.pem" });
