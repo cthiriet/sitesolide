@@ -16,7 +16,9 @@
  *
  * A token drawn at random and kept in the session row would add nothing that
  * these two checks do not cover: it is exactly the protection the portal gives
- * the apps behind it, which write far more.
+ * the apps behind it, which write far more. The question comes up again the
+ * day a button from here would touch Caddy or a service, and the general
+ * access, a restart and a restore now do, through the steward.
  */
 
 const encoder = new TextEncoder();
