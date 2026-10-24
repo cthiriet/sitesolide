@@ -358,11 +358,3 @@ export function allocatePorts(object: Record<string, unknown>, taken: ReadonlySe
   }
   return { object, allocated };
 }
-
-/** True when the manifest leaves a port for the machine to choose. */
-export function leavesPorts(object: Record<string, unknown>): boolean {
-  if (typeof object.services === "object" && object.services !== null && !Array.isArray(object.services)) {
-    return Object.values(object.services as Record<string, unknown>).some((service) => wantsPort(service));
-  }
-  return typeof object.start === "string" && object.start.length > 0 && !("port" in object);
-}

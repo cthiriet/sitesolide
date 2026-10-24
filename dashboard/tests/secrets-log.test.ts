@@ -12,8 +12,8 @@ import {
   lineDate,
   type AccessWindow,
   isAccessLogFull,
+  isRecentLine,
   mergeLogs,
-  pruneAccessLog,
   EARLIER_FIELDS,
   EARLIER_OPERATIONS,
   EARLIER_RESULTS,
@@ -312,21 +312,15 @@ describe("the access log", () => {
     for (const operation of ACCESS_OPERATIONS) expect(OPERATIONS).toContain(operation);
   });
 
-  test("pruned by age: older than 180 days goes, the very day of the bound stays; nothing dropped, nothing rewritten", () => {
-    const lines = [access(NOW - ACCESS_RETENTION_MS - 1, { detail: "old" }), access(NOW - ACCESS_RETENTION_MS, { detail: "bound" }), access(NOW - DAY, { detail: "recent" })];
-    const pruned = pruneAccessLog(text(lines), NOW);
-    expect(pruned).not.toBeNull();
-    expect(reread(pruned!).map((one) => one.detail)).toEqual(["bound", "recent"]);
-    expect(pruned!.endsWith("\n")).toBe(true);
-    expect(pruneAccessLog(pruned!, NOW)).toBeNull();
-    expect(pruneAccessLog("", NOW)).toBeNull();
-    // Everything too old: an empty file, not a refusal to prune.
-    expect(pruneAccessLog(text([access(NOW - 200 * DAY)]), NOW)).toBe("");
+  test("pruned by age: older than 180 days goes, the very day of the bound stays", () => {
+    const cutoff = NOW - ACCESS_RETENTION_MS;
+    expect(isRecentLine(encodeEntry(access(cutoff - 1)), cutoff)).toBe(false);
+    expect(isRecentLine(encodeEntry(access(cutoff)), cutoff)).toBe(true);
+    expect(isRecentLine(encodeEntry(access(NOW - DAY)), cutoff)).toBe(true);
+    expect(isRecentLine(encodeEntry(access(NOW - 200 * DAY)), cutoff)).toBe(false);
   });
 
-  test("never pushed out young: however many rows younger than 180 days, every one stays; the steward refuses changes instead", () => {
-    const lines = Array.from({ length: 30_000 }, (_, i) => access(NOW - DAY, { detail: `line ${i}` }));
-    expect(pruneAccessLog(text(lines), NOW)).toBeNull();
+  test("never pushed out young: however many rows younger than 180 days, the steward refuses changes instead", () => {
     expect(ACCESS_MAX_LINES).toBe(20_000);
     expect(ACCESS_RETENTION_MS).toBe(180 * DAY);
     // Full by its lines, or by its bytes, the longer rows' bound.
@@ -352,9 +346,9 @@ describe("the access log", () => {
   });
 
   test("a line that carries no date is dropped: no reader could read it either", () => {
-    const kept = access(NOW - DAY);
-    const pruned = pruneAccessLog(`${encodeEntry(kept)}{"a":"soon"}\n{torn\n[]\n`, NOW);
-    expect(pruned).toBe(encodeEntry(kept));
+    const cutoff = NOW - ACCESS_RETENTION_MS;
+    expect(isRecentLine(encodeEntry(access(NOW - DAY)).trimEnd(), cutoff)).toBe(true);
+    for (const line of ['{"a":"soon"}', "{torn", "[]"]) expect(isRecentLine(line, cutoff)).toBe(false);
   });
 
   test("seeded from the journal with its accepted changes of access alone, a line from before the actor was named included", () => {

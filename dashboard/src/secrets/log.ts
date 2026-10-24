@@ -441,26 +441,12 @@ export function lineDate(line: string): number | null {
 /**
  * Is this line of the access log one to keep: dated, and not before
  * `cutoff`? A line that carries no date goes: no reader could read it either.
+ * The steward prunes the file by this rule, line by line, the older lines
+ * alone dropped however many younger ones there are (src/secrets/system.ts).
  */
 export function isRecentLine(line: string, cutoff: number): boolean {
   const a = lineDate(line);
   return a !== null && a >= cutoff;
-}
-
-/**
- * The access log pruned: the lines older than the retention dropped, and
- * those alone, however many younger ones there are. Null when nothing is
- * dropped, so that the file is rewritten only when it changes. The steward
- * prunes the file itself line by line, never whole (src/secrets/system.ts),
- * with the same rule.
- */
-export function pruneAccessLog(text: string, now: number, retentionMs: number = ACCESS_RETENTION_MS): string | null {
-  const lines = text.split("\n");
-  if (lines[lines.length - 1] === "") lines.pop();
-  const cutoff = now - retentionMs;
-  const recent = lines.filter((line) => isRecentLine(line, cutoff));
-  if (recent.length === lines.length) return null;
-  return recent.length === 0 ? "" : `${recent.join("\n")}\n`;
 }
 
 /** The lines and bytes of an access log already pruned: is there room for one more change? */

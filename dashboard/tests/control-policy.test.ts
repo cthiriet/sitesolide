@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Manifest } from "../borrowed/manifest";
-import { allocatePorts, decideDoor, decideManifest, decideSlug, leavesPorts, leftoversReason, memoryBytes, reservedReason, scopeRefusals, takenPorts } from "../src/control/policy";
+import { allocatePorts, decideDoor, decideManifest, decideSlug, leftoversReason, memoryBytes, reservedReason, scopeRefusals, takenPorts } from "../src/control/policy";
 import type { Identity, Scope } from "../src/control/protocol";
 
 const ZONE = "test-zone.invalid";
@@ -260,16 +260,12 @@ describe("ports", () => {
     // Nothing to choose at all: returned as it is.
     const background = { slug: "new", services: { jobs, sync } };
     expect(allocatePorts(background, new Set(), null)).toEqual({ object: background, allocated: [] });
-    expect(leavesPorts(background)).toBe(false);
-    expect(leavesPorts(object)).toBe(true);
   });
 
   test("a manifest that names its ports, or a static site, is returned as it is", () => {
     const named = { slug: "new", start: "x", port: 3050 };
     expect(allocatePorts(named, new Set(), null)).toEqual({ object: named, allocated: [] });
     expect(allocatePorts({ slug: "new", publicDir: "p" }, new Set(), null)).toEqual({ object: { slug: "new", publicDir: "p" }, allocated: [] });
-    expect(leavesPorts(named)).toBe(false);
-    expect(leavesPorts({ slug: "new", start: "x" })).toBe(true);
   });
 
   test("a full range is refused, with the range named", () => {

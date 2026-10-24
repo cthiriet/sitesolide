@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { MESSAGE_MAX, judgeGatekeeperResult, gatekeeperUnitOf } from "../src/secrets/portal";
+import { gatekeeperUnit } from "../src/gatekeeper/instance";
+import { MESSAGE_MAX, judgeGatekeeperResult } from "../src/secrets/portal";
 import type { FileInfo } from "../src/secrets/scope";
 import type { Examination } from "../src/secrets/system";
 
@@ -28,14 +29,14 @@ const result = (others: Record<string, unknown> = {}) => ({
 
 describe("the gatekeeper's unit", () => {
   test("the action in the template's name, the slug alone as the instance", () => {
-    expect(gatekeeperUnitOf("on", "cms")).toBe("sitesolide-gatekeeper-on@cms.service");
-    expect(gatekeeperUnitOf("off", "cms-tool")).toBe("sitesolide-gatekeeper-off@cms-tool.service");
-    expect(gatekeeperUnitOf("code", "cms")).toBe("sitesolide-gatekeeper-code@cms.service");
-    expect(gatekeeperUnitOf("renew", "cms")).toBe("sitesolide-gatekeeper-renew@cms.service");
+    expect(gatekeeperUnit("cms", "on")).toBe("sitesolide-gatekeeper-on@cms.service");
+    expect(gatekeeperUnit("cms-tool", "off")).toBe("sitesolide-gatekeeper-off@cms-tool.service");
+    expect(gatekeeperUnit("cms", "code")).toBe("sitesolide-gatekeeper-code@cms.service");
+    expect(gatekeeperUnit("cms", "renew")).toBe("sitesolide-gatekeeper-renew@cms.service");
   });
 
   test("a name that is not a slug never enters a unit name", () => {
-    for (const slug of ["test-zone.invalid", "../cms", "cms;reboot", "Cms", "", "cms.service"]) expect(gatekeeperUnitOf("on", slug)).toBeNull();
+    for (const slug of ["test-zone.invalid", "../cms", "cms;reboot", "Cms", "", "cms.service"]) expect(gatekeeperUnit(slug, "on")).toBeNull();
   });
 });
 

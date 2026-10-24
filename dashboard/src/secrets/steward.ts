@@ -41,7 +41,7 @@ import { addressOf, codeAddress, unitOf } from "../state";
 import { reservedReason } from "../control/policy";
 import { generatePassword } from "../password";
 import { portalModifiable, generalChoices, DASHBOARD_SLUG, type Choices } from "../gatekeeper/rules";
-import { actionFor, type GeneralAccess } from "../gatekeeper/instance";
+import { actionFor, gatekeeperUnit, type GeneralAccess } from "../gatekeeper/instance";
 import { installedCode, isValidCode, readCodes as readLockCodes, stanzaClosesEveryAddress } from "../../borrowed/locks";
 import type { RandomSource } from "../sessions";
 import {
@@ -117,7 +117,6 @@ import {
   TRANSACTION_IN_PROGRESS_REASON,
   INTERRUPTED_TRANSACTION_REASON,
   backupElsewhereReason,
-  gatekeeperUnitOf,
 } from "./portal";
 import type {
   ErrorCode,
@@ -1585,7 +1584,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       return refuse(operation, body, { error: "invalid", message: `${site.folder} does not open with a code: choose Anyone with the code first` }, null, who);
     }
     const reason = current.choices[target];
-    const unit = gatekeeperUnitOf(action, site.folder);
+    const unit = gatekeeperUnit(site.folder, action);
     if (reason !== null || unit === null) {
       return refuse(operation, body, { error: "out-of-scope", message: reason ?? "the general access of this site cannot be changed" }, null, who);
     }
