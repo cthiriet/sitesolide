@@ -79,6 +79,7 @@ import {
   ProviderError,
   tagsFor,
   TRANSIENT,
+  undoMade,
   type Choice,
   type CreateOutcome,
   type CreateRequest,
@@ -850,19 +851,8 @@ export function digitalocean(context: ProviderContext): Provider {
    */
   async function undo(made: { kind: string; name: string; path: string }[], report: Report): Promise<string[]> {
     if (made.length === 0) return ["nothing had been created yet"];
-    report("-> undo what this run created");
-    const said: string[] = [];
     // The firewall first: it was created last, and names the tag.
-    for (const resource of [...made].reverse()) {
-      try {
-        await call("DELETE", resource.path, `delete the ${resource.kind} ${resource.name}`);
-        said.push(`deleted the ${resource.kind} ${resource.name} this run had created`);
-      } catch {
-        said.push(`left the ${resource.kind} ${resource.name}: the next run finds it and reuses it`);
-      }
-      report(`   ${said.at(-1)}`);
-    }
-    return said;
+    return undoMade(made, (resource) => call("DELETE", resource.path, `delete the ${resource.kind} ${resource.name}`), report);
   }
 
   /**
