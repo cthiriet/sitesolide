@@ -6,8 +6,8 @@
  * This file does nothing but wire things up: configuration, cleanup, socket,
  * stop. The routes are in src/secrets/steward.ts, the rules in the pure
  * modules of src/secrets/, the inputs and outputs in src/secrets/system.ts,
- * the socket in src/secrets/socket.ts. See PLAN-SECRETS.md, and
- * the bench results for what has been measured.
+ * the socket in src/secrets/socket.ts. dashboard/README.md, "The steward
+ * decides, the dashboard relays", says why it is built so.
  *
  * Unlike the collector, it does NOT travel with the dashboard's code: a root
  * daemon that writes secrets is not updated by an ordinary `sitesolide deploy`.
@@ -28,8 +28,7 @@
  *   curl --unix-socket $E/run/steward.sock http://steward/projects
  *
  * The files it manages follow from the deployed manifests and from the names
- * present in the secrets directory: see src/secrets/scope.ts. Nothing is
- * embedded at build time any more.
+ * present in the secrets directory: see src/secrets/scope.ts.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { GATEKEEPER_FOLDER } from "./src/secrets/portal";
