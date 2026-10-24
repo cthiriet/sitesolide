@@ -228,17 +228,17 @@ describe("the general access that deploy applies", () => {
 describe("the guard of the domain", () => {
   test("same general access on both sides, site open or with a code: the gesture goes through", () => {
     for (const access of ["public", "code"] as const) {
-      expect(guardDepositedManifest("vineyard", G[access], present(access), "domain")).toEqual({ kind: "agreed" });
+      expect(guardDepositedManifest("vineyard", G[access], present(access))).toEqual({ kind: "agreed" });
     }
   });
 
   test("a site absent from the machine has nothing to lose", () => {
-    expect(guardDepositedManifest("fresh", G.public, { kind: "absent" }, "domain")).toEqual({ kind: "agreed" });
+    expect(guardDepositedManifest("fresh", G.public, { kind: "absent" })).toEqual({ kind: "agreed" });
   });
 
   test("changed from the dashboard, the deposit would undo it: refusal that points to deploy", () => {
     for (const [local, machine] of [["restricted", "public"], ["public", "code"], ["code", "public"]] as const) {
-      const agreement = guardDepositedManifest("vineyard", G[local], present(machine), "domain");
+      const agreement = guardDepositedManifest("vineyard", G[local], present(machine));
       expect(agreement.kind).toBe("rejects");
       if (agreement.kind !== "rejects") return;
       expect(agreement.message).toBe(
@@ -249,15 +249,15 @@ describe("the guard of the domain", () => {
   });
 
   test("a site behind the portal switches its domain like any other, once the repository agrees", () => {
-    expect(guardDepositedManifest("vineyard", G.restricted, present("restricted"), "domain")).toEqual({ kind: "agreed" });
-    const behind = guardDepositedManifest("vineyard", G.public, present("restricted"), "domain");
+    expect(guardDepositedManifest("vineyard", G.restricted, present("restricted"))).toEqual({ kind: "agreed" });
+    const behind = guardDepositedManifest("vineyard", G.public, present("restricted"));
     expect(behind.kind).toBe("rejects");
     if (behind.kind !== "rejects") return;
     expect(behind.message).toBe("general access of vineyard changed from the dashboard: run `sitesolide deploy` in its folder first");
   });
 
   test("an unreadable reading authorises nothing", () => {
-    const agreement = guardDepositedManifest("vineyard", G.public, { kind: "unreadable", reason: "not valid JSON" }, "domain");
+    const agreement = guardDepositedManifest("vineyard", G.public, { kind: "unreadable", reason: "not valid JSON" });
     expect(agreement.kind).toBe("rejects");
     if (agreement.kind !== "rejects") return;
     expect(agreement.message).toContain("cannot tell whether the general access of vineyard");

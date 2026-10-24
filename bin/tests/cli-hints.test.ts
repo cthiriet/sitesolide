@@ -73,8 +73,8 @@ describe("the hints", () => {
     for (const decision of [
       decidePortal("shop", { portal: false, lock: false }, unreadable),
       confirmDoorUnderLock("shop", { portal: true, lock: false }, { kind: "present", portal: false, lock: false }),
-      guardDepositedManifest("shop", { portal: false, lock: false }, { kind: "present", portal: true, lock: false }, "domain"),
-      guardDepositedManifest("shop", { portal: true, lock: false }, { kind: "present", portal: false, lock: false }, "domain"),
+      guardDepositedManifest("shop", { portal: false, lock: false }, { kind: "present", portal: true, lock: false }),
+      guardDepositedManifest("shop", { portal: true, lock: false }, { kind: "present", portal: false, lock: false }),
     ]) {
       if (decision.kind === "rejects") messages.push(decision.message);
     }

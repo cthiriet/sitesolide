@@ -185,6 +185,14 @@ export type DepositedRead =
   | { kind: "present"; portal: boolean; lock: boolean }
   | { kind: "unreadable"; reason: string };
 
+/** What the manifests read say of one site's general access. */
+function doorIn(manifests: ReadonlyMap<string, string>, slug: string): DepositedRead {
+  const raw = manifests.get(slug);
+  if (raw === undefined) return { kind: "absent" };
+  const general = portalFromManifest(raw, slug);
+  return general.kind === "read" ? { kind: "present", portal: general.portal, lock: general.lock } : general;
+}
+
 /** The reading of a single site's manifest, for `deploy`. */
 export function readDepositedManifest(output: string, slug: string): DepositedRead {
   const reading = readDepositedManifests(output);
@@ -192,10 +200,7 @@ export function readDepositedManifest(output: string, slug: string): DepositedRe
   if ([...reading.manifests.keys()].some((name) => name !== slug)) {
     return unreadable("the server answered for another site");
   }
-  const raw = reading.manifests.get(slug);
-  if (raw === undefined) return { kind: "absent" };
-  const general = portalFromManifest(raw, slug);
-  return general.kind === "read" ? { kind: "present", portal: general.portal, lock: general.lock } : general;
+  return doorIn(reading.manifests, slug);
 }
 
 /**
@@ -206,16 +211,21 @@ export function readDepositedManifest(output: string, slug: string): DepositedRe
  */
 export function readManifestAmongAll(output: string, slug: string): DepositedRead {
   const reading = readDepositedManifests(output);
-  if (reading.kind === "unreadable") return reading;
-  const raw = reading.manifests.get(slug);
-  if (raw === undefined) return { kind: "absent" };
-  const general = portalFromManifest(raw, slug);
-  return general.kind === "read" ? { kind: "present", portal: general.portal, lock: general.lock } : general;
+  return reading.kind === "unreadable" ? reading : doorIn(reading.manifests, slug);
 }
 
 /** Does the machine carry the same general access as these fields? */
 function agrees(reading: { portal: boolean; lock: boolean }, local: General): boolean {
   return reading.portal === local.portal && reading.lock === local.lock;
+}
+
+/** The refusal of a reading that failed, which decides nothing: `after` says what was therefore left undone. */
+function unreadDoor(slug: string, reason: string, after: string[]): { kind: "rejects"; message: string; details: string[] } {
+  return {
+    kind: "rejects",
+    message: `cannot tell whether the general access of ${slug} was changed from the dashboard`,
+    details: [`${depositedManifestPath(slug)}: ${reason}`, ...after],
+  };
 }
 
 export type PortalDecision =
@@ -234,15 +244,10 @@ export type PortalDecision =
  */
 export function decidePortal(slug: string, local: General, reading: DepositedRead): PortalDecision {
   if (reading.kind === "unreadable") {
-    return {
-      kind: "rejects",
-      message: `cannot tell whether the general access of ${slug} was changed from the dashboard`,
-      details: [
-        `${depositedManifestPath(slug)}: ${reading.reason}`,
-        "nothing was sent: general access is never decided on a reading that failed,",
-        "the repository could otherwise open a site the dashboard closed",
-      ],
-    };
+    return unreadDoor(slug, reading.reason, [
+      "nothing was sent: general access is never decided on a reading that failed,",
+      "the repository could otherwise open a site the dashboard closed",
+    ]);
   }
   if (reading.kind === "absent" || agrees(reading, local)) {
     return { kind: "repository", ...local };
@@ -270,14 +275,7 @@ export function decidePortal(slug: string, local: General, reading: DepositedRea
  */
 export function confirmDoorUnderLock(slug: string, applied: General, reading: DepositedRead): Agreement {
   if (reading.kind === "unreadable") {
-    return {
-      kind: "rejects",
-      message: `cannot tell whether the general access of ${slug} was changed from the dashboard`,
-      details: [
-        `${depositedManifestPath(slug)}: ${reading.reason}`,
-        "neither the manifest nor the Caddy block was deposited: nothing is decided on a reading that failed",
-      ],
-    };
+    return unreadDoor(slug, reading.reason, ["neither the manifest nor the Caddy block was deposited: nothing is decided on a reading that failed"]);
   }
   if (reading.kind === "absent" || agrees(reading, applied)) return { kind: "agreed" };
   return {
@@ -308,18 +306,13 @@ export function switchAnnouncement(general: General, dryRun: boolean): { title: 
   };
 }
 
-/**
- * The action that deposits the local manifest on the VM without going through
- * `deploy`: `domain` (`sitesolide domain`). `lock` and `unlock` no longer
- * deposit it: the gatekeeper writes the machine's, and the repository follows.
- */
-export type ManifestAction = "domain";
-
 export type Agreement = { kind: "agreed" } | { kind: "rejects"; message: string; details: string[] };
 
 /**
- * The guard of the action that deposits the local manifest as is, before any
- * write.
+ * The guard of the one action that deposits the local manifest as is, without
+ * going through `deploy`, before any write: `sitesolide domain`. `lock` and
+ * `unlock` no longer deposit it: the gatekeeper writes the machine's, and the
+ * repository follows.
  *
  * It does not take the VM's general access back the way `deploy` does:
  * depositing the local manifest would therefore erase a portal put up from
@@ -335,21 +328,9 @@ export type Agreement = { kind: "agreed" } | { kind: "rejects"; message: string;
  * and it is up to it to refuse a site never deployed if need be. An unreadable
  * reading authorises nothing.
  */
-export function guardDepositedManifest(
-  slug: string,
-  local: General,
-  reading: DepositedRead,
-  _action: ManifestAction,
-): Agreement {
+export function guardDepositedManifest(slug: string, local: General, reading: DepositedRead): Agreement {
   if (reading.kind === "unreadable") {
-    return {
-      kind: "rejects",
-      message: `cannot tell whether the general access of ${slug} was changed from the dashboard`,
-      details: [
-        `${depositedManifestPath(slug)}: ${reading.reason}`,
-        "nothing was written: the manifest is never deposited on a reading that failed",
-      ],
-    };
+    return unreadDoor(slug, reading.reason, ["nothing was written: the manifest is never deposited on a reading that failed"]);
   }
   if (reading.kind === "absent") return { kind: "agreed" };
 

@@ -175,7 +175,6 @@ import {
   guardDepositedManifest,
   readDepositedManifest,
   readManifestAmongAll,
-  type ManifestAction,
   type DepositedRead,
 } from "./cli/portal-vm";
 import {
@@ -1591,22 +1590,16 @@ async function rereadUnderLock(
 }
 
 /**
- * The guard of the gestures that deposit the local manifest as it is, without
- * taking over the VM's door as `deploy` does: they would erase a portal set
+ * The guard of `domain`, which deposits the local manifest as it is, without
+ * taking over the VM's door as `deploy` does: it would erase a portal set
  * from the dashboard. Called before any write, the local one included.
  */
-async function requireAgreedDoor(
-  project: Project,
-  config: Config,
-  executor: Executor,
-  action: ManifestAction,
-): Promise<void> {
+async function requireAgreedDoor(project: Project, config: Config, executor: Executor): Promise<void> {
   const { manifest } = project;
   const agreement = guardDepositedManifest(
     manifest.slug,
     { portal: isProtected(manifest), lock: manifest.lock === true },
     await readDepositedDoor(manifest.slug, config, executor),
-    action,
   );
   if (agreement.kind === "rejects") die(agreement.message, agreement.details);
 }
@@ -3032,7 +3025,7 @@ async function switchDomain(
   // guard and the manifest deposit would be erased by that deposit, and the
   // next deployment, which follows the VM, would reopen the site.
   await takeCaddyLock(config, executor, "nothing was written");
-  await requireAgreedDoor(project, config, executor, "domain");
+  await requireAgreedDoor(project, config, executor);
   if (active) await requireClosingDomain(project.manifest, config, executor);
 
   // A domain activated before its DNS makes a certificate be asked for that the
