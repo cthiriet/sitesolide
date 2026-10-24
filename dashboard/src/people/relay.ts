@@ -34,9 +34,8 @@
  * and what those tokens did through the steward, read from its journal and
  * kept to their ids.
  */
-import { tokenHash } from "../sessions";
-import { isAcceptableOrigin } from "../sessions";
-import { fields, reach, relay, STORE_EXTRACTIONS, STORE_WITHHELD, type Extraction, type Received } from "../secrets/routes";
+import { isAcceptableOrigin, tokenHash } from "../sessions";
+import { extractPortal, fields, MAX_BODY_BYTES, MAX_CONTENT_BODY_BYTES, reach, relay, STORE_EXTRACTIONS, STORE_WITHHELD, type Extraction, type Received } from "../secrets/routes";
 import type { Steward } from "../secrets/client";
 import type { Tokens } from "../secrets/tokens";
 import type { BackupSteward } from "../backup/client";
@@ -104,8 +103,6 @@ export const TOKENS_OUTDATED = "This server's steward doesn't know personal toke
 
 /** Beyond that, it is not a site name. */
 const MAX_SLUG = 128;
-const MAX_BODY_BYTES = 64 * 1024;
-const MAX_CONTENT_BODY_BYTES = 512 * 1024;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -128,13 +125,6 @@ function oneSlug(req: Request): string | null {
   const wanted = new URL(req.url).searchParams.getAll("slug");
   return wanted.length === 1 && wanted[0] !== "" && wanted[0]!.length <= MAX_SLUG ? wanted[0]! : null;
 }
-
-const extractPortal: Extraction<{ slug: string; confirmation: string; active: boolean }> = (body) => {
-  const names = fields(["slug", "confirmation"] as const)(body);
-  if (names instanceof Response) return names;
-  if (typeof body!.active !== "boolean") return error(400, "invalid", "Missing or non-boolean field: active.");
-  return { ...names, active: body!.active };
-};
 
 export function createMemberRelay(dependencies: MemberRelayDependencies, clock: () => number = Date.now): MemberRelay {
   const { steward, tokens, resolve } = dependencies;

@@ -245,8 +245,8 @@ const extractRestore: Extraction<WithoutToken<RestoreRequest>> = (body) => {
   return { ...names, actor: SESSION_ACTOR };
 };
 
-/** `/portal`: the slug, `active` a boolean, and the confirmation, a string. */
-const extractPortal: Extraction<WithoutToken<PortalRequest>> = (body) => {
+/** `/portal`: the slug, `active` a boolean, and the confirmation, a string. A person's relay reads it the same way. */
+export const extractPortal: Extraction<WithoutToken<PortalRequest>> = (body) => {
   const names = fields(["slug", "confirmation"] as const)(body);
   if (names instanceof Response) return names;
   const { active } = body!;
