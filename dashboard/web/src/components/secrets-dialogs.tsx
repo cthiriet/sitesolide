@@ -44,6 +44,25 @@ export function describedBy(...ids: (string | false)[]): string | undefined {
   return ids.filter((id): id is string => id !== false).join(" ") || undefined
 }
 
+/** A secret field: masked, with nothing for a password manager to suggest or remember, a value not being a browser password. */
+export const NO_PASSWORD_MANAGER = { autoComplete: "off", "data-1p-ignore": "", "data-lpignore": "true", "data-bwignore": "" } as const
+
+/** The eye inside a masked field, which shows what it holds or masks it again; `what` names it to a screen reader. */
+export function ShowToggle({ visible, onToggle, what }: { visible: boolean; onToggle: () => void; what: string }) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      aria-label={`${visible ? "Hide" : "Show"} ${what}`}
+      onClick={onToggle}
+      className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground hover:text-foreground max-sm:size-8"
+    >
+      {visible ? <EyeOff /> : <Eye />}
+    </Button>
+  )
+}
+
 /** Where to return focus on closing: an element, the default behaviour, or nowhere. */
 export type FocusReturn = () => HTMLElement | boolean
 
@@ -254,16 +273,7 @@ function UnlockForm({
             aria-describedby={error !== "" ? errorId : undefined}
             className="h-10 pr-11 sm:h-9"
           />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={visible ? "Hide password" : "Show password"}
-            onClick={() => setVisible((before) => !before)}
-            className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground hover:text-foreground max-sm:size-8"
-          >
-            {visible ? <EyeOff /> : <Eye />}
-          </Button>
+          <ShowToggle visible={visible} onToggle={() => setVisible((before) => !before)} what="password" />
         </div>
         {error !== "" && (
           <p id={errorId} role="alert" className="text-sm text-destructive">
@@ -457,11 +467,7 @@ function VariableForm({
             value={value}
             autoFocus={editing}
             onChange={(event) => setValue(event.target.value)}
-            // A secret value is not a browser password: nothing to suggest, nothing to remember.
-            autoComplete="off"
-            data-1p-ignore=""
-            data-lpignore="true"
-            data-bwignore=""
+            {...NO_PASSWORD_MANAGER}
             spellCheck={false}
             // When editing, the name is fixed: a refusal can only concern the value. On an addition, the page
             // does not know which of the two fields the steward refuses, so it marks neither.
@@ -469,16 +475,7 @@ function VariableForm({
             aria-describedby={describedBy(helpId, error !== "" && errorId)}
             className="h-10 pr-11 font-mono sm:h-9"
           />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={visible ? "Hide value" : "Show value"}
-            onClick={() => setVisible((before) => !before)}
-            className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground hover:text-foreground max-sm:size-8"
-          >
-            {visible ? <EyeOff /> : <Eye />}
-          </Button>
+          <ShowToggle visible={visible} onToggle={() => setVisible((before) => !before)} what="value" />
         </div>
         <p id={helpId} className="text-xs text-pretty text-muted-foreground">
           Generate makes a random 256-bit token, for a secret the site issues itself.

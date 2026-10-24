@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject, type SyntheticEvent } from "react"
-import { Check, Copy, Eye, EyeOff } from "lucide-react"
+import { Check, Copy } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { CopyFallback, useAnnounce, useCopy } from "@/components/copy"
 import { Banner, INPUT_DIALOG } from "@/components/page"
-import type { FocusReturn, OnRefusal } from "@/components/secrets-dialogs"
+import { NO_PASSWORD_MANAGER, ShowToggle, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
 import { changePassword } from "@/lib/api"
 import { waitMessage } from "@/lib/signin"
 import { closeOutcome } from "@/lib/access"
@@ -40,14 +40,6 @@ import { cn } from "@/lib/utils"
 export type PasswordTarget = { slug: string; file: string; variable: string; opening: number }
 
 const COPY_WARNING = "You haven't copied the password. It can't be shown again."
-
-/** The secret fields: masked, with no suggestion and no memory from the password manager. */
-const NO_PASSWORD_MANAGER = {
-  autoComplete: "off",
-  "data-1p-ignore": "",
-  "data-lpignore": "true",
-  "data-bwignore": "",
-} as const
 
 export function PasswordDialog({
   target,
@@ -400,16 +392,7 @@ function PasswordForm({
                 aria-describedby={describedBy(newPasswordId, errors.newPassword, false)}
                 className="h-10 pr-11 font-mono sm:h-9"
               />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label={visible ? "Hide passwords" : "Show passwords"}
-                onClick={() => setVisible((before) => !before)}
-                className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground hover:text-foreground max-sm:size-8"
-              >
-                {visible ? <EyeOff /> : <Eye />}
-              </Button>
+              <ShowToggle visible={visible} onToggle={() => setVisible((before) => !before)} what="passwords" />
             </div>
           </Field>
           <Field id={idConfirmation} labelText="Repeat new password" error={errors.confirmation}>

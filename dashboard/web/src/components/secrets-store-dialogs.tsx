@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type DragEvent, type ReactNode, type SyntheticEvent } from "react"
-import { Eye, EyeOff, FileUp, TriangleAlert } from "lucide-react"
+import { FileUp, TriangleAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   AlertDialog,
@@ -25,7 +25,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useAnnounce } from "@/components/copy"
 import { INPUT_DIALOG, SEGMENTED, Segment } from "@/components/page"
-import { describedBy, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
+import { NO_PASSWORD_MANAGER, ShowToggle, describedBy, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
 import { generateStoreVariable, restoreStore, setStoreFile, setStoreVariable } from "@/lib/api"
 import { size } from "@/lib/format"
 import { MAX_UPLOAD_BYTES, refusalOf, succeeded } from "@/lib/secrets"
@@ -260,26 +260,13 @@ function ValueForm({
               value={value}
               autoFocus={fixed}
               onChange={(event) => setValue(event.target.value)}
-              // A secret value is not a browser password: nothing to suggest, nothing to remember.
-              autoComplete="off"
-              data-1p-ignore=""
-              data-lpignore="true"
-              data-bwignore=""
+              {...NO_PASSWORD_MANAGER}
               spellCheck={false}
               aria-invalid={(fixed && error !== "") || undefined}
               aria-describedby={describedBy(helpId, error !== "" && errorId)}
               className="h-10 pr-11 font-mono sm:h-9"
             />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={visible ? "Hide value" : "Show value"}
-              onClick={() => setVisible((before) => !before)}
-              className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground hover:text-foreground max-sm:size-8"
-            >
-              {visible ? <EyeOff /> : <Eye />}
-            </Button>
+            <ShowToggle visible={visible} onToggle={() => setVisible((before) => !before)} what="value" />
           </div>
           <p id={helpId} className="text-xs text-pretty text-muted-foreground">
             A key a provider gave you, typed or pasted. It is sent when you save, and not kept by this page.
