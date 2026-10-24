@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readManifest, type Manifest } from "../borrowed/manifest";
-import { portalModifiable, targetRefusal, generalChoices, manifestAccess, targetManifest } from "../src/gatekeeper/rules";
+import { portalModifiable, targetRefusal, generalChoices, targetManifest } from "../src/gatekeeper/rules";
 
 /**
  * What the gatekeeper agrees to change. The refusals count as much as the
@@ -125,12 +125,6 @@ describe("portalModifiable", () => {
 });
 
 describe("the three general accesses", () => {
-  test("how the manifest says the site opens", () => {
-    expect(manifestAccess(appSite)).toBe("public");
-    expect(manifestAccess({ ...appSite, portal: true })).toBe("restricted");
-    expect(manifestAccess({ ...appSite, lock: true })).toBe("code");
-  });
-
   test("the manifest a general access leaves never carries the portal and the lock together", () => {
     for (const from of [appSite, { ...appSite, portal: true }, { ...appSite, lock: true }] as Manifest[]) {
       expect(targetManifest(from, "restricted")).toMatchObject({ portal: true });

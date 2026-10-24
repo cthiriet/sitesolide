@@ -47,12 +47,6 @@ export function fixedRefusal(slug: string, manifest: Manifest | null): string | 
  */
 const REASONS: [prefix: string, reason: string][] = [["portal: only a project with `start`", "a static site cannot be restricted yet"]];
 
-/** How the manifest says the site opens: the portal, the code, or neither. */
-export function manifestAccess(manifest: Manifest): GeneralAccess {
-  if (isProtected(manifest)) return "restricted";
-  return manifest.lock === true ? "code" : "public";
-}
-
 /**
  * The manifest a general access leaves, judged on the object: `portal` and
  * `lock` as the target wants them, the same keys `setPortal` and `setLock`
