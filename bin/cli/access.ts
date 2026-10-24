@@ -553,11 +553,11 @@ export type OwnerWritePath =
   | "/tokens/project";
 
 /**
- * How long curl waits for a route that is not a write alone, in seconds,
- * thirty for every other. A restart watches the service for a few seconds,
- * and a change of general access waits for the steward's lock and then for
- * the gatekeeper, up to ninety seconds. The release of a removed project's
- * name comes once the project is gone, and is waited for least.
+ * How long curl waits, in seconds, for the routes not given the thirty of
+ * every other write. A restart watches the service for a few seconds, and a
+ * change of general access waits for the steward's lock and then for the
+ * gatekeeper, up to ninety seconds: both are given longer. The release of a
+ * removed project's name comes once the project is gone, and is given less.
  */
 const WRITE_SECONDS: Partial<Record<OwnerWritePath, number>> = { "/restart": 120, "/general": 240, "/tokens/project": 10 };
 
