@@ -4,7 +4,6 @@ import {
   passwordKind,
   passwordToSend,
   firstFaultyField,
-  generatedPasswordText,
   passwordTexts,
   checkEntry,
 } from "../src/lib/password"
@@ -70,11 +69,6 @@ describe("input", () => {
 })
 
 describe("drawn password", () => {
-  test("the copy is the password as it is, with no blank and no line break", () => {
-    expect(generatedPasswordText("x7Kp-2mQa-9vRt")).toBe("x7Kp-2mQa-9vRt")
-    expect(generatedPasswordText(" a b ")).toBe(" a b ")
-  })
-
   test("the announcement never contains the password", () => {
     expect(passwordAnnouncement(true)).toBe("Password changed. Copy it now: it won't be shown again.")
     expect(passwordAnnouncement(false)).toBe("Password changed.")

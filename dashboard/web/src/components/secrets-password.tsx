@@ -22,7 +22,6 @@ import {
   passwordAnnouncement,
   passwordToSend,
   firstFaultyField,
-  generatedPasswordText,
   passwordTexts,
   checkEntry,
   type PasswordErrors,
@@ -474,7 +473,6 @@ function GeneratedPasswordScreen({
   const copyState = useCopy("Password copied")
   const button = useRef<HTMLButtonElement>(null)
   const code = useRef<HTMLElement>(null)
-  const text = generatedPasswordText(password)
 
   // The form has just disappeared along with focus: the next gesture is the copy.
   useEffect(() => {
@@ -482,7 +480,7 @@ function GeneratedPasswordScreen({
   }, [])
 
   async function copy() {
-    if (await copyState.copy(text)) return onCopied()
+    if (await copyState.copy(password)) return onCopied()
     if (code.current !== null) window.getSelection()?.selectAllChildren(code.current)
   }
 
@@ -511,7 +509,7 @@ function GeneratedPasswordScreen({
         </Button>
       </div>
 
-      {copyState.state === "failure" && <CopyFallback text={text} onClose={copyState.reset} />}
+      {copyState.state === "failure" && <CopyFallback text={password} onClose={copyState.reset} />}
 
       <p className="text-sm text-pretty text-muted-foreground">{nextStep}</p>
 

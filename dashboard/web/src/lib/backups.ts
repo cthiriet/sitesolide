@@ -7,7 +7,7 @@
  * not in `reason`, and the page shows it as it stands. A rule copied into the
  * browser would protect nothing.
  */
-import { ago, dateTime, duration, size } from "./format"
+import { ago, duration, size } from "./format"
 import type { Tone } from "./tones"
 import type { BackupAuditEntry, BackupsView, CheckView, RestoreView, RetentionPolicy, SnapshotKind, SnapshotView } from "./types"
 
@@ -99,11 +99,6 @@ export function snapshotSize(snapshot: Pick<SnapshotView, "bytes" | "added">): s
 
 function capitalise(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1)
-}
-
-/** A snapshot's time as the page names it: the browser's time zone, the time of day. */
-export function snapshotTime(takenAt: number, timeZone?: string): string {
-  return dateTime(takenAt, timeZone)
 }
 
 /** What the server does, in the order it does it: the dialog lists it before the confirmation. */

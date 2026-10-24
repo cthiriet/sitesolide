@@ -87,15 +87,6 @@ export function passwordToSend(entry: Pick<PasswordEntry, "mode" | "newPassword"
   return entry.mode === "draw" ? null : entry.newPassword
 }
 
-/**
- * What "Copy password" puts on the clipboard: the password as it is, with no
- * space and no line break, ready to paste into a manager. One stray blank would
- * be a different password.
- */
-export function generatedPasswordText(password: string): string {
-  return password
-}
-
 /** What the shared region says: never the password. */
 export function passwordAnnouncement(generated: boolean): string {
   return generated ? "Password changed. Copy it now: it won't be shown again." : "Password changed."

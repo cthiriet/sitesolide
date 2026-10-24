@@ -28,7 +28,6 @@ import {
   restoreSteps,
   retentionText,
   snapshotSize,
-  snapshotTime,
   whereLabel,
 } from "@/lib/backups"
 import { ago, dateTime } from "@/lib/format"
@@ -162,7 +161,7 @@ function When({ at, serverNow }: { at: number; serverNow: number }) {
   return (
     <span className="grid">
       <time dateTime={new Date(at).toISOString()} className="tabular-nums">
-        {snapshotTime(at)}
+        {dateTime(at)}
       </time>
       <span className="text-xs text-muted-foreground">{ago(serverNow - at)}</span>
     </span>
@@ -190,7 +189,7 @@ function SnapshotsPanel({
       size="sm"
       disabled={!view.restorable}
       onClick={() => onRestore(snapshot)}
-      aria-label={`Restore ${view.slug} from ${snapshotTime(snapshot.takenAt)}`}
+      aria-label={`Restore ${view.slug} from ${dateTime(snapshot.takenAt)}`}
       className="max-md:h-10"
     >
       <ArchiveRestore />
@@ -375,7 +374,7 @@ function RestoreFlow({
   const [error, setError] = useState("")
   const inputId = useId()
   const closeButton = useRef<HTMLButtonElement>(null)
-  const when = snapshotTime(snapshot.takenAt)
+  const when = dateTime(snapshot.takenAt)
 
   useEffect(() => {
     busy.current = phase.phase === "in-progress"
