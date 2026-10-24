@@ -25,7 +25,7 @@ const KANBAN = projection({
 /** The tables of a portal from before the steward, as the upgrade finds them. */
 function legacyTables() {
   const sharing = memorySharing();
-  sharing.put(HOST, { mode: "domain", people: ["zoe@elsewhere.test"], domains: ["acme.test"] }, 1);
+  sharing.put(HOST, { mode: "domain", people: ["zoe@elsewhere.test"], domains: ["acme.test"] });
   const guests = memoryGuests();
   guests.add({ id: "InViTeInViTe0001", host: HOST, label: "Alice", createdAt: 1, expiresAt: NOW + 3_600_000, seenAt: null }, "c".repeat(64));
   return { sharing, guests };

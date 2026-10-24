@@ -7,13 +7,11 @@ import { DEFAULT_POLICY, type Policy } from "../src/sharing";
  * read-only like the table: a test lays its rows with `add`, the way a portal
  * upgraded with its old database finds them.
  */
-export function memoryGuests(): GuestStore & { rows: Map<string, { guest: Guest; hash: string }>; add: (guest: Guest, hash: string) => void } {
+export function memoryGuests(): GuestStore & { add: (guest: Guest, hash: string) => void } {
   const rows = new Map<string, { guest: Guest; hash: string }>();
   return {
-    rows,
     byId: (id) => rows.get(id)?.guest ?? null,
     byHash: (hash) => [...rows.values()].find((row) => row.hash === hash)?.guest ?? null,
-    list: () => [...rows.values()].map((row) => row.guest).sort((a, b) => b.createdAt - a.createdAt),
     add(guest, hash) {
       rows.set(guest.id, { guest: { ...guest }, hash });
     },
@@ -21,14 +19,12 @@ export function memoryGuests(): GuestStore & { rows: Map<string, { guest: Guest;
 }
 
 /** The sharing policies from before the steward, in memory and read-only: `put` stands for a row already there. */
-export function memorySharing(): SharingStore & { rows: Map<string, { policy: Policy; updatedAt: number }>; put: (host: string, policy: Policy, now: number) => void } {
-  const rows = new Map<string, { policy: Policy; updatedAt: number }>();
+export function memorySharing(): SharingStore & { put: (host: string, policy: Policy) => void } {
+  const rows = new Map<string, Policy>();
   return {
-    rows,
-    get: (host) => rows.get(host)?.policy ?? DEFAULT_POLICY,
-    list: () => [...rows.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([host, row]) => ({ host, ...row })),
-    put(host, policy, now) {
-      rows.set(host, { policy, updatedAt: now });
+    get: (host) => rows.get(host) ?? DEFAULT_POLICY,
+    put(host, policy) {
+      rows.set(host, policy);
     },
   };
 }

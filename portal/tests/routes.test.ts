@@ -556,7 +556,7 @@ describe("an identity on /verifier", () => {
 
   test("before the steward writes its projection, a person the portal's own policy listed gets in, as visitor", () => {
     const sharing = memorySharing();
-    sharing.put(HOST, { mode: "people", people: ["alice@acme.test"], domains: [] }, START);
+    sharing.put(HOST, { mode: "people", people: ["alice@acme.test"], domains: [] });
     const r = routes({ settings: SETTINGS, access: accessFolder("routes-legacy-people").reader({ guests: memoryGuests(), sharing }) });
     const alice = visit(r, identityCookie("alice@acme.test"));
     expect(alice.status).toBe(200);

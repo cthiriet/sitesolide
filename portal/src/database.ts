@@ -101,12 +101,10 @@ export type Guest = {
   seenAt: number | null;
 };
 
-/** The password access from before the steward kept it, read-only. */
+/** The password access from before the steward kept it, read-only. The hash never leaves this place. */
 export type GuestStore = {
   byId: (id: string) => Guest | null;
   byHash: (hash: string) => Guest | null;
-  /** Most recent first. The hash never leaves this place. */
-  list: () => Guest[];
 };
 
 /**
@@ -142,29 +140,23 @@ export function guestStore(db: Database): GuestStore {
   const queries = {
     byId: db.query<Row, [string]>(`SELECT ${COLUMNS} FROM invites WHERE id = ?`),
     byHash: db.query<Row, [string]>(`SELECT ${COLUMNS} FROM invites WHERE empreinte = ?`),
-    list: db.query<Row, []>(`SELECT ${COLUMNS} FROM invites ORDER BY cree_a DESC, id`),
   };
 
   return {
     byId: (id) => toGuest(queries.byId.get(id)),
     byHash: (hash) => toGuest(queries.byHash.get(hash)),
-    list: () => queries.list.all().map((row) => toGuest(row)!),
   };
 }
 
 // --- Sharing ---------------------------------------------------------------------
 
-export type SharedSite = { host: string; policy: Policy; updatedAt: number };
-
 /** Each site's sharing from before the steward kept who may open it, read-only. */
 export type SharingStore = {
   /** The site's policy, `DEFAULT_POLICY` when none was ever set. */
   get: (host: string) => Policy;
-  /** The sites whose policy was set, by host. */
-  list: () => SharedSite[];
 };
 
-type SharingRow = { host: string; mode: string; people: string; domains: string; updated_at: number };
+type SharingRow = { mode: string; people: string; domains: string };
 
 function parseArray(text: string): unknown {
   try {
@@ -187,15 +179,8 @@ function toPolicy(row: SharingRow | null): Policy {
 }
 
 export function sharingStore(db: Database): SharingStore {
-  const queries = {
-    get: db.query<SharingRow, [string]>("SELECT host, mode, people, domains, updated_at FROM sharing WHERE host = ?"),
-    list: db.query<SharingRow, []>("SELECT host, mode, people, domains, updated_at FROM sharing ORDER BY host"),
-  };
-
-  return {
-    get: (host) => toPolicy(queries.get.get(host)),
-    list: () => queries.list.all().map((row) => ({ host: row.host, policy: toPolicy(row), updatedAt: row.updated_at })),
-  };
+  const query = db.query<SharingRow, [string]>("SELECT mode, people, domains FROM sharing WHERE host = ?");
+  return { get: (host) => toPolicy(query.get(host)) };
 }
 
 // --- Audit -----------------------------------------------------------------------

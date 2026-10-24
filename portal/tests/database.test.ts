@@ -92,15 +92,13 @@ describe("the guest access store, read-only", () => {
     expect(store.byId("AAAAAAAAAAAAAAA2")?.seenAt).toBe(7_000);
   });
 
-  test("the list goes from the most recent to the oldest, without a hash", () => {
+  test("an access read back carries no hash", () => {
     lay(guest("AAAAAAAAAAAAAAA4", { createdAt: 9_000 }), "4".repeat(64));
-    const rows = store.list();
-    expect(rows[0]!.id).toBe("AAAAAAAAAAAAAAA4");
-    expect(JSON.stringify(rows)).not.toInclude("4".repeat(64));
+    expect(JSON.stringify(store.byHash("4".repeat(64)))).not.toInclude("4".repeat(64));
   });
 
   test("offers nothing that writes", () => {
-    expect(Object.keys(store).sort()).toEqual(["byHash", "byId", "list"]);
+    expect(Object.keys(store).sort()).toEqual(["byHash", "byId"]);
   });
 });
 
@@ -138,9 +136,6 @@ describe("the sharing store, read-only", () => {
       `INSERT INTO sharing (host, mode, people, domains, updated_at) VALUES ('${HOST}', 'domain', '["bob@acme.test"]', '["acme.test"]', 2000)`,
     );
     expect(store.get(HOST)).toEqual({ mode: "domain", people: ["bob@acme.test"], domains: ["acme.test"] });
-    expect(store.list()).toEqual([
-      { host: HOST, policy: { mode: "domain", people: ["bob@acme.test"], domains: ["acme.test"] }, updatedAt: 2_000 },
-    ]);
   });
 
   test("a row this version cannot read falls back to the admins alone, never wider", () => {
@@ -151,7 +146,7 @@ describe("the sharing store, read-only", () => {
   });
 
   test("offers nothing that writes", () => {
-    expect(Object.keys(store).sort()).toEqual(["get", "list"]);
+    expect(Object.keys(store).sort()).toEqual(["get"]);
   });
 });
 
