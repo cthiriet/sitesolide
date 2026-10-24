@@ -22,7 +22,7 @@ import { useData } from "@/components/data"
 import { Logo } from "@/components/logo"
 import { InternalLink, useNavigation } from "@/components/navigation"
 import { useTheme } from "@/components/theme"
-import { JUST_NOW_MS, duration, ago } from "@/lib/format"
+import { ABSENT, JUST_NOW_MS, dateTime, duration, ago } from "@/lib/format"
 import { PAGE_TITLE_ID } from "@/lib/pages"
 import { TONE_BANNER, TONE_PILL, TONE_DOT, TONE_TEXT, verdictTone, type Tone } from "@/lib/tones"
 import type { Snapshot } from "@/lib/types"
@@ -120,6 +120,20 @@ export function SeverityIcon({
       />
       {label && <span className="sr-only">{error ? "Error: " : "Warning: "}</span>}
     </>
+  )
+}
+
+/**
+ * When something happened, as an age, its date and time on hover. A time that
+ * does not read shows a hyphen: Date and Intl throw on NaN, and an unreadable
+ * row must not bring the page down.
+ */
+export function When({ at, serverNow }: { at: number | null; serverNow: number }) {
+  if (at === null || !Number.isFinite(at)) return <span className="text-muted-foreground">{ABSENT}</span>
+  return (
+    <time dateTime={new Date(at).toISOString()} title={dateTime(at)} className="whitespace-nowrap text-muted-foreground tabular-nums">
+      {ago(serverNow - at)}
+    </time>
   )
 }
 

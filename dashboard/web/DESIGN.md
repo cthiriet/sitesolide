@@ -336,6 +336,7 @@ on screen.
 | `Status` | a dot and a word. `point` in lists and tables, `pill` for what has to be seen from afar |
 | `SeverityIcon` | crossed circle (error) or triangle (warning) before a discrepancy, with hidden text |
 | `Count` | the number beside a title, `secondary-foreground` on the `border` grey |
+| `When` | an event's age in a log, its date and time on hover, a hyphen when it does not read |
 | `Segment`, `SEGMENTED` | a segmented control: each toggle button, and the bordered frame they sit in |
 | `ExternalLink` | a site address, underlined at rest, in a new tab |
 | `MachinePlate`, `Track` | the plate, reserved for the home page: one bordered panel, the server (its zone, cores, memory and disk) then load, memory and disk; `Track` is a 6 px bar with a 1 px tick across it at each threshold, reused for a service's memory |

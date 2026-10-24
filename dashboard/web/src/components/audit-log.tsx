@@ -5,9 +5,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
-import { Banner, SEGMENTED, Segment, Status } from "@/components/page"
+import { Banner, SEGMENTED, Segment, Status, When } from "@/components/page"
 import { ACCESS_ACTION, SOURCES, accessOnly, actorLabel, auditWords, detailLines, sourceLabel, sourceWords, type AuditFilters } from "@/lib/audit"
-import { ABSENT, ago, dateTime } from "@/lib/format"
+import { ABSENT, dateTime } from "@/lib/format"
 import { siteUrl } from "@/lib/pages"
 import type { AuditRow, AuditSource, SourceStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -157,17 +157,6 @@ export function AuditFilterBar({
 
 // --- A row -----------------------------------------------------------------------
 
-function When({ at, serverNow }: { at: string; serverNow: number }) {
-  const ms = Date.parse(at)
-  // An unreadable date must not bring the page down: Date and Intl throw on NaN.
-  if (!Number.isFinite(ms)) return <span className="text-muted-foreground">{ABSENT}</span>
-  return (
-    <time dateTime={at} title={dateTime(ms)} className="whitespace-nowrap text-muted-foreground tabular-nums">
-      {ago(serverNow - ms)}
-    </time>
-  )
-}
-
 /**
  * The site, linked when the server still has it; the host or name recorded,
  * when it says more. `compact`, on one line among others: the site alone, the
@@ -310,7 +299,7 @@ export function AuditLog({ rows, known, serverNow, caption }: { rows: readonly A
                   </td>
                   <td className="px-3 py-3 text-muted-foreground">{sourceLabel(row.source)}</td>
                   <td className="px-3 py-3 text-right">
-                    <When at={row.at} serverNow={serverNow} />
+                    <When at={Date.parse(row.at)} serverNow={serverNow} />
                   </td>
                   <td className="px-3 py-1.5 pr-4 text-right">
                     <Toggle open={expanded} controls={id} onToggle={() => toggle(row.id)} />
@@ -340,7 +329,7 @@ export function AuditLog({ rows, known, serverNow, caption }: { rows: readonly A
                   <Summary row={row} />
                 </span>
                 <span className="text-xs">
-                  <When at={row.at} serverNow={serverNow} />
+                  <When at={Date.parse(row.at)} serverNow={serverNow} />
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">

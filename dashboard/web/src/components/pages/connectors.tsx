@@ -18,7 +18,7 @@ import { Command, useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
 import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
-import { Banner, EmptyState, ErrorState, INPUT_DIALOG, PageBody, PageHeader, Panel, RowsSkeleton, Status } from "@/components/page"
+import { Banner, EmptyState, ErrorState, INPUT_DIALOG, PageBody, PageHeader, Panel, RowsSkeleton, Status, When } from "@/components/page"
 import { SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { useOrigin, type FocusReturn } from "@/components/secrets-dialogs"
@@ -35,7 +35,7 @@ import {
   type ConnectorField,
   type GrantRow,
 } from "@/lib/connectors"
-import { ABSENT, ago, dateTime } from "@/lib/format"
+import { ago } from "@/lib/format"
 import { siteUrl } from "@/lib/pages"
 import { refusalOf } from "@/lib/secrets"
 import type { ConnectorView, ConnectorsView, EgressAuditRow, EgressStatus } from "@/lib/types"
@@ -69,15 +69,6 @@ const ACTIVITY_AFTER_WRITE_MS = 6_000
 
 function isView(body: unknown): body is ConnectorsView {
   return typeof body === "object" && body !== null && Array.isArray((body as ConnectorsView).connectors) && Array.isArray((body as ConnectorsView).grants)
-}
-
-function When({ at, serverNow }: { at: number | null; serverNow: number }) {
-  if (at === null) return <span className="text-muted-foreground">{ABSENT}</span>
-  return (
-    <time dateTime={new Date(at).toISOString()} title={dateTime(at)} className="whitespace-nowrap text-muted-foreground tabular-nums">
-      {ago(serverNow - at)}
-    </time>
-  )
 }
 
 function SiteLink({ slug, known }: { slug: string | null; known: ReadonlySet<string> }) {

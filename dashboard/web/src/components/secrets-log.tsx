@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useState } from "react"
 import { History } from "lucide-react"
 import { useData } from "@/components/data"
-import { ErrorState, EmptyState, Panel, RowsSkeleton, Status } from "@/components/page"
+import { ErrorState, EmptyState, Panel, RowsSkeleton, Status, When } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { readSecretsLog } from "@/lib/api"
-import { ABSENT, dateTime, ago } from "@/lib/format"
 import {
   latestOperations,
   operationOutcome,
@@ -35,20 +34,6 @@ function Outcome({ entry }: { entry: LogEntry }) {
     <Status tone={outcome.tone} className="whitespace-normal">
       {outcome.text}
     </Status>
-  )
-}
-
-function When({ a, serverNow }: { a: number; serverNow: number }) {
-  // An unreadable date must not bring the page down: Date and Intl throw on NaN.
-  if (!Number.isFinite(a)) return <span className="text-muted-foreground">{ABSENT}</span>
-  return (
-    <time
-      dateTime={new Date(a).toISOString()}
-      title={dateTime(a)}
-      className="whitespace-nowrap text-muted-foreground tabular-nums"
-    >
-      {ago(serverNow - a)}
-    </time>
   )
 }
 
@@ -144,7 +129,7 @@ export function SecretsLog({ slug }: { slug: string }) {
                       {file !== null && <code className="font-mono text-xs">{file}</code>}
                     </td>
                     <td className="px-3 py-3 pr-4 text-right">
-                      <When a={entry.a} serverNow={serverNow} />
+                      <When at={entry.a} serverNow={serverNow} />
                     </td>
                   </tr>
                 )
@@ -162,7 +147,7 @@ export function SecretsLog({ slug }: { slug: string }) {
                     <Operation entry={entry} />
                   </span>
                   <span className="text-xs">
-                    <When a={entry.a} serverNow={serverNow} />
+                    <When at={entry.a} serverNow={serverNow} />
                   </span>
                   {(file !== null || outcome.text !== null) && (
                     <span className="col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">

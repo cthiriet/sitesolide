@@ -158,7 +158,8 @@ function SchedulePanel({ view, serverNow }: { view: BackupsView; serverNow: numb
 
 // --- The snapshots --------------------------------------------------------------------
 
-function When({ at, serverNow }: { at: number; serverNow: number }) {
+/** When a snapshot was taken: its date and time, how long ago under it. */
+function Taken({ at, serverNow }: { at: number; serverNow: number }) {
   return (
     <span className="grid">
       <time dateTime={new Date(at).toISOString()} className="tabular-nums">
@@ -249,7 +250,7 @@ function SnapshotsPanel({
               {shown.map((snapshot) => (
                 <tr key={snapshot.name}>
                   <td className="px-3 py-3 pl-4">
-                    <When at={snapshot.takenAt} serverNow={serverNow} />
+                    <Taken at={snapshot.takenAt} serverNow={serverNow} />
                   </td>
                   <td className="px-3 py-3">{kindLabel(snapshot.kind)}</td>
                   <td className="px-3 py-3 text-right tabular-nums">{snapshotSize(snapshot)}</td>
@@ -264,7 +265,7 @@ function SnapshotsPanel({
             {shown.map((snapshot) => (
               <li key={snapshot.name} className="flex items-center gap-3 px-4 py-3">
                 <div className="grid min-w-0 flex-1 gap-0.5">
-                  <When at={snapshot.takenAt} serverNow={serverNow} />
+                  <Taken at={snapshot.takenAt} serverNow={serverNow} />
                   <span className="text-xs text-muted-foreground">
                     {kindLabel(snapshot.kind)}, {snapshotSize(snapshot)}, {whereLabel(snapshot).toLowerCase()}
                   </span>
