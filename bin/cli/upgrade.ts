@@ -60,7 +60,7 @@
  * that the tests run the whole sequence against the model machine and kit of
  * bin/tests/setup-fakes.ts.
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_DIR_VARIABLE, IncompleteConfig, mergeConfig, privateFolder, type Config } from "./config";
@@ -72,9 +72,11 @@ import {
   caddyUnitRun,
   childEnvironment,
   COMPONENT_CONDITIONS,
+  journal,
   kitRunner,
   LIB,
   present,
+  readJson,
   setupOutput,
   sshMachine,
   UNITS,
@@ -320,10 +322,6 @@ function tail(output: string): string[] {
   return output.split("\n").filter((line) => line.trim() !== "").slice(-8);
 }
 
-function journal(context: UpgradeContext, unit: string): string {
-  return `ssh ${context.server} 'sudo journalctl -u ${unit} -n 50'`;
-}
-
 /** One component: how upgrade tells it is there, what it checks, what it runs. */
 export type Component = {
   id: string;
@@ -544,16 +542,6 @@ function release(): string {
   return isCompiled() ? "this binary, version dev" : "this checkout";
 }
 
-function readFile(path: string): Record<string, unknown> | null {
-  if (!existsSync(path)) return null;
-  try {
-    const value = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Runs upgrade; the exit code. */
 export async function runUpgrade(options: UpgradeOptions, deps: UpgradeDependencies): Promise<number> {
   const out = deps.output;
@@ -566,7 +554,7 @@ export async function runUpgrade(options: UpgradeOptions, deps: UpgradeDependenc
   const folder = privateFolder(deps.home, deps.environment);
   let config: Config;
   try {
-    config = mergeConfig(readFile(join(folder, "config.json")) as Partial<Config> | null, deps.environment, deps.home, (message) => out.say(`!! ${message}`));
+    config = mergeConfig(readJson(join(folder, "config.json")) as Partial<Config> | null, deps.environment, deps.home, (message) => out.say(`!! ${message}`));
   } catch (error) {
     if (!(error instanceof IncompleteConfig)) throw error;
     return refuse(`missing settings: ${error.missing.join(", ")}`, [

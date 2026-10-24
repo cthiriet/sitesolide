@@ -341,7 +341,8 @@ export async function configGuard(
   return ours ? { kind: "ours", server: configured.server } : { kind: "installed", server: configured.server };
 }
 
-function readJson(path: string): Record<string, unknown> | null {
+/** A JSON object read from a file of the workstation, null when it is missing or holds none. */
+export function readJson(path: string): Record<string, unknown> | null {
   if (!existsSync(path)) return null;
   try {
     const value = JSON.parse(readFileSync(path, "utf8")) as unknown;
@@ -661,7 +662,8 @@ export function present(label: string, path: string): Condition {
   return { label, test: `test -f ${path}` };
 }
 
-function journal(context: SetupContext, unit: string): string {
+/** The command that shows a unit's journal on the machine, the inspection of most steps. */
+export function journal(context: { server: string }, unit: string): string {
   return `ssh ${context.server} 'sudo journalctl -u ${unit} -n 50'`;
 }
 
