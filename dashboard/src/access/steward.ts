@@ -854,27 +854,25 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
     };
   }
 
-  function removePersonRoute(): Handler {
-    return async (req) => {
-      const body = await readBody(req, ["email"]);
-      if (body instanceof Response) return body;
-      const email = cleanEmail(body.email);
-      if (email === null) return fail("invalid", "email: the address of the person to take off");
-      const signIn = await dependencies.signIn();
-      let leaving = false;
-      const answer = await store.change<Response>(async (registry) => {
-        const was = personView(registry, email, signIn.admins);
-        const result = removePerson(registry, email);
-        if (result.removed.length === 0 && !result.create) return fail("not-found", `${email} has no access to any project`);
-        leaving = isDashboardPerson(registry, email);
-        const roles = Object.fromEntries(result.removed.map(({ slug, entry }) => [slug, entry.role]));
-        await journal({ operation: "access.remove", result: "ok", actor: OWNER, member: email, detail: `${email}: taken off everywhere, ${rolesText(roles)}${result.create ? "; may create projects" : ""}` });
-        console.log(`access: ${email} taken off every project`);
-        const response: PersonResponse = { person: was, change: "remove" };
-        return { registry: result.registry, value: Response.json(response) };
-      });
-      return afterwards(answer, leaving ? { email, actor: OWNER } : null);
-    };
+  async function removePersonRoute(req: Request): Promise<Response> {
+    const body = await readBody(req, ["email"]);
+    if (body instanceof Response) return body;
+    const email = cleanEmail(body.email);
+    if (email === null) return fail("invalid", "email: the address of the person to take off");
+    const signIn = await dependencies.signIn();
+    let leaving = false;
+    const answer = await store.change<Response>(async (registry) => {
+      const was = personView(registry, email, signIn.admins);
+      const result = removePerson(registry, email);
+      if (result.removed.length === 0 && !result.create) return fail("not-found", `${email} has no access to any project`);
+      leaving = isDashboardPerson(registry, email);
+      const roles = Object.fromEntries(result.removed.map(({ slug, entry }) => [slug, entry.role]));
+      await journal({ operation: "access.remove", result: "ok", actor: OWNER, member: email, detail: `${email}: taken off everywhere, ${rolesText(roles)}${result.create ? "; may create projects" : ""}` });
+      console.log(`access: ${email} taken off every project`);
+      const response: PersonResponse = { person: was, change: "remove" };
+      return { registry: result.registry, value: Response.json(response) };
+    });
+    return afterwards(answer, leaving ? { email, actor: OWNER } : null);
   }
 
   /** The owner's way out, over the owner's socket alone: the registry made without the portal's database. */
@@ -963,13 +961,13 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
       "/access/entry": { PUT: ownerGrant(true), DELETE: ownerRemove },
       "/access/migrate": { POST: migrateWithoutPortal },
       "/people": { GET: people },
-      "/people/person": { PUT: putPerson(true), DELETE: removePersonRoute() },
+      "/people/person": { PUT: putPerson(true), DELETE: removePersonRoute },
     },
     dashboard: {
       "/access": { GET: ownerList },
       "/access/entry": { PUT: ownerGrant(false), DELETE: ownerRemove },
       "/people": { GET: people },
-      "/people/person": { PUT: putPerson(false), DELETE: removePersonRoute() },
+      "/people/person": { PUT: putPerson(false), DELETE: removePersonRoute },
       "/access/person/list": { POST: personList },
       "/access/person/entry": { PUT: personGrant, DELETE: personRemove },
     },

@@ -242,7 +242,7 @@ export function migrate(
         continue;
       }
       // Can open already, by the old sharing: the password joins the entry.
-      entries.set(who, { ...found, by: found.by, password: { id: row.id, hash: row.empreinte, expiresAt: row.expire_a } });
+      entries.set(who, { ...found, password: { id: row.id, hash: row.empreinte, expiresAt: row.expire_a } });
       report.passwords++;
       continue;
     }

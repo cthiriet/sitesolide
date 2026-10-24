@@ -58,15 +58,7 @@ const US_UTC_SHAPE = /^\S+ (\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})\.(\d{
 export function readUsTimestamp(raw: string): number | null {
   const chunks = US_UTC_SHAPE.exec(raw.trim());
   if (chunks === null) return null;
-  const [year, month, day, hour, minute, second, micro] = chunks.slice(1).map(Number) as [
-    number,
-    number,
-    number,
-    number,
-    number,
-    number,
-    number,
-  ];
+  const [year, month, day, hour, minute, second, micro] = chunks.slice(1).map(Number) as [number, number, number, number, number, number, number];
 
   const ms = Date.UTC(year, month - 1, day, hour, minute, second);
   const date = new Date(ms);

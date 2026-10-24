@@ -353,13 +353,11 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
       const reached = await reach(() => steward.signIn(assertion!));
       if (reached.kind !== "received") return refused(reached.kind === "unavailable" ? "unavailable" : "failed", spent);
       if (reached.status !== 200) {
-        // `not-a-member`: a steward from before the word changed, read for one release.
-        if (reached.body.error === "no-role" || reached.body.error === "not-a-member" || reached.body.error === "can-open-only") {
-          limiter.refused(email, now);
-          return refused(reached.body.error === "can-open-only" ? "can-open-only" : "no-role", spent);
-        }
         limiter.refused(email, now);
-        return refused(reached.body.error === "invalid-assertion" ? "invalid" : "failed", spent);
+        const code = reached.body.error;
+        // `not-a-member`: a steward from before the word changed, read for one release.
+        const reason = code === "can-open-only" ? "can-open-only" : code === "no-role" || code === "not-a-member" ? "no-role" : code === "invalid-assertion" ? "invalid" : "failed";
+        return refused(reason, spent);
       }
       const session = reached.body.session;
       const expiresAt = reached.body.expiresAt;

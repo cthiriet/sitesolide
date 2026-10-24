@@ -393,6 +393,13 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     return (await claimsNow()) ?? failure("failure", "the tokens' claims on names cannot be read on the machine: the owner must restore /var/lib/sitesolide-steward/claims.json from the steward's backups, never delete it, since a claim dropped hands its name to whoever deploys next");
   }
 
+  /** The claims for a change that may add one on `slug`: a refusal too when they hold as many names as they keep. */
+  async function claimsWithRoom(slug: string): Promise<Claims | Response> {
+    const claims = await claimsToChange();
+    if (claims instanceof Response || Object.hasOwn(claims, slug) || Object.keys(claims).length < MAX_CLAIMS) return claims;
+    return failure("too-many-attempts", "the machine holds as many names for tokens as it keeps: the owner frees the names nobody deploys with sitesolide remove --confirm <name>");
+  }
+
   /**
    * Is this token's hold on a name it claimed released now? Released when
    * the machine carries the project and the token's own deployment of it
@@ -727,11 +734,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
         }
         // Which token deployed it, so that a hold this one claimed ahead is
         // kept once the project is there, and the name settled otherwise.
-        const claims = await claimsToChange();
+        const claims = await claimsWithRoom(target);
         if (claims instanceof Response) return claims;
-        if (!Object.hasOwn(claims, target) && Object.keys(claims).length >= MAX_CLAIMS) {
-          return failure("too-many-attempts", "the machine holds as many names for tokens as it keeps: the owner frees the names nobody deploys with sitesolide remove --confirm <name>");
-        }
         await system.writeClaims(encodeClaims(withDeployment(claims, target, identity.id, deployment, system.now())));
         const registry = await team();
         if (registry instanceof Response) return registry;
@@ -1113,12 +1117,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     if (registry.owners[slug] === holder.identity.id) return null;
     const bounded = await uncarriedBound(registry, holder.identity.id, slug);
     if (bounded !== null) return bounded;
-    const claims = await claimsToChange();
-    if (claims instanceof Response) return claims;
-    if (!Object.hasOwn(claims, slug) && Object.keys(claims).length >= MAX_CLAIMS) {
-      return failure("too-many-attempts", "the machine holds as many names for tokens as it keeps: the owner frees the names nobody deploys with sitesolide remove --confirm <name>");
-    }
-    return null;
+    const claims = await claimsWithRoom(slug);
+    return claims instanceof Response ? claims : null;
   }
 
   /**
@@ -1726,7 +1726,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       }
       if (left.length !== current.length) await system.writeCreations(encodeCreations(left));
     });
-    if (undone.length > 0) for (const creation of undone) console.log(`control: the creation of ${creation.slug} undone, its name settled with the others`);
+    for (const creation of undone) console.log(`control: the creation of ${creation.slug} undone, its name settled with the others`);
     await settleNames();
   }
 
