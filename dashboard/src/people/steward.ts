@@ -54,6 +54,7 @@ import {
   type PublicKey,
 } from "../../borrowed/assertion";
 import type { RandomSource } from "../sessions";
+import { createQueue, errorName, type Body, type Routes } from "../secrets/requests";
 import {
   MAX_AUTH_AGE_S,
   REAUTH_MAX_AGE_S,
@@ -74,10 +75,6 @@ import type { Who } from "./actions";
 import { attemptWait, countAttempt, EMPTY_UNLOCKS, failed, grant, isUnlocked, revokeMember, revokeSession, unlockedUntil, type UnlockBook } from "./unlocks";
 import { dropMember, dropSession, encodeBook, findSession, openMemberSession, readBook, spendNonce, type SessionBook } from "./sessions";
 import type { MembersSystem } from "./system";
-
-type Body = Record<string, unknown>;
-type Handler = (req: Request) => Promise<Response>;
-export type Routes = Record<string, Record<string, Handler>>;
 
 /** What the journal records of a person's event: the actor this steward verified, never one a request named. */
 export type MemberEvent = {
@@ -223,12 +220,6 @@ function fail(code: string, message: string): Response {
   return Response.json({ error: code, message }, { status: STATUSES[code] ?? 500 });
 }
 
-function errorName(e: unknown): string {
-  const code = (e as { code?: unknown } | null)?.code;
-  if (typeof code === "string") return code;
-  return e instanceof Error ? e.name : "unknown";
-}
-
 /** A slug's shape, before it enters the journal or a refusal. */
 const SLUG_SHAPE = /^[a-z0-9][a-z0-9.-]{0,62}$/;
 
@@ -247,12 +238,7 @@ export function createMemberRoutes(dependencies: MemberRoutesDependencies): Memb
    * Every change to the sessions or the keys, one at a time: two sign-ins
    * read side by side would each write a book without the other's session.
    */
-  let queue: Promise<unknown> = Promise.resolve();
-  function serially<T>(task: () => Promise<T>): Promise<T> {
-    const next = queue.then(task, task);
-    queue = next.catch(() => undefined);
-    return next;
-  }
+  const serially = createQueue();
 
   const registry = () => dependencies.access.read();
 

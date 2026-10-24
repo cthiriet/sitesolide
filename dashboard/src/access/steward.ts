@@ -61,6 +61,7 @@ import { isValidSlug } from "../../borrowed/manifest";
 import { cleanEmail } from "../../borrowed/sharing";
 import { generatePassword } from "../password";
 import type { MemberPrincipal } from "../people/steward";
+import { createQueue, errorName, type Body, type Handler, type Routes } from "../secrets/requests";
 import { reportText, migrate, readMembersFile } from "./migrate";
 import {
   MAX_DASHBOARD_PEOPLE,
@@ -102,10 +103,6 @@ import {
 import { granterName, judgeGrant, judgeRemoval, projectRefusal, readDuration, roleWord, signsInWithAccount, type Granter, type Machine } from "./rules";
 import type { AccessSystem } from "./system";
 
-type Body = Record<string, unknown>;
-type Handler = (req: Request) => Promise<Response>;
-export type Routes = Record<string, Record<string, Handler>>;
-
 /** What the journal records of access: the actor this steward verified, never one a request named. */
 export type AccessEvent = {
   operation: "access.add" | "access.change" | "access.remove" | "access.migrate" | "people.create" | "project.create" | "project.remove";
@@ -133,12 +130,6 @@ const STATUSES: Record<string, number> = {
 
 function fail(code: string, message: string): Response {
   return Response.json({ error: code, message }, { status: STATUSES[code] ?? 500 });
-}
-
-function errorName(e: unknown): string {
-  const code = (e as { code?: unknown } | null)?.code;
-  if (typeof code === "string") return code;
-  return e instanceof Error ? e.name : "unknown";
 }
 
 /** The steward's refusal of password access without the unlock: the dashboard turns it into the page's 423. */
@@ -219,13 +210,7 @@ export type AccessStore = {
 export function createAccessStore(dependencies: AccessStoreDependencies): AccessStore {
   const { system, journal } = dependencies;
   const sleep = dependencies.sleep ?? ((ms: number) => Bun.sleep(ms));
-
-  let queue: Promise<unknown> = Promise.resolve();
-  function serially<T>(task: () => Promise<T>): Promise<T> {
-    const next = queue.then(task, task);
-    queue = next.catch(() => undefined);
-    return next;
-  }
+  const serially = createQueue();
 
   let projectionNoted: string | null = null;
   /** What the projection was last written from, and its file as written: a read that finds either moved writes it again. */

@@ -151,6 +151,7 @@ import { createMemberActions, type Who } from "../people/actions";
 import type { MemberAuthority, SecretsForToken } from "../control/steward";
 import { readSecretsChange } from "../control/secrets";
 import type { StoreForToken } from "./store-api";
+import { createServe, errorName, GENERIC_MESSAGE, readJsonBody, type Body, type Handler, type Routes } from "./requests";
 import { machineRefusal, may } from "../people/powers";
 import { portalReading, type PortalAdmin } from "../people/portal";
 import { createAccessRoutes, createAccessStore, type AccessRoutes, type AccessStore } from "../access/steward";
@@ -241,8 +242,6 @@ export type StewardOptions = {
    */
   ownerStoreClaimed?: (slug: string) => Promise<boolean>;
 };
-
-export type Handler = (req: Request) => Promise<Response>;
 
 /**
  * The handler, and the one thing the control routes need to know of this one's
@@ -343,8 +342,6 @@ function error(code: ErrorCode, message: string, waitSeconds?: number): Response
   return Response.json(body, { status: STATUSES[code] });
 }
 
-const GENERIC_MESSAGE = "unexpected error, see the steward's log on the server";
-
 /** 503 and not 500: nothing is broken, the request can be made again in a moment. */
 function busy(): Response {
   const body: Failure = { error: "failure", message: "the server is busy, try again in a moment" };
@@ -390,52 +387,6 @@ function createLimit(max: number): <T>(task: () => Promise<T>) => Promise<T> {
     }
   };
 }
-
-type BodyRead = Uint8Array | "too-large" | "too-slow";
-
-/**
- * The body, piece by piece, bounded in size and in time: a body that never
- * arrives must not hold a place in flight indefinitely.
- */
-async function readStream(req: Request, max: number, timeoutMs: number): Promise<BodyRead> {
-  if (req.body === null) return new Uint8Array(0);
-  const reader = req.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expiration = new Promise<"too-slow">((resolve) => {
-    timer = setTimeout(() => resolve("too-slow"), timeoutMs);
-  });
-
-  try {
-    for (;;) {
-      const parsed = await Promise.race([reader.read(), expiration]);
-      if (parsed === "too-slow") {
-        reader.cancel().catch(() => undefined);
-        return "too-slow";
-      }
-      if (parsed.done) break;
-      total += parsed.value.byteLength;
-      if (total > max) {
-        reader.cancel().catch(() => undefined);
-        return "too-large";
-      }
-      chunks.push(parsed.value);
-    }
-  } finally {
-    clearTimeout(timer);
-  }
-
-  const bytes = new Uint8Array(total);
-  let position = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, position);
-    position += chunk.byteLength;
-  }
-  return bytes;
-}
-
-type Body = Record<string, unknown>;
 
 /** The dashboard's password: whoever unlocked with it. */
 const OWNER: Who = { actor: OWNER_ACTOR, member: null };
@@ -603,31 +554,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
 
   // --- Reading the body ------------------------------------------------------
 
-  async function readBody(req: Request, fields: string[], max = MAX_BODY_BYTES): Promise<Body | Response> {
-    const announced = Number(req.headers.get("content-length") ?? "0");
-    if (announced > max) return error("invalid", "request body too large");
-
-    const bytes = await readStream(req, max, bodyTimeoutMs);
-    if (bytes === "too-large") return error("invalid", "request body too large");
-    if (bytes === "too-slow") return error("invalid", "request body too slow");
-
-    let object: unknown;
-    try {
-      object = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-    } catch {
-      return error("invalid", "the request body must be a JSON object");
-    }
-    if (typeof object !== "object" || object === null || Array.isArray(object)) {
-      return error("invalid", "the request body must be a JSON object");
-    }
-    // An unknown field is a typing mistake of the relay's, refused rather than
-    // passed over in silence. Its name is not repeated: nothing says what it
-    // contains.
-    if (Object.keys(object).some((key) => !fields.includes(key))) {
-      return error("invalid", "unexpected field in the request body");
-    }
-    return object as Body;
-  }
+  const readBody = (req: Request, fields: string[], max = MAX_BODY_BYTES): Promise<Body | Response> => readJsonBody(req, fields, max, bodyTimeoutMs);
 
   /**
    * The body, then the token, before all the rest: without a token, nothing is
@@ -2506,7 +2433,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /** The store's routes, for the owner's unlocked dashboard or for root over SSH. */
-  function storeRoutes(ssh: boolean): Record<string, Record<string, (req: Request) => Promise<Response>>> {
+  function storeRoutes(ssh: boolean): Routes {
     const written = ssh ? sshStoreRoute : ownerStoreRoute;
     const route = (...args: Parameters<typeof written>) => told(written(...args));
     return {
@@ -2714,7 +2641,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       ? {}
       : createConnectorRoutes(options.connectors, { bodyWithToken, underLock, sites, now: () => system.now() });
 
-  const routes: Record<string, Record<string, (req: Request) => Promise<Response>>> = {
+  const routes: Routes = {
     ...storeRoutes(false),
     ...connectorRoutes,
     ...(members?.dashboard ?? {}),
@@ -2737,39 +2664,15 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     "/backups/audit": { GET: backups.audit },
   };
 
-  let inFlight = 0;
-
-  /**
-   * A person's routes under the names they had before `/people/`: a
-   * dashboard deployed before this steward still calls them. Kept one
-   * release.
-   */
-  const current = (path: string): string => (path.startsWith("/members/") ? `/people/${path.slice("/members/".length)}` : path);
-
-  /** One socket's routes, behind the same bound on requests in flight and the same catch. */
-  const serve = (table: Record<string, Record<string, (req: Request) => Promise<Response>>>): Handler => async (req) => {
-    if (inFlight >= maxInFlight) return busy();
-    inFlight++;
-    try {
-      const path = current(new URL(req.url).pathname);
-      const route = Object.hasOwn(table, path) ? table[path] : undefined;
-      if (route === undefined) return error("not-found", "no such route");
-
-      const handler = Object.hasOwn(route, req.method) ? route[req.method] : undefined;
-      if (handler === undefined) {
-        const body: Failure = { error: "invalid", message: "method not allowed" };
-        return Response.json(body, { status: 405, headers: { Allow: Object.keys(route).join(", ") } });
-      }
-      return await handler(req);
-    } catch (e) {
-      // The name of the error only: the message of a system error quotes a
-      // path, and that of another could quote worse.
-      console.error(`steward: unexpected error (${errorName(e)})`);
-      return error("failure", GENERIC_MESSAGE);
-    } finally {
-      inFlight--;
-    }
-  };
+  // Both sockets' routes, behind the same bound on requests in flight. A
+  // person's routes also answer under the names they had before `/people/`:
+  // a dashboard deployed before this steward still calls them. Kept one
+  // release.
+  const serve = createServe({
+    maxInFlight,
+    log: "steward",
+    rename: (path) => (path.startsWith("/members/") ? `/people/${path.slice("/members/".length)}` : path),
+  });
 
   const handle = serve(routes);
   return Object.assign(handle, {
@@ -2811,10 +2714,4 @@ function bounded(detail: string | null): string | null {
   if (detail === null) return null;
   const flat = detail.replace(/[\n\r\0]/g, " ");
   return flat.length <= MAX_FIELD ? flat : `${flat.slice(0, MAX_FIELD - 1)}…`;
-}
-
-function errorName(e: unknown): string {
-  const code = (e as { code?: unknown } | null)?.code;
-  if (typeof code === "string") return code;
-  return e instanceof Error ? e.name : "unknown";
 }

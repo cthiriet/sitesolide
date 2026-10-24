@@ -97,6 +97,7 @@ import type { AccessRoutes } from "../access/steward";
 import type { LeavingToken } from "../access/protocol";
 import { deployRefusal, MAX_TOKENS_PER_MEMBER, mintRefusals, narrowIdentity, scopeText, type MemberRights } from "../people/tokens";
 import type { StoreForToken } from "../secrets/store-api";
+import { createQueue, createServe, errorName, readJsonBody, type Body, type Handler } from "../secrets/requests";
 import { readFileContent, readFileName, readGenerate, readSecretsChange } from "./secrets";
 import { CREATION_MAX_AGE_MS, encodeCreations, MAX_PENDING, readCreations, type PendingCreation } from "./creations";
 import {
@@ -261,9 +262,6 @@ export type SecretsForToken = {
   restricted: (slug: string) => Promise<boolean>;
 };
 
-type Handler = (req: Request) => Promise<Response>;
-type Body = Record<string, unknown>;
-
 /**
  * The handler of the dashboard's socket, what the people's routes ask of it,
  * a person who left, every token of theirs revoked, `actor` the one who took
@@ -318,56 +316,6 @@ function line(text: string): string {
   return text.length <= 150 ? text : `${text.slice(0, 149)}…`;
 }
 
-function isObject(value: unknown): value is Body {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** The body, bounded in size and in time, an object with the expected fields and those alone. */
-async function readBody(req: Request, fields: string[], timeoutMs: number, max = MAX_CONTROL_BODY_BYTES): Promise<Body | Response> {
-  if (Number(req.headers.get("content-length") ?? "0") > max) return failure("invalid", "request body too large");
-  if (req.body === null) return failure("invalid", "the request body must be a JSON object");
-  const reader = req.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<"late">((resolve) => {
-    timer = setTimeout(() => resolve("late"), timeoutMs);
-  });
-  try {
-    for (;;) {
-      const read = await Promise.race([reader.read(), late]);
-      if (read === "late") {
-        reader.cancel().catch(() => undefined);
-        return failure("invalid", "request body too slow");
-      }
-      if (read.done) break;
-      total += read.value.byteLength;
-      if (total > max) {
-        reader.cancel().catch(() => undefined);
-        return failure("invalid", "request body too large");
-      }
-      chunks.push(read.value);
-    }
-  } finally {
-    clearTimeout(timer);
-  }
-  let object: unknown;
-  try {
-    object = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Bun.concatArrayBuffers(chunks)));
-  } catch {
-    return failure("invalid", "the request body must be a JSON object");
-  }
-  if (!isObject(object)) return failure("invalid", "the request body must be a JSON object");
-  if (Object.keys(object).some((key) => !fields.includes(key))) return failure("invalid", "unexpected field in the request body");
-  return object;
-}
-
-function errorName(e: unknown): string {
-  const code = (e as { code?: unknown } | null)?.code;
-  if (typeof code === "string") return code;
-  return e instanceof Error ? e.name : "unknown";
-}
-
 export function installerUnit(slug: string): string {
   return `${INSTALLER_PREFIX}@${slug}.service`;
 }
@@ -379,16 +327,14 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   const maxInFlight = options.maxInFlight ?? 16;
   const graceMs = options.graceMs ?? 15_000;
 
+  /** The body, bounded in size and in time, an object with the expected fields and those alone. */
+  const readBody = (req: Request, fields: string[], max = MAX_CONTROL_BODY_BYTES) => readJsonBody(req, fields, max, bodyTimeoutMs);
+
   /**
    * Every change to the registry, one at a time: two creations read side by
    * side would each write a registry without the other's token.
    */
-  let queue: Promise<unknown> = Promise.resolve();
-  function serially<T>(task: () => Promise<T>): Promise<T> {
-    const next = queue.then(task, task);
-    queue = next.catch(() => undefined);
-    return next;
-  }
+  const serially = createQueue();
 
   async function team(): Promise<Team | Response> {
     let text: string | null;
@@ -630,7 +576,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * /tokens/person/create.
    */
   async function newToken(req: Request): Promise<Response> {
-    const body = await readBody(req, ["token", "label", "holder", "expiresAt", "scope"], bodyTimeoutMs);
+    const body = await readBody(req, ["token", "label", "holder", "expiresAt", "scope"]);
     if (body instanceof Response) return body;
     if (!(await options.isUnlocked(body.token))) return failure("locked", "locked, unlock again");
     const holder = readHolder(body.holder);
@@ -669,7 +615,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   async function revoke(req: Request): Promise<Response> {
-    const body = await readBody(req, ["id"], bodyTimeoutMs);
+    const body = await readBody(req, ["id"]);
     if (body instanceof Response) return body;
     return serially(async () => {
       const registry = await team();
@@ -688,7 +634,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   // --- deploying -----------------------------------------------------------------
 
   async function authenticateRoute(req: Request): Promise<Response> {
-    const body = await readBody(req, ["bearer"], bodyTimeoutMs);
+    const body = await readBody(req, ["bearer"]);
     if (body instanceof Response) return body;
     const holder = await identify(body.bearer);
     if (holder instanceof Response) return holder;
@@ -696,7 +642,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   async function preflight(req: Request): Promise<Response> {
-    const body = await readBody(req, ["bearer", "slug"], bodyTimeoutMs);
+    const body = await readBody(req, ["bearer", "slug"]);
     if (body instanceof Response) return body;
     const holder = await identify(body.bearer);
     if (holder instanceof Response) return holder;
@@ -721,7 +667,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   async function deploy(req: Request): Promise<Response> {
-    const body = await readBody(req, ["bearer", "deployment", "slug", "manifest"], bodyTimeoutMs);
+    const body = await readBody(req, ["bearer", "deployment", "slug", "manifest"]);
     if (body instanceof Response) return body;
     const holder = await identify(body.bearer);
     if (holder instanceof Response) return holder;
@@ -836,7 +782,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   async function logs(req: Request): Promise<Response> {
-    const body = await readBody(req, ["bearer", "slug", "lines", "cursor"], bodyTimeoutMs);
+    const body = await readBody(req, ["bearer", "slug", "lines", "cursor"]);
     if (body instanceof Response) return body;
     const holder = await identify(body.bearer);
     if (holder instanceof Response) return holder;
@@ -886,7 +832,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * rules, the person a token belongs to an Admin of it, Can open alone.
    */
   async function accessRoute(req: Request, fields: string[], run: (holder: Holder, slug: string, body: Body) => Promise<Response>): Promise<Response> {
-    const body = await readBody(req, ["bearer", "slug", ...fields], bodyTimeoutMs);
+    const body = await readBody(req, ["bearer", "slug", ...fields]);
     if (body instanceof Response) return body;
     const holder = await identify(body.bearer);
     if (holder instanceof Response) return holder;
@@ -1088,7 +1034,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * come, a deployment started meanwhile included.
    */
   async function restartRoute(req: Request): Promise<Response> {
-    const body = await readBody(req, ["bearer", "slug"], bodyTimeoutMs);
+    const body = await readBody(req, ["bearer", "slug"]);
     if (body instanceof Response) return body;
     const holder = await identify(body.bearer);
     if (holder instanceof Response) return holder;
@@ -1229,7 +1175,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * answers the refusal, and lists nothing.
    */
   async function storeList(req: Request): Promise<Response> {
-    const body = await readBody(req, ["bearer", "slug", "quiet"], bodyTimeoutMs);
+    const body = await readBody(req, ["bearer", "slug", "quiet"]);
     if (body instanceof Response) return body;
     if (body.quiet !== undefined && typeof body.quiet !== "boolean") return failure("invalid", "quiet must be true or false");
     const holder = await identify(body.bearer);
@@ -1287,7 +1233,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
 
   /** Names set and removed in one write, all or nothing. A name that starts like a key is a value, refused unquoted. */
   async function storeChange(req: Request): Promise<Response> {
-    const body = await readBody(req, ["bearer", "slug", "set", "remove"], bodyTimeoutMs, MAX_SECRETS_CHANGE_BODY_BYTES);
+    const body = await readBody(req, ["bearer", "slug", "set", "remove"], MAX_SECRETS_CHANGE_BODY_BYTES);
     if (body instanceof Response) return body;
     const change = readSecretsChange(body.set, body.remove);
     if ("refusal" in change) return failure("invalid", change.refusal);
@@ -1299,7 +1245,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
 
   /** A value drawn on the machine: never sent back, journaled as a set. */
   async function storeGenerate(req: Request): Promise<Response> {
-    const body = await readBody(req, ["bearer", "slug", "name", "format", "bytes", "replace"], bodyTimeoutMs);
+    const body = await readBody(req, ["bearer", "slug", "name", "format", "bytes", "replace"]);
     if (body instanceof Response) return body;
     const asked = readGenerate(body.name, body.format, body.bytes, body.replace);
     if ("refusal" in asked) return failure("invalid", asked.refusal);
@@ -1308,7 +1254,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
 
   /** A file of the store, its bytes in base64, 64 KiB at most: judged here first, never quoted. */
   async function storeSetFile(req: Request): Promise<Response> {
-    const body = await readBody(req, ["bearer", "slug", "name", "content"], bodyTimeoutMs, MAX_SECRETS_CHANGE_BODY_BYTES);
+    const body = await readBody(req, ["bearer", "slug", "name", "content"], MAX_SECRETS_CHANGE_BODY_BYTES);
     if (body instanceof Response) return body;
     const name = readFileName(body.name);
     if (typeof name !== "string") return failure("invalid", name.refusal);
@@ -1320,7 +1266,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
 
   /** A file of the store removed, that file alone: never the folder, which every unit loads. */
   async function storeRemoveFile(req: Request): Promise<Response> {
-    const body = await readBody(req, ["bearer", "slug", "name"], bodyTimeoutMs);
+    const body = await readBody(req, ["bearer", "slug", "name"]);
     if (body instanceof Response) return body;
     const name = readFileName(body.name);
     if (typeof name !== "string") return failure("invalid", name.refusal);
@@ -1333,7 +1279,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
 
   async function memberList(req: Request): Promise<Response> {
     if (members === undefined) return failure("not-found", "no such route");
-    const body = await readBody(req, ["session"], bodyTimeoutMs);
+    const body = await readBody(req, ["session"]);
     if (body instanceof Response) return body;
     const principal = await members.authorize(body.session, null);
     if (principal instanceof Response) return principal;
@@ -1353,7 +1299,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    */
   async function memberCreate(req: Request): Promise<Response> {
     if (members === undefined) return failure("not-found", "no such route");
-    const body = await readBody(req, ["session", "token", "label", "expiresAt", "scope"], bodyTimeoutMs);
+    const body = await readBody(req, ["session", "token", "label", "expiresAt", "scope"]);
     if (body instanceof Response) return body;
     const principal = await members.authorize(body.session, body.token);
     if (principal instanceof Response) return principal;
@@ -1388,7 +1334,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   /** A person revokes a token of theirs, whoever made it, no unlock, as the owner does; anyone else's reads as unknown. */
   async function memberRevoke(req: Request): Promise<Response> {
     if (members === undefined) return failure("not-found", "no such route");
-    const body = await readBody(req, ["session", "id"], bodyTimeoutMs);
+    const body = await readBody(req, ["session", "id"]);
     if (body instanceof Response) return body;
     const principal = await members.authorize(body.session, null);
     if (principal instanceof Response) return principal;
@@ -1464,7 +1410,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * name by then, the owner's own project included.
    */
   async function forgetProject(req: Request): Promise<Response> {
-    const body = await readBody(req, ["slug"], bodyTimeoutMs);
+    const body = await readBody(req, ["slug"]);
     if (body instanceof Response) return body;
     const { slug } = body;
     if (typeof slug !== "string" || !isValidSlug(slug)) return failure("invalid", "slug: lowercase letters, digits and dashes");
@@ -1565,7 +1511,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * Journaled under the owner.
    */
   async function takeBackRoute(req: Request): Promise<Response> {
-    const body = await readBody(req, ["slug"], bodyTimeoutMs);
+    const body = await readBody(req, ["slug"]);
     if (body instanceof Response) return body;
     const { slug } = body;
     if (typeof slug !== "string" || !isValidSlug(slug)) return failure("invalid", "slug: lowercase letters, digits and dashes");
@@ -1655,12 +1601,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   // --- creations and the tokens from before -----------------------------------------
 
   /** The creations waiting for their installer, one change at a time. */
-  let creationsTurn: Promise<unknown> = Promise.resolve();
-  function inCreationsTurn<T>(task: () => Promise<T>): Promise<T> {
-    const next = creationsTurn.then(task, task);
-    creationsTurn = next.catch(() => undefined);
-    return next;
-  }
+  const inCreationsTurn = createQueue();
 
   async function pending(): Promise<PendingCreation[] | Response> {
     let text: string | null;
@@ -1964,32 +1905,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
         }),
   };
 
-  let inFlight = 0;
-  /** One socket's routes, behind the same bound on requests in flight and the same catch. */
-  const serve = (table: Record<string, Record<string, Handler>>): Handler => async (req) => {
-    if (inFlight >= maxInFlight) {
-      return Response.json({ error: "failure", message: "the server is busy, try again in a moment" } satisfies ControlFailure, { status: 503 });
-    }
-    inFlight++;
-    try {
-      const path = new URL(req.url).pathname;
-      const route = Object.hasOwn(table, path) ? table[path] : undefined;
-      if (route === undefined) return failure("not-found", "no such route");
-      const handler = Object.hasOwn(route, req.method) ? route[req.method] : undefined;
-      if (handler === undefined) {
-        return Response.json({ error: "invalid", message: "method not allowed" } satisfies ControlFailure, {
-          status: 405,
-          headers: { Allow: Object.keys(route).join(", ") },
-        });
-      }
-      return await handler(req);
-    } catch (e) {
-      console.error(`control: unexpected error (${errorName(e)})`);
-      return failure("failure", "unexpected error, see the steward's log on the server");
-    } finally {
-      inFlight--;
-    }
-  };
+  // Both sockets' routes, behind the same bound on requests in flight.
+  const serve = createServe({ maxInFlight, log: "control" });
   return Object.assign(serve(routes), {
     revokeMember,
     tokensOf,

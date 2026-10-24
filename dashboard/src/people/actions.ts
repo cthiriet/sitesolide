@@ -40,10 +40,7 @@ import type { ProjectView } from "../secrets/protocol";
 import { generalNeedsUnlock, machineRefusal, may, needsUnlock, powerRefusal, roleDetail, type Power } from "./powers";
 import type { Role, Roles } from "./protocol";
 import type { MemberPrincipal, MemberRoutes, RestartRefusal } from "./steward";
-
-type Body = Record<string, unknown>;
-type Handler = (req: Request) => Promise<Response>;
-export type Routes = Record<string, Record<string, Handler>>;
+import type { Body, Handler, Routes } from "../secrets/requests";
 
 /**
  * Who the steward acts for: the email it verified, as the journal writes it.
