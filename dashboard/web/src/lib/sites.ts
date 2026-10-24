@@ -39,15 +39,15 @@ export const HEADLESS_NOTE = "Runs in the background, serves no page"
  */
 export function siteAddress(site: Pick<Site, "address" | "domain" | "headless">): Address {
   const domain = site.domain
-  const preversion = { href: `https://${site.address}`, text: site.address }
-  if (site.headless && domain === null) return { ...preversion, note: { text: HEADLESS_NOTE, warn: false } }
-  if (domain === null) return { ...preversion, note: null }
+  const preview = { href: `https://${site.address}`, text: site.address }
+  if (site.headless && domain === null) return { ...preview, note: { text: HEADLESS_NOTE, warn: false } }
+  if (domain === null) return { ...preview, note: null }
   if (domain.active && domain.route) {
     return { href: `https://${domain.name}`, text: domain.name, note: { text: site.address, warn: false } }
   }
-  if (domain.active) return { ...preversion, note: { text: `${domain.name} not routed`, warn: true } }
-  if (domain.route) return { ...preversion, note: { text: `${domain.name} routed, not active`, warn: true } }
-  return { ...preversion, note: { text: `Pending: ${domain.name}`, warn: false } }
+  if (domain.active) return { ...preview, note: { text: `${domain.name} not routed`, warn: true } }
+  if (domain.route) return { ...preview, note: { text: `${domain.name} routed, not active`, warn: true } }
+  return { ...preview, note: { text: `Pending: ${domain.name}`, warn: false } }
 }
 
 // --- General access ------------------------------------------------------------------

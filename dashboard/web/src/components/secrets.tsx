@@ -165,7 +165,7 @@ function FileBlock({ slug, file }: { slug: string; file: FileView }) {
                   unlocked={actions.state.open}
                   read={() => actions.read(variableTarget)}
                   onUnlock={actions.unlock}
-                  onEdit={() => actions.modifier(variableTarget)}
+                  onEdit={() => actions.edit(variableTarget)}
                   onRemove={() => actions.remove(variableTarget)}
                 />
               )

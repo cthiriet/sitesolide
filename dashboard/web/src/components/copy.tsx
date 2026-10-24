@@ -54,7 +54,7 @@ const FEEDBACK_MS = 2000
  */
 export function useCopy(announcement: string) {
   const announce = useAnnounce()
-  const [state, setCopyState] = useState<"repos" | "copied" | "failure">("repos")
+  const [state, setCopyState] = useState<"idle" | "copied" | "failure">("idle")
   const timer = useRef<number | undefined>(undefined)
 
   useEffect(() => () => window.clearTimeout(timer.current), [])
@@ -71,13 +71,13 @@ export function useCopy(announcement: string) {
       }
       setCopyState("copied")
       announce(announcement)
-      timer.current = window.setTimeout(() => setCopyState("repos"), FEEDBACK_MS)
+      timer.current = window.setTimeout(() => setCopyState("idle"), FEEDBACK_MS)
       return true
     },
     [announcement, announce],
   )
 
-  const reset = useCallback(() => setCopyState("repos"), [])
+  const reset = useCallback(() => setCopyState("idle"), [])
 
   return { state, copy, reset }
 }

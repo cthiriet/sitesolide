@@ -355,12 +355,12 @@ export type Progress = { part: number; usual: number; elapsed: string; slow: boo
  * progress, which the page does not know.
  */
 export function restartProgress(elapsedMs: number): Progress {
-  const borne = Math.max(0, elapsedMs)
+  const bounded = Math.max(0, elapsedMs)
   return {
-    part: Math.min(1, borne / RESTART_SCALE_MS),
+    part: Math.min(1, bounded / RESTART_SCALE_MS),
     usual: RESTART_USUAL_MS / RESTART_SCALE_MS,
-    elapsed: `${Math.floor(borne / 1000)}s`,
-    slow: borne >= RESTART_SLOW_MS,
+    elapsed: `${Math.floor(bounded / 1000)}s`,
+    slow: bounded >= RESTART_SLOW_MS,
   }
 }
 

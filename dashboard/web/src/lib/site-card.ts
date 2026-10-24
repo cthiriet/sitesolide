@@ -109,7 +109,7 @@ export type ServiceCard =
 
 function serviceGaugeOf(memory: number | null, peak: number | null, limit: number | null): ServiceGauge | null {
   if (memory === null) return null
-  const partPic = peak === null || limit === null || limit <= 0 ? null : Math.round((peak / limit) * 100)
+  const peakShare = peak === null || limit === null || limit <= 0 ? null : Math.round((peak / limit) * 100)
   return {
     tile: {
       heading: "Memory",
@@ -118,9 +118,9 @@ function serviceGaugeOf(memory: number | null, peak: number | null, limit: numbe
       detail: limit === null ? "No limit" : `of ${size(limit)}`,
       level: serviceLevel(memory, peak, limit),
     },
-    peak: partPic === null ? null : Math.min(100, partPic),
+    peak: peakShare === null ? null : Math.min(100, peakShare),
     peakDetail:
-      peak === null ? "No peak recorded" : partPic === null ? `Peak ${size(peak)}` : `Peak ${size(peak)}, ${partPic}% of the limit`,
+      peak === null ? "No peak recorded" : peakShare === null ? `Peak ${size(peak)}` : `Peak ${size(peak)}, ${peakShare}% of the limit`,
   }
 }
 
@@ -328,7 +328,7 @@ export type AddressRow = {
   name: string
   /** Null when the address does not answer: a link to it would lead nowhere. */
   href: string | null
-  role: "domain" | "alias" | "preversion" | "main"
+  role: "domain" | "alias" | "preview" | "main"
   /** The domain's state; the aliases and the preview address have none of their own. */
   state: ServiceState | null
   detail: string | null
@@ -355,10 +355,10 @@ export function siteAddresses(site: Pick<Site, "slug" | "address" | "domain" | "
             ? [{ tone: "attention", label: "Routed, not active" }, "In the routing table, no longer active in sitesolide.json"]
             : [{ tone: "neutral", label: "Pending" }, "Declared in sitesolide.json, not active yet"]
     lines.push({ name: domain.name, href, role: "domain", state, detail })
-    for (const aliases of domain.aliases) {
+    for (const alias of domain.aliases) {
       lines.push({
-        name: aliases,
-        href: domain.route ? `https://${aliases}` : null,
+        name: alias,
+        href: domain.route ? `https://${alias}` : null,
         role: "alias",
         state: null,
         detail: `Alias of ${domain.name}`,
@@ -370,7 +370,7 @@ export function siteAddresses(site: Pick<Site, "slug" | "address" | "domain" | "
   lines.push({
     name: site.address,
     href: `https://${site.address}`,
-    role: main ? "main" : "preversion",
+    role: main ? "main" : "preview",
     state: null,
     detail: site.headless
       ? "Serves no page: it answers that the project runs in the background"

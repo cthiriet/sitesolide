@@ -183,7 +183,7 @@ describe("a site's addresses", () => {
       {
         name: "calendar.test-zone.invalid",
         href: "https://calendar.test-zone.invalid",
-        role: "preversion",
+        role: "preview",
         state: null,
         detail: "Preview address, always served",
       },
@@ -195,7 +195,7 @@ describe("a site's addresses", () => {
     expect(lines.map((line) => [line.name, line.role, line.href])).toEqual([
       ["wheels.test", "domain", "https://wheels.test"],
       ["www.wheels.test", "alias", "https://www.wheels.test"],
-      ["calendar.test-zone.invalid", "preversion", "https://calendar.test-zone.invalid"],
+      ["calendar.test-zone.invalid", "preview", "https://calendar.test-zone.invalid"],
     ])
     expect(lines[0]?.state).toEqual({ tone: "ok", label: "Active" })
     expect(lines[1]?.detail).toBe("Alias of wheels.test")
@@ -489,7 +489,7 @@ describe("a project that serves no page", () => {
       {
         name: "courier.test-zone.invalid",
         href: "https://courier.test-zone.invalid",
-        role: "preversion",
+        role: "preview",
         state: null,
         detail: "Serves no page: it answers that the project runs in the background",
       },

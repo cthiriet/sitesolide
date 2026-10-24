@@ -378,8 +378,8 @@ export type ChangeProgress = { part: number; elapsed: string; slow: boolean }
 
 /** The time actually elapsed on the track, never an invented progress. */
 export function changeProgress(elapsedMs: number): ChangeProgress {
-  const borne = Math.max(0, elapsedMs)
-  return { part: Math.min(1, borne / CHANGE_SCALE_MS), elapsed: `${Math.floor(borne / 1000)}s`, slow: borne >= CHANGE_SLOW_MS }
+  const bounded = Math.max(0, elapsedMs)
+  return { part: Math.min(1, bounded / CHANGE_SCALE_MS), elapsed: `${Math.floor(bounded / 1000)}s`, slow: bounded >= CHANGE_SLOW_MS }
 }
 
 // --- People with access ----------------------------------------------------------------

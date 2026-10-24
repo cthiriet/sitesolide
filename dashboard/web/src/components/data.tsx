@@ -66,17 +66,17 @@ export function useSecrets(generation: number, onSessionExpired: () => void, ena
   const [until, setUnlockedUntil] = useState<number | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const inFlight = useRef<Promise<void> | null>(null)
-  const encore = useRef(false)
+  const followUp = useRef(false)
 
   const reload = useCallback((): Promise<void> => {
     if (inFlight.current !== null) {
-      encore.current = true
+      followUp.current = true
       return inFlight.current
     }
-    const tache = (async () => {
+    const task = (async () => {
       try {
         do {
-          encore.current = false
+          followUp.current = false
           const { status, body } = await readSecrets()
           if (status === 200 && body !== null && Array.isArray(body.projects)) {
             setProjects(sortProjects(body.projects))
@@ -91,13 +91,13 @@ export function useSecrets(generation: number, onSessionExpired: () => void, ena
           }
           if (refusal.kind === "locked") setUnlockedUntil(null)
           else setProblem(refusal.message)
-        } while (encore.current)
+        } while (followUp.current)
       } finally {
         inFlight.current = null
       }
     })()
-    inFlight.current = tache
-    return tache
+    inFlight.current = task
+    return task
   }, [onSessionExpired])
 
   // Read only by whom it concerns: a person who is a Viewer everywhere has none.

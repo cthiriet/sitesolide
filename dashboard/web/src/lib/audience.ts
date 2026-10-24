@@ -110,8 +110,8 @@ export function figures(measure: Measure): Figure[] {
 export function axisCeiling(maximum: number): number {
   if (maximum <= 0) return 1
   const power = 10 ** Math.floor(Math.log10(maximum))
-  for (const pas of [1, 2, 5, 10]) {
-    const candidate = pas * power
+  for (const step of [1, 2, 5, 10]) {
+    const candidate = step * power
     if (maximum <= candidate) return candidate
   }
   return 10 * power

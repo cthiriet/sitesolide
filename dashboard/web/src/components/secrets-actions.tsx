@@ -101,7 +101,7 @@ export type SecretsActions = {
   restartNow: (slug: string) => void
   read: (target: VariableTarget) => Promise<ReadResult>
   add: (target: FileTarget) => void
-  modifier: (target: VariableTarget) => void
+  edit: (target: VariableTarget) => void
   remove: (target: VariableTarget) => void
   create: (target: FileTarget) => void
   restore: (target: FileTarget) => void
@@ -157,7 +157,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   const [unlockOpen, setUnlockOpen] = useState(false)
   const [editing, setEditing] = useState<(EditTarget & { open: boolean }) | null>(null)
   const [removal, setRemoval] = useState<Confirmation | null>(null)
-  const [restoration, setRestauration] = useState<Confirmation | null>(null)
+  const [restoration, setRestoration] = useState<Confirmation | null>(null)
   const [confirmationInProgress, setConfirmationInProgress] = useState(false)
   const [confirmError, setConfirmError] = useState("")
   const [restartState, setRestartState] = useState<RestartState | null>(null)
@@ -225,11 +225,11 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   }, [restartState?.open])
 
   // A reconnection wait stops with the provider: it reads nothing more for anyone.
-  const monte = useRef(true)
+  const mounted = useRef(true)
   useEffect(() => {
-    monte.current = true
+    mounted.current = true
     return () => {
-      monte.current = false
+      mounted.current = false
     }
   }, [])
 
@@ -270,7 +270,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   function closeDialogs() {
     setEditing((before) => before && { ...before, open: false })
     setRemoval((before) => before && { ...before, open: false })
-    setRestauration((before) => before && { ...before, open: false })
+    setRestoration((before) => before && { ...before, open: false })
     setRestartState((before) => before && { ...before, open: false })
     setPassword((before) => before && { ...before, open: false })
     setAccessChange((before) => before && { ...before, open: false })
@@ -434,7 +434,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   function askRestore(target: FileTarget) {
     require(() => {
       setConfirmError("")
-      setRestauration({ ...target, variable: null, open: true })
+      setRestoration({ ...target, variable: null, open: true })
     })
   }
 
@@ -446,7 +446,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     try {
       const { status, body } = await restoreSecretFile(target)
       if (succeeded(status)) {
-        setRestauration({ ...restoration, open: false })
+        setRestoration({ ...restoration, open: false })
         announce(`Restored the previous ${target.file}. Restart ${target.slug} to use it.`)
         return afterAction()
       }
@@ -513,7 +513,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   async function waitForReturn() {
     for (;;) {
       await pause(RECONNECT_MS)
-      if (!monte.current) return
+      if (!mounted.current) return
       const { status, body } = await readSecrets()
       if (status === 401) return sessionExpired()
       if (status === 200 && body !== null && (body.until ?? null) === null) break
@@ -609,7 +609,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     },
     read,
     add: (target) => openEditor(target, null),
-    modifier: (target) => openEditor(target, target.variable),
+    edit: (target) => openEditor(target, target.variable),
     remove: askRemoval,
     create,
     restore: askRestore,
@@ -706,7 +706,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
         inProgress={confirmationInProgress}
         error={confirmError}
         onConfirm={() => void confirmRestore()}
-        onClose={() => setRestauration((before) => before && { ...before, open: false })}
+        onClose={() => setRestoration((before) => before && { ...before, open: false })}
         focusReturn={actionFocusReturn}
       />
 
