@@ -32,7 +32,7 @@
  * Built around their dependencies, like src/routes.ts: the tests drive them
  * with a provider they run themselves.
  */
-import type { AuditStore, NewEvent } from "./database";
+import { recordQuietly, type AuditStore, type NewEvent } from "./database";
 import {
   bindingHash,
   drawBinding,
@@ -176,11 +176,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
       failures.set(key, { minute, count });
       if (count > FAILURES_PER_MINUTE) return;
     }
-    try {
-      options.audit.record(event, now);
-    } catch (err) {
-      console.error(`audit: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    recordQuietly(options.audit, event, now);
   }
 
   function siteOrigin(host: string): string {

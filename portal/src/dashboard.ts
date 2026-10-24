@@ -34,8 +34,9 @@
  * redemption: a key the steward lays or replaces later needs no restart.
  */
 import { readFileSync } from "node:fs";
+import { isRelayed, respond } from "./admin";
 import { readPrivateKey, signAssertion, type PrivateKey } from "./assertion";
-import type { AuditStore, NewEvent } from "./database";
+import { recordQuietly, type AuditStore, type NewEvent } from "./database";
 import { bindingHash, isBinding, issueFlow, type HandoffStore } from "./handoff";
 import { isAcceptableUrl, type Settings } from "./oidc";
 import { isValidHost, safeReturnTo } from "./gate";
@@ -93,15 +94,6 @@ export type DashboardAdmin = {
   redeem: (req: Request) => Promise<Response>;
 };
 
-function respond(body: unknown, status = 200): Response {
-  return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
-}
-
-/** What has come through Caddy has no business here. */
-function isRelayed(req: Request): boolean {
-  return req.headers.has("x-forwarded-for") || req.headers.has("x-portal-hote");
-}
-
 async function readBody(req: Request): Promise<Record<string, unknown> | null> {
   try {
     const body: unknown = await req.json();
@@ -113,14 +105,7 @@ async function readBody(req: Request): Promise<Record<string, unknown> | null> {
 
 export function createDashboardAdmin(options: DashboardAdminOptions, clock: () => number = Date.now): DashboardAdmin {
   const host = options.origin === null ? null : new URL(options.origin).hostname;
-
-  function record(event: NewEvent, now: number): void {
-    try {
-      options.audit.record(event, now);
-    } catch (err) {
-      console.error(`audit: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
+  const record = (event: NewEvent, now: number) => recordQuietly(options.audit, event, now);
 
   /** Why nothing is offered, or null when everything a dashboard sign-in needs is there. */
   function unavailable(): Response | null {

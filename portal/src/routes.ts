@@ -5,7 +5,7 @@
  */
 import { remainingWait, isAcceptableSubmission } from "../borrowed/auth";
 import { grantActor, grantExpiration, type PasswordGrant, type Role } from "./access";
-import type { AuditStore, NewEvent } from "./database";
+import { recordQuietly, type AuditStore, type NewEvent } from "./database";
 import { issueSignOut, IDENTITY_DURATION_S, OWNER_SIGN_OUT } from "./handoff";
 import type { Settings } from "./oidc";
 import { signedOutPage, signInPage } from "./page";
@@ -127,14 +127,7 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
     });
   }
 
-  function audit(event: NewEvent, now: number): void {
-    try {
-      options.audit?.record(event, now);
-    } catch (err) {
-      // The audit tells what happened; it must never be what stops it.
-      console.error(`audit: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
+  const audit = (event: NewEvent, now: number) => recordQuietly(options.audit, event, now);
 
   function open(returnTo: string, token: string, durationS: number): Response {
     return new Response(null, {

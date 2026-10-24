@@ -29,12 +29,13 @@ import type { AuditStore } from "./database";
 import type { Settings } from "./oidc";
 import type { AccessReader } from "./projection";
 
-function respond(body: unknown, status = 200): Response {
+/** The admin routes' answer, never cached; src/dashboard.ts answers with it too. */
+export function respond(body: unknown, status = 200): Response {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-/** What has come through Caddy has no business here. */
-function isRelayed(req: Request): boolean {
+/** What has come through Caddy has no business here, nor on the dashboard's two routes. */
+export function isRelayed(req: Request): boolean {
   return req.headers.has("x-forwarded-for") || req.headers.has("x-portal-hote");
 }
 

@@ -18,8 +18,9 @@
  *   for the cookie;
  * - `<expiration>.id.<identity>.<signature>` for someone who signed in with
  *   the identity provider, `<identity>` being their verified email and name
- *   in base64url JSON. The gate then re-reads the site's sharing policy on
- *   every request, which is what makes removing someone immediate.
+ *   in base64url JSON. The gate then judges them against the site's people
+ *   with access on every request, which is what makes removing someone
+ *   immediate.
  *
  * The first two are the forms from before identities, unchanged: the cookies
  * in circulation on the machine stay valid. A portal rolled back to an older
@@ -134,8 +135,11 @@ function decodeJson(text: string): unknown {
   }
 }
 
-/** An identity read back from JSON, judged again rather than trusted. */
-function identityFrom(value: unknown): Identity | null {
+/**
+ * An identity read back from JSON, the cookie's or a sealed token's, judged
+ * again rather than trusted.
+ */
+export function readIdentity(value: unknown): Identity | null {
   if (typeof value !== "object" || value === null) return null;
   const { e, n } = value as Record<string, unknown>;
   const email = cleanEmail(e);
@@ -195,7 +199,7 @@ export function readToken(
     if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) return null;
     // Read only once the signature holds: a forged payload never reaches
     // JSON.parse, and what the portal signed is judged again all the same.
-    const identity = identityFrom(decodeJson(payload));
+    const identity = readIdentity(decodeJson(payload));
     return identity === null ? null : { guest: null, identity };
   }
 
@@ -239,11 +243,6 @@ export function unseal(key: Uint8Array, token: string | null): Record<string, un
   if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) return null;
   const value = decodeJson(parts[0]!);
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
-/** An identity carried in a sealed token, judged like the cookie's. */
-export function readIdentity(value: unknown): Identity | null {
-  return identityFrom(value);
 }
 
 /**

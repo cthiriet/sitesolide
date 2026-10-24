@@ -211,6 +211,15 @@ export type AuditStore = {
   recent: (limit: number, before?: number) => AuditEvent[];
 };
 
+/** Records an event, and never throws: the audit tells what happened, it must never be what stops it. */
+export function recordQuietly(audit: AuditStore | undefined, event: NewEvent, now: number): void {
+  try {
+    audit?.record(event, now);
+  } catch (err) {
+    console.error(`audit: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 /** Beyond this, an event is forgotten: the audit answers "who got in lately", not "since when". */
 export const AUDIT_RETENTION_MS = 180 * 24 * 3600 * 1000;
 
