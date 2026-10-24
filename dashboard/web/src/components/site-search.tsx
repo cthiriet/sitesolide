@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, type KeyboardEvent as FieldKeyEvent, type Ref
 import { Search, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { SEGMENTED, Segment } from "@/components/page"
 import { searchShortcut } from "@/lib/search"
 import { FILTERS, type SiteFilter } from "@/lib/sites"
 import { cn } from "@/lib/utils"
@@ -122,32 +123,19 @@ export function SiteFilterChips({
   onValue: (filter: SiteFilter) => void
 }) {
   return (
-    <div
-      role="group"
-      aria-label="Filter sites"
-      className="grid w-full grid-cols-5 gap-0.5 rounded-lg border bg-card p-0.5 sm:inline-flex sm:w-auto dark:bg-background"
-    >
-      {FILTERS.map((filter) => {
-        const selected = filter.key === value
-        return (
-          <button
-            key={filter.key}
-            type="button"
-            aria-pressed={selected}
-            title={filter.description}
-            onClick={() => onValue(filter.key)}
-            className={cn(
-              "inline-flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-md px-1.5 text-[0.8125rem] whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-[1.875rem] sm:px-2.5",
-              selected
-                ? "bg-muted font-medium text-strong"
-                : "text-secondary-foreground hover:bg-muted/60 hover:text-strong",
-            )}
-          >
-            {filter.label}
-            <span className="text-xs font-normal text-muted-foreground tabular-nums">{counts[filter.key]}</span>
-          </button>
-        )
-      })}
+    <div role="group" aria-label="Filter sites" className={cn(SEGMENTED, "grid w-full grid-cols-5 gap-0.5 sm:inline-flex sm:w-auto")}>
+      {FILTERS.map((filter) => (
+        <Segment
+          key={filter.key}
+          selected={filter.key === value}
+          title={filter.description}
+          onClick={() => onValue(filter.key)}
+          className="min-w-0 gap-1.5 px-1.5 sm:px-2.5"
+        >
+          {filter.label}
+          <span className="text-xs font-normal text-muted-foreground tabular-nums">{counts[filter.key]}</span>
+        </Segment>
+      ))}
     </div>
   )
 }

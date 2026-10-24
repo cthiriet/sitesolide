@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react"
+import { useId, type ComponentProps, type ReactNode } from "react"
 import {
   CircleX,
   CloudOff,
@@ -134,6 +134,29 @@ export function Count({ children, className }: { children: ReactNode; className?
     >
       {children}
     </span>
+  )
+}
+
+/** A segmented control's frame: a bordered card, on `background` in dark so that the chosen grey still shows. */
+export const SEGMENTED = "rounded-lg border bg-card p-0.5 dark:bg-background"
+
+/**
+ * One segment of a segmented control, a toggle button that reads and is
+ * reached on its own: the chosen one takes the grey and the `strong` text of
+ * the sidebar's current page.
+ */
+export function Segment({ selected, className, ...props }: ComponentProps<"button"> & { selected: boolean }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      className={cn(
+        "inline-flex h-9 items-center justify-center rounded-md px-2.5 text-[0.8125rem] whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-[1.875rem]",
+        selected ? "bg-muted font-medium text-strong" : "text-secondary-foreground hover:bg-muted/60 hover:text-strong",
+        className,
+      )}
+      {...props}
+    />
   )
 }
 

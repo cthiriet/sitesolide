@@ -24,7 +24,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useAnnounce } from "@/components/copy"
-import { INPUT_DIALOG } from "@/components/page"
+import { INPUT_DIALOG, SEGMENTED, Segment } from "@/components/page"
 import { describedBy, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
 import { generateStoreVariable, restoreStore, setStoreFile, setStoreVariable } from "@/lib/api"
 import { size } from "@/lib/format"
@@ -229,29 +229,24 @@ function ValueForm({
       )}
 
       {/* Two ways to give a value: the segment chosen takes the muted grey, as the page's filters do. */}
-      <div role="group" aria-label="How to give its value" className="inline-flex w-fit rounded-lg border bg-card p-0.5 dark:bg-background">
+      <div role="group" aria-label="How to give its value" className={cn(SEGMENTED, "inline-flex w-fit")}>
         {(
           [
             ["type", "Type a value"],
             ["generate", "Generate on the server"],
           ] as const
         ).map(([key, label]) => (
-          <button
+          <Segment
             key={key}
-            type="button"
-            aria-pressed={mode === key}
+            selected={mode === key}
             disabled={busy}
             onClick={() => {
               setMode(key)
               setError("")
             }}
-            className={cn(
-              "inline-flex h-9 items-center justify-center rounded-md px-2.5 text-[0.8125rem] whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-[1.875rem]",
-              mode === key ? "bg-muted font-medium text-strong" : "text-secondary-foreground hover:bg-muted/60 hover:text-strong",
-            )}
           >
             {label}
-          </button>
+          </Segment>
         ))}
       </div>
 

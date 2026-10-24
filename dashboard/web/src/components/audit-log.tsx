@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
-import { Banner, Status } from "@/components/page"
+import { Banner, SEGMENTED, Segment, Status } from "@/components/page"
 import { ACCESS_ACTION, SOURCES, accessOnly, actorLabel, auditWords, detailLines, sourceLabel, sourceWords, type AuditFilters } from "@/lib/audit"
 import { ABSENT, ago, dateTime } from "@/lib/format"
 import { siteUrl } from "@/lib/pages"
@@ -60,25 +60,18 @@ export function SourceStates({ statuses }: { statuses: readonly SourceStatus[] }
 function SourceChips({ value, onValue }: { value: AuditSource | null; onValue: (source: AuditSource | null) => void }) {
   const choices: { key: AuditSource | null; label: string; description: string }[] = [{ key: null, label: "All", description: "Every source" }, ...SOURCES]
   return (
-    <div role="group" aria-label="Filter by source" className="grid w-full grid-cols-3 gap-0.5 rounded-lg border bg-card p-0.5 sm:inline-flex sm:w-auto dark:bg-background">
-      {choices.map((choice) => {
-        const selected = choice.key === value
-        return (
-          <button
-            key={choice.key ?? "all"}
-            type="button"
-            aria-pressed={selected}
-            title={choice.description}
-            onClick={() => onValue(choice.key)}
-            className={cn(
-              "inline-flex h-9 min-w-0 items-center justify-center rounded-md px-1.5 text-[0.8125rem] whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-[1.875rem] sm:px-2.5",
-              selected ? "bg-muted font-medium text-strong" : "text-secondary-foreground hover:bg-muted/60 hover:text-strong",
-            )}
-          >
-            {choice.label}
-          </button>
-        )
-      })}
+    <div role="group" aria-label="Filter by source" className={cn(SEGMENTED, "grid w-full grid-cols-3 gap-0.5 sm:inline-flex sm:w-auto")}>
+      {choices.map((choice) => (
+        <Segment
+          key={choice.key ?? "all"}
+          selected={choice.key === value}
+          title={choice.description}
+          onClick={() => onValue(choice.key)}
+          className="min-w-0 px-1.5 sm:px-2.5"
+        >
+          {choice.label}
+        </Segment>
+      ))}
     </div>
   )
 }
@@ -86,19 +79,10 @@ function SourceChips({ value, onValue }: { value: AuditSource | null; onValue: (
 /** One more segment, beside the sources: the access changes alone, from every source that keeps them. */
 function AccessChip({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
   return (
-    <div className="inline-flex rounded-lg border bg-card p-0.5 dark:bg-background">
-      <button
-        type="button"
-        aria-pressed={on}
-        title="Who was given access, changed or removed, and general access"
-        onClick={() => onChange(!on)}
-        className={cn(
-          "inline-flex h-9 items-center justify-center rounded-md px-2.5 text-[0.8125rem] whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-[1.875rem]",
-          on ? "bg-muted font-medium text-strong" : "text-secondary-foreground hover:bg-muted/60 hover:text-strong",
-        )}
-      >
+    <div className={cn(SEGMENTED, "inline-flex")}>
+      <Segment selected={on} title="Who was given access, changed or removed, and general access" onClick={() => onChange(!on)}>
         Access changes
-      </button>
+      </Segment>
     </div>
   )
 }
