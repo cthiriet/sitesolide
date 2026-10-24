@@ -70,10 +70,12 @@ import {
   DEBIAN,
   formatPrice,
   isManagedTags,
+  keyMaterial,
   machineOfTags,
   MANAGED_LABEL,
   MANAGED_VALUE,
   MACHINE_LABEL,
+  patiently,
   ProviderError,
   tagsFor,
   TRANSIENT,
@@ -496,11 +498,6 @@ export function regionLabel(region: DoRegion): string {
   return country === undefined ? region.name : `${region.name}, ${country}`;
 }
 
-/** The key itself, without its comment: two copies of a key compare equal through it. */
-function keyMaterial(line: string): string {
-  return line.trim().split(/\s+/).slice(0, 2).join(" ");
-}
-
 /** The image as the order takes it: a public image's slug, or an id. */
 function imageReference(image: string): string | number {
   const mapped = IMAGES[image] ?? image;
@@ -603,27 +600,12 @@ export function digitalocean(context: ProviderContext): Provider {
     return same.sort((a, b) => rank(a) - rank(b) || a.id - b.id);
   }
 
-  /**
-   * A call made while waiting: a failure that says "later" is tolerated until
-   * the deadline, once warned; any other ends the wait.
-   */
-  async function patiently<T>(attempt: () => Promise<T>, deadline: number, report: Report, warned: { done: boolean }): Promise<T | null> {
-    try {
-      return await attempt();
-    } catch (error) {
-      if (!(error instanceof ProviderError) || !TRANSIENT.has(error.failure.error) || clock.now() >= deadline) throw error;
-      if (!warned.done) report(`!! ${error.failure.message}: still waiting`);
-      warned.done = true;
-      return null;
-    }
-  }
-
   async function waitForAction(id: number, label: string, report: Report): Promise<void> {
     const deadline = clock.now() + WAITS.actionMs;
     const warned = { done: false };
     let last = "";
     for (;;) {
-      const read = await patiently(() => call<{ action: DoAction }>("GET", `/actions/${id}`, `follow ${label}`), deadline, report, warned);
+      const read = await patiently(clock, () => call<{ action: DoAction }>("GET", `/actions/${id}`, `follow ${label}`), deadline, report, warned);
       if (read !== null) {
         const action = read.action;
         if (action.status === "completed") {
@@ -649,7 +631,7 @@ export function digitalocean(context: ProviderContext): Provider {
     const warned = { done: false };
     let last = "";
     for (;;) {
-      const read = await patiently(() => call<{ droplet: DoDroplet }>("GET", `/droplets/${id}`, `read the droplet ${name}`), deadline, report, warned);
+      const read = await patiently(clock, () => call<{ droplet: DoDroplet }>("GET", `/droplets/${id}`, `read the droplet ${name}`), deadline, report, warned);
       if (read !== null) {
         const droplet = read.droplet;
         if (droplet.status !== last) report(`   status: ${droplet.status}`);
@@ -680,7 +662,7 @@ export function digitalocean(context: ProviderContext): Provider {
     const deadline = clock.now() + WAITS.firewallMs;
     const warned = { done: false };
     for (;;) {
-      const read = await patiently(() => call<{ firewall: DoFirewall }>("GET", `/firewalls/${firewall.id}`, `read the firewall ${firewall.name}`), deadline, report, warned);
+      const read = await patiently(clock, () => call<{ firewall: DoFirewall }>("GET", `/firewalls/${firewall.id}`, `read the firewall ${firewall.name}`), deadline, report, warned);
       if (read !== null) {
         const current = read.firewall;
         const pending = (current.pending_changes ?? []).some((change) => change.droplet_id === dropletId);
@@ -912,7 +894,7 @@ export function digitalocean(context: ProviderContext): Provider {
     const warned = { done: false };
     for (;;) {
       try {
-        await patiently(() => call<{ droplet: DoDroplet }>("GET", `/droplets/${id}`, `read the droplet ${name}`), deadline, report, warned);
+        await patiently(clock, () => call<{ droplet: DoDroplet }>("GET", `/droplets/${id}`, `read the droplet ${name}`), deadline, report, warned);
       } catch (error) {
         if (error instanceof DigitalOceanError && error.status === 404) return true;
         // The deletion was accepted: a wait that ends on "later" says so, and the rest goes on.

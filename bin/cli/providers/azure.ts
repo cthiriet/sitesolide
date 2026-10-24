@@ -69,9 +69,9 @@ import {
   MACHINE_LABEL,
   MANAGED_LABEL,
   MANAGED_VALUE,
+  patiently,
   ProviderError,
   retryAfter,
-  TRANSIENT,
   type Choice,
   type CreateOutcome,
   type CreateRequest,
@@ -865,21 +865,6 @@ export function azure(context: ProviderContext): Provider {
     return items;
   }
 
-  /**
-   * A call made while waiting: a failure that says "later" is tolerated until
-   * the deadline, once warned; any other ends the wait.
-   */
-  async function patiently<T>(attempt: () => Promise<T>, deadline: number, report: Report, warned: { done: boolean }): Promise<T | null> {
-    try {
-      return await attempt();
-    } catch (error) {
-      if (!(error instanceof ProviderError) || !TRANSIENT.has(error.failure.error) || clock.now() >= deadline) throw error;
-      if (!warned.done) report(`!! ${error.failure.message}: still waiting`);
-      warned.done = true;
-      return null;
-    }
-  }
-
   /** The milliseconds Retry-After asks for, within reason, else the usual pause. */
   function pause(headers: Headers | null): number {
     if (headers === null) return WAITS.pollMs;
@@ -911,7 +896,7 @@ export function azure(context: ProviderContext): Provider {
       const url = followable(asyncOperation, `follow ${label}`);
       for (;;) {
         await clock.sleep(pause(headers));
-        const read = await patiently(() => send("GET", url, `follow ${label}`), deadline, report, warned);
+        const read = await patiently(clock, () => send("GET", url, `follow ${label}`), deadline, report, warned);
         if (read !== null) {
           const status = (read.body as { status?: unknown; error?: { code?: unknown; message?: unknown } } | null) ?? {};
           const state = typeof status.status === "string" ? status.status : "";
@@ -928,7 +913,7 @@ export function azure(context: ProviderContext): Provider {
       const url = followable(location, `follow ${label}`);
       for (;;) {
         await clock.sleep(pause(headers));
-        const read = await patiently(() => send("GET", url, `follow ${label}`), deadline, report, warned);
+        const read = await patiently(clock, () => send("GET", url, `follow ${label}`), deadline, report, warned);
         if (read !== null) {
           if (read.status !== 202) {
             show("Succeeded");
@@ -955,6 +940,7 @@ export function azure(context: ProviderContext): Provider {
       const target = resource;
       // Wrapped, so that a tolerated failure (null) is not taken for a resource that is gone.
       const outcome = await patiently(
+        clock,
         async () => ({ found: await read<{ properties?: { provisioningState?: unknown } }>(target.path, target.version, `follow ${label}`) }),
         deadline,
         report,
@@ -1095,7 +1081,7 @@ export function azure(context: ProviderContext): Provider {
       }
       await clock.sleep(2 * WAITS.pollMs);
       const namespace = pending[0]!;
-      const state = await patiently(() => read(namespace), deadline, report, warned);
+      const state = await patiently(clock, () => read(namespace), deadline, report, warned);
       if (state?.registrationState === "Registered") {
         report(`   ${namespace}: registered`);
         pending.shift();
@@ -1200,7 +1186,7 @@ export function azure(context: ProviderContext): Provider {
     let last = "";
     for (;;) {
       // Wrapped, so that a tolerated failure (null) is not taken for a machine that is gone.
-      const outcome = await patiently(async () => ({ vm: await readVm(where.vm, name) }), deadline, report, warned);
+      const outcome = await patiently(clock, async () => ({ vm: await readVm(where.vm, name) }), deadline, report, warned);
       if (outcome !== null && outcome.vm === null) throw new AzureError({ error: "provider-not-found", message: `the virtual machine ${name} disappeared` }, 404, "");
       const vm = outcome?.vm ?? null;
       if (vm !== null) {

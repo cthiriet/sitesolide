@@ -57,6 +57,17 @@ export function machineOfTags(tags: readonly string[] | undefined | null): strin
   return (tags ?? []).find((tag) => tag.startsWith(prefix))?.slice(prefix.length) ?? null;
 }
 
+/** Tags as labels: `managed-by:sitesolide` becomes `managed-by=sitesolide`; a tag without a colon, a label without a value. */
+export function labelsOfTags(tags: readonly string[] | undefined | null): Record<string, string> {
+  const labels: Record<string, string> = {};
+  for (const tag of tags ?? []) {
+    const colon = tag.indexOf(":");
+    if (colon === -1) labels[tag] = "";
+    else labels[tag.slice(0, colon)] = tag.slice(colon + 1);
+  }
+  return labels;
+}
+
 /** An OpenSSH public key, as the `.pub` file holds it. */
 export type PublicKey = {
   /** `ssh-ed25519`, `ecdsa-sha2-nistp256`, `ssh-rsa`... */
@@ -68,6 +79,11 @@ export type PublicKey = {
   /** MD5 of the key, colon separated hex: what Hetzner and DigitalOcean show, and what `ssh-keygen -E md5 -l` prints. */
   fingerprint: string;
 };
+
+/** The key itself, without its comment: two copies of a key compare equal through it. */
+export function keyMaterial(line: string): string {
+  return line.trim().split(/\s+/).slice(0, 2).join(" ");
+}
 
 export type CreateRequest = {
   name: string;
@@ -329,6 +345,21 @@ export function statusFailure(title: string, status: number, said: string, heade
 
 /** The codes a wait shrugs off until its deadline: they say "later", not "no". */
 export const TRANSIENT = new Set(["provider-rate-limited", "provider-failure", "provider-unreachable", "provider-busy"]);
+
+/**
+ * A call made while waiting: a failure that says "later" is tolerated until
+ * the deadline, once warned; any other ends the wait.
+ */
+export async function patiently<T>(clock: Clock, attempt: () => Promise<T>, deadline: number, report: Report, warned: { done: boolean }): Promise<T | null> {
+  try {
+    return await attempt();
+  } catch (error) {
+    if (!(error instanceof ProviderError) || !TRANSIENT.has(error.failure.error) || clock.now() >= deadline) throw error;
+    if (!warned.done) report(`!! ${error.failure.message}: still waiting`);
+    warned.done = true;
+    return null;
+  }
+}
 
 /**
  * What `create` asks of the image when nothing else is said: Debian 13, the

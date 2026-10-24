@@ -55,14 +55,16 @@ import {
   DEBIAN,
   formatPrice,
   isManagedTags,
+  keyMaterial,
+  labelsOfTags,
   machineOfTags,
   MACHINE_LABEL,
   MANAGED_LABEL,
   MANAGED_VALUE,
+  patiently,
   ProviderError,
   retryAfter,
   tagsFor,
-  TRANSIENT,
   type Choice,
   type CreateOutcome,
   type CreateRequest,
@@ -380,17 +382,6 @@ export function describeType(type: ScalewayServerType): string {
   return `${type.ncpus} vCPU, ${Number.isInteger(memory) ? memory : memory.toFixed(1)} GB RAM, ${type.arch}`;
 }
 
-/** Tags as labels, for Machine.labels: `managed-by:sitesolide` -> `{"managed-by": "sitesolide"}`. */
-export function labelsOfTags(tags: readonly string[] | undefined | null): Record<string, string> {
-  const labels: Record<string, string> = {};
-  for (const tag of tags ?? []) {
-    const colon = tag.indexOf(":");
-    if (colon === -1) labels[tag] = "";
-    else labels[tag.slice(0, colon)] = tag.slice(colon + 1);
-  }
-  return labels;
-}
-
 /** The addresses of a server, the flexible ones first; dynamic ones change on every start. */
 function addressesOf(server: ScalewayServer): ScalewayServerIp[] {
   const all = server.public_ips ?? (server.public_ip === null || server.public_ip === undefined ? [] : [server.public_ip]);
@@ -494,11 +485,6 @@ export function cheapestTypes(types: Record<string, ScalewayServerType>, availab
 function suggestedTypes(types: Record<string, ScalewayServerType>, availability: Record<string, Availability>, zone: string, except?: string): string[] {
   const lines = cheapestTypes(types, availability, except);
   return lines.length === 0 ? [`Scaleway has no other type in stock at ${zone}`] : [`the cheapest types Scaleway has in stock at ${zone}:`, ...lines];
-}
-
-/** The key itself, without its comment: two copies of a key compare equal through it. */
-function keyMaterial(line: string): string {
-  return line.trim().split(/\s+/).slice(0, 2).join(" ");
 }
 
 /** The first eight hex digits of a key's MD5, colon-less: what `create` adds to the key's name when the plain one is taken. */
@@ -686,21 +672,6 @@ export function scaleway(context: ProviderContext): Provider {
   }
 
   /**
-   * A call made while waiting: a failure that says "later" is tolerated until
-   * the deadline, once warned; any other ends the wait.
-   */
-  async function patiently<T>(attempt: () => Promise<T>, deadline: number, report: Report, warned: { done: boolean }): Promise<T | null> {
-    try {
-      return await attempt();
-    } catch (error) {
-      if (!(error instanceof ProviderError) || !TRANSIENT.has(error.failure.error) || clock.now() >= deadline) throw error;
-      if (!warned.done) report(`!! ${error.failure.message}: still waiting`);
-      warned.done = true;
-      return null;
-    }
-  }
-
-  /**
    * Until the server runs. `poweredOn` says this run asked it to start: until
    * the server is seen starting, a stopped state is the request not taken in
    * yet; after, it is a start that failed. Without it, a stopped server is
@@ -712,7 +683,7 @@ export function scaleway(context: ProviderContext): Provider {
     let last = "";
     let seenStarting = false;
     for (;;) {
-      const server = await patiently(() => readServer(zone, id, name), deadline, report, warned);
+      const server = await patiently(clock, () => readServer(zone, id, name), deadline, report, warned);
       if (server !== null) {
         const state = `${server.state}${server.state_detail ? ` (${server.state_detail})` : ""}`;
         if (state !== last) report(`   state: ${state}`);
@@ -759,7 +730,7 @@ export function scaleway(context: ProviderContext): Provider {
         throw new ProviderError({ error: "machine-timeout", message: `${current.name} is still not stopped after ${WAITS.stoppedMs / 60_000} minutes`, details: [`last state: ${last}`, "nothing was deleted yet"] });
       }
       await clock.sleep(WAITS.pollMs);
-      const read = await patiently(() => readServer(current.zone, current.id, current.name), deadline, report, warned);
+      const read = await patiently(clock, () => readServer(current.zone, current.id, current.name), deadline, report, warned);
       if (read !== null) current = { ...read, zone: read.zone ?? current.zone };
     }
   }
@@ -769,7 +740,7 @@ export function scaleway(context: ProviderContext): Provider {
     const deadline = clock.now() + WAITS.volumeMs;
     const warned = { done: false };
     for (;;) {
-      const volume = await patiently(() => call<BlockVolume>("GET", `${block(zone)}/volumes/${encodeURIComponent(id)}`, `read the volume ${id}`), deadline, report, warned);
+      const volume = await patiently(clock, () => call<BlockVolume>("GET", `${block(zone)}/volumes/${encodeURIComponent(id)}`, `read the volume ${id}`), deadline, report, warned);
       if (volume !== null && settled(volume)) return volume;
       if (clock.now() >= deadline) return null;
       await clock.sleep(WAITS.pollMs);

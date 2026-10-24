@@ -77,9 +77,9 @@ import {
   MACHINE_LABEL,
   MANAGED_LABEL,
   MANAGED_VALUE,
+  patiently,
   ProviderError,
   retryAfter,
-  TRANSIENT,
   type Choice,
   type CreateOutcome,
   type CreateRequest,
@@ -947,21 +947,6 @@ export function gcp(context: ProviderContext): Provider {
     return found.filter((instance) => instance.name === name);
   }
 
-  /**
-   * A call made while waiting: a failure that says "later" is tolerated until
-   * the deadline, once warned; any other ends the wait.
-   */
-  async function patiently<T>(attempt: () => Promise<T>, deadline: number, report: Report, warned: { done: boolean }): Promise<T | null> {
-    try {
-      return await attempt();
-    } catch (error) {
-      if (!(error instanceof ProviderError) || !TRANSIENT.has(error.failure.error) || clock.now() >= deadline) throw error;
-      if (!warned.done) report(`!! ${error.failure.message}: still waiting`);
-      warned.done = true;
-      return null;
-    }
-  }
-
   /** Polls an operation until it is DONE, bounded; one that ends in error throws an OperationError. */
   async function waitFor(operation: GcpOperation, what: string, report: Report): Promise<void> {
     const scope = operation.zone !== undefined ? `/zones/${lastSegment(operation.zone)}` : operation.region !== undefined ? `/regions/${lastSegment(operation.region)}` : "/global";
@@ -983,7 +968,7 @@ export function gcp(context: ProviderContext): Provider {
         });
       }
       await clock.sleep(WAITS.pollMs);
-      const read = await patiently(() => call<GcpOperation>("GET", path, `follow the operation to ${what}`), deadline, report, warned);
+      const read = await patiently(clock, () => call<GcpOperation>("GET", path, `follow the operation to ${what}`), deadline, report, warned);
       if (read !== null) current = read;
     }
   }
@@ -993,7 +978,7 @@ export function gcp(context: ProviderContext): Provider {
     const warned = { done: false };
     let last = "";
     for (;;) {
-      const instance = await patiently(() => call<GcpInstance>("GET", own(`/zones/${zone}/instances/${name}`), `read the instance ${name}`), deadline, report, warned);
+      const instance = await patiently(clock, () => call<GcpInstance>("GET", own(`/zones/${zone}/instances/${name}`), `read the instance ${name}`), deadline, report, warned);
       if (instance !== null) {
         const status = (instance.status ?? "").toLowerCase();
         if (status !== last) report(`   status: ${status}`);

@@ -56,15 +56,16 @@ import {
   DEBIAN,
   formatPrice,
   isManagedTags,
+  labelsOfTags,
   machineOfTags,
   MANAGED_LABEL,
   MANAGED_VALUE,
   MACHINE_LABEL,
+  patiently,
   ProviderError,
   retryAfter,
   statusFailure,
   tagsFor,
-  TRANSIENT,
   type Choice,
   type CreateOutcome,
   type CreateRequest,
@@ -328,17 +329,6 @@ function isPrivate(address: string): boolean {
   return /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.)/.test(address);
 }
 
-/** Tags as labels: `managed-by:sitesolide` becomes `managed-by=sitesolide`; a tag without a colon, a label without a value. */
-export function labelsOfTags(tags: readonly string[] | undefined | null): Record<string, string> {
-  const labels: Record<string, string> = {};
-  for (const tag of tags ?? []) {
-    const colon = tag.indexOf(":");
-    if (colon === -1) labels[tag] = "";
-    else labels[tag.slice(0, colon)] = tag.slice(colon + 1);
-  }
-  return labels;
-}
-
 export function toMachine(instance: LinodeInstance, types: LinodeType[] | null): Machine {
   const type = types?.find((candidate) => candidate.id === instance.type);
   const monthly = type === undefined ? null : priceAt(type, instance.region).monthly;
@@ -514,28 +504,13 @@ export function linode(context: ProviderContext): Provider {
     return firewalls.find((firewall) => firewall.label.toLowerCase() === label.toLowerCase()) ?? null;
   }
 
-  /**
-   * A call made while waiting: a failure that says "later" is tolerated until
-   * the deadline, once warned; any other ends the wait.
-   */
-  async function patiently<T>(attempt: () => Promise<T>, deadline: number, report: Report, warned: { done: boolean }): Promise<T | null> {
-    try {
-      return await attempt();
-    } catch (error) {
-      if (!(error instanceof ProviderError) || !TRANSIENT.has(error.failure.error) || clock.now() >= deadline) throw error;
-      if (!warned.done) report(`!! ${error.failure.message}: still waiting`);
-      warned.done = true;
-      return null;
-    }
-  }
-
   /** Until Akamai says the Linode runs: `provisioning`, then `booting`, then `running`. */
   async function waitRunning(id: number, name: string, report: Report, justCreated: boolean): Promise<LinodeInstance> {
     const deadline = clock.now() + WAITS.runningMs;
     const warned = { done: false };
     let last = "";
     for (;;) {
-      const read = await patiently(() => call<LinodeInstance>("GET", `/linode/instances/${id}`, `read the Linode ${name}`), deadline, report, warned);
+      const read = await patiently(clock, () => call<LinodeInstance>("GET", `/linode/instances/${id}`, `read the Linode ${name}`), deadline, report, warned);
       if (read !== null) {
         if (read.status !== last) report(`   status: ${read.status}`);
         last = read.status;

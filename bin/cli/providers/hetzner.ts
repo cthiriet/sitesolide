@@ -38,10 +38,12 @@ import {
   DEBIAN,
   formatPrice,
   isManaged,
+  keyMaterial,
   labelsFor,
   MANAGED_LABEL,
   MANAGED_VALUE,
   MACHINE_LABEL,
+  patiently,
   ProviderError,
   type Choice,
   type CreateOutcome,
@@ -53,7 +55,6 @@ import {
   type ProviderEntry,
   type Report,
   type Resource,
-  TRANSIENT,
 } from "./provider";
 import type { Failure } from "../remote";
 
@@ -370,11 +371,6 @@ export function refusesTheOffer(error: HetznerError): boolean {
   return (error.failure.details ?? []).some((line) => /^(server_type|location)\b/.test(line));
 }
 
-/** The key itself, without its comment: two copies of a key compare equal through it. */
-function keyMaterial(line: string): string {
-  return line.trim().split(/\s+/).slice(0, 2).join(" ");
-}
-
 /** Where a firewall applies besides the server `except`. */
 function appliedElsewhere(firewall: HetznerFirewall, except: number): string[] {
   const elsewhere: string[] = [];
@@ -464,21 +460,6 @@ export function hetzner(context: ProviderContext): Provider {
     return servers.find((server) => server.name === name) ?? null;
   }
 
-  /**
-   * A call made while waiting: a failure that says "later" is tolerated until
-   * the deadline, once warned; any other ends the wait.
-   */
-  async function patiently<T>(attempt: () => Promise<T>, deadline: number, report: Report, warned: { done: boolean }): Promise<T | null> {
-    try {
-      return await attempt();
-    } catch (error) {
-      if (!(error instanceof ProviderError) || !TRANSIENT.has(error.failure.error) || clock.now() >= deadline) throw error;
-      if (!warned.done) report(`!! ${error.failure.message}: still waiting`);
-      warned.done = true;
-      return null;
-    }
-  }
-
   async function waitForAction(action: HetznerAction, report: Report): Promise<void> {
     const deadline = clock.now() + WAITS.actionMs;
     const warned = { done: false };
@@ -509,7 +490,7 @@ export function hetzner(context: ProviderContext): Provider {
       }
       await clock.sleep(WAITS.pollMs);
       const id = current.id;
-      const read = await patiently(() => call<{ action: HetznerAction }>("GET", `/actions/${id}`, `follow ${current.command}`), deadline, report, warned);
+      const read = await patiently(clock, () => call<{ action: HetznerAction }>("GET", `/actions/${id}`, `follow ${current.command}`), deadline, report, warned);
       if (read !== null) current = read.action;
     }
   }
@@ -519,7 +500,7 @@ export function hetzner(context: ProviderContext): Provider {
     const warned = { done: false };
     let last = "";
     for (;;) {
-      const read = await patiently(() => call<{ server: HetznerServer }>("GET", `/servers/${id}`, `read the server ${name}`), deadline, report, warned);
+      const read = await patiently(clock, () => call<{ server: HetznerServer }>("GET", `/servers/${id}`, `read the server ${name}`), deadline, report, warned);
       if (read !== null) {
         const server = read.server;
         if (server.status !== last) report(`   status: ${server.status}`);

@@ -55,9 +55,12 @@ import {
   DEBIAN,
   formatPrice,
   isManagedTags,
+  keyMaterial,
+  labelsOfTags,
   machineOfTags,
   MANAGED_LABEL,
   MANAGED_VALUE,
+  patiently,
   ProviderError,
   retryAfter,
   statusFailure,
@@ -280,17 +283,6 @@ export function isDefiniteRefusal(error: ProviderError): boolean {
 
 // --- what the answers mean -------------------------------------------------------------------
 
-/** `managed-by:sitesolide` as the label `managed-by` = `sitesolide`, for the interface's `labels`. */
-export function labelsOfTags(tags: readonly string[] | undefined): Record<string, string> {
-  const labels: Record<string, string> = {};
-  for (const tag of tags ?? []) {
-    const colon = tag.indexOf(":");
-    if (colon === -1) labels[tag] = "";
-    else labels[tag.slice(0, colon)] = tag.slice(colon + 1);
-  }
-  return labels;
-}
-
 /** The SSH key an instance's tags say was uploaded for it, or null. */
 export function keyOfTags(tags: readonly string[] | undefined): string | null {
   const prefix = `${KEY_TAG}:`;
@@ -325,11 +317,6 @@ export function fingerprintOf(line: string): string {
   const blob = line.trim().split(/\s+/)[1] ?? "";
   if (!/^[A-Za-z0-9+/]+=*$/.test(blob)) return "";
   return new Bun.CryptoHasher("md5").update(Buffer.from(blob, "base64")).digest("hex").match(/../g)?.join(":") ?? "";
-}
-
-/** The key itself, without its comment: two copies of a key compare equal through it. */
-function keyMaterial(line: string): string {
-  return line.trim().split(/\s+/).slice(0, 2).join(" ");
 }
 
 /** An address Vultr has not assigned yet reads `0.0.0.0`, or nothing. */
@@ -568,27 +555,12 @@ export function vultr(context: ProviderContext): Provider {
     return clean(answer.instance);
   }
 
-  /**
-   * A call made while waiting: a failure that says "later" is tolerated until
-   * the deadline, once warned; any other ends the wait.
-   */
-  async function patiently<T>(attempt: () => Promise<T>, deadline: number, report: Report, warned: { done: boolean }): Promise<T | null> {
-    try {
-      return await attempt();
-    } catch (error) {
-      if (!(error instanceof ProviderError) || !TRANSIENT.has(error.failure.error) || clock.now() >= deadline) throw error;
-      if (!warned.done) report(`!! ${error.failure.message}: still waiting`);
-      warned.done = true;
-      return null;
-    }
-  }
-
   async function waitReady(id: string, name: string, report: Report, justCreated: boolean): Promise<VultrInstance> {
     const deadline = clock.now() + WAITS.readyMs;
     const warned = { done: false };
     let last = "";
     for (;;) {
-      const instance = await patiently(() => readInstance(id, name), deadline, report, warned);
+      const instance = await patiently(clock, () => readInstance(id, name), deadline, report, warned);
       if (instance !== null) {
         const status = statusOf(instance);
         if (status !== last) report(`   status: ${status}`);
