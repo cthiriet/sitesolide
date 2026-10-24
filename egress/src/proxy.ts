@@ -44,7 +44,7 @@ import {
 } from "./decide";
 import type { Caller, Peer } from "./proc-net";
 import { machineAddresses, resolveChecked, type Lookup, type OwnAddresses } from "./resolve";
-import { concat, copy, createLingering, pause, resume, side, write, type Side } from "./sockets";
+import { concat, copy, createLingering, createPipe, pause, resume, side, type Side } from "./sockets";
 
 /**
  * The admission's limits, maxConnections and maxPerProject counted from the
@@ -95,12 +95,13 @@ export type Limits = AdmissionLimits & {
  *   one project    8 MiB + 6.5 MiB +  128 heads x 16 KiB  =  16.5 MiB
  *   all projects  32 MiB + 6.5 MiB + 1024 heads x 16 KiB  =  54.5 MiB
  *
- * A chunk written in part keeps at most twice what it counts (see flush), so
- * 93 MiB at the very worst for everyone, beside some 50 MiB for Bun: the rest
- * of the 256 MiB is margin for the kernel's buffers, which no constant here
- * bounds, and for the collector. Bytes sent before a tunnel opens count the
- * same, and are capped per connection by pendingBytes. A refused connection
- * that lingers holds nothing: what it still sends is dropped as it is read.
+ * A chunk written in part keeps at most twice what it counts (see createPipe
+ * in sockets.ts), so 93 MiB at the very worst for everyone, beside some 50 MiB
+ * for Bun: the rest of the 256 MiB is margin for the kernel's buffers, which
+ * no constant here bounds, and for the collector. Bytes sent before a tunnel
+ * opens count the same, and are capped per connection by pendingBytes. A
+ * refused connection that lingers holds nothing: what it still sends is
+ * dropped as it is read.
  *
  * Every figure above holds for both ports together: the connectors' port is
  * admitted and budgeted with this one (admission.ts), its connections among
@@ -195,25 +196,6 @@ export function startProxy(options: ProxyOptions): Proxy {
   /** May this connection's sides read, as far as the budgets go? */
   const mayRead = (connection: Connection) => admission.mayRead(connection);
 
-  /** A tunnel's sides stop reading, but one whose peer is gone, which is read to see it close (see sideClosed). */
-  function stopReading(connection: Connection): void {
-    if (connection.phase !== "open") return;
-    if (connection.upstream.socket !== null && !connection.client.paused) pause(connection.client);
-    if (connection.client.socket !== null && !connection.upstream.paused) pause(connection.upstream);
-  }
-
-  /** A side reads again once nothing it sent waits for the other side, and no budget holds it back. */
-  function resumeIfAllowed(connection: Connection, from: Side, to: Side): void {
-    if (connection.phase !== "open" || from.socket === null || to.socket === null) return;
-    if (to.queue.length > 0 || !mayRead(connection)) return;
-    resume(from);
-  }
-
-  function startReading(connection: Connection): void {
-    resumeIfAllowed(connection, connection.client, connection.upstream);
-    resumeIfAllowed(connection, connection.upstream, connection.client);
-  }
-
   /**
    * Counts bytes that start or stop waiting; the admission stops or restarts
    * reading where a budget is crossed, a whole project past
@@ -221,58 +203,16 @@ export function startProxy(options: ProxyOptions): Proxy {
    */
   const account = (connection: Connection, bytes: number) => admission.account(connection, bytes);
 
-  /** Bytes for a side that cannot take them now. */
-  function enqueue(connection: Connection, to: Side, chunk: Uint8Array): void {
-    to.queue.push(chunk);
-    to.queued += chunk.length;
-    account(connection, chunk.length);
-  }
-
-  /** Writes what it can, keeps the rest, and pauses the other side while too much waits. */
-  function send(connection: Connection, to: Side, from: Side, chunk: Uint8Array): void {
-    if (to.socket === null) return;
-    if (to.queue.length === 0) {
-      const written = write(to, chunk);
-      if (written === chunk.length) return;
-      chunk = copy(chunk.subarray(written));
-    } else {
-      chunk = copy(chunk);
-    }
-    if (to.queued + chunk.length > limits.bufferBytes && !from.paused) pause(from);
-    enqueue(connection, to, chunk);
-  }
-
-  function flush(connection: Connection, to: Side, from: Side): void {
-    if (to.socket === null) return;
-    let released = 0;
-    while (to.queue.length > 0) {
-      const chunk = to.queue[0]!;
-      const written = write(to, chunk);
-      // A byte delivered is activity: a slow reader catching up is no idle
-      // tunnel.
-      if (written > 0) connection.lastActivity = Date.now();
-      released += written;
-      if (written < chunk.length) {
-        // The rest is a view of the chunk, which stays in memory whole. Once
-        // the rest is under half of it, a copy lets the chunk go: what a
-        // queue keeps is never more than twice what it counts.
-        const rest = chunk.subarray(written);
-        to.queue[0] = rest.length * 2 < rest.buffer.byteLength ? copy(rest) : rest;
-        break;
-      }
-      to.queue.shift();
-    }
-    to.queued -= released;
-    account(connection, -released);
-    if (to.queue.length > 0) return;
-    if (to.ending) return close(connection);
-    resumeIfAllowed(connection, from, to);
-  }
+  // A tunnel's two sides, piped as a connector call's are (see sideClosed for
+  // a side whose peer is gone, still read to see it close).
+  const { stopReading, startReading, send, flush } = createPipe<Connection>(admission, limits.bufferBytes, close);
 
   /** Bytes the client sent before its tunnel opened, kept for the upstream, within their cap and the budgets. */
   function holdEarly(connection: Connection, bytes: Uint8Array): void {
     if (bytes.length === 0) return;
-    enqueue(connection, connection.upstream, bytes);
+    connection.upstream.queue.push(bytes);
+    connection.upstream.queued += bytes.length;
+    account(connection, bytes.length);
     if (connection.upstream.queued > limits.pendingBytes) {
       return refuse(connection, 400, "egress: too much sent before the tunnel opened");
     }

@@ -55,7 +55,7 @@ import type { Policy } from "./policy";
 import type { Caller, Peer } from "./proc-net";
 import { DEFAULT_LIMITS, type Limits } from "./proxy";
 import { machineAddresses, resolveChecked, type Lookup, type OwnAddresses } from "./resolve";
-import { concat, copy, createLingering, pause, resume, side, write, type Side } from "./sockets";
+import { concat, copy, createLingering, createPipe, pause, side, type Side } from "./sockets";
 
 /** The biggest request body forwarded: an API call, not a file upload service. */
 export const MAX_BODY_BYTES = 10 * 1024 * 1024;
@@ -291,65 +291,8 @@ export function startConnectors(options: ConnectorsOptions): Connectors {
   const inFlight = new Map<string, number>();
   let underWay = 0;
 
-  /** A call's sides stop reading, but one whose peer is gone. */
-  function stopReading(call: Call): void {
-    if (call.phase !== "open") return;
-    if (call.upstream.socket !== null && !call.client.paused) pause(call.client);
-    if (call.client.socket !== null && !call.upstream.paused) pause(call.upstream);
-  }
-
-  /** A side reads again once nothing it sent waits for the other side, and no budget holds it back. */
-  function resumeIfAllowed(call: Call, from: Side, to: Side): void {
-    if (call.phase !== "open" || from.socket === null || to.socket === null) return;
-    if (to.queue.length > 0 || !admission.mayRead(call)) return;
-    resume(from);
-  }
-
-  function startReading(call: Call): void {
-    resumeIfAllowed(call, call.client, call.upstream);
-    resumeIfAllowed(call, call.upstream, call.client);
-  }
-
-  /** Writes what it can, keeps the rest, and pauses the other side while too much waits. */
-  function send(call: Call, to: Side, from: Side, chunk: Uint8Array): void {
-    if (to.socket === null || chunk.length === 0) return;
-    if (to.queue.length === 0) {
-      const written = write(to, chunk);
-      if (written === chunk.length) return;
-      chunk = copy(chunk.subarray(written));
-    } else {
-      chunk = copy(chunk);
-    }
-    if (to.queued + chunk.length > limits.bufferBytes && !from.paused) pause(from);
-    to.queue.push(chunk);
-    to.queued += chunk.length;
-    admission.account(call, chunk.length);
-  }
-
-  function flush(call: Call, to: Side, from: Side): void {
-    if (to.socket === null) return;
-    let released = 0;
-    while (to.queue.length > 0) {
-      const chunk = to.queue[0]!;
-      const written = write(to, chunk);
-      // A byte delivered is activity: a slow reader catching up is no idle call.
-      if (written > 0) call.lastActivity = Date.now();
-      released += written;
-      if (written < chunk.length) {
-        // A copy once the rest is under half the chunk: what a queue keeps is
-        // never more than twice what it counts, as in proxy.ts.
-        const rest = chunk.subarray(written);
-        to.queue[0] = rest.length * 2 < rest.buffer.byteLength ? copy(rest) : rest;
-        break;
-      }
-      to.queue.shift();
-    }
-    to.queued -= released;
-    admission.account(call, -released);
-    if (to.queue.length > 0) return;
-    if (to.ending) return close(call);
-    resumeIfAllowed(call, from, to);
-  }
+  // A call's two sides, piped as a tunnel's are.
+  const { stopReading, startReading, resumeIfAllowed, send, flush } = createPipe<Call>(admission, limits.bufferBytes, close);
 
   /** Drops what waits for the upstream: it is gone, or has answered whole. */
   function forgetUpstream(call: Call): void {

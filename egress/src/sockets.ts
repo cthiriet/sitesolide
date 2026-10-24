@@ -1,14 +1,16 @@
 /**
  * What both ports do with a raw Bun socket: pause and resume it in a way Bun
  * 1.3.11 keeps, write to it without that undoing a pause, keep the bytes a
- * read delivered, and close a refused one without the reset that would throw
- * its answer away.
+ * read delivered, move them between a connection's two sides within the
+ * budgets, and close a refused one without the reset that would throw its
+ * answer away.
  *
  * Every function here works around a behaviour of Bun measured on 1.3.11 and
  * held to by the tests of proxy.ts and connectors.ts: change one only with
  * those tests running.
  */
 import type { Socket } from "bun";
+import type { Admission, Member } from "./admission";
 
 /** One end of a connection, and the bytes waiting for it. */
 export type Side = {
@@ -75,6 +77,96 @@ export function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
   joined.set(a, 0);
   joined.set(b, a.length);
   return joined;
+}
+
+/** A connection as both ports pipe it: a tunnel on the CONNECT port, a call on the connectors'. */
+export type Piped = Member & {
+  phase: "head" | "deciding" | "open" | "closed";
+  client: Side;
+  upstream: Side;
+  /** When a byte was last delivered, either way: what the idle sweep reads. */
+  lastActivity: number;
+};
+
+export type Pipe<T extends Piped> = {
+  /** Its sides stop reading, but one whose peer is gone, which is read to see it close. */
+  stopReading: (connection: T) => void;
+  startReading: (connection: T) => void;
+  /** A side reads again once nothing it sent waits for the other side, and no budget holds it back. */
+  resumeIfAllowed: (connection: T, from: Side, to: Side) => void;
+  /** Writes what it can, keeps the rest, and pauses the other side while too much waits. */
+  send: (connection: T, to: Side, from: Side, chunk: Uint8Array) => void;
+  /** Writes what waits for a side that drained, and closes the connection once an ending side has it all. */
+  flush: (connection: T, to: Side, from: Side) => void;
+};
+
+/**
+ * How the bytes of a connection move between its two sides, the same on both
+ * ports: written at once when they can be, queued and counted against the
+ * admission's budgets when they cannot, the sending side paused once
+ * `bufferBytes` wait for the other, and read again once they have all gone
+ * and no budget holds it back.
+ */
+export function createPipe<T extends Piped>(admission: Admission, bufferBytes: number, close: (connection: T) => void): Pipe<T> {
+  function stopReading(connection: T): void {
+    if (connection.phase !== "open") return;
+    if (connection.upstream.socket !== null && !connection.client.paused) pause(connection.client);
+    if (connection.client.socket !== null && !connection.upstream.paused) pause(connection.upstream);
+  }
+
+  function resumeIfAllowed(connection: T, from: Side, to: Side): void {
+    if (connection.phase !== "open" || from.socket === null || to.socket === null) return;
+    if (to.queue.length > 0 || !admission.mayRead(connection)) return;
+    resume(from);
+  }
+
+  function startReading(connection: T): void {
+    resumeIfAllowed(connection, connection.client, connection.upstream);
+    resumeIfAllowed(connection, connection.upstream, connection.client);
+  }
+
+  function send(connection: T, to: Side, from: Side, chunk: Uint8Array): void {
+    if (to.socket === null || chunk.length === 0) return;
+    if (to.queue.length === 0) {
+      const written = write(to, chunk);
+      if (written === chunk.length) return;
+      chunk = copy(chunk.subarray(written));
+    } else {
+      chunk = copy(chunk);
+    }
+    if (to.queued + chunk.length > bufferBytes && !from.paused) pause(from);
+    to.queue.push(chunk);
+    to.queued += chunk.length;
+    admission.account(connection, chunk.length);
+  }
+
+  function flush(connection: T, to: Side, from: Side): void {
+    if (to.socket === null) return;
+    let released = 0;
+    while (to.queue.length > 0) {
+      const chunk = to.queue[0]!;
+      const written = write(to, chunk);
+      // A byte delivered is activity: a slow reader catching up is not idle.
+      if (written > 0) connection.lastActivity = Date.now();
+      released += written;
+      if (written < chunk.length) {
+        // The rest is a view of the chunk, which stays in memory whole. Once
+        // the rest is under half of it, a copy lets the chunk go: what a
+        // queue keeps is never more than twice what it counts.
+        const rest = chunk.subarray(written);
+        to.queue[0] = rest.length * 2 < rest.buffer.byteLength ? copy(rest) : rest;
+        break;
+      }
+      to.queue.shift();
+    }
+    to.queued -= released;
+    admission.account(connection, -released);
+    if (to.queue.length > 0) return;
+    if (to.ending) return close(connection);
+    resumeIfAllowed(connection, from, to);
+  }
+
+  return { stopReading, startReading, resumeIfAllowed, send, flush };
 }
 
 export type LingerLimits = {
