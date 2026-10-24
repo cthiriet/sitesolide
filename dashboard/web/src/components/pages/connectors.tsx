@@ -18,7 +18,7 @@ import { Command, useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
 import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
-import { Banner, EmptyState, ErrorState, INPUT_DIALOG, PageBody, PageHeader, Panel, RowsSkeleton, Status, When } from "@/components/page"
+import { Banner, EmptyState, ErrorState, INPUT_DIALOG, PageBody, PageHeader, Panel, RowsSkeleton, Status, When, useRetry } from "@/components/page"
 import { SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { useOrigin, type FocusReturn } from "@/components/secrets-dialogs"
@@ -671,7 +671,6 @@ export function ConnectorsPage() {
   const announce = useAnnounce()
   const [list, setList] = useState<ListState>({ state: "loading" })
   const [activity, setActivity] = useState<ActivityState>({ state: "loading" })
-  const [retrying, setRetrying] = useState(false)
   const [editing, setEditing] = useState<Opened>({ open: false, opening: 0, connector: null })
   const [removal, setRemoval] = useState<Opened>({ open: false, opening: 0, connector: null })
   const [grantInFlight, setGrantInFlight] = useState<string | null>(null)
@@ -743,14 +742,7 @@ export function ConnectorsPage() {
     }
   }
 
-  async function retry() {
-    setRetrying(true)
-    try {
-      await Promise.all([load(), loadActivity()])
-    } finally {
-      setRetrying(false)
-    }
-  }
+  const { retrying, retry } = useRetry(() => Promise.all([load(), loadActivity()]))
 
   const known = new Set(snapshot?.sites.map((site) => site.slug) ?? [])
   const ready = list.state === "ready" ? list.view : null
@@ -780,7 +772,7 @@ export function ConnectorsPage() {
               The steward on the server predates connectors. Bring it up to date from your workstation.
             </Banner>
           ) : (
-            <ErrorState title={list.message} onRetry={() => void retry()} inProgress={retrying} />
+            <ErrorState title={list.message} onRetry={retry} inProgress={retrying} />
           ))}
 
         {ready !== null && !ready.installed && (
@@ -829,7 +821,7 @@ export function ConnectorsPage() {
           </>
         )}
 
-        <ActivityPanel activity={activity} known={known} serverNow={actions.serverNow} onRetry={() => void retry()} retrying={retrying} />
+        <ActivityPanel activity={activity} known={known} serverNow={actions.serverNow} onRetry={retry} retrying={retrying} />
       </PageBody>
 
       <ConnectorDialog

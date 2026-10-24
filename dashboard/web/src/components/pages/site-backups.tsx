@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Command, useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
-import { Banner, EmptyState, ErrorState, INPUT_DIALOG, Panel, PanelSkeleton, RowsSkeleton, Status } from "@/components/page"
+import { Banner, EmptyState, ErrorState, INPUT_DIALOG, Panel, PanelSkeleton, RowsSkeleton, Status, useRetry } from "@/components/page"
 import { SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { Track, useClock } from "@/components/secrets-dialogs"
@@ -562,16 +562,7 @@ function Content({ slug, backups, onRestore }: { slug: string; backups: ReturnTy
   const actions = useSecretsActions()
   const serverNow = now + offset
   const { load, reload } = backups
-  const [rereading, setRereading] = useState(false)
-
-  async function retry() {
-    setRereading(true)
-    try {
-      await reload()
-    } finally {
-      setRereading(false)
-    }
-  }
+  const { retrying, retry } = useRetry(reload)
 
   if (load.state === "loading") {
     return (
@@ -587,7 +578,7 @@ function Content({ slug, backups, onRestore }: { slug: string; backups: ReturnTy
   if (load.state === "error") {
     return (
       <Panel>
-        <ErrorState title={load.message} onRetry={() => void retry()} inProgress={rereading}>
+        <ErrorState title={load.message} onRetry={retry} inProgress={retrying}>
           {load.outdated ? (
             <div className="grid gap-2">
               <span>Bring it up to date from your workstation, then come back:</span>

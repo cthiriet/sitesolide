@@ -1,4 +1,4 @@
-import { useId, type ComponentProps, type ReactNode } from "react"
+import { useId, useState, type ComponentProps, type ReactNode } from "react"
 import {
   CircleX,
   CloudOff,
@@ -300,6 +300,19 @@ export function ErrorState({
       </EmptyState>
     </div>
   )
+}
+
+/**
+ * A read asked for again from a *Retry* button, `retrying` while it runs so
+ * that the button says so. What the read finds is its own to show.
+ */
+export function useRetry(read: () => Promise<unknown>): { retrying: boolean; retry: () => void } {
+  const [retrying, setRetrying] = useState(false)
+  function retry() {
+    setRetrying(true)
+    void read().finally(() => setRetrying(false))
+  }
+  return { retrying, retry }
 }
 
 /** A problem that does not stop you reading the page: the previous data stays displayed. */

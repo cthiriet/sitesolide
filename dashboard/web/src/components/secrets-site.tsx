@@ -1,9 +1,8 @@
-import { useState } from "react"
 import { RotateCcw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useData } from "@/components/data"
 import { isPerson } from "@/lib/identity"
-import { ErrorState, Panel, RowsSkeleton, Status } from "@/components/page"
+import { ErrorState, Panel, RowsSkeleton, Status, useRetry } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { SectionLink } from "@/components/site"
 import { ago, capitalise } from "@/lib/format"
@@ -106,17 +105,8 @@ export function SiteSecretsPanel({ slug }: { slug: string }) {
   const { secrets, snapshot, identity } = useData()
   const person = isPerson(identity)
   const { projects, problem, reload } = secrets
-  const [rereading, setRereading] = useState(false)
+  const { retrying, retry } = useRetry(reload)
   const project = projects?.find((candidate) => candidate.slug === slug) ?? null
-
-  async function retry() {
-    setRereading(true)
-    try {
-      await reload()
-    } finally {
-      setRereading(false)
-    }
-  }
 
   if (project === null) {
     const site = snapshot?.sites.find((candidate) => candidate.slug === slug)
@@ -129,7 +119,7 @@ export function SiteSecretsPanel({ slug }: { slug: string }) {
             <RowsSkeleton lines={2} />
           </div>
         ) : (
-          <ErrorState title={problem} onRetry={() => void retry()} inProgress={rereading} compact>
+          <ErrorState title={problem} onRetry={retry} inProgress={retrying} compact>
             {problem === UNREACHABLE &&
               (person ? (
                 "If it lasts, tell the owner of the server."

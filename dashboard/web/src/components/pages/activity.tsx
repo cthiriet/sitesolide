@@ -6,7 +6,7 @@ import { AuditFilterBar, AuditLog, SourceStates } from "@/components/audit-log"
 import { useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
 import { useNavigation } from "@/components/navigation"
-import { EmptyState, ErrorState, PageBody, PageHeader, Panel, RowsSkeleton } from "@/components/page"
+import { EmptyState, ErrorState, PageBody, PageHeader, Panel, RowsSkeleton, useRetry } from "@/components/page"
 import {
   NO_FILTERS,
   filtersFrom,
@@ -107,7 +107,6 @@ export function ActivityPage() {
   // load, and for the sources a filter leaves out.
   const [seen, setSeen] = useState<SourceStatus[]>([])
   const [more, setMore] = useState(false)
-  const [retrying, setRetrying] = useState(false)
   // The read that counts: an answer to filters changed since is dropped.
   const sequence = useRef(0)
   const typing = useRef<number | null>(null)
@@ -186,14 +185,7 @@ export function ActivityPage() {
     }
   }
 
-  async function retry() {
-    setRetrying(true)
-    try {
-      await load(applied)
-    } finally {
-      setRetrying(false)
-    }
-  }
+  const { retrying, retry } = useRetry(() => load(applied))
 
   function exportRows(kind: "csv" | "jsonl") {
     if (log.state !== "ready" || log.rows.length === 0) return
@@ -258,7 +250,7 @@ export function ActivityPage() {
           )}
 
           {log.state === "error" && (
-            <ErrorState title={log.message} onRetry={() => void retry()} inProgress={retrying}>
+            <ErrorState title={log.message} onRetry={retry} inProgress={retrying}>
               {log.message === "Can't reach the dashboard." ? "The server didn't answer. Check your connection, then try again." : undefined}
             </ErrorState>
           )}

@@ -1,8 +1,7 @@
-import { useState } from "react"
 import { CloudOff, FileText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useData } from "@/components/data"
-import { Banner, ErrorState, EmptyState, Panel, PanelSkeleton } from "@/components/page"
+import { Banner, ErrorState, EmptyState, Panel, PanelSkeleton, useRetry } from "@/components/page"
 import { FilesPanel, SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { SecretsLog } from "@/components/secrets-log"
@@ -45,16 +44,7 @@ function Content({ slug }: { slug: string }) {
   const store = project?.store ?? null
   const shown = store !== null || (project !== null && project.files.length > 0)
   const { projects, problem, reload } = secrets
-  const [rereading, setRereading] = useState(false)
-
-  async function retry() {
-    setRereading(true)
-    try {
-      await reload()
-    } finally {
-      setRereading(false)
-    }
-  }
+  const { retrying, retry } = useRetry(reload)
 
   return (
     <>
@@ -71,11 +61,11 @@ function Content({ slug }: { slug: string }) {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => void retry()}
-              disabled={rereading}
+              onClick={retry}
+              disabled={retrying}
               className="max-md:h-9"
             >
-              {rereading ? "Retrying…" : "Retry"}
+              {retrying ? "Retrying…" : "Retry"}
             </Button>
           }
         >
@@ -93,8 +83,8 @@ function Content({ slug }: { slug: string }) {
         <Panel>
           <ErrorState
             title={problem === UNREACHABLE ? UNREACHABLE : "Couldn't load secrets."}
-            onRetry={() => void retry()}
-            inProgress={rereading}
+            onRetry={retry}
+            inProgress={retrying}
           >
             {problem === UNREACHABLE ? (
               person ? (

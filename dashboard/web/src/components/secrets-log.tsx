@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { History } from "lucide-react"
 import { useData } from "@/components/data"
-import { ErrorState, EmptyState, Panel, RowsSkeleton, Status, When } from "@/components/page"
+import { ErrorState, EmptyState, Panel, RowsSkeleton, Status, When, useRetry } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { readSecretsLog } from "@/lib/api"
 import {
@@ -47,7 +47,6 @@ export function SecretsLog({ slug }: { slug: string }) {
   const { generation, sessionExpired } = useData()
   const { revision, serverNow } = useSecretsActions()
   const [list, setList] = useState<ListState>({ state: "loading" })
-  const [rereading, setRereading] = useState(false)
 
   const load = useCallback(async () => {
     const { status, body } = await readSecretsLog(slug)
@@ -65,14 +64,7 @@ export function SecretsLog({ slug }: { slug: string }) {
     void load()
   }, [generation, revision, load])
 
-  async function retry() {
-    setRereading(true)
-    try {
-      await load()
-    } finally {
-      setRereading(false)
-    }
-  }
+  const { retrying, retry } = useRetry(load)
 
   const caption = `Recent operations on ${slug}, most recent first`
 
@@ -85,7 +77,7 @@ export function SecretsLog({ slug }: { slug: string }) {
       )}
 
       {list.state === "error" && (
-        <ErrorState title={list.message} onRetry={() => void retry()} inProgress={rereading} compact />
+        <ErrorState title={list.message} onRetry={retry} inProgress={retrying} compact />
       )}
 
       {list.state === "ready" && list.entries.length === 0 && (
