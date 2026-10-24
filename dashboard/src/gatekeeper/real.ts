@@ -232,6 +232,12 @@ function readFileSafely(path: string): { bytes: Uint8Array; permissions: Permiss
   }
 }
 
+/** The text of a file read by readFileSafely, null when it is missing. */
+function readTextSafely(path: string): string | null {
+  const parsed = readFileSafely(path);
+  return parsed === null ? null : decoder.decode(parsed.bytes);
+}
+
 /** A real directory, not a link: the slug ends up in a path written under root. */
 function requireFolder(path: string): void {
   const stat = lstatSync(path);
@@ -438,8 +444,8 @@ export function createMachine(config: MachineConfig): GeneralMachine {
     const group = config.locksGroup ?? null;
     if (group === null) return config.blockOwner;
     const groupFile = config.groupFile ?? "/etc/group";
-    const parsed = readFileSafely(groupFile);
-    const gid = parsed === null ? null : readGroup(decoder.decode(parsed.bytes), group);
+    const groups = readTextSafely(groupFile);
+    const gid = groups === null ? null : readGroup(groups, group);
     if (gid === null) throw new Error(`the group ${group} is not in ${groupFile}: Caddy could not read the preview locks`);
     return { uid: config.blockOwner?.uid ?? process.getuid?.() ?? 0, gid };
   }
@@ -459,8 +465,7 @@ export function createMachine(config: MachineConfig): GeneralMachine {
     }
     let text: string | null = null;
     try {
-      const parsed = readFileSafely(join(path, HOLDER_NAME));
-      text = parsed === null ? null : decoder.decode(parsed.bytes);
+      text = readTextSafely(join(path, HOLDER_NAME));
     } catch {
       // A link, a directory, a file too big: unreadable, therefore held.
       text = null;
@@ -633,8 +638,7 @@ export function createMachine(config: MachineConfig): GeneralMachine {
     },
 
     async readBlock(slug: string) {
-      const parsed = readFileSafely(join(config.blocksFolder, blockName(slug)));
-      return parsed === null ? null : decoder.decode(parsed.bytes);
+      return readTextSafely(join(config.blocksFolder, blockName(slug)));
     },
 
     async writeManifest(slug: string, text: string, permissions: Permissions) {
@@ -760,8 +764,7 @@ export function createMachine(config: MachineConfig): GeneralMachine {
     },
 
     async readCodes() {
-      const parsed = readFileSafely(config.codesFile);
-      return parsed === null ? null : decoder.decode(parsed.bytes);
+      return readTextSafely(config.codesFile);
     },
 
     async writeCodes(text, owner) {
@@ -769,8 +772,7 @@ export function createMachine(config: MachineConfig): GeneralMachine {
     },
 
     async readLocksFragment() {
-      const parsed = readFileSafely(join(config.locksFolder, FRAGMENT_NAME));
-      return parsed === null ? null : decoder.decode(parsed.bytes);
+      return readTextSafely(join(config.locksFolder, FRAGMENT_NAME));
     },
 
     /**
@@ -807,23 +809,21 @@ export function createMachine(config: MachineConfig): GeneralMachine {
       for (const entry of readdirSync(config.sitesDir, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
         if (!isSitesFolder(entry.name)) throw new Error(`unexpected folder in ${config.sitesDir}`);
-        const parsed = readFileSafely(join(config.sitesDir, entry.name, "sitesolide.json"));
-        if (parsed === null) {
+        const text = readTextSafely(join(config.sitesDir, entry.name, "sitesolide.json"));
+        if (text === null) {
           if (readFileSafely(join(config.sitesDir, entry.name, "site.json")) !== null) {
             throw new Error(`${entry.name}: site.json is still there and sitesolide.json is missing, redeploy it with sitesolide deploy`);
           }
           sites.push({ slug: entry.name, lock: undefined });
           continue;
         }
-        sites.push({ slug: entry.name, lock: lockField(decoder.decode(parsed.bytes), entry.name) });
+        sites.push({ slug: entry.name, lock: lockField(text, entry.name) });
       }
       return sites.sort((a, b) => a.slug.localeCompare(b.slug));
     },
 
     async readDoorPage(slug) {
-      const folder = join(config.doorPagesDir, siteFolderName(slug));
-      const parsed = readFileSafely(join(folder, "index.html"));
-      return parsed === null ? null : decoder.decode(parsed.bytes);
+      return readTextSafely(join(config.doorPagesDir, siteFolderName(slug), "index.html"));
     },
 
     async writeDoorPage(slug, text, owner) {
