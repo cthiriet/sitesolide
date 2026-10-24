@@ -544,32 +544,31 @@ export type OwnerWritePath =
   | "/store/generate"
   | "/store/file"
   | "/restart"
-  | "/tokens/claim";
+  | "/general"
+  | "/tokens/claim"
+  | "/tokens/project";
 
 /**
- * Those that wait for the steward's lock and then for a service: a restart
- * watches the service for a few seconds. curl waits longer for them than for
- * a write alone.
+ * How long curl waits for a route that is not a write alone, in seconds,
+ * thirty for every other. A restart watches the service for a few seconds,
+ * and a change of general access waits for the steward's lock and then for
+ * the gatekeeper, up to ninety seconds. The release of a removed project's
+ * name comes once the project is gone, and is waited for least.
  */
-const SLOW_WRITES: readonly OwnerWritePath[] = ["/restart"];
+const WRITE_SECONDS: Partial<Record<OwnerWritePath, number>> = { "/restart": 120, "/general": 240, "/tokens/project": 10 };
 
 /** A change, the JSON body on standard input: no address of the request, nor any value, ever goes through a shell. */
 export function ownerWriteCommand(method: "PUT" | "DELETE" | "POST" | "PATCH", path: OwnerWritePath): string {
-  const time = SLOW_WRITES.includes(path) ? 120 : 30;
-  return `sudo curl -sS --max-time ${time} -X ${method} -H 'Content-Type: application/json' --data-binary @- -w '\\n%{http_code}\\n' ${SOCKET} http://steward${path}`;
+  return `sudo curl -sS --max-time ${WRITE_SECONDS[path] ?? 30} -X ${method} -H 'Content-Type: application/json' --data-binary @- -w '\\n%{http_code}\\n' ${SOCKET} http://steward${path}`;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * A change of general access, the JSON body on standard input. It waits for
- * the steward's lock and then for the gatekeeper, up to ninety seconds: curl
- * waits longer than for the other routes.
- */
+/** A change of general access, the JSON body on standard input. */
 export function ownerGeneralCommand(): string {
-  return `sudo curl -sS --max-time 240 -X POST -H 'Content-Type: application/json' --data-binary @- -w '\\n%{http_code}\\n' ${SOCKET} http://steward/general`;
+  return ownerWriteCommand("POST", "/general");
 }
 
 /**

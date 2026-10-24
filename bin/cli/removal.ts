@@ -11,7 +11,7 @@
  * action without ever touching production, where a mistake here erases a site.
  */
 
-import { OWNER_SOCKET, readCurlAnswer } from "./access";
+import { ownerWriteCommand, readCurlAnswer } from "./access";
 import { isValidSlug } from "./manifest";
 import { removeUnitsCommand } from "./services";
 import { storeRemovalActions } from "./store";
@@ -201,7 +201,7 @@ export function leftToDo(slug: string, siteFolder: string | null): string[] {
  * machine still carries the project, so this comes once the folder is gone.
  */
 export function ownershipReleaseCommand(): string {
-  return `sudo curl -sS --max-time 10 -X DELETE -H 'Content-Type: application/json' --data-binary @- -w '\\n%{http_code}\\n' --unix-socket ${OWNER_SOCKET} http://steward/tokens/project`;
+  return ownerWriteCommand("DELETE", "/tokens/project");
 }
 
 export type OwnershipRelease =
