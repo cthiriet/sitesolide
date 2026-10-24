@@ -123,7 +123,7 @@ function readRows(source: AuditSource, list: unknown, where: string): SourceRow[
  * an older: the merge, which takes each source as a stream in its own order,
  * would otherwise take the older one for a row already read and drop it.
  */
-function windowed(rows: SourceRow[], listed: number, after: Position | null, size: number): ReaderResult {
+function windowed(rows: SourceRow[], listed: number, after: Position | null, size: number): Extract<ReaderResult, { kind: "rows" }> {
   const ordered = [...rows].sort((a, b) => (isAfter(a.position, b.position) ? 1 : isAfter(b.position, a.position) ? -1 : 0));
   const left = after === null ? ordered : ordered.filter((row) => isAfter(row.position, after));
   return {
@@ -265,10 +265,7 @@ export function createReaders(dependencies: AuditDependencies): Readers {
       const rows = readRows("steward", entries, "The steward");
       if (!Array.isArray(rows)) return rows;
       const listed = (entries as unknown[]).length;
-      if (answer.body?.paged === true) {
-        const ordered = windowed(rows, 0, after, asked);
-        return ordered.kind === "rows" ? { ...ordered, end: listed < asked, window: null } : ordered;
-      }
+      if (answer.body?.paged === true) return { ...windowed(rows, 0, after, asked), end: listed < asked, window: null };
       return windowed(rows, listed, after, size);
     },
   };
