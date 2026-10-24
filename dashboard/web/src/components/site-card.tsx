@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from "react"
 import { CalendarClock, Cog, FileCode2, Globe, KeyRound, Lock, ShieldCheck, ShieldOff, ShieldX, type LucideIcon } from "lucide-react"
-import { Track } from "@/components/gauge"
+import { LEVEL_TEXT, Track } from "@/components/gauge"
 import { ExternalLink } from "@/components/link"
 import { Banner, Panel, Status } from "@/components/page"
 import { Badge } from "@/components/ui/badge"
@@ -9,7 +9,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ABSENT } from "@/lib/format"
 import { BAR_CLASSES } from "@/lib/gauges"
 import { CodeChip } from "@/components/access-word"
-import { type Level } from "@/lib/gauges"
 import {
   SERVICE_THRESHOLD_POSITIONS,
   SERVICE_THRESHOLDS_TITLE,
@@ -27,13 +26,6 @@ import {
 import { TONE_TEXT, severityTone } from "@/lib/tones"
 import type { Discrepancy, Site } from "@/lib/types"
 import { cn } from "@/lib/utils"
-
-/** The figure takes its bar's colour beyond the first threshold, as on the machine plate. */
-const LEVEL_TEXT: Record<Level, string> = {
-  normal: "",
-  warn: "text-attention-text",
-  critical: "text-destructive",
-}
 
 /** A path or a unit name, what gets typed into a terminal: monospace, discreet. */
 function Terminal({ children }: { children: string }) {

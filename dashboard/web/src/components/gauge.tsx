@@ -16,8 +16,8 @@ import {
 import type { Snapshot } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-/** The figure takes its bar's colour beyond the first threshold. */
-const LEVEL_TEXT: Record<Level, string> = {
+/** The figure takes its bar's colour beyond the first threshold, on the plate as on a service's card. */
+export const LEVEL_TEXT: Record<Level, string> = {
   normal: "",
   warn: "text-attention-text",
   critical: "text-destructive",

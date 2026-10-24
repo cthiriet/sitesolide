@@ -14,7 +14,7 @@ import { useData } from "@/components/data"
 import { InternalLink } from "@/components/navigation"
 import { WithSnapshot, PageBody, EmptyState, PageHeader, Panel, Status } from "@/components/page"
 import { isPerson } from "@/lib/identity"
-import { SECTIONS, siteUrl, type Section } from "@/lib/pages"
+import { pageTitle, siteUrl, type Section } from "@/lib/pages"
 import { siteDiscrepancies, siteState } from "@/lib/site-card"
 import { TONE_DOT } from "@/lib/tones"
 import type { Discrepancy, ProjectView, Site } from "@/lib/types"
@@ -218,11 +218,6 @@ export function SectionLink({
 
 // --- The shared page ---------------------------------------------------------------
 
-/** A section's title, except Overview, which carries the slug. */
-function sectionTitle(slug: string, section: Section): string {
-  return section === "overview" ? slug : (SECTIONS.find((entry) => entry.section === section)?.title ?? slug)
-}
-
 /**
  * A site's section: the header with its breadcrumb and, on a phone, the
  * switcher; then the body, which only receives a site the snapshot knows. An
@@ -249,7 +244,7 @@ export function SitePage({
   return (
     <>
       <PageHeader
-        title={sectionTitle(slug, section)}
+        title={pageTitle({ name: "site", slug, section })}
         breadcrumb={<SiteBreadcrumb slug={slug} section={section} />}
         afterTitle={<HeaderSitePicker slug={slug} section={section} />}
         count={count}
