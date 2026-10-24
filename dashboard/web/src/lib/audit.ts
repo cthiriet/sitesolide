@@ -7,12 +7,13 @@
  * reads every component's own audit, and shows what comes back. A row's
  * detail is data from a component, rendered as text and never as markup.
  */
+import { ROLE_TEXTS } from "./access"
 import { callApi } from "./api"
 import { activityLine } from "./connectors"
 import { capitalise, dateTime, plural } from "./format"
 import { operationOutcome, operationParts } from "./secrets"
 import type { Tone } from "./tones"
-import type { AuditResponse, AuditRow, AuditSource, LogEntry, Operation, SourceStatus } from "./types"
+import type { AccessRole, AuditResponse, AuditRow, AuditSource, LogEntry, Operation, SourceStatus } from "./types"
 
 // --- The sources -----------------------------------------------------------------
 
@@ -265,7 +266,7 @@ function roleNote(note: string | null): string | null {
   if (note === null) return null
   if (note === "no role") return "Refused: no role on this project"
   const role = note.startsWith("role ") ? note.slice("role ".length) : null
-  return role === null ? `Refused: ${note}` : `Refused: ${Object.hasOwn(ROLE_WORDS, role) ? ROLE_WORDS[role] : role} here`
+  return role === null ? `Refused: ${note}` : `Refused: ${roleWord(role) ?? role} here`
 }
 
 /** The steward's operation behind an action, for the words its own Activity always used. */
@@ -392,8 +393,10 @@ function stewardWords(row: AuditRow, operation: StewardOperation): AuditWords {
   return { summary: `${ok ? DONE[operation] : TRIED[operation]}${named}`, note: outcome.text, tone }
 }
 
-/** The ladder's roles as the page says them, `admin` included for an admin email's sign-in. */
-const ROLE_WORDS: Readonly<Record<string, string>> = { visitor: "Can open", viewer: "Viewer", developer: "Developer", admin: "Admin" }
+/** A rung of the ladder as the page says it, `admin` included for an admin email's sign-in; null for any other word. */
+function roleWord(role: string | null): string | null {
+  return role !== null && Object.hasOwn(ROLE_TEXTS, role) ? ROLE_TEXTS[role as AccessRole].label : null
+}
 
 /**
  * The steward's note on an access change, `dana@example.com: Developer ->
@@ -538,8 +541,8 @@ export function auditWords(row: AuditRow, timeZone?: string): AuditWords {
       const site = row.site ?? row.target ?? "a site"
       if (method === "password") return { summary: "Signed in with the owner's password", note: times(count(detail.count)), tone: "neutral" }
       // Who it was is the actor's column: a password access's name, or an email.
-      const role = text(detail.role)
-      const as = role !== null && Object.hasOwn(ROLE_WORDS, role) ? ` as ${ROLE_WORDS[role]}` : ""
+      const role = roleWord(text(detail.role))
+      const as = role === null ? "" : ` as ${role}`
       return { summary: `Opened ${site}${as}`, note: times(count(detail.count)), tone: "neutral" }
     }
     case "portal.signin_failed": {

@@ -8,7 +8,7 @@
  * see is empty or malformed, so that the owner does not wait for a round trip
  * to learn a field is missing.
  */
-import { isPlatform } from "./access"
+import { isPlatform, roleLabel } from "./access"
 import { actorLabel, auditWords } from "./audit"
 import { duration } from "./format"
 import type { Tone } from "./tones"
@@ -194,12 +194,10 @@ export function liveReach(token: Pick<TokenView, "owned" | "scope" | "member">, 
   }
   return projects.map(({ slug }) => {
     const role = Object.hasOwn(roles, slug) ? roles[slug]! : null
-    if (role === "developer" || role === "admin") return { slug, text: `${slug} (${ROLE_WORDS[role]})`, paused: false }
-    return { slug, text: `${slug} (paused: ${role === null ? "no role" : ROLE_WORDS[role]} now)`, paused: true }
+    if (role === "developer" || role === "admin") return { slug, text: `${slug} (${roleLabel(role)})`, paused: false }
+    return { slug, text: `${slug} (paused: ${role === null ? "no role" : roleLabel(role)} now)`, paused: true }
   })
 }
-
-const ROLE_WORDS: Readonly<Record<Role | "visitor", string>> = { visitor: "Can open", viewer: "Viewer", developer: "Developer", admin: "Admin" }
 
 /** The command the holder runs, without the token: typed at its prompt, it never lands in a shell history. */
 export function loginCommand(origin: string): string {
@@ -367,7 +365,7 @@ export function noProjectText(roles: Roles, holder: string | null): string {
 export function holderLine(holder: { roles: Roles; create: boolean }): string {
   const deploys = mintableProjects(holder.roles)
   const parts: string[] = []
-  if (deploys.length > 0 && deploys.length <= 2) parts.push(deploys.map(({ slug, role }) => `${ROLE_WORDS[role]} on ${slug}`).join(", "))
+  if (deploys.length > 0 && deploys.length <= 2) parts.push(deploys.map(({ slug, role }) => `${roleLabel(role)} on ${slug}`).join(", "))
   if (deploys.length > 2) parts.push(`Developer or Admin on ${deploys.length} projects`)
   if (holder.create) parts.push("May create projects")
   if (parts.length === 0) return "Viewer only"

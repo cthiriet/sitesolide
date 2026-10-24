@@ -8,7 +8,8 @@
  * offers only what the steward will accept.
  */
 import { cleanEmail } from "../../../borrowed/sharing"
-import { passwordExpiry, roleLabel, signsInWithAccount, type Expiry, type SignIn } from "./access"
+import { isExpired, passwordExpiry, roleLabel, signsInWithAccount, type Expiry, type SignIn } from "./access"
+import { isLive } from "./tokens"
 import type { AccessRole, PersonView, TokenView } from "./types"
 
 export type ProjectRole = { slug: string; role: AccessRole; label: string; password: Expiry | null }
@@ -62,7 +63,7 @@ export function createFieldError(text: string, signIn: SignIn): string | null {
 /** Every password access that has ended, across projects: what "Remove expired" takes off. */
 export function expiredAccesses(people: readonly Pick<PersonView, "who" | "passwords">[], now: number): { slug: string; who: string }[] {
   return people
-    .flatMap((person) => person.passwords.filter((one) => one.expired || (one.expiresAt !== null && one.expiresAt <= now)).map((one) => ({ slug: one.slug, who: person.who })))
+    .flatMap((person) => person.passwords.filter((one) => isExpired({ password: one }, now)).map((one) => ({ slug: one.slug, who: person.who })))
     .sort((a, b) => a.slug.localeCompare(b.slug, "en") || a.who.localeCompare(b.who, "en"))
 }
 
@@ -72,7 +73,7 @@ export function expiredAccesses(people: readonly Pick<PersonView, "who" | "passw
  * Null when they have none.
  */
 export function revokedTokensLine(tokens: readonly Pick<TokenView, "label" | "member" | "by" | "revokedAt" | "expiresAt">[], email: string, now: number): string | null {
-  const theirs = tokens.filter((token) => token.member === email && token.revokedAt === null && (token.expiresAt === null || now < token.expiresAt))
+  const theirs = tokens.filter((token) => token.member === email && isLive(token, now))
   if (theirs.length === 0) return null
   const named = theirs.map((token) => `${token.label} (made by ${token.by === "owner" ? "you" : "them"})`)
   return `Also revokes ${theirs.length === 1 ? "1 token" : `${theirs.length} tokens`}: ${named.join(", ")}.`
