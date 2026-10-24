@@ -13,6 +13,7 @@ import { SidebarMenuButton } from "@/components/ui/sidebar"
 import { useData } from "@/components/data"
 import { InternalLink } from "@/components/navigation"
 import { WithSnapshot, PageBody, EmptyState, PageHeader, Panel, Status } from "@/components/page"
+import { isPerson } from "@/lib/identity"
 import { SECTIONS, siteUrl, type Section } from "@/lib/pages"
 import { siteDiscrepancies, siteState } from "@/lib/site-card"
 import { TONE_DOT } from "@/lib/tones"
@@ -261,7 +262,7 @@ export function SitePage({
             const site = snapshot.sites.find((candidate) => candidate.slug === slug)
             if (site === undefined) {
               // A person sees their projects alone: one they hold no role on reads as absent, and whom to ask.
-              const person = identity !== null && identity.kind === "person"
+              const person = isPerson(identity)
               return (
                 <Panel>
                   <EmptyState

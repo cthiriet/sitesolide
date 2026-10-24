@@ -24,6 +24,7 @@
  * Members from before its one Access section. They are read like their
  * equivalent, and navigation replaces the address with the new one.
  */
+import { isPerson, roleOn, type Person } from "./identity"
 import type { IdentityView, Role } from "./types"
 import type { Verdict } from "./verdict"
 
@@ -60,11 +61,11 @@ export const MACHINE_PAGES: readonly MachineEntry[] = [
 const PERSON_PAGES: readonly MachinePage[] = ["home", "activity"]
 
 /** May this person mint a token of their own: a Developer or an Admin somewhere, or the create right. A Viewer mints nothing. */
-export function mayMint(identity: Extract<IdentityView, { kind: "person" }>): boolean {
+function mayMint(identity: Person): boolean {
   return identity.create || Object.values(identity.roles).some((role) => role === "developer" || role === "admin")
 }
 
-function personPages(identity: Extract<IdentityView, { kind: "person" }>): readonly MachinePage[] {
+function personPages(identity: Person): readonly MachinePage[] {
   return mayMint(identity) ? [...PERSON_PAGES, "tokens"] : PERSON_PAGES
 }
 
@@ -76,26 +77,16 @@ const ROLE_SECTIONS: Readonly<Record<Role, readonly Section[]>> = {
 
 const OWNER_SECTIONS: readonly Section[] = ["overview", "audience", "secrets", "access", "backups"]
 
-function isPersonIdentity(identity: IdentityView | null): identity is Extract<IdentityView, { kind: "person" }> {
-  return identity !== null && identity.kind === "person"
-}
-
-/** The person's role on a project, null when they hold none or are the owner. */
-export function roleIn(identity: IdentityView | null, slug: string): Role | null {
-  if (!isPersonIdentity(identity)) return null
-  return Object.hasOwn(identity.roles, slug) ? identity.roles[slug]! : null
-}
-
 /** The machine's pages this person may open, in the sidebar's order. */
 export function machinePagesFor(identity: IdentityView | null): readonly MachineEntry[] {
-  if (!isPersonIdentity(identity)) return MACHINE_PAGES
+  if (!isPerson(identity)) return MACHINE_PAGES
   const pages = personPages(identity)
   return MACHINE_PAGES.filter((entry) => pages.includes(entry.name))
 }
 
 function allowedSections(identity: IdentityView | null, slug: string): readonly Section[] {
-  if (!isPersonIdentity(identity)) return OWNER_SECTIONS
-  const role = roleIn(identity, slug)
+  if (!isPerson(identity)) return OWNER_SECTIONS
+  const role = roleOn(identity, slug)
   return role === null ? ROLE_SECTIONS.viewer : ROLE_SECTIONS[role]
 }
 
@@ -108,7 +99,7 @@ export function sectionsFor(identity: IdentityView | null, slug: string): readon
 /** May this person open this page? A person asking for one that is not theirs is told so. */
 export function mayOpen(page: Page, identity: IdentityView | null): boolean {
   if (page.name === "site") return allowedSections(identity, page.slug).includes(page.section)
-  return !isPersonIdentity(identity) || personPages(identity).includes(page.name)
+  return !isPerson(identity) || personPages(identity).includes(page.name)
 }
 
 /** The order of the sidebar and the tabs, inside a site. */

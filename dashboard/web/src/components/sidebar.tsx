@@ -17,6 +17,7 @@ import { Logo } from "@/components/logo"
 import { InternalLink, useNavigation } from "@/components/navigation"
 import { SidebarSitePicker, useSite } from "@/components/site"
 import { useTheme } from "@/components/theme"
+import { isPerson } from "@/lib/identity"
 import { machineIndicators, siteIndicators, sidebarShortcut, type Indicator } from "@/lib/sidebar"
 import { ariaCurrent, machinePagesFor, pageUrl, sectionsFor, type MachinePage, type Page, type Section } from "@/lib/pages"
 import { TONE_PILL, TONE_DOT, type Tone } from "@/lib/tones"
@@ -212,7 +213,7 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="pb-3">
-        {identity !== null && identity.kind === "person" && (
+        {isPerson(identity) && (
           <p className="truncate px-2.5 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden" title={identity.email}>
             {identity.email}
           </p>

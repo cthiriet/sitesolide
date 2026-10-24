@@ -17,6 +17,7 @@ import {
 } from "@/components/page"
 import { SearchField, SiteFilterChips } from "@/components/site-search"
 import { SiteList } from "@/components/sites"
+import { isPerson } from "@/lib/identity"
 import { siteUrl } from "@/lib/pages"
 import { searchAnnouncement, filterSites, countLabel, queryWords } from "@/lib/search"
 import { withSecrets } from "@/lib/secrets"
@@ -139,7 +140,7 @@ function Inventory({ snapshot }: { snapshot: Snapshot }) {
 
   if (sites.length === 0) {
     // A person sees their projects alone: none yet is no word about the server.
-    if (identity !== null && identity.kind === "person") {
+    if (isPerson(identity)) {
       return (
         <Panel>
           <EmptyState icon={Globe} title="No project of yours yet">
@@ -241,7 +242,7 @@ function HomeSkeleton() {
 export function HomePage() {
   const { snapshot, identity } = useData()
   // The machine's own figures are the owner's: a person sees their projects.
-  const person = identity !== null && identity.kind === "person"
+  const person = isPerson(identity)
   return (
     <>
       <PageHeader title="Sites" count={snapshot?.sites.length} />

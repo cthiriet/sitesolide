@@ -3,6 +3,7 @@ import { SignIn } from "@/components/signin"
 import { UnreachableScreen } from "@/components/page"
 import { signOut as postSignOut, readState, readSecrets, readSession } from "@/lib/api"
 import { currentAge } from "@/lib/format"
+import { isPerson } from "@/lib/identity"
 import {
   UNREACHABLE,
   clockOffset,
@@ -179,7 +180,6 @@ function OpenSession({
   const [currentConfigured, setConfigured] = useState(configured)
   const [currentIdentity, setIdentity] = useState(identity)
   const [currentSso, setSso] = useState(sso)
-  const person = currentIdentity !== null && currentIdentity.kind === "person"
   const [generation, setGeneration] = useState(0)
   const [now, setNow] = useState(() => Date.now())
   const inFlight = useRef(false)
@@ -262,8 +262,8 @@ function OpenSession({
 
   // A person reads the secrets of the projects where they are a Developer or
   // an Admin; the steward and the service decide what comes back.
-  const roles = currentIdentity !== null && currentIdentity.kind === "person" ? Object.values(currentIdentity.roles) : []
-  const secrets = useSecrets(generation, sessionExpired, !person || roles.some((role) => role !== "viewer"))
+  const readsSecrets = !isPerson(currentIdentity) || Object.values(currentIdentity.roles).some((role) => role !== "viewer")
+  const secrets = useSecrets(generation, sessionExpired, readsSecrets)
   const bySite = useMemo(() => secretsBySite(secrets.projects), [secrets.projects])
 
   const reading = received?.reading ?? null
