@@ -32,10 +32,11 @@
  * a path or a message that could quote one.
  */
 import { Database } from "bun:sqlite";
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { PROJECTION_NAME } from "../../borrowed/access";
-import { readBounded, readGroup, writeAtomically } from "../secrets/system";
+import { layForPortal, type PortalWrite } from "../people/system";
+import { readBounded, writeAtomically } from "../secrets/system";
 import type { PortalRows, SharingRow, InviteRow } from "./migrate";
 import { LEGACY_REGISTRY_NAME, PORTAL_DATABASE, REGISTRY_MAX_BYTES, REGISTRY_NAME } from "./protocol";
 
@@ -52,8 +53,6 @@ export type AccessSystemConfig = {
   portalDataFolder: string;
 };
 
-export type ProjectionWrite = "written" | "no-folder" | "no-group";
-
 export type PortalReading = { kind: "absent" } | { kind: "read"; rows: PortalRows } | { kind: "unreadable"; reason: string };
 
 export type AccessSystem = {
@@ -68,7 +67,7 @@ export type AccessSystem = {
   /** The portal's sharing and password access, read from a checked copy of its database. */
   readPortalDatabase: () => Promise<PortalReading>;
   /** Lays the portal's projection, unless its folder or the portal's group is missing. */
-  writeProjection: (text: string) => Promise<ProjectionWrite>;
+  writeProjection: (text: string) => Promise<PortalWrite>;
 };
 
 /** The portal's database: its audit is bounded to a few tens of megabytes. */
@@ -335,28 +334,6 @@ export function createAccessSystem(config: AccessSystemConfig, checkOwner: boole
       return { kind: "unreadable", reason: last };
     },
 
-    async writeProjection(text) {
-      // The folder is bin/deploy-steward.sh's: a link or anything but a
-      // folder there, and nothing is written.
-      try {
-        const folder = lstatSync(config.portalKeyFolder);
-        if (!folder.isDirectory() || folder.isSymbolicLink()) return "no-folder";
-      } catch {
-        return "no-folder";
-      }
-      let owner: { uid: number; gid: number } | null = null;
-      if (config.portalGroup !== "") {
-        let gid: number | null = null;
-        try {
-          gid = readGroup(readFileSync(config.groupsFile, "utf8"), config.portalGroup);
-        } catch {
-          gid = null;
-        }
-        if (gid === null) return "no-group";
-        owner = { uid: 0, gid };
-      }
-      writeAtomically(config.portalKeyFolder, PROJECTION_NAME, encoder.encode(text), { owner, mode: 0o640 });
-      return "written";
-    },
+    writeProjection: async (text) => layForPortal(config, PROJECTION_NAME, text),
   };
 }

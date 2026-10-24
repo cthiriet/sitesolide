@@ -40,7 +40,8 @@ export type MembersSystemConfig = {
 /** What portal.env says of signing in with a provider. */
 export type PortalSettings = { configured: boolean; allowedDomains: string[]; admins: string[]; providerName: string | null };
 
-export type KeyWrite = "written" | "no-folder" | "no-group";
+/** A file laid for the portal, or why not: its folder or its group missing. */
+export type PortalWrite = "written" | "no-folder" | "no-group";
 
 export type MembersSystem = {
   now: () => number;
@@ -51,7 +52,7 @@ export type MembersSystem = {
   writePublicKey: (text: string) => Promise<void>;
   readPortalKey: () => Promise<string | null>;
   /** Lays the portal's private key, unless its folder or its group is missing. */
-  writePortalKey: (text: string) => Promise<KeyWrite>;
+  writePortalKey: (text: string) => Promise<PortalWrite>;
   readPortalSettings: () => Promise<PortalSettings>;
   /** Does the machine carry `/srv/sites/<slug>`? */
   projectExists: (slug: string) => boolean;
@@ -73,6 +74,35 @@ function readQuietly(path: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * A file laid for the portal in its folder, the assertion key or the access
+ * projection: `root:<portal group> 0640`, root writing it, the portal's
+ * account reading it, the dashboard's not. The folder is
+ * bin/deploy-steward.sh's: a link or anything but a folder there, or no
+ * portal group yet, and nothing is written.
+ */
+export function layForPortal(config: Pick<MembersSystemConfig, "portalKeyFolder" | "groupsFile" | "portalGroup">, name: string, text: string): PortalWrite {
+  try {
+    const folder = lstatSync(config.portalKeyFolder);
+    if (!folder.isDirectory() || folder.isSymbolicLink()) return "no-folder";
+  } catch {
+    return "no-folder";
+  }
+  let owner: { uid: number; gid: number } | null = null;
+  if (config.portalGroup !== "") {
+    let gid: number | null = null;
+    try {
+      gid = readGroup(readFileSync(config.groupsFile, "utf8"), config.portalGroup);
+    } catch {
+      gid = null;
+    }
+    if (gid === null) return "no-group";
+    owner = { uid: 0, gid };
+  }
+  writeAtomically(config.portalKeyFolder, name, encoder.encode(text), { owner, mode: 0o640 });
+  return "written";
 }
 
 /** The sign-in settings of portal.env, every value judged by the portal's own rules. */
@@ -114,29 +144,7 @@ export function createMembersSystem(config: MembersSystemConfig): MembersSystem 
     },
 
     readPortalKey: async () => readQuietly(portalKeyFile),
-    async writePortalKey(text) {
-      // The folder is bin/deploy-steward.sh's: a link or anything but a folder
-      // of root's there, and nothing is written.
-      try {
-        const folder = lstatSync(config.portalKeyFolder);
-        if (!folder.isDirectory() || folder.isSymbolicLink()) return "no-folder";
-      } catch {
-        return "no-folder";
-      }
-      let owner: { uid: number; gid: number } | null = null;
-      if (config.portalGroup !== "") {
-        let gid: number | null = null;
-        try {
-          gid = readGroup(readFileSync(config.groupsFile, "utf8"), config.portalGroup);
-        } catch {
-          gid = null;
-        }
-        if (gid === null) return "no-group";
-        owner = { uid: 0, gid };
-      }
-      writeAtomically(config.portalKeyFolder, PORTAL_KEY_NAME, encoder.encode(text), { owner, mode: 0o640 });
-      return "written";
-    },
+    writePortalKey: async (text) => layForPortal(config, PORTAL_KEY_NAME, text),
 
     async readPortalSettings() {
       const examination = readBounded(join(config.secretsFolder, "portal.env"), MAX_ENV_BYTES);
