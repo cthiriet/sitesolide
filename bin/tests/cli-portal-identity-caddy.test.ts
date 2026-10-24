@@ -8,6 +8,7 @@ import { PORTAL_PORT } from "../cli/portal";
 import { startProvider, type MockProvider } from "../../portal/tests/provider";
 import { encodeProjection, PROJECTION_VERSION, type Projection, type SiteAccess } from "../../portal/src/access";
 import { guestHash } from "../../portal/src/gate";
+import { block, freePort, waitFor } from "./caddy-lab";
 
 /**
  * Who is in, as the site behind a real Caddy learns it.
@@ -60,40 +61,6 @@ const INJECTED = [
   "\trequest_header X-Sitesolide_role admin",
   '\trequest_header X_sitesolide-User-Name "The CEO"',
 ];
-
-function block(text: string, header: string): string {
-  const lines = text.split("\n");
-  const first = lines.findIndex((line) => line.trimStart().startsWith(header));
-  if (first === -1) throw new Error(`block not found: ${header}`);
-  const body: string[] = [];
-  let depth = 0;
-  for (const line of lines.slice(first)) {
-    const code = line.trimStart().startsWith("#") ? "" : line;
-    depth += (code.match(/\{/g) ?? []).length - (code.match(/\}/g) ?? []).length;
-    body.push(line);
-    if (depth === 0 && body.length > 1) break;
-  }
-  return body.join("\n");
-}
-
-function freePort(): number {
-  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() });
-  const port = server.port!;
-  server.stop(true);
-  return port;
-}
-
-async function waitFor(url: string): Promise<void> {
-  for (let i = 0; i < 100; i++) {
-    try {
-      await fetch(url);
-      return;
-    } catch {
-      await Bun.sleep(50);
-    }
-  }
-  throw new Error(`nothing answers on ${url}`);
-}
 
 describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
   const folder = mkdtempSync(join(tmpdir(), "portal-identity-caddy-"));

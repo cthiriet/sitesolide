@@ -3,6 +3,7 @@ import { decideBlock, domainLeftOpen, generateFragment, HEADLESS_ANSWER, isEarli
 import { buildFragment, SITE_VARIABLE as LOCKS_SITE_VARIABLE, stanzaClosesEveryAddress } from "../../api/src/locks";
 import { validate, type Manifest } from "../cli/manifest";
 import { fragmentPassesIdentity, IDENTITY_STRIP, PORTAL_GENERATIONS, PORTAL_PORT, portalStanza } from "../cli/portal";
+import { block } from "./caddy-lab";
 
 const MIXED: Manifest = {
   slug: "budget",
@@ -12,26 +13,6 @@ const MIXED: Manifest = {
 };
 const API: Manifest = { slug: "my-api", port: 3041, start: "uvicorn app:api" };
 const SHOWCASE: Manifest = { slug: "notes", publicDir: "dist" };
-
-/**
- * Same block extraction as api/tests/caddyfile.test.ts: comments readily quote
- * braces and take no part in the structure.
- */
-function block(text: string, header: string): string {
-  const lines = text.split("\n");
-  const first = lines.findIndex((line) => line.trimStart().startsWith(header));
-  if (first === -1) throw new Error(`block not found: ${header}`);
-
-  const body: string[] = [];
-  let depth = 0;
-  for (const line of lines.slice(first)) {
-    const code = line.trimStart().startsWith("#") ? "" : line;
-    depth += (code.match(/\{/g) ?? []).length - (code.match(/\}/g) ?? []).length;
-    body.push(line);
-    if (depth === 0 && body.length > 1) break;
-  }
-  return body.join("\n");
-}
 
 describe("the three shapes", () => {
   test("a static showcase has no fragment", () => {

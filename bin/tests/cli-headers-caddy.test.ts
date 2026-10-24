@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateFragment, ZONE_HOST } from "../cli/fragment";
 import { readManifest, SERVICE_PORTS, validate, type Manifest } from "../cli/manifest";
+import { block, freePort } from "./caddy-lab";
 
 /**
  * A manifest's headers, as a real Caddy serves them.
@@ -41,28 +42,6 @@ const LEGITIMATE: Record<string, string> = {
   Link: "</style.css>; rel=preload; as=style",
   "X-Note": "100% #1 & more ~ | ^ [ok] ! ? @ = + < > ;",
 };
-
-function block(text: string, header: string): string {
-  const lines = text.split("\n");
-  const first = lines.findIndex((line) => line.trimStart().startsWith(header));
-  if (first === -1) throw new Error(`block not found: ${header}`);
-  const body: string[] = [];
-  let depth = 0;
-  for (const line of lines.slice(first)) {
-    const code = line.trimStart().startsWith("#") ? "" : line;
-    depth += (code.match(/\{/g) ?? []).length - (code.match(/\}/g) ?? []).length;
-    body.push(line);
-    if (depth === 0 && body.length > 1) break;
-  }
-  return body.join("\n");
-}
-
-function freePort(): number {
-  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() });
-  const port = server.port!;
-  server.stop(true);
-  return port;
-}
 
 /** The service's port: a manifest names one of the services' range, never one the system picks. */
 function freeServicePort(): number {
