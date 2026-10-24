@@ -199,6 +199,13 @@ function attempt<T>(generate: () => T, fallback: T): T {
   }
 }
 
+/** The door and the preview lock a deposited manifest carries, as confirmDoorUnderLock reads them. */
+function depositedDoor(raw: string | undefined, slug: string): DepositedRead {
+  if (raw === undefined) return { kind: "absent" };
+  const door = portalFromManifest(raw, slug);
+  return door.kind === "read" ? { kind: "present", portal: door.portal, lock: door.lock } : door;
+}
+
 /** The manifest a file of the machine was generated from, when it reads. */
 function previousManifest(raw: string | undefined): Manifest | null {
   if (raw === undefined) return null;
@@ -225,11 +232,7 @@ export function finalManifest(
   if (!isObject(object)) throw new Stop("invalid-manifest", "sitesolide.json must contain an object");
 
   const raw = deposited.get(slug);
-  let onMachine: DepositedRead = { kind: "absent" };
-  if (raw !== undefined) {
-    const door = portalFromManifest(raw, slug);
-    onMachine = door.kind === "read" ? { kind: "present", portal: door.portal, lock: door.lock } : door;
-  }
+  const onMachine = depositedDoor(raw, slug);
   if (onMachine.kind === "unreadable") {
     throw new Stop("machine-unreadable", `the manifest on the machine does not read (${onMachine.reason}): nothing was changed, the owner must look at /srv/sites/${slug}/sitesolide.json`);
   }
@@ -492,15 +495,11 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
       throw new Stop("caddy-busy", `Caddy is being changed by ${taken.who ?? "another action"}: nothing served was changed, deploy again in a moment`);
     }
     release = taken.release;
-    let underLock: DepositedRead = { kind: "absent" };
+    let underLock: DepositedRead;
     let current: Map<string, string> | null = null;
     try {
       current = await host.readManifests();
-      const raw = current.get(slug);
-      if (raw !== undefined) {
-        const door = portalFromManifest(raw, slug);
-        underLock = door.kind === "read" ? { kind: "present", portal: door.portal, lock: door.lock } : door;
-      }
+      underLock = depositedDoor(current.get(slug), slug);
     } catch (error) {
       underLock = { kind: "unreadable", reason: (error as Error).message };
     }

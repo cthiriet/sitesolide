@@ -537,7 +537,7 @@ export function createHost(config: HostConfig): Host {
           if (!found && lstatSync(path).isFile()) found = true;
         });
       } catch {
-        return found;
+        // Past MAX_TREE_ENTRIES, or a name gone meanwhile: what was found stands.
       }
       return found;
     },
