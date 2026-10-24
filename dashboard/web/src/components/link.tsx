@@ -2,6 +2,10 @@ import type { ReactNode } from "react"
 import { ArrowUpRight } from "lucide-react"
 import { cn } from "@/lib/utils"
 
+/** A link inside text, to a site or a page of the dashboard: underlined at rest, darker on hover. */
+export const TEXT_LINK =
+  "rounded-sm underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
+
 /**
  * An address opens alongside, never in place of the dashboard: leaving it to
  * look at a site would cost the position in the list, and a reconnection if the
@@ -18,10 +22,7 @@ export function ExternalLink({ href, children, className }: { href: string; chil
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className={cn(
-        "max-w-full rounded-sm underline decoration-foreground/20 underline-offset-4 transition-colors outline-none wrap-anywhere hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring",
-        className,
-      )}
+      className={cn(TEXT_LINK, "max-w-full transition-colors wrap-anywhere", className)}
     >
       {children}
       <ArrowUpRight aria-hidden="true" className="ml-1 inline-block size-3 align-[-0.0625rem] text-muted-foreground" />

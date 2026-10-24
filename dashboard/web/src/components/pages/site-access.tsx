@@ -3,6 +3,7 @@ import { KeyRound } from "lucide-react"
 import { GeneralAccessPanel } from "@/components/access-general"
 import { PeopleWithAccess } from "@/components/access-people"
 import { useData } from "@/components/data"
+import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
 import { Banner, ErrorState, Panel, PanelSkeleton } from "@/components/page"
 import { SecretsLockControl } from "@/components/secrets"
@@ -32,9 +33,6 @@ import type { AccessPageResponse, Site } from "@/lib/types"
 
 /** The portal's own project, whose Secrets hold portal.env, where company sign-in is set up. */
 const PORTAL_SLUG = "portal"
-
-const LINK =
-  "rounded-sm underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
 
 type Loaded = { state: "loading" } | { state: "failed"; message: string } | { state: "ready"; page: AccessPageResponse }
 
@@ -110,7 +108,7 @@ function Content({ site }: { site: Site }) {
     <>
       <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
         Who can open {slug}, and what each person can do with it here. Changes apply from each person's next visit.{" "}
-        <InternalLink href={activityUrl({ action: "access", target: slug })} className={LINK}>
+        <InternalLink href={activityUrl({ action: "access", target: slug })} className={TEXT_LINK}>
           See changes in Activity
         </InternalLink>
       </p>
@@ -125,7 +123,7 @@ function Content({ site }: { site: Site }) {
           in to the dashboard. Set <code className="font-mono text-xs">OIDC_ISSUER</code>,{" "}
           <code className="font-mono text-xs">OIDC_CLIENT_ID</code> and <code className="font-mono text-xs">OIDC_CLIENT_SECRET</code>{" "}
           in the portal's{" "}
-          <InternalLink href={siteUrl(PORTAL_SLUG, "secrets")} className={LINK}>
+          <InternalLink href={siteUrl(PORTAL_SLUG, "secrets")} className={TEXT_LINK}>
             portal.env
           </InternalLink>
           , then restart it.

@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Command, useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
+import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
 import { Banner, EmptyState, ErrorState, INPUT_DIALOG, PageBody, PageHeader, Panel, RowsSkeleton, Status } from "@/components/page"
 import { SecretsLockControl } from "@/components/secrets"
@@ -82,10 +83,7 @@ function SiteLink({ slug, known }: { slug: string | null; known: ReadonlySet<str
   if (slug === null) return null
   if (!known.has(slug)) return <span>{slug}</span>
   return (
-    <InternalLink
-      href={siteUrl(slug)}
-      className="rounded-sm underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
-    >
+    <InternalLink href={siteUrl(slug)} className={TEXT_LINK}>
       {slug}
     </InternalLink>
   )

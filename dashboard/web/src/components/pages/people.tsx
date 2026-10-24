@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Who } from "@/components/access-word"
 import { useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
+import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
 import { Banner, EmptyState, ErrorState, PageBody, PageHeader, Panel, PanelSkeleton } from "@/components/page"
 import { SecretsLockControl } from "@/components/secrets"
@@ -53,8 +54,7 @@ type Loaded = { state: "loading" } | { state: "failed"; message: string } | { st
  */
 const ROW = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 px-4 @2xl:grid-cols-[minmax(0,1fr)_10rem_2.5rem]"
 
-const LINK =
-  "rounded-sm text-foreground underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
+const LINK = cn(TEXT_LINK, "text-foreground")
 
 /** A person's roles, each project linked to its Access section. */
 function Roles({ person, now }: { person: PersonView; now: number }) {

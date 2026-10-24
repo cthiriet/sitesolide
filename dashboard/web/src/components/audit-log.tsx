@@ -3,6 +3,7 @@ import { ChevronDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
 import { Banner, Status } from "@/components/page"
 import { ACCESS_ACTION, SOURCES, accessOnly, actorLabel, auditWords, detailLines, sourceLabel, sourceWords, type AuditFilters } from "@/lib/audit"
@@ -183,8 +184,6 @@ function When({ at, serverNow }: { at: string; serverNow: number }) {
   )
 }
 
-const LINK = "rounded-sm underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
-
 /**
  * The site, linked when the server still has it; the host or name recorded,
  * when it says more. `compact`, on one line among others: the site alone, the
@@ -194,7 +193,7 @@ function Target({ row, known, compact = false }: { row: AuditRow; known: Readonl
   if (row.target === null) return <span className="text-muted-foreground">{ABSENT}</span>
   const site =
     row.site !== null && known.has(row.site) ? (
-      <InternalLink href={siteUrl(row.site)} className={LINK}>
+      <InternalLink href={siteUrl(row.site)} className={TEXT_LINK}>
         {row.site}
       </InternalLink>
     ) : (

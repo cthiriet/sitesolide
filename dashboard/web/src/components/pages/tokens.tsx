@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
 import { Who } from "@/components/access-word"
+import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
 import { Banner, EmptyState, ErrorState, PageBody, PageHeader, Panel, PanelSkeleton, Status } from "@/components/page"
 import { SecretsLockControl } from "@/components/secrets"
@@ -37,9 +38,6 @@ import { cn } from "@/lib/utils"
  */
 
 type Loaded = { state: "loading" } | { state: "failed" } | { state: "ready"; list: TeamPageResponse }
-
-const LINK =
-  "rounded-sm underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
 
 /**
  * A token: its label, who made it and for whom, its state; what it may do
@@ -268,7 +266,7 @@ export function TokensPage() {
               title="Token activity"
               full
               actions={
-                <InternalLink href="/activity/" className={cn(LINK, "text-xs text-muted-foreground hover:text-foreground")}>
+                <InternalLink href="/activity/" className={cn(TEXT_LINK, "text-xs text-muted-foreground hover:text-foreground")}>
                   All activity
                 </InternalLink>
               }

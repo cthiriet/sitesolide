@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
 import { MachinePlate, PlateSkeleton } from "@/components/gauge"
+import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
 import {
   WithSnapshot,
@@ -23,6 +24,7 @@ import { searchAnnouncement, filterSites, countLabel, queryWords } from "@/lib/s
 import { withSecrets } from "@/lib/secrets"
 import { countFilters, filterByKind, FILTERS, sitesCaption, sortSites, type SiteFilter } from "@/lib/sites"
 import type { Discrepancy, Snapshot, Site } from "@/lib/types"
+import { cn } from "@/lib/utils"
 import { worstSeverities, sortDiscrepancies } from "@/lib/verdict"
 
 /** The announcement of the result count waits for typing to settle: one per keystroke would be read in a burst. */
@@ -72,10 +74,7 @@ function IssuesPanel({ discrepancies, sites }: { discrepancies: readonly Discrep
                     {slug === null ? (
                       <span className="font-medium">Server</span>
                     ) : known.has(slug) ? (
-                      <InternalLink
-                        href={siteUrl(slug)}
-                        className="rounded-sm font-medium underline decoration-foreground/20 underline-offset-4 outline-none hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                      >
+                      <InternalLink href={siteUrl(slug)} className={cn(TEXT_LINK, "font-medium")}>
                         {slug}
                       </InternalLink>
                     ) : (
