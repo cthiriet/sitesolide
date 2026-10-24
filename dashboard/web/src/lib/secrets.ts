@@ -25,8 +25,6 @@ import type {
   RestartVerdict,
 } from "./types"
 
-export type { Tone } from "./tones"
-
 /** A revealed value masks itself again after this delay. */
 export const REVEAL_MS = 30_000
 

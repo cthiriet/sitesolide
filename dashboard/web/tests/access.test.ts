@@ -7,7 +7,6 @@ import {
   DEFAULT_PASSWORD_DURATION_S,
   DEPLOY_NOTE,
   GENERAL_CHOICES,
-  LADDER,
   PASSWORD_DURATIONS,
   PLATFORM_SLUGS,
   ROLE_TEXTS,
@@ -50,7 +49,6 @@ import {
   refusalText,
   removalConfirmation,
   roleLabel,
-  rolesSummary,
   selfChangeWarning,
   sendLine,
   signsInWithAccount,
@@ -89,13 +87,11 @@ const page = (fields: Partial<{ entries: EntryView[]; signIn: SignIn; grantable:
 
 describe("the roles", () => {
   test("one ladder, from Can open to Admin, each in the spec's words, each including the ones below", () => {
-    expect(LADDER).toEqual(ALL)
     expect(ALL.map(roleLabel)).toEqual(["Can open", "Viewer", "Developer", "Admin"])
     // The owner is no rung: they are above every project, on no list.
     expect(Object.keys(ROLE_TEXTS)).toEqual(ALL)
     // Each rung says what it adds to the one below.
     for (const role of ["viewer", "developer", "admin"] as const) expect(ROLE_TEXTS[role].can.startsWith("Also ")).toBe(true)
-    expect(rolesSummary({ shop: "viewer", blog: "developer", cms: "admin" })).toBe("blog: Developer, cms: Admin, shop: Viewer")
   })
 
   test("raising above Can open, or drawing a password, waits for the unlock; lowering and Can open never do", () => {

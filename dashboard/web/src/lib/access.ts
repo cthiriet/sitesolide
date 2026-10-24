@@ -12,7 +12,7 @@
  * (borrowed/access.ts). `modifiable` and `reason` for general access come
  * from the steward too: only it knows which site may change.
  */
-import { ROLES, rank } from "../../../borrowed/access"
+import { rank } from "../../../borrowed/access"
 import { cleanDomain, cleanEmail, domainOf, maySignIn } from "../../../borrowed/sharing"
 import { ago, dateTime, duration } from "./format"
 import { siteAccess } from "./sites"
@@ -36,17 +36,8 @@ export const ROLE_TEXTS: Readonly<Record<AccessRole, RoleText>> = {
   admin: { label: "Admin", can: "Also reads its secrets, changes its access and people, restores its backups.", yours: "you can do everything with the project" },
 }
 
-/** The ladder, from the lowest. */
-export const LADDER: readonly AccessRole[] = ROLES
-
 export function roleLabel(role: AccessRole): string {
   return ROLE_TEXTS[role].label
-}
-
-/** `blog: Developer, shop: Viewer`, sorted by project. */
-export function rolesSummary(roles: Readonly<Record<string, AccessRole>>): string {
-  const entries = Object.entries(roles).sort(([a], [b]) => a.localeCompare(b, "en"))
-  return entries.map(([slug, role]) => `${slug}: ${roleLabel(role)}`).join(", ")
 }
 
 // --- General access ------------------------------------------------------------------
@@ -59,10 +50,6 @@ export const GENERAL_CHOICES: readonly GeneralChoice[] = [
   { access: "restricted", title: "Restricted", sentence: "Only the people with access can open it, once signed in." },
   { access: "code", title: "Anyone with the code", sentence: "Anyone who has the preview code can open it." },
 ]
-
-export function generalTitle(access: GeneralAccess): string {
-  return GENERAL_CHOICES.find((choice) => choice.access === access)?.title ?? access
-}
 
 /** sitesolide.json and the server disagree: what it means, in words. */
 export type GeneralProblem = { title: string; detail: string }

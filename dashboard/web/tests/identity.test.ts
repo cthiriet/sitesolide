@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { isAdminOf, isPerson, mayRestart, reauthUrl, roleOn, signInFailure, signInUrl, unlockFailure } from "../src/lib/identity"
+import { isPerson, mayRestart, reauthUrl, roleOn, signInFailure, signInUrl, unlockFailure } from "../src/lib/identity"
 import { MACHINE_PAGES, SECTIONS, machinePagesFor, mayOpen, pageFromUrl, sectionsFor } from "../src/lib/pages"
 import { auditWords } from "../src/lib/audit"
 import type { AuditRow, IdentityView } from "../src/lib/types"
@@ -34,13 +34,11 @@ describe("what a person sees of the page", () => {
     expect(mayOpen(pageFromUrl("/people/"), OWNER)).toBe(true)
   })
 
-  test("the role on a project, an Admin's, and the restart for a Developer and an Admin on their own projects", () => {
+  test("the role on a project, and the restart for a Developer and an Admin on their own projects", () => {
     expect(isPerson(ALICE) && !isPerson(OWNER) && !isPerson(null)).toBe(true)
     expect(roleOn(ALICE, "blog")).toBe("developer")
     expect(roleOn(ALICE, "nowhere")).toBeNull()
     expect(roleOn(OWNER, "blog")).toBeNull()
-    expect(isAdminOf(ALICE, "cms")).toBe(true)
-    expect(isAdminOf(ALICE, "blog")).toBe(false)
     expect(mayRestart(ALICE, "blog")).toBe(true)
     expect(mayRestart(ALICE, "shop")).toBe(false)
     expect(mayRestart(OWNER, "blog")).toBe(false)

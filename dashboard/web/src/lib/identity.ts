@@ -29,11 +29,6 @@ export function mayRestart(identity: IdentityView | null, slug: string): boolean
   return role === "developer" || role === "admin"
 }
 
-/** An Admin of this project: the one person who reads its secrets, changes its access and restores its backups. */
-export function isAdminOf(identity: IdentityView | null, slug: string): boolean {
-  return roleOn(identity, slug) === "admin"
-}
-
 /**
  * Where a person's unlock begins: a forced sign-in at the provider, coming
  * back to this page. A previous refusal's note is left off the way back.
