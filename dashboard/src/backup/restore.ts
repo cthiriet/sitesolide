@@ -51,7 +51,7 @@ import type { BackupConfig } from "./config";
 import { addSnapshot, DATABASE_NAME, openDatabase, openForReading, PRUNE_WANTED, readDoomed, recordAudit, recordDoomed, writeSetting } from "./database";
 import { takeLock, waitForLock } from "./lock";
 import { freeBytes, readProject, type Project } from "./projects";
-import { DATA, FAILED, INCOMING, PREVIOUS, recoveryPlan, type Present } from "./recovery";
+import { DATA, FAILED, INCOMING, PREVIOUS, recoveryPlan, type Plan, type Present } from "./recovery";
 import {
   MAX_REQUEST_BYTES,
   MAX_RESULT_BYTES,
@@ -253,11 +253,7 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
     // --- Leftovers of an interrupted restore
     const plan = recoveryPlan(presentIn(root));
     if (plan.kind === "refuse") throw new Refused(plan.reason);
-    for (const step of plan.steps) {
-      if ("rename" in step) renameSync(join(root, step.rename[0]), join(root, step.rename[1]));
-      else rmSync(join(root, step.remove), { recursive: true, force: true });
-    }
-    if (plan.note !== null) log(`restore ${folder}: ${plan.note}`);
+    repair(root, plan, (note) => log(`restore ${folder}: ${note}`));
     const dataStat = lstatOrNull(join(root, DATA));
     if (dataStat === null || !dataStat.isDirectory() || dataStat.isSymbolicLink()) throw new Refused(`${folder} has no data folder to restore into`);
 
@@ -321,12 +317,7 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
     if (units.length > 0) {
       publish("running", `Stopping ${folder}.`);
       markStopped(units);
-      // The timers first, on their own: one that fired while its service's
-      // stop waited in the same transaction would start a run, on the data
-      // about to be set aside.
-      const timers = units.filter(isTimerUnit);
-      if (timers.length > 0) await dependencies.systemctl(["stop", ...timers], SYSTEMCTL_TIMEOUT_MS);
-      await dependencies.systemctl(["stop", ...units.filter((unit) => !isTimerUnit(unit))], SYSTEMCTL_TIMEOUT_MS);
+      await stopUnits(dependencies, units);
       // A service still running would keep writing into the folder about to be
       // set aside, and its writes would be lost with it.
       for (const unit of units) {
@@ -384,9 +375,7 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
 
     // --- The service did not come back: the previous data goes back in.
     publish("running", `${folder} did not start on the restored data. Putting the previous data back.`);
-    const timers = units.filter(isTimerUnit);
-    if (timers.length > 0) await dependencies.systemctl(["stop", ...timers], SYSTEMCTL_TIMEOUT_MS);
-    await dependencies.systemctl(["stop", ...units.filter((unit) => !isTimerUnit(unit))], SYSTEMCTL_TIMEOUT_MS);
+    await stopUnits(dependencies, units);
     renameSync(join(root, DATA), join(root, FAILED));
     renameSync(join(root, PREVIOUS), join(root, DATA));
     syncFolder(root);
@@ -461,6 +450,26 @@ function withDoomed(config: BackupConfig): string[] {
   } catch {
     return [];
   }
+}
+
+/** The steps of a clean recovery plan, carried out in the project's folder; `say` hears its note. */
+function repair(root: string, plan: Extract<Plan, { kind: "clean" }>, say: (note: string) => void): void {
+  for (const step of plan.steps) {
+    if ("rename" in step) renameSync(join(root, step.rename[0]), join(root, step.rename[1]));
+    else rmSync(join(root, step.remove), { recursive: true, force: true });
+  }
+  if (plan.note !== null) say(plan.note);
+}
+
+/**
+ * The project's units stopped, the timers first, on their own: one that
+ * fired while its service's stop waited in the same transaction would start
+ * a run, on the data about to be set aside.
+ */
+async function stopUnits(dependencies: Pick<RestoreDependencies, "systemctl">, units: string[]): Promise<void> {
+  const timers = units.filter(isTimerUnit);
+  if (timers.length > 0) await dependencies.systemctl(["stop", ...timers], SYSTEMCTL_TIMEOUT_MS);
+  await dependencies.systemctl(["stop", ...units.filter((unit) => !isTimerUnit(unit))], SYSTEMCTL_TIMEOUT_MS);
 }
 
 function presentIn(root: string): Present {
@@ -732,15 +741,8 @@ export async function afterRestore(dependencies: Pick<RestoreDependencies, "conf
       try {
         const root = join(config.sitesDir, folder);
         const plan = recoveryPlan(presentIn(root));
-        if (plan.kind === "clean") {
-          for (const step of plan.steps) {
-            if ("rename" in step) renameSync(join(root, step.rename[0]), join(root, step.rename[1]));
-            else rmSync(join(root, step.remove), { recursive: true, force: true });
-          }
-          if (plan.note !== null) log(`restore ${folder}: ${plan.note}`);
-        } else {
-          note = ` ${plan.reason}.`;
-        }
+        if (plan.kind === "clean") repair(root, plan, (repaired) => log(`restore ${folder}: ${repaired}`));
+        else note = ` ${plan.reason}.`;
       } catch (error) {
         log(`restore ${folder}: the leftovers could not be repaired (${errorText(error)})`);
       } finally {
