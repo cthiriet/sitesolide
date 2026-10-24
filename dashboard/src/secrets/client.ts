@@ -46,8 +46,6 @@ export type Steward = {
   changePassword: (requested: PasswordRequest) => Promise<Response>;
   togglePortal: (requested: PortalRequest) => Promise<Response>;
   restart: (requested: ProjectRequest) => Promise<Response>;
-  /** A project's store, names and states, as the owner lists it: no token, like `/projects`. */
-  readStore: (slug: string) => Promise<Response>;
   setStoreVariable: (requested: WithToken & StoreSetRequest) => Promise<Response>;
   removeStoreVariables: (requested: WithToken & StoreRemoveRequest) => Promise<Response>;
   /** A value drawn on the machine: the answer names it, never carries it. */
@@ -123,7 +121,6 @@ export function localSteward(socket: string, timeouts: Timeouts = DEFAULT_TIMEOU
     changePassword: (requested) => call("POST", "/password", requested, timeouts.longMs),
     togglePortal: (requested) => call("POST", "/portal", requested, timeouts.longMs),
     restart: (requested) => call("POST", "/restart", requested, timeouts.longMs),
-    readStore: (slug) => call("GET", `/store?${new URLSearchParams({ slug })}`),
     // Every write, and the reveal, waits its turn under the steward's lock.
     setStoreVariable: (requested) => call("PUT", "/store/variable", requested, timeouts.longMs),
     removeStoreVariables: (requested) => call("DELETE", "/store/variable", requested, timeouts.longMs),

@@ -341,7 +341,6 @@ describe("both halves: the dashboard's routes over the steward's", () => {
       people: () => steward.call("dashboard", "GET", "/people"),
       putPerson: (body) => steward.call("dashboard", "PUT", "/people/person", body),
       removePerson: (email) => steward.call("dashboard", "DELETE", "/people/person", { email }),
-      portal: async () => Response.json({}),
       general: async () => Response.json({}),
     };
     const tokens = createTokens(() => NOW);

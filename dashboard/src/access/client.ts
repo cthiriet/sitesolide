@@ -12,8 +12,6 @@ export type AccessSteward = {
   people: () => Promise<Response>;
   putPerson: (requested: { token?: string; email: unknown; create: unknown }) => Promise<Response>;
   removePerson: (email: unknown) => Promise<Response>;
-  /** The site's portal put up or taken away, the steward's `/portal`: the unlock to take it away, none to put it up. */
-  portal: (requested: { token?: string; slug: unknown; active: boolean; confirmation: string }) => Promise<Response>;
   /**
    * The site's general access, any of the three, or a new code, the
    * steward's `/general`: the unlock for all but Restricted.
@@ -24,7 +22,7 @@ export type AccessSteward = {
 /** Every access route answers within seconds. */
 export const ACCESS_TIMEOUT_MS = 20_000;
 
-/** The portal's change waits for the gatekeeper, up to ninety seconds, and for the steward's lock. */
+/** A change of general access waits for the gatekeeper, up to ninety seconds, and for the steward's lock. */
 export const PORTAL_TIMEOUT_MS = 200_000;
 
 /** `redirect: "error"`: a redirect would carry a request to the address it names. */
@@ -45,7 +43,6 @@ export function localAccessSteward(socket: string): AccessSteward {
     people: () => call("GET", "/people"),
     putPerson: (requested) => call("PUT", "/people/person", requested),
     removePerson: (email) => call("DELETE", "/people/person", { email }),
-    portal: (requested) => call("POST", "/portal", requested, PORTAL_TIMEOUT_MS),
     general: (requested) => call("POST", "/general", requested, PORTAL_TIMEOUT_MS),
   };
 }

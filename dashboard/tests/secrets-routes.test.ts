@@ -108,7 +108,6 @@ function fakeSteward() {
     changePassword: () => Response.json({ file: FILE, password: DRAWN_PASSWORD }),
     togglePortal: () => Response.json({ portal: PORTAL, detail: "portal installed" }),
     restart: () => Response.json({ verdict: VERDICT }),
-    readStore: () => Response.json({ store: STORE }),
     setStoreVariable: () => Response.json(STORE_CHANGE),
     removeStoreVariables: () => Response.json(STORE_CHANGE),
     generateStoreVariable: () => Response.json(STORE_CHANGE),
@@ -136,7 +135,6 @@ function fakeSteward() {
     changePassword: (requested) => call("changePassword", requested),
     togglePortal: (requested) => call("togglePortal", requested),
     restart: (requested) => call("restart", requested),
-    readStore: (slug) => call("readStore", slug),
     setStoreVariable: (requested) => call("setStoreVariable", requested),
     removeStoreVariables: (requested) => call("removeStoreVariables", requested),
     generateStoreVariable: (requested) => call("generateStoreVariable", requested),
@@ -1163,7 +1161,7 @@ describe("a project's store, the owner's", () => {
 });
 
 describe("localSteward's store routes, on a real Unix socket", () => {
-  test("every method aims at its route, with its verb, the body as JSON, the slug of a listing encoded; every write and the reveal wait the long delay", async () => {
+  test("every method aims at its route, with its verb, the body as JSON; every write and the reveal wait the long delay", async () => {
     const folder = mkdtempSync(join(tmpdir(), "socket-store-"));
     const socket = join(folder, "s.sock");
     const received: { method: string; path: string; query: string; body: string }[] = [];
@@ -1172,7 +1170,7 @@ describe("localSteward's store routes, on a real Unix socket", () => {
       async fetch(req) {
         const url = new URL(req.url);
         received.push({ method: req.method, path: url.pathname, query: url.search, body: await req.text() });
-        if (url.pathname !== "/store") await Bun.sleep(150);
+        await Bun.sleep(150);
         return Response.json({ ok: true });
       },
     });
@@ -1189,7 +1187,6 @@ describe("localSteward's store routes, on a real Unix socket", () => {
         steward.revealStoreValue({ token, slug: "cms", name: "A" }),
       ];
       expect((await Promise.all(calls)).map((response) => response.status)).toEqual(Array(7).fill(200));
-      expect((await steward.readStore("cms&slug=x/../y")).status).toBe(200);
       expect(received.map(({ method, path }) => `${method} ${path}`).sort()).toEqual(
         [
           "PUT /store/variable",
@@ -1199,12 +1196,9 @@ describe("localSteward's store routes, on a real Unix socket", () => {
           "DELETE /store/file",
           "POST /store/restore",
           "POST /store/value",
-          "GET /store",
         ].sort(),
       );
       expect(received.find((one) => one.path === "/store/generate")!.body).toBe(JSON.stringify({ token, slug: "cms", name: "K", format: "hex", bytes: 32 }));
-      const listing = received.find((one) => one.method === "GET")!;
-      expect(listing).toEqual({ method: "GET", path: "/store", query: "?slug=cms%26slug%3Dx%2F..%2Fy", body: "" });
     } finally {
       await server.stop(true);
       rmSync(folder, { recursive: true, force: true });

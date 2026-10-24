@@ -66,7 +66,6 @@ function setup(
     people: () => answer("GET", "/people", null),
     putPerson: (body) => answer("PUT", "/people/person", body as Record<string, unknown>),
     removePerson: (email) => answer("DELETE", "/people/person", { email }),
-    portal: (body) => answer("POST", "/portal", body as Record<string, unknown>),
     general: (body) => answer("POST", "/general", body as Record<string, unknown>),
   };
   const tokens = createTokens(() => NOW);
