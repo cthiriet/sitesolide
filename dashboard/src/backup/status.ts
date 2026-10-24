@@ -113,8 +113,8 @@ export function readStatus(text: string | null): RunStatus | null {
  * close to a file meant to be read, synced, renamed, and the folder synced so
  * that the rename survives a power cut.
  */
-export function writeFileAtomically(folder: string, name: string, content: string | Uint8Array, mode: number): void {
-  writeAtomically(folder, name, typeof content === "string" ? new TextEncoder().encode(content) : content, { owner: null, mode });
+export function writeFileAtomically(folder: string, name: string, content: string, mode: number): void {
+  writeAtomically(folder, name, new TextEncoder().encode(content), { owner: null, mode });
 }
 
 export function syncFolder(folder: string): void {
