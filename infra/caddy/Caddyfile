@@ -149,7 +149,7 @@
 	#
 	# A matcher set on reverse_proxy rather than a handle: the handles of a same
 	# block form an exclusive group, which reverse_proxy and file_server do not.
-	# See the header of strophe() in api/src/locks.ts.
+	# See the header of stanza() in api/src/locks.ts.
 	@form path /api/*
 	reverse_proxy @form 127.0.0.1:3000
 
