@@ -194,9 +194,20 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
     return answer(open, received);
   }
 
-  /** May the member see this project's part? The page offers it only then; the steward refuses the rest anyway. */
-  function mayOn(open: Open, slug: string, power: Power): Response | null {
-    return may(roleOn(open.identity.roles, slug), power) ? null : error(403, "out-of-scope", `This part of ${slug} isn't yours: ask one of its Admins.`);
+  /**
+   * A read of one project's part, the steward's answer relayed, once the
+   * member's role there shows it: the page offers it only then, and the
+   * steward refuses the rest anyway.
+   */
+  function projectRead(power: Power, read: (slug: string) => Promise<Response>): Handler {
+    return async (req) => {
+      const open = await member(req, false);
+      if (open instanceof Response) return open;
+      const slug = oneSlug(req);
+      if (slug === null) return error(400, "invalid", "Name one site.");
+      if (!may(roleOn(open.identity.roles, slug), power)) return error(403, "out-of-scope", `This part of ${slug} isn't yours: ask one of its Admins.`);
+      return relay(await reach(() => read(slug), null));
+    };
   }
 
   return {
@@ -210,15 +221,7 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
       return json({ projects, until: tokens.read(open.session.hash)?.expiresAt ?? null });
     },
 
-    async secretsLog(req) {
-      const open = await member(req, false);
-      if (open instanceof Response) return open;
-      const slug = oneSlug(req);
-      if (slug === null) return error(400, "invalid", "Name one site.");
-      const refusal = mayOn(open, slug, "secrets.list");
-      if (refusal !== null) return refusal;
-      return relay(await reach(() => dependencies.secrets.readLog(slug), null));
-    },
+    secretsLog: projectRead("secrets.list", (slug) => dependencies.secrets.readLog(slug)),
 
     async unlock(req) {
       const open = await member(req, true);
@@ -249,25 +252,8 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
     restoreStore: withToken(STORE_EXTRACTIONS.restore, "POST", "/people/store/restore", { long: true }),
     restoreBackup: withToken(fields(["slug", "snapshot", "confirmation"] as const), "POST", "/people/backups/restore", { long: true }),
 
-    async backups(req) {
-      const open = await member(req, false);
-      if (open instanceof Response) return open;
-      const slug = oneSlug(req);
-      if (slug === null) return error(400, "invalid", "Name one site.");
-      const refusal = mayOn(open, slug, "backups");
-      if (refusal !== null) return refusal;
-      return relay(await reach(() => dependencies.backups.readBackups(slug), null));
-    },
-
-    async backupAudit(req) {
-      const open = await member(req, false);
-      if (open instanceof Response) return open;
-      const slug = oneSlug(req);
-      if (slug === null) return error(400, "invalid", "Name one site.");
-      const refusal = mayOn(open, slug, "backups");
-      if (refusal !== null) return refusal;
-      return relay(await reach(() => dependencies.backups.readBackupAudit(slug), null));
-    },
+    backups: projectRead("backups", (slug) => dependencies.backups.readBackups(slug)),
+    backupAudit: projectRead("backups", (slug) => dependencies.backups.readBackupAudit(slug)),
 
     /**
      * The member's Tokens page: their tokens, what they may mint them for, and
