@@ -9,7 +9,7 @@
  */
 import { callApi } from "./api"
 import { activityLine } from "./connectors"
-import { dateTime } from "./format"
+import { capitalise, dateTime, plural } from "./format"
 import { operationOutcome, operationParts } from "./secrets"
 import type { Tone } from "./tones"
 import type { AuditResponse, AuditRow, AuditSource, LogEntry, Operation, SourceStatus } from "./types"
@@ -204,7 +204,6 @@ export type AuditWords = {
 const text = (value: unknown): string | null => (typeof value === "string" && value !== "" ? value : null)
 const count = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null)
 const list = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [])
-const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 const times = (n: number | null) => (n === null || n <= 1 ? null : `${n} times`)
 
 /** Why the portal refused a sign-in, in words. An unknown reason is shown as it is. */
@@ -423,7 +422,7 @@ export function expiryNote(until: string, timeZone?: string): string | null {
   const found = /^until (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}) UTC$/.exec(until)
   const ms = found === null ? Number.NaN : Date.parse(`${found[1]}T${found[2]}:00Z`)
   if (Number.isFinite(ms)) return `Until ${dateTime(ms, timeZone)}`
-  return until.charAt(0).toUpperCase() + until.slice(1)
+  return capitalise(until)
 }
 
 function accessWords(row: AuditRow, timeZone?: string): AuditWords {

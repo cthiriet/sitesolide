@@ -7,7 +7,7 @@
  * which decides what is wrong; the memory thresholds from lib/gauges.ts, which
  * takes its own from there; the card only arranges and names.
  */
-import { ABSENT, dateTime, duration, ago, size, sizeOutOf } from "./format"
+import { ABSENT, dateTime, duration, ago, plural, size, sizeOutOf } from "./format"
 import { serviceLevel, MEMORY_CRITICAL_SHARE, PEAK_WARNING_SHARE, type Level, type Tile } from "./gauges"
 import {
   siteAccess,
@@ -28,10 +28,6 @@ import {
 import type { Tone } from "./tones"
 import type { Discrepancy, Site, SiteService } from "./types"
 import { countBySeverity, sortDiscrepancies } from "./verdict"
-
-function plural(count: number, word: string): string {
-  return `${count} ${word}${count === 1 ? "" : "s"}`
-}
 
 /** A fact on the card: a label, its value, a clarification, and the value's tone. */
 export type Fact = { label: string; value: string; detail: string | null; tone: Tone }

@@ -11,7 +11,7 @@
  * the listing carries names and states only, and a revealed value lives in the
  * row that shows it.
  */
-import { ago, size } from "./format"
+import { ago, plural, size } from "./format"
 import type { Tone } from "./tones"
 import type { GenerateFormat, ProjectView, StoreChangeResponse, StoreFileView, StoreRestoreResponse, StoreVariableView, StoreView } from "./types"
 
@@ -117,10 +117,6 @@ export function missingLabel(store: Pick<StoreView, "missing" | "files">): strin
 
 export type OverviewRow = { label: string; detail: string; state: Badge | null }
 
-function count(number: number, word: string): string {
-  return `${number} ${word}${number === 1 ? "" : "s"}`
-}
-
 /**
  * A store in a few rows, for a site's Overview: its variables counted by
  * whether they hold a value, its files by name. Names of files only, never of variables: the inventory belongs to the Secrets
@@ -135,14 +131,14 @@ export function storeOverview(store: StoreView): OverviewRow[] {
       (piece): piece is string => piece !== null,
     )
     rows.push({
-      label: count(store.variables.length, "variable"),
+      label: plural(store.variables.length, "variable"),
       detail: missingNames.length === 0 ? "All set" : pieces.join(", "),
       state: missingNames.length > 0 ? { text: "Missing", tone: "error" } : null,
     })
   }
   if (store.files.length > 0) {
     rows.push({
-      label: count(store.files.length, "file"),
+      label: plural(store.files.length, "file"),
       detail: store.files.map((file) => file.name).join(", "),
       state: missingFiles.length > 0 ? { text: "Missing", tone: "error" } : store.files.some((file) => file.state === "unmanaged") ? { text: "Unmanaged", tone: "attention" } : null,
     })

@@ -30,7 +30,7 @@ import {
   snapshotSize,
   whereLabel,
 } from "@/lib/backups"
-import { ago, dateTime } from "@/lib/format"
+import { ago, capitalise, dateTime } from "@/lib/format"
 import { UNREACHABLE, refusalOf, succeeded } from "@/lib/secrets"
 import { TONE_TEXT } from "@/lib/tones"
 import type { BackupAuditEntry, BackupsView, RestoreView, SnapshotView } from "@/lib/types"
@@ -208,7 +208,7 @@ function SnapshotsPanel({
             <Info aria-hidden="true" className="mt-px size-3.5 shrink-0" />
             <span>
               <span className="sr-only">Why no restore is offered: </span>
-              {view.reason.charAt(0).toUpperCase() + view.reason.slice(1)}.
+              {capitalise(view.reason)}.
             </span>
           </span>
         )

@@ -7,7 +7,7 @@
  * not in `reason`, and the page shows it as it stands. A rule copied into the
  * browser would protect nothing.
  */
-import { ago, duration, size } from "./format"
+import { ago, capitalise, duration, size } from "./format"
 import type { Tone } from "./tones"
 import type { BackupAuditEntry, BackupsView, CheckView, RestoreView, RetentionPolicy, SnapshotKind, SnapshotView } from "./types"
 
@@ -95,10 +95,6 @@ export function checkReading(checks: BackupsView["checks"], repository: BackupsV
 /** A snapshot's size, and what it added when it was taken, when known: "12 MB, 340 KB new". */
 export function snapshotSize(snapshot: Pick<SnapshotView, "bytes" | "added">): string {
   return snapshot.added === undefined || snapshot.added === null ? size(snapshot.bytes) : `${size(snapshot.bytes)}, ${size(snapshot.added)} new`
-}
-
-function capitalise(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
 /** What the server does, in the order it does it: the dialog lists it before the confirmation. */

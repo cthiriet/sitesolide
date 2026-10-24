@@ -6,7 +6,7 @@ import { isPerson } from "@/lib/identity"
 import { ErrorState, Panel, RowsSkeleton, Status } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { SectionLink } from "@/components/site"
-import { ago } from "@/lib/format"
+import { ago, capitalise } from "@/lib/format"
 import { UNREACHABLE, PENDING_LABEL, splitReason, pendingFiles, pendingVariables, pendingPhrase, fileSummary } from "@/lib/secrets"
 import { storeOverview } from "@/lib/store"
 import type { ProjectView } from "@/lib/types"
@@ -30,7 +30,7 @@ function Content({ project }: { project: ProjectView }) {
             {PENDING_LABEL}
           </Status>
           <p className="min-w-0 flex-1 basis-48 text-xs text-pretty text-muted-foreground">
-            {phrase.charAt(0).toUpperCase() + phrase.slice(1)} changed after {project.slug} last started.
+            {capitalise(phrase)} changed after {project.slug} last started.
           </p>
           {project.service !== null && (
             <Button variant="outline" size="sm" onClick={() => actions.restart(project.slug)} className="max-md:h-10">

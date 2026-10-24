@@ -4,6 +4,7 @@
  * Pure, drawn from the discrepancies `src/state.ts` has already judged: the
  * page re-evaluates nothing, it counts and names.
  */
+import { plural } from "./format"
 import type { Discrepancy } from "./types"
 
 export type Severity = Discrepancy["severity"]
@@ -20,10 +21,6 @@ export function countBySeverity(discrepancies: readonly Discrepancy[]): { errors
     else warnings += 1
   }
   return { errors, warnings }
-}
-
-function plural(count: number, word: string): string {
-  return `${count} ${word}${count === 1 ? "" : "s"}`
 }
 
 /**

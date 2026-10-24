@@ -1,4 +1,14 @@
-/** Formatting of the reading's figures. Pure: returns text, decides nothing. */
+/** Formatting of the reading's figures, and of the words around them. Pure: returns text, decides nothing. */
+
+/** "1 error", "3 errors"; `many` for a word whose plural is not its singular and an s. */
+export function plural(count: number, one: string, many = `${one}s`): string {
+  return `${count} ${count === 1 ? one : many}`
+}
+
+/** A sentence's first letter in capital: a reason from the server starts in lowercase. */
+export function capitalise(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
 
 const UNITS = ["B", "KB", "MB", "GB", "TB"] as const
 

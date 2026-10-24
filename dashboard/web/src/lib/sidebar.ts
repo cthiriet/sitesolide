@@ -3,6 +3,7 @@
  * the machine level as inside a site. Pure: the storage arrives as a parameter,
  * and so does the data.
  */
+import { plural } from "./format"
 import type { MachinePage, Section } from "./pages"
 import { fileProblems } from "./secrets"
 import { siteAccess, serviceSummaryOf } from "./sites"
@@ -49,10 +50,6 @@ export function sidebarShortcut(agent: string): string {
 
 export type Indicator = { count: number; tone: Tone; label: string }
 
-function plural(count: number, singular: string, many: string): string {
-  return `${count} ${count === 1 ? singular : many}`
-}
-
 /** An app service that is not running, as the site's row shows it in red. */
 export function downServices(sites: readonly Site[], now: number): number {
   return sites.filter((site) => site.type === "app" && serviceSummaryOf(site, now).kind === "stopped").length
@@ -62,7 +59,7 @@ export function downServices(sites: readonly Site[], now: number): number {
 function discrepancyIndicator(discrepancies: readonly Discrepancy[] | null): Indicator | null {
   if (discrepancies === null || discrepancies.length === 0) return null
   const error = discrepancies.some((discrepancy) => discrepancy.severity === "error")
-  return { count: discrepancies.length, tone: error ? "error" : "attention", label: plural(discrepancies.length, "issue", "issues") }
+  return { count: discrepancies.length, tone: error ? "error" : "attention", label: plural(discrepancies.length, "issue") }
 }
 
 /**

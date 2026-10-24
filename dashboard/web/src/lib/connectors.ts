@@ -8,6 +8,7 @@
  * body of a write, and never comes back.
  */
 import { callApi, type SecretsRefusal } from "./api"
+import { capitalise } from "./format"
 import type { Tone } from "./tones"
 import type {
   ConnectorsActivityResponse,
@@ -212,7 +213,7 @@ export function refusalField(message: string): { field: ConnectorField | null; m
   for (const [prefix, field] of prefixes) {
     if (message.startsWith(prefix)) {
       const rest = message.slice(prefix.length)
-      return { field, message: rest.charAt(0).toUpperCase() + rest.slice(1) }
+      return { field, message: capitalise(rest) }
     }
   }
   return { field: null, message }

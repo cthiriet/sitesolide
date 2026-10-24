@@ -10,7 +10,7 @@
  * the browser would protect nothing and would end up diverging from the one
  * that counts.
  */
-import { duration } from "./format"
+import { capitalise, duration, plural } from "./format"
 import { serviceWord } from "./sites"
 import { missingLabel, storeMissing, storePending, withStore } from "./store"
 import type { Tone } from "./tones"
@@ -40,10 +40,6 @@ export const UNREACHABLE = "Can't reach the server's secrets."
 export const BUSY = "The server is busy. Try again in a moment."
 
 export const PENDING_LABEL = "Restart pending"
-
-function plural(count: number, word: string): string {
-  return `${count} ${word}${count === 1 ? "" : "s"}`
-}
 
 // --- The unlock ----------------------------------------------------------------
 
@@ -335,8 +331,8 @@ export function splitReason(reason: string): { text: string; command: string | n
   const marked = clean.lastIndexOf(": sudo ")
   const text = marked === -1 ? clean : clean.slice(0, marked).trim()
   const command = marked === -1 ? null : clean.slice(marked + 2).trim()
-  const majuscule = text.charAt(0).toUpperCase() + text.slice(1)
-  const phrase = majuscule === "" || /[.!?]$/.test(majuscule) ? majuscule : `${majuscule}.`
+  const capitalised = capitalise(text)
+  const phrase = capitalised === "" || /[.!?]$/.test(capitalised) ? capitalised : `${capitalised}.`
   return { text: phrase, command: command === "" ? null : command }
 }
 
@@ -618,10 +614,10 @@ export function operationOutcome(entry: LogEntry): OperationOutcome {
   const read = detail === null ? null : translate(detail, entry.operation)
   if (entry.result === "ok") {
     // A merge says how many names it brought, and from which files: "2 merged from a.env, b.env".
-    if (entry.operation === "migrate" && read !== null && read !== "") return { tone: "ok", text: read.charAt(0).toUpperCase() + read.slice(1) }
+    if (entry.operation === "migrate" && read !== null && read !== "") return { tone: "ok", text: capitalise(read) }
     if (entry.operation !== "restart" || read === null || read === "") return { tone: "ok", text: null }
     // Alone in its column, the verdict takes its capital, like the dialog's word.
-    const text = read.charAt(0).toUpperCase() + read.slice(1)
+    const text = capitalise(read)
     // The steward writes the verdict first, then the systemd state:
     // "active, active/running, 0 restarts". The first word decides.
     const verdict = detail?.split(",")[0]?.trim()
