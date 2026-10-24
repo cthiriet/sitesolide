@@ -64,7 +64,7 @@ import { isIP } from "node:net";
 import { join, resolve } from "node:path";
 import { generatePassword } from "../../dashboard/src/password";
 import { canonicalAddress, describePlan, manualRecords } from "./cloudflare";
-import { DnsError, ensureZoneRecords, type DnsEntry } from "./dns/dns";
+import { DnsError, ensureZoneRecords, type DnsEntry, type ZoneApi } from "./dns/dns";
 import { DNS_PROVIDERS, dnsEntry, dnsVariables, MANUAL } from "./dns/registry";
 import { fieldsToAsk, fromEnvironment, isFailure, missingFields, parseStdinCredentials, scrubSecrets, secretValues } from "./machine";
 import { ProviderError, type Credentials, type Fetch } from "./providers/provider";
@@ -907,6 +907,12 @@ function definedNames(text: string): string[] {
     .filter((name): name is string => name !== undefined);
 }
 
+/** The file's credential lines that name none of `names`: another provider's, in grep's words. */
+function otherCredentialLines(names: readonly string[]): string {
+  const lines = `grep -E '${CREDENTIAL_LINE}' ${CADDY_ENV_FILE}`;
+  return names.length === 0 ? lines : `${lines} | grep -Ev '^[[:space:]]*(${names.join("|")})='`;
+}
+
 /**
  * The file written with these values, every other credential line it held
  * KEPT: a switch of provider writes the new one's variables a step before
@@ -915,8 +921,7 @@ function definedNames(text: string): string[] {
  * dns-leftovers step takes them out once the new policy is in service.
  */
 export function dnsCredentialsRun(text: string): string {
-  const names = definedNames(text);
-  const others = names.length === 0 ? `grep -E '${CREDENTIAL_LINE}' ${CADDY_ENV_FILE}` : `grep -E '${CREDENTIAL_LINE}' ${CADDY_ENV_FILE} | grep -Ev '^[[:space:]]*(${names.join("|")})='`;
+  const others = otherCredentialLines(definedNames(text));
   return runScript(
     "setup:dns-credentials:run",
     `next=$(mktemp)
@@ -930,9 +935,7 @@ install -m 0640 -o root -g caddy "$next" ${CADDY_ENV_FILE}`,
 
 /** Whether the file holds a credential line the provider in place does not read: its previous provider's. */
 export function dnsLeftoversCheck(text: string): string {
-  const names = definedNames(text);
-  const foreign = names.length === 0 ? `grep -E '${CREDENTIAL_LINE}' ${CADDY_ENV_FILE}` : `grep -E '${CREDENTIAL_LINE}' ${CADDY_ENV_FILE} | grep -Ev '^[[:space:]]*(${names.join("|")})='`;
-  return machineCheck("setup:dns-leftovers:check", [{ label: "env-own-only", test: `! { ${foreign}; } | grep -q .` }]);
+  return machineCheck("setup:dns-leftovers:check", [{ label: "env-own-only", test: `! { ${otherCredentialLines(definedNames(text))}; } | grep -q .` }]);
 }
 
 /** The file keeping every line but the credentials the provider in place does not read. */
@@ -1061,6 +1064,7 @@ async function waitForResolution(context: SetupContext): Promise<string> {
 /** The steps that follow the hardening, every one of them run through the deploy account. */
 export function installSteps(): Step<SetupContext>[] {
   const optional = (context: SetupContext): string | null => (context.options.minimal ? "--minimal" : null);
+  const zoneFiles = installCheck("setup:caddy-zone:check", [present("zone-file", "/etc/caddy/sitesolide.env"), present("domain-table", "/etc/caddy/domaines.map")]);
   return [
     {
       id: "caddy",
@@ -1170,13 +1174,13 @@ export function installSteps(): Step<SetupContext>[] {
     {
       id: "caddy-zone",
       title: "zone file and domain table",
-      check: installCheck("setup:caddy-zone:check", [present("zone-file", "/etc/caddy/sitesolide.env"), present("domain-table", "/etc/caddy/domaines.map")]),
+      check: zoneFiles,
       // On a first install bin/deploy-caddy.sh lays the two files, then stops:
       // Caddy's unit does not load the zone variables yet. That stop is
       // expected, and printed only if the files are not there afterwards.
       run: async (context) => {
         const { output } = await context.deps.kit({ kind: "script", name: "deploy-caddy.sh", args: [], quiet: true }, context.childEnvironment);
-        const after = await installCheck("setup:caddy-zone:check", [present("zone-file", "/etc/caddy/sitesolide.env"), present("domain-table", "/etc/caddy/domaines.map")])(context);
+        const after = await zoneFiles(context);
         if (after.state !== "done") {
           throw new StepFailure("bin/deploy-caddy.sh did not lay the zone file and the domain table", output.split("\n").filter((line) => line.trim() !== "").slice(-8));
         }
@@ -1384,20 +1388,33 @@ function placeholderCredentials(dns: DnsEntry | null): Credentials | null {
   return Object.fromEntries(dns.credentials.map((field) => [field.variable, "placeholder"]));
 }
 
+/**
+ * The DNS provider's API for these credentials, opened when asked, and what
+ * scrubs a failure's words of them: the credentials, and a token the
+ * provider obtains for them, whichever provider wrote it.
+ */
+function dnsSession(context: SetupContext, entry: DnsEntry, credentials: Credentials): { open: () => ZoneApi; scrub: (text: string) => string } {
+  const secrets = secretValues(entry, credentials);
+  return {
+    open: () =>
+      entry.open({
+        credentials,
+        environment: context.deps.dnsApi.environment,
+        fetcher: context.deps.dnsApi.fetcher ?? fetch,
+        clock: { now: () => context.deps.now(), sleep: (ms) => context.deps.sleep(ms) },
+        secret: (value) => {
+          if (value !== "") secrets.push(value);
+        },
+      }),
+    scrub: (text) => scrubSecrets(text, secrets),
+  };
+}
+
 /** The credentials, tried with a read of the zone: refused ones stop the step before anything is written. */
 async function proveDnsCredentials(context: SetupContext, entry: DnsEntry, credentials: Credentials): Promise<void> {
-  const secrets = secretValues(entry, credentials);
-  const scrub = (text: string): string => scrubSecrets(text, secrets);
+  const { open, scrub } = dnsSession(context, entry, credentials);
   try {
-    const api = entry.open({
-      credentials,
-      environment: context.deps.dnsApi.environment,
-      fetcher: context.deps.dnsApi.fetcher ?? fetch,
-      clock: { now: () => context.deps.now(), sleep: (ms) => context.deps.sleep(ms) },
-      secret: (value) => {
-        if (value !== "") secrets.push(value);
-      },
-    });
+    const api = open();
     await api.verify();
     await api.findZone(context.options.zone);
   } catch (error) {
@@ -1426,21 +1443,9 @@ function dnsStep(): Step<SetupContext> {
       // Never reached under --dns manual, which skips this step.
       const entry = context.dns!;
       const credentials = await requireDnsCredentials(context, entry);
-      // The credentials, and a token the provider obtains for them, are
-      // scrubbed from whatever a failure says, whichever provider wrote it.
-      const secrets = secretValues(entry, credentials);
-      const scrub = (text: string): string => scrubSecrets(text, secrets);
+      const { open, scrub } = dnsSession(context, entry, credentials);
       try {
-        const api = entry.open({
-          credentials,
-          environment: context.deps.dnsApi.environment,
-          fetcher: context.deps.dnsApi.fetcher ?? fetch,
-          clock: { now: () => context.deps.now(), sleep: (ms) => context.deps.sleep(ms) },
-          secret: (value) => {
-            if (value !== "") secrets.push(value);
-          },
-        });
-        const { zone, actions } = await ensureZoneRecords(api, context.options.zone, context.addresses, context.options.dnsReplace);
+        const { zone, actions } = await ensureZoneRecords(open(), context.options.zone, context.addresses, context.options.dnsReplace);
         const changes = describePlan(actions);
         return changes.length === 0 ? `already in the ${entry.title} zone ${zone}` : `${changes.join("; ")}, in the ${entry.title} zone ${zone}`;
       } catch (error) {
