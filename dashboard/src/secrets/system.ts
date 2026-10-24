@@ -237,6 +237,21 @@ function errorCode(error: unknown): string | undefined {
   return (error as { code?: string } | null)?.code;
 }
 
+/** Neither the entry nor a folder above it: what a missing path throws. */
+function isMissing(error: unknown): boolean {
+  const code = errorCode(error);
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/** A folder's entries, links not followed, none when it cannot be read. */
+function entriesOf(folder: string): Dirent[] {
+  try {
+    return readdirSync(folder, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
 function toInfo(stat: Stats): FileInfo {
   return {
     link: stat.isSymbolicLink(),
@@ -280,7 +295,7 @@ export function readBounded(path: string, max: number): Examination {
   try {
     before = lstatSync(path);
   } catch (error) {
-    if (errorCode(error) === "ENOENT" || errorCode(error) === "ENOTDIR") return { kind: "absent" };
+    if (isMissing(error)) return { kind: "absent" };
     throw error;
   }
 
@@ -323,9 +338,8 @@ function openPlain(path: string): number | "absent" | "not-plain" {
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (error) {
-    const code = errorCode(error);
-    if (code === "ENOENT" || code === "ENOTDIR") return "absent";
-    if (code === "ELOOP") return "not-plain";
+    if (isMissing(error)) return "absent";
+    if (errorCode(error) === "ELOOP") return "not-plain";
     throw error;
   }
   const info = fstatSync(fd);
@@ -620,8 +634,7 @@ function realFolders(paths: readonly string[]): void {
     try {
       stat = lstatSync(path);
     } catch (error) {
-      const code = errorCode(error);
-      if (code === "ENOENT" || code === "ENOTDIR") return;
+      if (isMissing(error)) return;
       throw error;
     }
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("a store folder is not a plain folder");
@@ -635,8 +648,7 @@ function folderExists(path: string): boolean {
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("a store folder is not a plain folder");
     return true;
   } catch (error) {
-    const code = errorCode(error);
-    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    if (isMissing(error)) return false;
     throw error;
   }
 }
@@ -780,21 +792,14 @@ export function createSystem(config: SystemConfig): System {
    * in a store's place is never walked into.
    */
   function tempFolders(): string[] {
-    const read = (folder: string): Dirent[] => {
-      try {
-        return readdirSync(folder, { withFileTypes: true });
-      } catch {
-        return [];
-      }
-    };
     const folders: string[] = [];
     folders.push(config.secretsFolder, previousFolder);
     for (const root of [storeRoot, storePreviousRoot]) {
-      for (const entry of read(root)) {
+      for (const entry of entriesOf(root)) {
         if (!entry.isDirectory()) continue;
         const folder = join(root, entry.name);
         folders.push(folder);
-        for (const inner of read(folder)) {
+        for (const inner of entriesOf(folder)) {
           if (inner.isDirectory() && inner.name === "files") folders.push(join(folder, inner.name));
         }
       }
@@ -818,14 +823,7 @@ export function createSystem(config: SystemConfig): System {
 
     async listSecrets() {
       const names: string[] = [];
-      const read = (folder: string): Dirent[] => {
-        try {
-          return readdirSync(folder, { withFileTypes: true });
-        } catch {
-          return [];
-        }
-      };
-      for (const entry of read(config.secretsFolder)) {
+      for (const entry of entriesOf(config.secretsFolder)) {
         if (!entry.name.startsWith(".") && entry.isFile()) names.push(entry.name);
       }
       return names.sort();
@@ -899,9 +897,8 @@ export function createSystem(config: SystemConfig): System {
       try {
         unlinkSync(path);
       } catch (error) {
-        const code = errorCode(error);
         // Neither the file nor its directory: no previous version to remove.
-        if (code === "ENOENT" || code === "ENOTDIR") return;
+        if (isMissing(error)) return;
         throw error;
       }
       // The removal must survive a power cut before the new secret is written:
@@ -1018,8 +1015,7 @@ export function createSystem(config: SystemConfig): System {
         lstatSync(join(config.gatekeeperFolder, BACKUPS_NAME, siteName(slug)));
         return true;
       } catch (error) {
-        const code = errorCode(error);
-        if (code === "ENOENT" || code === "ENOTDIR") return false;
+        if (isMissing(error)) return false;
         throw error;
       }
     },
@@ -1028,8 +1024,7 @@ export function createSystem(config: SystemConfig): System {
       try {
         return readdirSync(join(config.gatekeeperFolder, BACKUPS_NAME)).sort();
       } catch (error) {
-        const code = errorCode(error);
-        if (code === "ENOENT" || code === "ENOTDIR") return [];
+        if (isMissing(error)) return [];
         throw error;
       }
     },
@@ -1065,8 +1060,7 @@ export function createSystem(config: SystemConfig): System {
         const stat = lstatSync(path);
         return { link: stat.isSymbolicLink(), folder: stat.isDirectory(), uid: stat.uid, mode: stat.mode & 0o7777 };
       } catch (error) {
-        const code = errorCode(error);
-        if (code === "ENOENT" || code === "ENOTDIR") return null;
+        if (isMissing(error)) return null;
         throw error;
       }
     },
@@ -1120,8 +1114,7 @@ export function createSystem(config: SystemConfig): System {
       try {
         names = readdirSync(folders.files);
       } catch (error) {
-        const code = errorCode(error);
-        if (code === "ENOENT" || code === "ENOTDIR") return [];
+        if (isMissing(error)) return [];
         throw error;
       }
       return names.filter((name) => !name.startsWith(".")).sort();
@@ -1139,8 +1132,7 @@ export function createSystem(config: SystemConfig): System {
       try {
         return toInfo(lstatSync(join(folders.files, storeEntry(name))));
       } catch (error) {
-        const code = errorCode(error);
-        if (code === "ENOENT" || code === "ENOTDIR") return null;
+        if (isMissing(error)) return null;
         throw error;
       }
     },
@@ -1163,8 +1155,7 @@ export function createSystem(config: SystemConfig): System {
         // and the folder stays, empty or not.
         unlinkSync(path);
       } catch (error) {
-        const code = errorCode(error);
-        if (code === "ENOENT" || code === "ENOTDIR") return;
+        if (isMissing(error)) return;
         throw error;
       }
       syncFolder(folders.files);
