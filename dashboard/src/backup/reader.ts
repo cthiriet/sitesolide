@@ -102,6 +102,16 @@ function exists(path: string): boolean {
   }
 }
 
+/** Which of a restore's folders stand in a project's folder, `root`: what recoveryPlan judges. */
+export function presentIn(root: string): Present {
+  return {
+    data: exists(join(root, DATA)),
+    incoming: exists(join(root, INCOMING)),
+    previous: exists(join(root, PREVIOUS)),
+    failed: exists(join(root, FAILED)),
+  };
+}
+
 function isPolicy(value: unknown): value is RetentionPolicy {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
@@ -163,15 +173,7 @@ export function createBackupReader(config: BackupReaderConfig): BackupReader {
       }),
     audit: (folder, limit, before = null) => withDatabase([], (db) => readAudit(db, folder, limit, before)),
     result: (folder) => readPlain(join(config.runFolder, RESULTS_NAME, `${folder}.json`), MAX_RESULT_BYTES),
-    present: (folder) => {
-      const root = join(config.sitesDir, folder);
-      return {
-        data: exists(join(root, DATA)),
-        incoming: exists(join(root, INCOMING)),
-        previous: exists(join(root, PREVIOUS)),
-        failed: exists(join(root, FAILED)),
-      };
-    },
+    present: (folder) => presentIn(join(config.sitesDir, folder)),
     hasData: (folder) => {
       try {
         const stat = lstatSync(join(config.sitesDir, folder, DATA));

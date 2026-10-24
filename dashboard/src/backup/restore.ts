@@ -51,7 +51,8 @@ import type { BackupConfig } from "./config";
 import { addSnapshot, DATABASE_NAME, openDatabase, openForReading, PRUNE_WANTED, readDoomed, recordAudit, recordDoomed, writeSetting } from "./database";
 import { takeLock, waitForLock } from "./lock";
 import { freeBytes, readProject, type Project } from "./projects";
-import { DATA, FAILED, INCOMING, PREVIOUS, recoveryPlan, type Plan, type Present } from "./recovery";
+import { presentIn } from "./reader";
+import { DATA, FAILED, INCOMING, PREVIOUS, recoveryPlan, type Plan } from "./recovery";
 import {
   MAX_REQUEST_BYTES,
   MAX_RESULT_BYTES,
@@ -470,19 +471,6 @@ async function stopUnits(dependencies: Pick<RestoreDependencies, "systemctl">, u
   const timers = units.filter(isTimerUnit);
   if (timers.length > 0) await dependencies.systemctl(["stop", ...timers], SYSTEMCTL_TIMEOUT_MS);
   await dependencies.systemctl(["stop", ...units.filter((unit) => !isTimerUnit(unit))], SYSTEMCTL_TIMEOUT_MS);
-}
-
-function presentIn(root: string): Present {
-  return {
-    data: exists(join(root, DATA)),
-    incoming: exists(join(root, INCOMING)),
-    previous: exists(join(root, PREVIOUS)),
-    failed: exists(join(root, FAILED)),
-  };
-}
-
-function exists(path: string): boolean {
-  return lstatOrNull(path) !== null;
 }
 
 function lstatOrNull(path: string) {
