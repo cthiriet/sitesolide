@@ -58,7 +58,7 @@ import { FRAGMENT_NAME, lockField } from "../../borrowed/locks";
 import { isValidSlug } from "../../borrowed/manifest";
 import { isValidSlug as isSitesFolder } from "../../borrowed/table";
 import { parseEnvBytes } from "../secrets/envfile";
-import { readGroup } from "../secrets/system";
+import { readGroup, writeAtomically as writeBytesAtomically } from "../secrets/system";
 import { BACKUPS_NAME, HOLDER_NAME, LOCK_NAME } from "./instance";
 import {
   judgeLock,
@@ -258,45 +258,14 @@ function suffix(): string {
 }
 
 /**
- * Temporary file in `O_EXCL`, in root's name and in 0600; mode, then owner,
- * then content; `fsync`, rename, `fsync` of the directory. The temporary file
- * ends in `.tmp`: in /etc/caddy/sites, `import /etc/caddy/sites/*.caddy` never
- * reads it, even when left behind by an abrupt stop.
+ * The steward's atomic write (src/secrets/system.ts): a temporary file in
+ * `O_EXCL`, in root's name and in 0600; mode, then owner, then content;
+ * `fsync`, rename, `fsync` of the directory. The temporary file ends in
+ * `.tmp`: in /etc/caddy/sites, `import /etc/caddy/sites/*.caddy` never reads
+ * it, even when left behind by an abrupt stop.
  */
-function writeAtomically(
-  folder: string,
-  name: string,
-  text: string,
-  mode: number,
-  owner: { uid: number; gid: number } | null,
-): void {
-  const final = join(folder, name);
-  const temporary = join(folder, `.${name}.${suffix()}.tmp`);
-  const bytes = encoder.encode(text);
-  const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-  let place = false;
-  try {
-    try {
-      fchmodSync(fd, mode);
-      if (owner !== null) fchownSync(fd, owner.uid, owner.gid);
-      let written = 0;
-      while (written < bytes.length) written += writeSync(fd, bytes, written, bytes.length - written);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    renameSync(temporary, final);
-    place = true;
-    syncFolder(folder);
-  } finally {
-    if (!place) {
-      try {
-        unlinkSync(temporary);
-      } catch {
-        // already gone
-      }
-    }
-  }
+function writeAtomically(folder: string, name: string, text: string, mode: number, owner: { uid: number; gid: number } | null): void {
+  writeBytesAtomically(folder, name, encoder.encode(text), { owner, mode });
 }
 
 function alive(pid: number): boolean {
