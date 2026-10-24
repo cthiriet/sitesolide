@@ -32,13 +32,6 @@ import { PORTAL_PORT } from "./portal";
 export const LOOPBACK_TABLE = "sitesolide_boucle";
 
 /**
- * The services' ports, defined beside the manifest's validation, which refuses
- * a service declared outside them. bin/tests/cli-loopback.test.ts checks that
- * every unit in the repository listens inside this range.
- */
-export { SERVICE_PORTS };
-
-/**
  * The set of `port . uid` pairs the rule lets through: a project reaching its
  * own ports, and nobody else's (reachesOwnPorts). Without it, the front of a
  * project of several services could not call its own API, nor a service's

@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readManifest, SERVICE_PORTS, validate } from "../cli/manifest";
-import { choosePort, needsPort, PLATFORM_PORTS, setPort } from "../cli/ports";
+import { choosePort, needsPort, setPort } from "../cli/ports";
+import { PLATFORM_PORTS } from "../cli/services";
 import { RESERVED_PORTS } from "../cli/services";
 
 /**

@@ -15,8 +15,8 @@ import {
   requestedConnectors,
   type HostPattern,
 } from "../cli/egress";
-import { CADDY_ADMIN_PORT, SERVICE_PORTS } from "../cli/loopback";
-import { validate, type Manifest } from "../cli/manifest";
+import { CADDY_ADMIN_PORT } from "../cli/loopback";
+import { SERVICE_PORTS, validate, type Manifest } from "../cli/manifest";
 import { generateUnit, generateUnits } from "../cli/unit";
 
 const APP: Manifest = { slug: "budget", port: 3022, start: "/usr/local/bin/bun run server.ts" };

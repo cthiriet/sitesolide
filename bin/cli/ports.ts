@@ -23,13 +23,7 @@
  * Pure: returns decisions and text, touches nothing.
  */
 import { hasServices, isApp, mainPort, readManifest, SERVICE_PORTS, servicesOf, type Manifest } from "./manifest";
-import { PLATFORM_PORTS, reservedPorts } from "./services";
-
-/**
- * The platform's services, by port. In services.ts, which the dashboard
- * borrows, so that the installer reserves them too: see reservedPorts.
- */
-export { PLATFORM_PORTS };
+import { reservedPorts } from "./services";
 
 /** An app with a single `start` and no `port`: the one shape `deploy` gives a port to. */
 export function needsPort(manifest: Manifest): boolean {

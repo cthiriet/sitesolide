@@ -6,7 +6,6 @@ import {
   type LoopbackMode,
   adminPatterns,
   CADDY_ADMIN_PORT,
-  SERVICE_PORTS,
   loopbackRule,
   LOOPBACK_TABLE,
   PROJECT_PORTS_SET,
@@ -14,7 +13,7 @@ import {
   projectPortsFile,
   reachesOwnPorts,
 } from "../cli/loopback";
-import { servicesOf, type Manifest } from "../cli/manifest";
+import { SERVICE_PORTS, servicesOf, type Manifest } from "../cli/manifest";
 import { PORTAL_PORT } from "../cli/portal";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
