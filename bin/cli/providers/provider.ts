@@ -362,6 +362,32 @@ export async function patiently<T>(clock: Clock, attempt: () => Promise<T>, dead
 }
 
 /**
+ * Deletes, the last made first, what a run created before an order the
+ * provider refused: each resource said deleted, or `left` for the next run
+ * to find and reuse when its deletion fails. What happened, one line each,
+ * for the refusal's details.
+ */
+export async function undoMade<R extends { kind: string; name: string }>(
+  made: readonly R[],
+  remove: (resource: R) => Promise<unknown>,
+  report: Report,
+  left: (resource: R) => string = (resource) => `left the ${resource.kind} ${resource.name}: the next run finds it and reuses it`,
+): Promise<string[]> {
+  report("-> undo what this run created");
+  const said: string[] = [];
+  for (const resource of [...made].reverse()) {
+    try {
+      await remove(resource);
+      said.push(`deleted the ${resource.kind} ${resource.name} this run had created`);
+    } catch {
+      said.push(left(resource));
+    }
+    report(`   ${said.at(-1)}`);
+  }
+  return said;
+}
+
+/**
  * What `create` asks of the image when nothing else is said: Debian 13, the
  * only system `sitesolide setup` is verified on. Each provider maps it onto
  * its own image.

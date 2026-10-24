@@ -80,6 +80,7 @@ import {
   patiently,
   ProviderError,
   retryAfter,
+  undoMade,
   type Choice,
   type CreateOutcome,
   type CreateRequest,
@@ -1172,20 +1173,16 @@ export function gcp(context: ProviderContext): Provider {
    */
   async function undo(made: Made[], machine: string, report: Report): Promise<string[]> {
     if (made.length === 0) return ["this run had created nothing yet"];
-    report("-> undo what this run created");
-    const said: string[] = [];
     // The address first: it was created last.
-    for (const resource of [...made].reverse()) {
-      try {
+    return undoMade(
+      made,
+      async (resource) => {
         const operation = await call<GcpOperation>("DELETE", resource.path, `delete the ${resource.kind} ${resource.name}`);
         await waitFor(operation, `delete the ${resource.kind} ${resource.name}`, () => {});
-        said.push(`deleted the ${resource.kind} ${resource.name} this run had created`);
-      } catch {
-        said.push(`left the ${resource.kind} ${resource.name}: the next run reuses it, or \`sitesolide machine destroy ${machine} --provider gcp\` removes it`);
-      }
-      report(`   ${said.at(-1)}`);
-    }
-    return said;
+      },
+      report,
+      (resource) => `left the ${resource.kind} ${resource.name}: the next run reuses it, or \`sitesolide machine destroy ${machine} --provider gcp\` removes it`,
+    );
   }
 
   /** What to try instead of a type the zone has no room for: the other zones of the region, and other types. */

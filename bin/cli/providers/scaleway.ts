@@ -65,6 +65,7 @@ import {
   ProviderError,
   retryAfter,
   tagsFor,
+  undoMade,
   type Choice,
   type CreateOutcome,
   type CreateRequest,
@@ -922,18 +923,7 @@ export function scaleway(context: ProviderContext): Provider {
    */
   async function undo(made: Made[], earlier: string[], report: Report): Promise<string[]> {
     if (made.length === 0) return ["this run had created nothing yet", ...earlier];
-    report("-> undo what this run created");
-    const said: string[] = [];
-    for (const resource of [...made].reverse()) {
-      try {
-        await call("DELETE", resource.path, `delete the ${resource.kind} ${resource.name}`);
-        said.push(`deleted the ${resource.kind} ${resource.name} this run had created`);
-      } catch {
-        said.push(`left the ${resource.kind} ${resource.name}: the next run finds it and reuses it`);
-      }
-      report(`   ${said.at(-1)}`);
-    }
-    return [...said, ...earlier];
+    return [...(await undoMade(made, (resource) => call("DELETE", resource.path, `delete the ${resource.kind} ${resource.name}`), report)), ...earlier];
   }
 
   /** What a refusal says of what an earlier run left in the zone, which this one reuses: it stays, billed for an address, until a create or a destroy. */
