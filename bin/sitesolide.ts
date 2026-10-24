@@ -701,6 +701,27 @@ class Executor {
   }
 
   /**
+   * A command on the VM that reads `input` on its standard input, never in
+   * its arguments, its output relayed as `run` relays it. Its exit code; the
+   * callers say what a dry run does instead, and what a failure means.
+   */
+  async pipe(config: Config, command: string, input: string): Promise<number> {
+    const proc = Bun.spawn(["ssh", config.server, command], {
+      env: childEnvironment(),
+      stdin: new TextEncoder().encode(input),
+      stdout: childOutput(),
+      stderr: childOutput(),
+    });
+    running++;
+    try {
+      await Promise.all([relayOutput(proc.stdout, "stdout"), relayOutput(proc.stderr, "stderr")]);
+      return await proc.exited;
+    } finally {
+      running--;
+    }
+  }
+
+  /**
    * Read only: never short-circuited by the dry-run mode, it changes nothing. A
    * remote command that fails is reported rather than swallowed: an empty and
    * silent output made `status` look mute while the remote shell was refusing
@@ -1468,15 +1489,12 @@ async function compareWithServer(project: Project, config: Config, executor: Exe
   if (isApp(manifest)) {
     // As deploy decides: the previous manifest's units are the generator's own.
     const before = await previousUnits(slug, config, executor);
-    for (const { unit, text } of generateUnits(manifest)) {
-      const path = unitPath(unit);
-      const reading = await readRemoteFile(config, executor, path);
-      if (reading.kind === "unreadable") {
-        die(`cannot tell whether ${path} is there`, ["the server answered neither an absence nor a unit file", "nothing was changed"]);
-      }
-      const action = decideUnit({ installed: reading.kind === "present" ? reading.content : "", generated: text, replace: false, previous: before.get(unit) ?? null });
-      if (action === "install") changes.push(path);
-      if (action === "diverged") kept.push(path);
+    const units = generateUnits(manifest);
+    const onMachine = await readInstalledUnits(units, config, executor, "nothing was changed");
+    for (const [i, { unit, text }] of units.entries()) {
+      const action = decideUnit({ installed: onMachine[i]!, generated: text, replace: false, previous: before.get(unit) ?? null });
+      if (action === "install") changes.push(unitPath(unit));
+      if (action === "diverged") kept.push(unitPath(unit));
     }
     const listing = readUnitsAnswer(await executor.read(config, listUnitsCommand(slug)), slug);
     if (listing.kind === "unreadable") {
@@ -1738,20 +1756,7 @@ async function installAsProject(manifest: Manifest, config: Config, executor: Ex
     say(`   [dry-run] run ${install} in ${projectPaths(manifest.slug).app} as ${account}, in a transient unit with the service's walls`);
     return;
   }
-  const proc = Bun.spawn(["ssh", config.server, sandboxedInstallCommand(manifest.slug, deploymentAccount(config.server))], {
-    env: childEnvironment(),
-    stdin: new TextEncoder().encode(`${install}\n`),
-    stdout: childOutput(),
-    stderr: childOutput(),
-  });
-  running++;
-  let code: number;
-  try {
-    await Promise.all([relayOutput(proc.stdout, "stdout"), relayOutput(proc.stderr, "stderr")]);
-    code = await proc.exited;
-  } finally {
-    running--;
-  }
+  const code = await executor.pipe(config, sandboxedInstallCommand(manifest.slug, deploymentAccount(config.server)), `${install}\n`);
   stopIfInterrupted();
   if (code !== 0) {
     die(`install failed (${code}): ${install}`, [
@@ -1776,20 +1781,7 @@ async function depositText(
     return;
   }
   const command = `sudo install -m ${mode} -o ${owner.split(":")[0]} -g ${owner.split(":")[1]} /dev/stdin ${destination}`;
-  const proc = Bun.spawn(["ssh", config.server, command], {
-    env: childEnvironment(),
-    stdin: new TextEncoder().encode(content),
-    stdout: childOutput(),
-    stderr: childOutput(),
-  });
-  running++;
-  let code: number;
-  try {
-    await Promise.all([relayOutput(proc.stdout, "stdout"), relayOutput(proc.stderr, "stderr")]);
-    code = await proc.exited;
-  } finally {
-    running--;
-  }
+  const code = await executor.pipe(config, command, content);
   stopIfInterrupted();
   if (code !== 0) die(`write refused: ${destination}`);
 }
@@ -2177,19 +2169,11 @@ async function prepareService(
   // A unit the generator made from the manifest the previous deployment left
   // is its own too: a changed manifest replaces it without --force.
   const previous = await previousUnits(slug, config, executor);
-  const decisions = [];
-  for (const { unit, text } of units) {
-    const path = unitPath(unit);
-    const reading = await readRemoteFile(config, executor, path);
-    if (reading.kind === "unreadable") {
-      die(`cannot tell whether ${path} is there`, [
-        "the server answered neither an absence nor a unit file",
-        "nothing was installed: a unit is never replaced on a reading that failed",
-      ]);
-    }
-    const installed = reading.kind === "present" ? reading.content : "";
-    decisions.push({ unit, text, path, installed, action: decideUnit({ installed, generated: text, replace, previous: previous.get(unit) ?? null }) });
-  }
+  const onMachine = await readInstalledUnits(units, config, executor, "nothing was installed: a unit is never replaced on a reading that failed");
+  const decisions = units.map(({ unit, text }, i) => {
+    const installed = onMachine[i]!;
+    return { unit, text, path: unitPath(unit), installed, action: decideUnit({ installed, generated: text, replace, previous: previous.get(unit) ?? null }) };
+  });
 
   // The main unit is what starts the others, at boot as after a deployment. A
   // main unit left as it is would not want them, and they would be missing
@@ -2322,8 +2306,23 @@ async function removeStaleUnits(manifest: Manifest, config: Config, executor: Ex
  * a project's unit edited by hand, never a system service.
  */
 async function checkUnitNames(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
-  // Every name deploy lays, the timers of scheduled services and the anchor
-  // of a project whose every service is scheduled included.
+  const foreign = await foreignUnitsOf(manifest, config, executor);
+  if (foreign.length > 0) {
+    die(`${manifest.slug} is already the name of a service of the server, which deploy never replaces`, [
+      ...foreign,
+      "nothing was written: pick another slug in sitesolide.json",
+    ]);
+  }
+}
+
+/**
+ * Why each unit name the project's manifest generates is already systemd's
+ * for a service deploy did not write, one line each; a reading that fails
+ * stops everything. Every name deploy lays is asked, the timers of scheduled
+ * services and the anchor of a project whose every service is scheduled
+ * included.
+ */
+async function foreignUnitsOf(manifest: Manifest, config: Config, executor: Executor): Promise<string[]> {
   const units = unitNames(manifest);
   const reading = readUnitOrigins(await executor.read(config, unitOriginsCommand(manifest.slug, units)), units);
   if (reading.kind === "unreadable") {
@@ -2332,13 +2331,7 @@ async function checkUnitNames(manifest: Manifest, config: Config, executor: Exec
       "nothing was written: a unit is never laid over a service the reading could not see",
     ]);
   }
-  const foreign = units.flatMap((unit) => foreignUnit(unit, manifest.slug, reading.facts.get(unit)!) ?? []);
-  if (foreign.length > 0) {
-    die(`${manifest.slug} is already the name of a service of the server, which deploy never replaces`, [
-      ...foreign,
-      "nothing was written: pick another slug in sitesolide.json",
-    ]);
-  }
+  return units.flatMap((unit) => foreignUnit(unit, manifest.slug, reading.facts.get(unit)!) ?? []);
 }
 
 /**
@@ -2502,7 +2495,7 @@ async function rebuildProjectPorts(config: Config, executor: Executor, mode: "se
     // off from each other.
     // A worker or a scheduled service declares no port, and has none to check.
     const ports = servicesOf(manifest).flatMap((service) => (service.port === null ? [] : [service.port]));
-    if (manifest.slug !== folder || !ports.every((port) => Number.isInteger(port) && port >= 3000 && port <= 3099)) {
+    if (manifest.slug !== folder || !ports.every((port) => Number.isInteger(port) && port >= SERVICE_PORTS.first && port <= SERVICE_PORTS.last)) {
       say(`   skipped ${folder}: its services on the server do not read, they lose their access`);
       continue;
     }
@@ -2926,7 +2919,7 @@ async function domainPointsHere(domain: string, config: Config): Promise<boolean
 }
 
 /** The declared domain, or the stop: without it there is nothing to switch. */
-function requireDomain(manifest: Manifest): { name: string; active?: boolean } {
+function requireDomain(manifest: Manifest): NonNullable<Manifest["domain"]> {
   const domain = manifest.domain;
   if (domain === undefined) {
     die("no domain declared in the manifest", [
@@ -2934,7 +2927,7 @@ function requireDomain(manifest: Manifest): { name: string; active?: boolean } {
       'declare it first:  "domain": { "name": "example.com", "active": false }',
     ]);
   }
-  return domain as { name: string; active?: boolean };
+  return domain;
 }
 
 /**
@@ -2954,7 +2947,7 @@ async function showDomain(
   const active = domain.active === true;
 
   say(`-> domain of ${manifest.slug}`);
-  say(`   declared   ${domain.name}${(domain as { aliases?: string[] }).aliases?.length ? ` (aliases: ${(domain as { aliases?: string[] }).aliases?.join(", ")})` : ""}`);
+  say(`   declared   ${domain.name}${domain.aliases?.length ? ` (aliases: ${domain.aliases.join(", ")})` : ""}`);
   say(`   manifest   ${active ? "active" : "inactive, preview only"}`);
 
   const table = await executor.read(
@@ -2981,7 +2974,7 @@ async function showDomain(
     slug: manifest.slug,
     domain: {
       name: domain.name,
-      aliases: (domain as { aliases?: string[] }).aliases ?? [],
+      aliases: domain.aliases ?? [],
       active,
       table: table.trim() !== "0",
       dns: pointsHere,
@@ -3366,15 +3359,7 @@ async function refreshProject(folder: string, raw: string, run: RefreshRun, conf
 
     // A name systemd gives to a unit deploy did not write: deploy refuses it
     // before anything is laid, `--force` or not, and so does this.
-    const names = unitNames(manifest);
-    const origins = readUnitOrigins(await executor.read(config, unitOriginsCommand(slug, names)), names);
-    if (origins.kind === "unreadable") {
-      die(`cannot tell whether systemd already runs a service named ${slug}`, [
-        "the server answered nothing readable",
-        "nothing was written: a unit is never laid over a service the reading could not see",
-      ]);
-    }
-    const foreign = names.flatMap((unit) => foreignUnit(unit, slug, origins.facts.get(unit)!) ?? []);
+    const foreign = await foreignUnitsOf(manifest, config, executor);
     if (foreign.length > 0) {
       stopContext = null;
       refuseProject(run, foreignUnits(slug), foreign);
@@ -3448,17 +3433,23 @@ async function missingAfterRestart(manifest: Manifest, config: Config, executor:
   });
 }
 
-/** What the machine has of each unit, in order, "" for one it does not have; a reading that fails stops everything. */
-async function readInstalledUnits(units: readonly GeneratedUnit[], config: Config, executor: Executor): Promise<string[]> {
+/**
+ * What the machine has of each unit, in order, "" for one it does not have;
+ * a reading that fails stops everything, `untouched` saying what was left as
+ * it was.
+ */
+async function readInstalledUnits(
+  units: readonly GeneratedUnit[],
+  config: Config,
+  executor: Executor,
+  untouched = "nothing was written: a unit is never replaced on a reading that failed",
+): Promise<string[]> {
   const installed: string[] = [];
   for (const { unit } of units) {
     const path = unitPath(unit);
     const reading = await readRemoteFile(config, executor, path);
     if (reading.kind === "unreadable") {
-      die(`cannot tell whether ${path} is there`, [
-        "the server answered neither an absence nor a unit file",
-        "nothing was written: a unit is never replaced on a reading that failed",
-      ]);
+      die(`cannot tell whether ${path} is there`, ["the server answered neither an absence nor a unit file", untouched]);
     }
     installed.push(reading.kind === "present" ? reading.content : "");
   }
@@ -3685,10 +3676,7 @@ function optionValue(arguments_: string[], name: string): string | undefined {
  * read: that is what takes a configuration across a change without retyping it.
  */
 async function initialise(arguments_: string[]): Promise<void> {
-  const value = (name: string): string | undefined => {
-    const marker = arguments_.indexOf(`--${name}`);
-    return marker === -1 ? undefined : arguments_[marker + 1];
-  };
+  const value = (name: string): string | undefined => optionValue(arguments_, `--${name}`);
 
   const existing = Bun.file(configPath());
   const onDisk = (await existing.exists()) ? ((await existing.json()) as Record<string, string>) : {};
@@ -4088,16 +4076,9 @@ if (import.meta.main) {
       await refresh(parsed, config, executor);
       break;
     }
-    case "remove": {
-      const marker = arguments_.indexOf("--confirm");
-      await remove(
-        readProject(folder),
-        config,
-        executor,
-        marker === -1 ? undefined : arguments_[marker + 1],
-      );
+    case "remove":
+      await remove(readProject(folder), config, executor, optionValue(arguments_, "--confirm"));
       break;
-    }
     case "run": {
       const separator = arguments_.indexOf("--");
       await runWithSecret(
