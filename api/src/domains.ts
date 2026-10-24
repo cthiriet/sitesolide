@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
 import { DOMAIN_TABLE_TTL_MS } from "./config";
-import { createZone, type Zone } from "./zone";
+import { cachedFile, createZone, type Zone } from "./zone";
 
 /**
  * Reduces what Caddy passes along to a comparable host name: lowercase, no
@@ -57,35 +56,12 @@ export type Table = {
  * decided before the table is read: see src/zone.ts.
  */
 export function createTable(path: string, ttlMs: number = DOMAIN_TABLE_TTL_MS, zone: Zone = createZone({ ttlMs })): Table {
-  let allowedHosts = new Set<string>();
-  let lastRead = 0;
-  let neverRead = true;
-
-  /**
-   * A failed read keeps the previous table: the file may be in the middle of
-   * being rewritten, and temporarily losing the list would make legitimate
-   * renewals fail. This fallback never authorizes more than the last known
-   * table.
-   */
-  function reread(now: number): Set<string> {
-    if (!neverRead && now - lastRead < ttlMs) return allowedHosts;
-
-    try {
-      allowedHosts = parseDomainTable(readFileSync(path, "utf8"));
-      neverRead = false;
-    } catch (err) {
-      // ENOENT is normal as long as no client has moved to its own domain.
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        allowedHosts = new Set();
-        neverRead = false;
-      } else {
-        console.error(`could not read ${path}:`, err);
-      }
-    }
-
-    lastRead = now;
-    return allowedHosts;
-  }
+  // A missing file is an empty table, normal as long as no client has moved
+  // to its own domain. A failed read keeps the previous table: the file may be
+  // in the middle of being rewritten, and temporarily losing the list would
+  // make legitimate renewals fail. This fallback never authorizes more than
+  // the last known table.
+  const table = cachedFile(path, ttlMs, parseDomainTable, new Set<string>());
 
   return {
     /**
@@ -107,14 +83,14 @@ export function createTable(path: string, ttlMs: number = DOMAIN_TABLE_TTL_MS, z
       const zoned = zone.decide(host, now);
       if (zoned !== null) return zoned;
 
-      if (!reread(now).has(host)) return { allowed: false, reason: "unknown domain" };
+      if (!table.get(now).has(host)) return { allowed: false, reason: "unknown domain" };
 
       return { allowed: true, reason: "active client domain" };
     },
 
     /** Number of currently authorized domains, for diagnostics. */
     count(now) {
-      return reread(now).size;
+      return table.get(now).size;
     },
   };
 }

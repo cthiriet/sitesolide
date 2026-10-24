@@ -224,7 +224,7 @@ export type LockOptions = {
  * therefore as an overwrite. The `(commun)` snippet sets its cache policy
  * according to the *requested* path, and `handle` is sorted after `header`:
  * without that line, the door page goes back out with the
- * `public, max-age=31536000, immutable` of `@immuable` as soon as the
+ * `public, max-age=31536000, immutable` of `@immutable` as soon as the
  * requested URL ends in `.ico` or `.png`. Measured. The browser asks for
  * `/favicon.ico` all by itself while displaying the door page: it would
  * therefore keep an HTML page at the icon's address, for a year, without ever

@@ -32,16 +32,17 @@ import { onDemandPolicy, parseZoneNames, ZONE_LABEL } from "./zone-names";
  * for it.
  */
 
-export { onDemandPolicy, parseZoneNames, ZONE_LABEL } from "./zone-names";
+export { onDemandPolicy, parseZoneNames } from "./zone-names";
 
 /**
  * A file read through a cache: at most once per window, `ttlMs` unless the
- * caller asks for a shorter one. The same discipline as the domain table's
- * (src/domains.ts): a missing file is its empty value, and any other failure
- * keeps the last value read, which never allows more than it did. `read`
- * says whether a reading ever succeeded, a missing file counting as one.
+ * caller asks for a shorter one. The zone's two files and the domain table
+ * (src/domains.ts) are all read through it: a missing file is its empty
+ * value, and any other failure keeps the last value read, which never allows
+ * more than it did. `read` says whether a reading ever succeeded, a missing
+ * file counting as one.
  */
-function cachedFile<T>(path: string, ttlMs: number, parse: (content: string) => T, absent: T): { get: (now: number, windowMs?: number) => T; read: () => boolean } {
+export function cachedFile<T>(path: string, ttlMs: number, parse: (content: string) => T, absent: T): { get: (now: number, windowMs?: number) => T; read: () => boolean } {
   let value = absent;
   let lastRead = 0;
   let neverRead = true;

@@ -115,7 +115,7 @@ describe("isValidLockSlug", () => {
     expect(isValidLockSlug("../etc")).toBe(false);
     expect(isValidLockSlug("Agency")).toBe(false);
     expect(isValidLockSlug("a.b")).toBe(false);
-    expect(isValidLockSlug("-debut")).toBe(false);
+    expect(isValidLockSlug("-leading")).toBe(false);
     expect(isValidLockSlug("")).toBe(false);
   });
 });
