@@ -302,7 +302,7 @@ export function createRoutes(store: Store, options: Options, clock: () => number
 
       const reading = await read(options.stateFile, now);
       // Nothing in this dashboard is to be kept: it describes an instant.
-      return Response.json(roles === null ? reading : memberReading(reading, roles), { headers: { "Cache-Control": "no-store" } });
+      return Response.json(roles === null ? reading : memberReading(reading, roles), { headers: NO_CACHE });
     },
   };
 }

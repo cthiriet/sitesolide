@@ -124,14 +124,7 @@ export function setCookie(token: string, online: boolean, durationMs: number): s
 
 /** The same cookie, empty and expired: signing out erases rather than forgets. */
 export function clearCookie(online: boolean): string {
-  return [
-    `${cookieName(online)}=`,
-    "Path=/",
-    "Max-Age=0",
-    "HttpOnly",
-    "SameSite=Strict",
-    ...(online ? ["Secure"] : []),
-  ].join("; ");
+  return setCookie("", online, 0);
 }
 
 /**
