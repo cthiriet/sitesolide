@@ -21,7 +21,7 @@ import { InternalLink } from "@/components/navigation"
 import { Banner, EmptyState, ErrorState, INPUT_DIALOG, PageBody, PageHeader, Panel, RowsSkeleton, Status, When, useRetry } from "@/components/page"
 import { SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
-import { useOrigin, type FocusReturn } from "@/components/secrets-dialogs"
+import { returnTo, type FocusReturn } from "@/components/secrets-dialogs"
 import {
   activityLine,
   grantRows,
@@ -675,7 +675,12 @@ export function ConnectorsPage() {
   const [removal, setRemoval] = useState<Opened>({ open: false, opening: 0, connector: null })
   const [grantInFlight, setGrantInFlight] = useState<string | null>(null)
   const [grantError, setGrantError] = useState("")
-  const { remember, focusReturn } = useOrigin()
+  // The element a dialog was opened from, the page itself included when nothing had focus.
+  const origin = useRef<HTMLElement | null>(null)
+  const remember = () => {
+    origin.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  }
+  const focusReturn: FocusReturn = () => returnTo(origin.current)
   const later = useRef<number | null>(null)
 
   const load = useCallback(async () => {
