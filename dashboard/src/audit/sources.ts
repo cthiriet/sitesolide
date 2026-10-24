@@ -27,7 +27,7 @@ import type { BackupSteward } from "../backup/client";
 import type { ConnectorsSteward, EgressReader } from "../connectors/client";
 import type { ControlStore } from "../control/store";
 import type { AuditReader, Readers, ReaderResult } from "./aggregate";
-import { fromJournal, fromTableRow, isAfter, type Position, type SourceRow } from "./normalize";
+import { fromJournal, fromTableRow, isAfter, isObject, type Position, type SourceRow } from "./normalize";
 import type { AuditSource } from "./protocol";
 
 /** The most the portal and the egress proxy hand over at once; they bound a larger ask to it without a word. */
@@ -50,10 +50,6 @@ const DASHBOARD_SLUG = "dashboard";
 type Answer =
   | { kind: "unreachable" }
   | { kind: "answered"; status: number; body: Record<string, unknown> | null };
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /**
  * A call and its JSON body, read piece by piece up to MAX_ANSWER_BYTES. A
