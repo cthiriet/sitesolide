@@ -346,9 +346,10 @@ export function signedOutPage(next: string): string {
 export const DOOR_PAGE_MARKER = "Guard page of locked previews";
 
 /**
- * The door page of the previews. The word "preview" does not appear in it,
- * and that is deliberate: nobody outside the trade reads it that way. Whoever lands
- * here is most often a craftsman coming to look at their site.
+ * The door page of the previews. What a visitor reads never calls the site a
+ * preview, and that is deliberate: the word is the trade's, and whoever lands
+ * here is most often a craftsman coming to look at their site. Only the
+ * marker, in a comment no browser shows, says it.
  *
  * Caddy compares the key character for character: a code typed in lowercase
  * would give a 401 with no explanation. The pattern therefore accepts only the
