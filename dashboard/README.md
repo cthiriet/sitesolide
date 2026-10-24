@@ -242,7 +242,11 @@ JavaScript. The production surface does not grow by one executable byte.
 
 The page renders no data at build time: it calls `/api/*` once open, which is
 the only way to put content behind a session while Caddy serves the files in the
-clear. Its design rules, tokens, primitives, vocabulary and layout, are in
+clear. The one thing written into it is the release it was built from, at the
+foot of the sidebar: the tag a release build hands it, `git describe` from a
+checkout, see `web/astro.config.mjs`. A new release therefore changes the page,
+and `sitesolide upgrade` redeploys the dashboard each time, which keeps that
+line the release the machine was last upgraded to. Its design rules, tokens, primitives, vocabulary and layout, are in
 [web/DESIGN.md](web/DESIGN.md).
 
 ## Secrets

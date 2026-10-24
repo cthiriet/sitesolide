@@ -21,6 +21,7 @@ import { machineIndicators, siteIndicators, sidebarShortcut, type Indicator } fr
 import { ariaCurrent, machinePagesFor, pageUrl, sectionsFor, type MachinePage, type Page, type Section } from "@/lib/pages"
 import { TONE_PILL, TONE_DOT, type Tone } from "@/lib/tones"
 import { cn } from "@/lib/utils"
+import { VERSION } from "@/lib/version"
 
 /** The icon of each machine page. */
 export const MACHINE_ICONS: Record<MachinePage, LucideIcon> = {
@@ -248,6 +249,13 @@ export function AppSidebar() {
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
+        {/* The release this page was built from, out of the way: gone when collapsed. */}
+        <p
+          className="truncate px-2.5 pt-1 font-mono text-[0.6875rem] text-muted-foreground group-data-[collapsible=icon]:hidden"
+          title={`sitesolide ${VERSION}`}
+        >
+          {VERSION}
+        </p>
       </SidebarFooter>
     </Sidebar>
   )

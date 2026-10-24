@@ -64,21 +64,22 @@ All in `src/styles/global.css`, under `:root` (light) and `.dark`. A component
 | `primary`, `ring` | `#0b6e79` | `#4cb8c4` | petrol: the primary button, the focus ring, the sidebar's marker, a gauge's fill |
 | `primary-foreground` | `#ffffff` | `#0a0b0d` | text on the primary button |
 | `highlight` | `#e7f3f4` | `#0e2427` | the accent's palest tint: the current page in the sidebar |
-| `mark-from`, `mark-to` | `#138896`, `#0a5560` | `#5cc8d3`, `#2c98a4` | the logo's gradient, top left to bottom right |
+| `mark-face`, `mark-line`, `mark-shadow` | `#0b6e79`, `#12211f`, `#12211f` | `#0c6870`, `#cfe3dc`, `#4f7a70` | the logo: its face, the line around it, its offset shadow |
 | `track`, `tick` | `#e3e6eb`, `#8e95a1` | `#1f2227`, `#5e6572` | a gauge's empty bar, its threshold ticks |
 | `destructive` | `#b3253f` | `#f36f84` | errors, and only errors |
 | `sidebar-accent`, `sidebar-primary` | as `muted`, `primary` | as `muted`, `primary` | a hover in the sidebar, and the current page's marker |
 
-**The brand is one petrol ramp**, one hue (185 to 188 degrees) in four steps:
-`highlight`, the palest, for a surface that says "here"; `mark-from`, a step
-lighter than the accent; `primary`, the accent; `mark-to`, a step deeper. The
-logo's gradient brackets the accent, so the logo, the sidebar's marker and the
-primary button read as one colour, in both themes. Dark lifts the accent and
-the logo's steps, so that the deep end does not sink into the page, and turns
-the tint into a deep petrol surface. The logo writes its stops as
-`var(--mark-from)` and `var(--mark-to)`; the favicon, the portal's page and
-`docs/assets` repeat the hex values, which cannot read a token, and change
-with them.
+**The brand is one petrol hue** (185 to 188 degrees): `highlight`, the
+palest, for a surface that says "here", and `primary`, the accent. Dark lifts
+the accent and turns the tint into a deep petrol surface.
+
+**The logo is the landing page's**, drawn as sitesolide.fr draws it in its
+header: the block laid twice, a hard shadow offset down and to the right, then
+a petrol face ringed with a line. Its three tokens are the landing page's own
+values rather than the dashboard's greys, so the mark is the same on both
+sites; in light, its face is the accent itself. The favicon, the portal's page
+and `docs/assets` keep the older gradient, `#138896` to `#0a5560` in light and
+`#5cc8d3` to `#2c98a4` in dark, as the landing page's favicon does.
 
 Measured contrasts (WCAG), to check again after any change. Light:
 `foreground` 17.8:1 on `card`; `secondary-foreground` 10.4:1 on `card`;
@@ -90,9 +91,9 @@ a tick 3.0:1 on `card`. Dark: `foreground` 15.3:1 on `card`;
 7.9:1 on `card`; `destructive` 6.6:1 on `card`; a tick 3.2:1 on `card` and
 3.0:1 on `popover`. On `highlight`: `strong` 17.4:1 in light and 16.2:1 in
 dark, `muted-foreground` 5.1 and 5.0:1, the `primary` marker 5.3 and 6.9:1,
-an error count 4.9 and 5.0:1 on its pill. The logo, as a graphic: `mark-from`
-4.0:1 on `background` in light, `mark-to` 8.0:1; in dark 10.0 and 5.8:1. The
-full list is in the comment of `styles/global.css`.
+an error count 4.9 and 5.0:1 on its pill. The logo, as a graphic, outlined
+by `mark-line`: 15.6:1 on `background` in light, 14.7:1 in dark. The full
+list is in the comment of `styles/global.css`.
 
 One pair stays short, in a passing state: the primary button's hover,
 `primary/80` from the generated `button`, puts white at 3.95:1 in light. A

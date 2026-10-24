@@ -141,10 +141,16 @@ function walk(folder: string, prefix = ""): string[] {
  * what the manifest excludes, which a deployment never sends anyway. The
  * manifest packed loses `build`: deployed from the kit, the component sends
  * what was built and runs nothing. A checkout keeps its manifest whole, and
- * builds as it always did. The same sources and the same lockfiles build the
- * same bytes, so the release stays reproducible.
+ * builds as it always did. The same sources, the same lockfiles and the same
+ * version build the same bytes, so the release stays reproducible.
+ *
+ * Each build is handed the release's version in SITESOLIDE_BUILD_VERSION: the
+ * dashboard's page names it in its sidebar, and a staged copy has no git to
+ * ask. A new release therefore changes the dashboard's page, and `sitesolide
+ * upgrade` redeploys the dashboard every time, which is what keeps the version
+ * it shows the one the machine was last upgraded to.
  */
-export function releaseKit(root = REPOSITORY): { entries: KitEntry[]; prebuilt: Prebuilt[] } {
+export function releaseKit(root = REPOSITORY, version = "dev"): { entries: KitEntry[]; prebuilt: Prebuilt[] } {
   const sources = kitFiles(root);
   const stage = mkdtempSync(join(tmpdir(), "sitesolide-stage-"));
   try {
@@ -168,7 +174,7 @@ export function releaseKit(root = REPOSITORY): { entries: KitEntry[]; prebuilt: 
       const { NODE_ENV: _, ...environment } = process.env;
       const run = Bun.spawnSync(["sh", "-c", command], {
         cwd: join(stage, component),
-        env: { ...environment, PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ""}` },
+        env: { ...environment, PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ""}`, SITESOLIDE_BUILD_VERSION: version },
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -266,7 +272,7 @@ export async function build(options: { version: string; targets: readonly Target
   const root = options.root ?? REPOSITORY;
   const out = resolve(options.out);
   if (!isValidVersion(options.version)) throw new Error(`--version: ${options.version} is neither dev nor a tag like v0.3.0`);
-  const release = releaseKit(root);
+  const release = releaseKit(root, options.version);
   const kit = packKit(release.entries);
   // The embedded source map names each module relative to the working
   // directory: from the root, it says bin/cli/kit.ts, and never where the

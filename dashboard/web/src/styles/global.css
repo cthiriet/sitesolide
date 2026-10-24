@@ -14,8 +14,9 @@
     --tracking-title: -0.02em;
     --color-strong: var(--strong);
     --color-highlight: var(--highlight);
-    --color-mark-from: var(--mark-from);
-    --color-mark-to: var(--mark-to);
+    --color-mark-face: var(--mark-face);
+    --color-mark-line: var(--mark-line);
+    --color-mark-shadow: var(--mark-shadow);
     --color-divider: var(--divider);
     --color-track: var(--track);
     --color-tick: var(--tick);
@@ -69,14 +70,15 @@
 
 /*
   Graphite: neutral greys and one colour family, petrol, which is also the
-  brand's. Four steps of it, one hue: `primary`, the accent, for what is
+  brand's. Two steps of it, one hue: `primary`, the accent, for what is
   current or in focus (the sidebar's marker, a gauge's fill, the focus ring,
   the primary button); `highlight`, its palest tint, the surface of the current
-  page in the sidebar; `mark-from` and `mark-to`, the logo's gradient, one step
-  lighter and one step deeper than the accent, so that the logo and the accent
-  read as one colour. The red, `destructive`, is the error colour and nothing
-  else: it is not the brand's. See web/DESIGN.md, which also gives each
-  token's role.
+  page in the sidebar. The logo's three, `mark-face`, `mark-line` and
+  `mark-shadow`, are the landing page's petrol, line and shadow, carried over
+  as they are so that the mark is the same wherever it appears; in light, its
+  face is the accent itself. The red, `destructive`, is the error colour and
+  nothing else: it is not the brand's. See web/DESIGN.md, which also gives
+  each token's role.
 
   In light, the page and the sidebar are a cool off-white, the content surfaces
   white, separated by a one pixel rule and never a shadow. In dark, the page is
@@ -102,8 +104,8 @@
   counter, secondary-foreground on border, 8.3:1. On highlight, the current
   page: strong 17.4:1, secondary-foreground 9.2:1, muted-foreground 5.1:1, the
   primary marker 5.3:1, the destructive and attention counts 4.9 and 4.6:1 on
-  their pill. The logo: mark-from 4.0:1 on background and 4.2:1 on card,
-  mark-to 8.0:1 on background.
+  their pill. The logo, outlined by its line: mark-line 15.6:1 on background
+  and 16.6:1 on card, mark-face 5.6 and 6.0:1.
   Dark: foreground 15.3:1 on card; secondary-foreground 11.7:1 on card;
   muted-foreground 5.8:1 on card and 5.5:1 on muted; near black on primary
   8.4:1; primary 7.9:1 on card and 6.8:1 on the track; ok-text 10.2:1,
@@ -112,8 +114,8 @@
   tab's count beyond 6.5:1 on its dot; a counter, secondary-foreground on
   border, 10.0:1. On highlight: strong 16.2:1, foreground 13.3:1,
   muted-foreground 5.0:1, the primary marker 6.9:1, the destructive count
-  5.0:1 on its pill. The logo: mark-from 10.0:1 and mark-to 5.8:1 on
-  background, 9.4 and 5.4:1 on card.
+  5.0:1 on its pill. The logo: mark-line 14.7:1 on background and 13.9:1
+  on card, 4.9:1 on mark-face, mark-shadow 4.1:1 on background.
 
   Three values move from the mockup to clear those floors: attention #c98a0b
   became #b0790a (2.4:1 on the track before), the ticks #a3a9b3 and #3a3e46
@@ -130,8 +132,9 @@
     --primary: #0b6e79;
     --primary-foreground: #ffffff;
     --highlight: #e7f3f4;
-    --mark-from: #138896;
-    --mark-to: #0a5560;
+    --mark-face: #0b6e79;
+    --mark-line: #12211f;
+    --mark-shadow: #12211f;
     --secondary: #eceef2;
     --secondary-foreground: #3a404a;
     --muted: #eceef2;
@@ -181,8 +184,9 @@
     --primary: #4cb8c4;
     --primary-foreground: #0a0b0d;
     --highlight: #0e2427;
-    --mark-from: #5cc8d3;
-    --mark-to: #2c98a4;
+    --mark-face: #0c6870;
+    --mark-line: #cfe3dc;
+    --mark-shadow: #4f7a70;
     --secondary: #16181c;
     --secondary-foreground: #c9cdd3;
     --muted: #16181c;

@@ -1,32 +1,23 @@
-import { useId } from "react"
+/** The block's outline: two slits cut in from opposite sides, the S of sitesolide left standing in the material. */
+const BLOCK =
+  "M8.47 3H23.53A5.47 5.47 0 0 1 29 8.47V10.73H11.76A1.23 1.23 0 0 0 11.76 13.19H29V23.53A5.47 5.47 0 0 1 23.53 29H8.47A5.47 5.47 0 0 1 3 23.53V21.27H20.24A1.23 1.23 0 0 0 20.24 18.81H3V8.47A5.47 5.47 0 0 1 8.47 3Z"
 
 /**
- * The mark: a solid block with two slits cut in from opposite sides, the S of
- * sitesolide left standing in the material. The landing page and the portal
- * carry the same outline, and docs/assets holds it as files.
+ * The mark, drawn as the landing page draws it: the block laid twice, its hard
+ * shadow offset down and to the right, then its petrol face ringed with the
+ * line. The slits are holes in both, so the page shows through them in both
+ * themes. Its colours are the landing page's own, `mark-face`, `mark-line` and
+ * `mark-shadow` in styles/global.css, rather than the dashboard's greys: the
+ * logo is the brand's, the same on every surface that carries it.
  *
- * One path rather than a block under two lighter bars: the slits are holes, so
- * the page shows through them in both themes. The gradient is the brand's
- * petrol, `mark-from` to `mark-to` in styles/global.css, one step lighter and
- * one step deeper than the accent, lifted in the dark theme where the deep end
- * would sink into the page. Its id goes through useId: ids are global to the
- * document, and two logos rendered together would steal each other's gradient.
+ * The favicon in layouts/main.astro, the portal's page and docs/assets keep
+ * the older gradient, as the landing page's favicon does.
  */
 export function Logo({ className }: { className?: string }) {
-  const fill = `${useId()}-fill`
-
   return (
-    <svg className={className} viewBox="0 0 32 32" aria-hidden="true">
-      <defs>
-        <linearGradient id={fill} x1="3" y1="3" x2="29" y2="29" gradientUnits="userSpaceOnUse">
-          <stop offset="0" className="[stop-color:var(--mark-from)]" />
-          <stop offset="1" className="[stop-color:var(--mark-to)]" />
-        </linearGradient>
-      </defs>
-      <path
-        d="M8.47 3H23.53A5.47 5.47 0 0 1 29 8.47V10.73H11.76A1.23 1.23 0 0 0 11.76 13.19H29V23.53A5.47 5.47 0 0 1 23.53 29H8.47A5.47 5.47 0 0 1 3 23.53V21.27H20.24A1.23 1.23 0 0 0 20.24 18.81H3V8.47A5.47 5.47 0 0 1 8.47 3Z"
-        fill={`url(#${fill})`}
-      />
+    <svg className={className} viewBox="0 0 32 32" overflow="visible" aria-hidden="true">
+      <path d={BLOCK} transform="translate(1.6 1.6)" className="fill-mark-shadow" />
+      <path d={BLOCK} className="fill-mark-face stroke-mark-line" strokeWidth={1.5} strokeLinejoin="round" />
     </svg>
   )
 }

@@ -31,11 +31,12 @@ const ICON =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cstyle%3E.a%7Bstop-color:%23138896%7D.b%7Bstop-color:%230a5560%7D@media (prefers-color-scheme:dark)%7B.a%7Bstop-color:%235cc8d3%7D.b%7Bstop-color:%232c98a4%7D%7D%3C/style%3E%3Cdefs%3E%3ClinearGradient id='f' x1='1' y1='1' x2='31' y2='31' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0' class='a'/%3E%3Cstop offset='1' class='b'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M7.32 1H24.68A6.32 6.32 0 0 1 31 7.32V9.92H11.11A1.42 1.42 0 0 0 11.11 12.76H31V24.68A6.32 6.32 0 0 1 24.68 31H7.32A6.32 6.32 0 0 1 1 24.68V22.08H20.89A1.42 1.42 0 0 0 20.89 19.24H1V7.32A6.32 6.32 0 0 1 7.32 1Z' fill='url(%23f)'/%3E%3C/svg%3E";
 
 /**
- * The logo of the portal and of the dashboard: a solid block with two slits
- * cut in from opposite sides, the S of sitesolide. Inline rather than as a
- * file, for the same reason as the rest of the page. Its gradient is the
- * dashboard's light one, the brand's petrol around the accent. The gradient
- * identifier is global to the document, and there is only one logo per page.
+ * The portal's logo: a solid block with two slits cut in from opposite
+ * sides, the S of sitesolide. Inline rather than as a file, for the same
+ * reason as the rest of the page. Its gradient is the favicon's light one, the
+ * brand's petrol; the dashboard has since taken the landing page's drawing.
+ * The gradient identifier is global to the document, and there is only one
+ * logo per page.
  */
 const LOGO = `<svg viewBox="0 0 32 32" aria-hidden="true">
         <defs>

@@ -497,7 +497,7 @@ describe("the release's kit, its components built", () => {
   let release: ReturnType<typeof releaseKit>;
   let kit = "";
   beforeAll(() => {
-    release = releaseKit();
+    release = releaseKit(undefined, "v0.0.0-release.1");
     const { archive, hash } = packKit(release.entries);
     kit = join(scratch(), "kit");
     unpackKit(archive, hash, kit, "v0.0.0-release.1");
@@ -520,6 +520,13 @@ describe("the release's kit, its components built", () => {
     delete source.build;
     expect(manifest("dashboard")).toEqual(source);
     expect(readFileSync(join(REPO_ROOT, "analytics", "sitesolide.json"), "utf8")).toBe(readFileSync(join(kit, "analytics", "sitesolide.json"), "utf8"));
+  });
+
+  test("the dashboard's page names the release it was built from", () => {
+    // Handed by the release build: the staged copy has no git to ask.
+    const chunks = release.entries.filter((entry) => /^dashboard\/public\/_assets\/.+\.js$/.test(entry.path));
+    const naming = chunks.filter((entry) => new TextDecoder().decode(entry.content).includes("v0.0.0-release.1"));
+    expect(naming.length).toBeGreaterThan(0);
   });
 
   test("what a build needed stays behind: its tools, the interface's sources, what the manifest never sends", () => {

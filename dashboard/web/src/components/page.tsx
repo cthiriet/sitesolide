@@ -28,6 +28,7 @@ import { TONE_BANNER, TONE_PILL, TONE_DOT, TONE_TEXT, verdictTone, type Tone } f
 import type { Snapshot } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import type { Severity } from "@/lib/verdict"
+import { VERSION } from "@/lib/version"
 
 /**
  * The primitives shared by the pages: header, container, panel, empty states,
@@ -396,7 +397,7 @@ function RefreshButton({ className }: { className?: string }) {
   )
 }
 
-/** On a phone, the theme and the sign-out, which the sidebar carries elsewhere. */
+/** On a phone, the theme, the sign-out and the release, which the sidebar carries elsewhere. */
 function MobileMenu() {
   const { signOut } = useData()
   const { label, Icon, toggle } = useTheme()
@@ -419,6 +420,10 @@ function MobileMenu() {
           <LogOut />
           Sign out
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <p className="truncate px-1.5 py-1 font-mono text-[0.6875rem] text-muted-foreground" title={`sitesolide ${VERSION}`}>
+          {VERSION}
+        </p>
       </DropdownMenuContent>
     </DropdownMenu>
   )

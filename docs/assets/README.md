@@ -10,9 +10,12 @@
 
 **The mark** is a solid block with two slits cut in from opposite sides: the S
 of sitesolide, left standing in the material. The slits are holes rather than
-bars painted over the block, so any background shows through them. Its source
-of truth is `dashboard/web/src/components/logo.tsx`; a change there comes here
-too, and to the portal's page and the dashboard's favicon.
+bars painted over the block, so any background shows through them. These files
+draw it with a petrol gradient, as the favicons of the dashboard, the portal
+and the landing page do, and the portal's page; a change of outline goes to
+all of them. The dashboard's page draws it as the landing page's header does,
+a petrol face ringed with a line over a hard offset shadow: see
+`dashboard/web/src/components/logo.tsx`.
 
 **The wordmark** is Archivo at width 125 and weight 650, tracked at −0.02 em,
 converted to outlines so the SVG renders the same without the font. Its height,
@@ -27,5 +30,6 @@ baseline to ascender, is 52 % of the mark's, centred on it.
 dashboard's accent, `#0b6e79` in light and `#4cb8c4` in dark, so the logo and
 the accent read as the same petrol; the wordmark takes the dashboard's text
 colour. Red is the dashboard's error colour, never the brand's. The tokens
-behind these values, `mark-from`, `mark-to`, `primary` and `foreground`, are in
-`dashboard/web/src/styles/global.css`.
+`primary` and `foreground` are in `dashboard/web/src/styles/global.css`, beside
+`mark-face`, `mark-line` and `mark-shadow`, the landing page's colours for the
+dashboard's drawing of the mark.
