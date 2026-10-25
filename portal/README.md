@@ -682,6 +682,16 @@ Its CSS is hand-written and inline, and that is the repository's one Tailwind
 exception: the lock's page is served for every URL of the locked host, and its
 own resources would serve themselves in a loop.
 
+It is drawn in Ledger, the landing page's design, light or dark as the browser
+prefers. Its faces are named, Hanken Grotesk and IBM Plex Mono, and never
+fetched: a font file cannot be served beside the lock's page, and carried in
+`data:` they would add some 65 KB to every 401 of every protected site. A
+browser without them shows its system face at Ledger's sizes and weights.
+
+The portal's own host shows the same card at its root, `public/index.html`,
+committed and written from the template by `bun run home-page`; a test fails
+when the two part.
+
 With a provider configured, the sign-in page offers *Sign in with ...* above the
 password: a link, not a form, since the flow leaves for the portal's own host
 and the CSP's `form-action 'self'` would refuse a form's redirect there. To

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { signInPage, signedOutPage, doorPage, portalPage, DOOR_PAGE_MARKER } from "../src/page";
+import { join } from "node:path";
+import { signInPage, signedOutPage, doorPage, portalPage, homePage, DOOR_PAGE_MARKER } from "../src/page";
 
 /** The chunk of page between two markers, bounds included. */
 function between(page: string, start: string, end: string): string {
@@ -83,6 +84,17 @@ describe("the portal login page", () => {
     expect(page).toInclude('href="/_portal/oidc?retour=%2F&amp;account=choose">Use another account</a>');
   });
 
+  test("a message sits under the password alone, and leads the card once a provider is offered", () => {
+    // With a provider most messages are the account's: not let in, expired.
+    // Under the password field they would read as a wrong password.
+    const alone = signInPage("/", "Password refused.");
+    expect(alone.indexOf('role="alert"')).toBeGreaterThan(alone.indexOf('name="motdepasse"'));
+    const offered = signInPage("/", "Not shared.", { providerName: "Google", chooseAccount: true });
+    expect(offered).toInclude('<p class="alert notice" role="alert">Not shared.</p>');
+    expect(offered.indexOf('role="alert"')).toBeLessThan(offered.indexOf('class="sso"'));
+    expect(offered.split('role="alert"')).toHaveLength(2);
+  });
+
   test("the provider's name is escaped, it comes from the configuration", () => {
     const page = signInPage("/", "", { providerName: "<b>Acme</b>" });
     expect(page).toInclude("Sign in with &lt;b&gt;Acme&lt;/b&gt;");
@@ -98,6 +110,13 @@ describe("the pages of the portal's own host", () => {
 
   test("without a way back, no link", () => {
     expect(portalPage("Expired.", "Sign in again.")).not.toInclude("<a ");
+  });
+
+  test("the root's page is the committed public/index.html, from the same template", async () => {
+    // Caddy serves the file as it stands: a change of the template that did
+    // not reach it would leave the portal's own host in the old design.
+    const committed = await Bun.file(join(import.meta.dir, "..", "public", "index.html")).text();
+    expect({ upToDate: committed === homePage(), fix: "bun run home-page" }).toEqual({ upToDate: true, fix: "bun run home-page" });
   });
 });
 
@@ -125,19 +144,29 @@ describe("a single template for both", () => {
     }
   });
 
-  test("the brand is the landing page's: the slotted block over its shadow, then the name", () => {
-    for (const page of [doorPage(""), signInPage("/")]) {
+  test("the brand is the landing page's: the slotted block in its petrol gradient, then the name", () => {
+    for (const page of [doorPage(""), signInPage("/"), homePage()]) {
       const brand = between(page, '<p class="brand">', "</p>");
-      expect(brand).toInclude('<svg viewBox="0 0 32 32" overflow="visible" aria-hidden="true">');
-      expect(brand).toInclude('transform="translate(1.6 1.6)" fill="#12211f"');
-      expect(brand).toInclude('fill="#0b6e79" stroke="#12211f" stroke-width="1.5"');
-      expect(brand).not.toInclude("gradient");
-      expect(brand).toInclude('<span><span class="site">site</span>solide</span>');
+      expect(brand).toInclude('<svg viewBox="0 0 32 32" aria-hidden="true">');
+      expect(brand).toInclude('<stop offset="0" stop-color="#14899A" /><stop offset="1" stop-color="#0A5560" />');
+      expect(brand).toInclude('fill="url(#mark)"');
+      // Ledger draws no hard offset shadow and no outline around the mark.
+      expect(brand).not.toInclude("translate(");
+      expect(brand).not.toInclude("stroke");
+      expect(brand).toInclude("<span>sitesolide</span>");
     }
   });
 
+  test("light and dark from the browser's preference, and no face fetched", () => {
+    const page = signInPage("/");
+    expect(page).toInclude("@media (prefers-color-scheme: dark)");
+    expect(page).toInclude('<meta name="color-scheme" content="light dark">');
+    expect(page).not.toInclude("@font-face");
+    expect(page).toInclude('"Hanken Grotesk", ui-sans-serif, system-ui');
+  });
+
   test("no external resource: the door page would serve itself in a loop", () => {
-    for (const page of [doorPage(""), signInPage("/")]) {
+    for (const page of [doorPage(""), signInPage("/"), homePage()]) {
       expect(page).not.toMatch(/\ssrc=/);
       expect(page).not.toMatch(/href="https?:/);
       expect(page).not.toInclude("@import");

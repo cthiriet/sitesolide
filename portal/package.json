@@ -9,7 +9,8 @@
     "build": "bun run borrow",
     "test": "bun test",
     "check": "bun run borrow && bun test && tsc --noEmit",
-    "lock-page": "bun scripts/lock-page.ts"
+    "lock-page": "bun scripts/lock-page.ts",
+    "home-page": "bun scripts/home-page.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
