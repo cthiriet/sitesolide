@@ -181,13 +181,16 @@ tabular by default, so numbers that get compared line up.
 | Label: a column head, a gauge's heading, a panel's unit, a menu's group | `mono-label` (Plex Mono 11/16 px, 500, capitals, +0.12 em, `muted-foreground`; 12 px on a phone) |
 | An address | `font-mono text-[0.8125rem]` (13 px) |
 | A name, a path, a unit in a row | `font-mono text-xs` (12 px) |
+| A dotted action, a variable in a sentence, the version | `font-mono text-[0.6875rem] max-md:text-xs` (11 px, 12 on a phone) |
 | Wordmark in the sidebar | `text-[0.9375rem] font-semibold tracking-[-0.02em]`, the zone below in `font-mono text-xs text-muted-foreground` |
 
 `text-title`, `text-figure` and `text-heading` are theme tokens, and
 `mono-label` a utility, in `styles/global.css`. Capitals and letter spacing
 only in a `mono-label` and a lock code, no single word in a different colour
 inside a title, nothing below 11 px, and nothing that carries meaning below
-12 px on a phone.
+12 px on a phone. A chart's figures and dates are text in the page beside its
+SVG, never text inside it: in the viewBox they would scale with the panel,
+from some 6 px on a phone to 16 px on a wide screen.
 
 ### 2.4 Spacing, widths, radii, surfaces
 

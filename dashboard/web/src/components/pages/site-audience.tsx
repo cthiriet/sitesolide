@@ -14,6 +14,7 @@ import {
   axisCeiling,
 } from "@/lib/audience"
 import { ago } from "@/lib/format"
+import { cn } from "@/lib/utils"
 import type { Audience, DayCount, Measure, Site } from "@/lib/types"
 
 /**
@@ -43,8 +44,12 @@ function tag(zone: string): string {
 function Curve({ days }: { days: readonly DayCount[] }) {
   const titleId = useId()
   const width = 720
-  const height = 180
-  const margin = { top: 12, right: 12, bottom: 22, left: 38 }
+  const height = 160
+  // The plot fills the drawing: the labels are text beside it, not in it.
+  // Text inside the viewBox would scale with the panel's width, from some
+  // 6 px on a phone to 16 px on a wide screen; set in the page it stays at
+  // 12 px, which a phone's reader needs for anything that carries meaning.
+  const margin = { top: 6, right: 6, bottom: 1, left: 0 }
   const plot = {
     width: width - margin.left - margin.right,
     height: height - margin.top - margin.bottom,
@@ -68,83 +73,80 @@ function Curve({ days }: { days: readonly DayCount[] }) {
   // three are enough to place the window.
   const marks = [...new Set([0, Math.floor((days.length - 1) / 2), days.length - 1])]
   const step = days.length > 1 ? plot.width / (days.length - 1) : plot.width
+  const percent = (value: number, of: number) => `${((value / of) * 100).toFixed(3)}%`
 
   return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      className="h-auto w-full text-primary"
-      role="img"
-      aria-labelledby={titleId}
-    >
-      <title id={titleId}>Visits per day over the period</title>
+    <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 text-xs text-muted-foreground tabular-nums">
+      {/* The figures, each level with its rule; the widest, invisible, sizes the column. */}
+      <div aria-hidden="true" className="relative text-right">
+        <span className="invisible">{formatNumber(ceiling)}</span>
+        {graduations.map((value) => (
+          <span key={value} className="absolute right-0 -translate-y-1/2" style={{ top: percent(y(value), height) }}>
+            {formatNumber(Math.round(value))}
+          </span>
+        ))}
+      </div>
 
-      {graduations.map((value) => (
-        <g key={value} className="text-border">
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-auto w-full overflow-visible text-primary" role="img" aria-labelledby={titleId}>
+        <title id={titleId}>Visits per day over the period</title>
+
+        {graduations.map((value) => (
           <line
+            key={value}
             x1={margin.left}
             y1={y(value)}
             x2={margin.left + plot.width}
             y2={y(value)}
+            className="text-border"
             stroke="currentColor"
             strokeWidth="1"
+            vectorEffect="non-scaling-stroke"
           />
-          <text
-            x={margin.left - 8}
-            y={y(value)}
-            dy="0.32em"
-            textAnchor="end"
-            fontSize="11"
-            className="fill-muted-foreground"
-          >
-            {formatNumber(Math.round(value))}
-          </text>
-        </g>
-      ))}
+        ))}
 
-      {marks.map((index) => {
-        const day = days[index]
-        if (day === undefined) return null
-        return (
-          <text
+        <polygon points={area} fill="currentColor" opacity="0.1" />
+        <polyline
+          points={points.join(" ")}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+          vectorEffect="non-scaling-stroke"
+        />
+        <circle cx={x(days.length - 1)} cy={y(days[days.length - 1]?.visits ?? 0)} r="4" fill="currentColor" />
+
+        {/* One invisible band per day, carrying the browser's tooltip: that is
+            all a hover needs when the page has no charting script, and it works
+            too where hovering does not exist. */}
+        {days.map((day, index) => (
+          <rect
             key={day.day}
-            x={x(index)}
-            y={height - 5}
-            textAnchor={index === 0 ? "start" : index === days.length - 1 ? "end" : "middle"}
-            fontSize="11"
-            className="fill-muted-foreground"
+            x={Math.max(margin.left, x(index) - step / 2)}
+            y={margin.top}
+            width={step}
+            height={plot.height}
+            fill="transparent"
           >
-            {shortDay(day.day)}
-          </text>
-        )
-      })}
+            <title>{`${shortDay(day.day)}: ${formatNumber(day.visits)} visits, ${formatNumber(day.views)} views`}</title>
+          </rect>
+        ))}
+      </svg>
 
-      <polygon points={area} fill="currentColor" opacity="0.1" />
-      <polyline
-        points={points.join(" ")}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-      <circle cx={x(days.length - 1)} cy={y(days[days.length - 1]?.visits ?? 0)} r="4" fill="currentColor" />
-
-      {/* One invisible band per day, carrying the browser's tooltip: that is
-          all a hover needs when the page has no charting script, and it works
-          too where hovering does not exist. */}
-      {days.map((day, index) => (
-        <rect
-          key={day.day}
-          x={Math.max(margin.left, x(index) - step / 2)}
-          y={margin.top}
-          width={step}
-          height={plot.height}
-          fill="transparent"
-        >
-          <title>{`${shortDay(day.day)}: ${formatNumber(day.visits)} visits, ${formatNumber(day.views)} views`}</title>
-        </rect>
-      ))}
-    </svg>
+      {/* The dates, under the plot's first, middle and last day. */}
+      <div aria-hidden="true" className="relative col-start-2 mt-1.5 h-4">
+        {marks.map((index) => {
+          const day = days[index]
+          if (day === undefined) return null
+          const anchor = index === 0 ? "" : index === days.length - 1 ? "-translate-x-full" : "-translate-x-1/2"
+          return (
+            <span key={day.day} className={cn("absolute top-0 whitespace-nowrap", anchor)} style={{ left: percent(x(index), width) }}>
+              {shortDay(day.day)}
+            </span>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 

@@ -102,7 +102,7 @@ function PersonRow({
         <Roles person={person} now={now} />
         {person.admin && (
           <span className="text-xs text-muted-foreground">
-            Every site, as admin: set on the server in <code className="font-mono text-[0.6875rem]">OIDC_ADMIN_EMAILS</code>.
+            Every site, as admin: set on the server in <code className="font-mono text-[0.6875rem] max-md:text-xs">OIDC_ADMIN_EMAILS</code>.
           </span>
         )}
       </div>

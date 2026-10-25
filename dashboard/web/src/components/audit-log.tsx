@@ -194,7 +194,7 @@ function Summary({ row }: { row: AuditRow }) {
         <span className="wrap-anywhere">{words.summary}</span>
       )}
       <span className="text-xs text-muted-foreground wrap-anywhere">
-        <code className="font-mono text-[0.6875rem]">{row.action}</code>
+        <code className="font-mono text-[0.6875rem] max-md:text-xs">{row.action}</code>
         {words.note !== null && ` · ${words.note}`}
       </span>
     </span>

@@ -527,7 +527,7 @@ function MobileMenu() {
           Sign out
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <p className="truncate px-1.5 py-1 font-mono text-[0.6875rem] text-muted-foreground" title={`sitesolide ${VERSION}`}>
+        <p className="truncate px-1.5 py-1 font-mono text-[0.6875rem] text-muted-foreground max-md:text-xs" title={`sitesolide ${VERSION}`}>
           {VERSION}
         </p>
       </DropdownMenuContent>
