@@ -241,7 +241,8 @@ export function restoreOutcome(restore: RestoreView, slug: string): RestoreOutco
     case "ok":
       return { tone: "ok", title: `Restored ${slug}`, detail: restore.message }
     case "rejects":
-      return { tone: "error", title: "Restore refused, nothing changed", detail: sentence }
+      // Refused, nothing changed: a refusal reads in attention, as Activity says this one and every other.
+      return { tone: "attention", title: "Restore refused, nothing changed", detail: sentence }
     case "failure":
       return { tone: "error", title: "Restore failed", detail: sentence }
     case "unknown":

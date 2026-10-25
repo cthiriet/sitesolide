@@ -152,7 +152,7 @@ describe("the restore", () => {
   test("its outcome in words, refusals saying nothing changed", () => {
     expect(restoreOutcome(restore(), "cms")).toMatchObject({ tone: "ok", title: "Restored cms" })
     expect(restoreOutcome(restore({ state: "rejects", message: "no restore request" }), "cms")).toEqual({
-      tone: "error",
+      tone: "attention",
       title: "Restore refused, nothing changed",
       detail: "No restore request",
     })

@@ -703,7 +703,8 @@ function Content({ slug, backups, onRestore }: { slug: string; backups: ReturnTy
       )}
 
       {recentFailure && restore !== null && (
-        <Banner tone="error">
+        // A failure in red, a result the server could not read in attention: the outcome's own tone, as the Details and Activity say it.
+        <Banner tone={restore.state === "failure" ? "error" : "attention"}>
           <span className="font-medium">{restoreOutcome(restore, slug).title}.</span> {restore.message}
         </Banner>
       )}
