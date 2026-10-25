@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type SyntheticEvent } from "react"
-import { Globe, UsersRound, X } from "lucide-react"
+import { Building2, FolderMinus, FolderPlus, RectangleEllipsis, SearchX, User, UserX, UsersRound, type LucideIcon } from "lucide-react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -11,137 +11,183 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
-import { Who } from "@/components/access-word"
+import { Label } from "@/components/ui/label"
+import { CHIP, Who } from "@/components/access-word"
 import { useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
+import { DataTable, RowButton, RowMenu, type Column } from "@/components/data-table"
+import { DetailSheet, SheetFacts, SheetRecent, SheetSection, useSheet, type Fact } from "@/components/detail-sheet"
+import { FilterBar, useListState, type Facet } from "@/components/filter-bar"
+import { LegendEntry } from "@/components/legend"
 import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
-import { Banner, EmptyState, ErrorState, PageBody, PageHeader, Panel, PanelSkeleton } from "@/components/page"
-import { LockGlyph } from "@/components/unlock"
+import { Banner, Count, EmptyState, ErrorState, INPUT_DIALOG, InlineEmpty, PageBody, PageHeader, Panel, PanelSkeleton } from "@/components/page"
+import { WriteButton, WriteMenuItem } from "@/components/unlock"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { readPeople, readTokens, removeAccess, removePerson, setCreate } from "@/lib/api"
-import { ACCESS_UNREACHABLE, refusalText } from "@/lib/access"
+import { ACCESS_UNREACHABLE, passwordExpiry, refusalText } from "@/lib/access"
+import { FILTER_BAR_FROM, narrowList, type ListSpec } from "@/lib/list-state"
 import { siteUrl } from "@/lib/pages"
-import { createFieldError, createRefusal, domainGroups, expiredAccesses, mayRemove, projectRoles, removalSentence, revokedTokensLine } from "@/lib/people"
+import {
+  ENTRY_KINDS,
+  ENTRY_WORDS,
+  accessExpiry,
+  createFieldError,
+  createRefusal,
+  entryMatches,
+  entryProjects,
+  expiredAccesses,
+  mayRemove,
+  peopleEntries,
+  removalSentence,
+  revokedTokensLine,
+  type EntryKind,
+  type EntryProject,
+  type PeopleEntry,
+} from "@/lib/people"
 import { refusalOf } from "@/lib/secrets"
+import { fitChips, isLive } from "@/lib/tokens"
 import { TONE_TEXT } from "@/lib/tones"
-import type { PeoplePageResponse, PersonView } from "@/lib/types"
+import type { PeoplePageResponse, PersonView, TokenView } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /**
- * People: everyone with access to a project, across the machine, and what
- * each can do; the owner's alone. Roles are given in each project's Access
- * section, where the people are; here the owner gives the right to create
- * projects, and takes someone off every project at once.
+ * People: everyone with access to a project, and every domain, across the
+ * machine, in one list; the owner's alone. Roles are given in each project's
+ * Access section, where the people are; here the owner lets someone create
+ * projects, and takes someone off every project at once, from a row's menu
+ * or its sheet.
  *
  * Giving the create right waits for the unlock, as giving a role does;
  * taking it away, taking someone off, or clearing the password accesses that
  * ended, never waits.
  */
 
-/** By email, ignoring case: a name carried over from before the registry may start with a capital. */
-function sortedPeople(people: readonly PersonView[]): PersonView[] {
-  return [...people].sort((a, b) => a.who.localeCompare(b.who, "en", { sensitivity: "base" }))
-}
-
 type Loaded = { state: "loading" } | { state: "failed"; message: string } | { state: "ready"; page: PeoplePageResponse }
 
-/**
- * A person's row: who and their roles, the create right, the removal. In a
- * wide panel, three columns under a header, the right's label said once
- * there; narrower, the right goes under the roles with its label.
- */
-const ROW = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 px-4 @2xl:grid-cols-[minmax(0,1fr)_10rem_2.5rem]"
+/** The list's address: a search and the Type facet, from ten rows. */
+const SPEC: ListSpec = { facets: { type: ENTRY_KINDS } }
+
+/** What a row is, as an icon: User a company account, RectangleEllipsis password access, Building2 a domain. */
+const KIND_ICON: Readonly<Record<EntryKind, LucideIcon>> = { account: User, password: RectangleEllipsis, domain: Building2 }
+
+function KindMark({ kind }: { kind: EntryKind }) {
+  const Icon = KIND_ICON[kind]
+  return (
+    <span role="img" aria-label={ENTRY_WORDS[kind].label} title={`${ENTRY_WORDS[kind].label}. ${ENTRY_WORDS[kind].description}`} className="inline-flex shrink-0 text-muted-foreground">
+      <Icon aria-hidden="true" className="size-4" />
+    </span>
+  )
+}
 
 const LINK = cn(TEXT_LINK, "text-foreground")
 
-/** A person's roles, each project linked to its Access section. */
-function Roles({ person, now }: { person: PersonView; now: number }) {
-  const roles = projectRoles(person, now)
-  if (roles.length === 0) return <span className="text-xs text-muted-foreground">No project yet.</span>
+/** "calendar Admin", the role muted; a password access's project alone, its icon saying the rest. */
+function ProjectWord({ project, kind }: { project: EntryProject; kind: EntryKind }) {
   return (
-    <ul className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-      {roles.map(({ slug, label, password }) => (
-        <li key={slug}>
-          <InternalLink href={siteUrl(slug, "access")} className={LINK}>
-            {slug}
-          </InternalLink>
-          : {label}
-          {password !== null && <span className={password.tone === "attention" ? TONE_TEXT.attention : undefined}>, {password.text}</span>}
-        </li>
-      ))}
-    </ul>
+    <span className="inline-flex min-w-0 items-baseline gap-1">
+      <InternalLink href={siteUrl(project.slug, "access")} className={cn(LINK, "truncate")}>
+        {project.slug}
+      </InternalLink>
+      {kind !== "password" && <span className="shrink-0 text-muted-foreground">{project.role}</span>}
+    </span>
   )
 }
 
-function PersonRow({
-  person,
-  page,
-  now,
-  busy,
-  onCreate,
-  onRemove,
-}: {
-  person: PersonView
-  page: PeoplePageResponse
-  now: number
-  busy: boolean
-  onCreate: (create: boolean) => void
-  onRemove: () => void
-}) {
-  const id = useId()
-  const refusal = createRefusal(person.who, page.signIn)
-  const offered = person.create || refusal === null
+const projectsText = (projects: readonly EntryProject[]) => projects.map(({ slug, role }) => `${slug}: ${role}`).join(", ")
+
+function ProjectsCell({ entry, now }: { entry: PeopleEntry; now: number }) {
+  const projects = entryProjects(entry, now)
+  if (projects.length === 0) {
+    const admin = entry.kind !== "domain" && entry.person.admin
+    return <span className="text-muted-foreground">{admin ? "Every site, as admin" : "No project yet"}</span>
+  }
+  // A role takes its room beside the slug, about ten characters.
+  const { shown, more } = fitChips(projects, (one) => one.slug.length + (entry.kind === "password" ? 0 : one.role.length + 1), { budget: 32 })
   return (
-    <li className={cn(ROW, "py-3")}>
-      <div className="grid min-w-0 gap-1">
-        <span className="font-medium wrap-break-word">
-          <Who value={person.who} />
-        </span>
-        <Roles person={person} now={now} />
-        {person.admin && (
-          <span className="text-xs text-muted-foreground">
-            Every site, as admin: set on the server in <code className="font-mono text-[0.6875rem] max-md:text-xs">OIDC_ADMIN_EMAILS</code>.
+    <span title={projectsText(projects)} className="flex min-w-0 items-center gap-1.5">
+      <span className="flex min-w-0 items-baseline truncate">
+        {shown.map((project, index) => (
+          <span key={project.slug} className="inline-flex min-w-0 items-baseline">
+            {index > 0 && <span className="text-muted-foreground">,&nbsp;</span>}
+            <ProjectWord project={project} kind={entry.kind} />
           </span>
-        )}
-      </div>
-      <div className="flex items-center @max-2xl:col-start-1 @max-2xl:row-start-2 @2xl:justify-center">
-        {offered ? (
-          <label
-            htmlFor={id}
-            className="-mx-2 flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm select-none hover:bg-muted has-disabled:cursor-default has-focus-visible:ring-2 has-focus-visible:ring-ring"
-          >
-            <input id={id} type="checkbox" checked={person.create} disabled={busy} onChange={(event) => onCreate(event.target.checked)} className="size-4 accent-primary" />
-            <span className="@2xl:sr-only">May create projects</span>
-          </label>
-        ) : (
-          <span className="sr-only">{refusal}</span>
-        )}
-      </div>
-      <div className="flex items-center justify-end @max-2xl:col-start-2 @max-2xl:row-start-1">
-        {mayRemove(person) ? (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            disabled={busy}
-            title={`Remove ${person.who} from every project`}
-            aria-label={`Remove ${person.who} from every project`}
-            onClick={onRemove}
-            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive max-md:size-10 dark:hover:bg-destructive/15"
-          >
-            <X />
-          </Button>
-        ) : (
-          <span aria-hidden="true" className="size-8 max-md:size-10" />
-        )}
-      </div>
-    </li>
+        ))}
+      </span>
+      {more > 0 && (
+        <span className="shrink-0">
+          <Count className="h-[1.125rem] px-1 text-[0.6875rem]">+{more}</Count>
+          <span className="sr-only">: {projectsText(projects)}</span>
+        </span>
+      )}
+    </span>
   )
 }
 
-/** The create right for someone who has no access anywhere yet. */
-function CreateForm({ page, onGiven }: { page: PeoplePageResponse; onGiven: (email: string) => void }) {
+const EXPIRY_TONE = { plain: "text-foreground", muted: "text-muted-foreground", attention: "font-medium text-attention-text" } as const
+
+function columns(now: number, open: (entry: PeopleEntry) => void): Column<PeopleEntry>[] {
+  return [
+    {
+      key: "who",
+      head: "Person",
+      width: "minmax(220px,1.3fr)",
+      slot: "primary",
+      cell: (entry) => (
+        <>
+          <KindMark kind={entry.kind} />
+          <RowButton onClick={() => open(entry)}>
+            <Who value={entry.who} />
+          </RowButton>
+          {entry.kind !== "domain" && entry.person.create && (
+            <span title="May create projects, with a token of their own" className={cn(CHIP, "font-normal text-secondary-foreground")}>
+              Creates projects
+            </span>
+          )}
+        </>
+      ),
+    },
+    {
+      key: "projects",
+      head: "Projects",
+      width: "minmax(220px,1.6fr)",
+      slot: "meta",
+      cell: (entry) => <ProjectsCell entry={entry} now={now} />,
+    },
+    {
+      key: "expires",
+      head: "Expires",
+      width: "104px",
+      align: "end",
+      slot: "state",
+      cell: (entry) => {
+        const expiry = entry.kind === "domain" ? null : accessExpiry(entry.person, now)
+        if (expiry === null) return null
+        return (
+          <span title="When their password access ends" className={cn("whitespace-nowrap", EXPIRY_TONE[expiry.tone])}>
+            {expiry.text}
+          </span>
+        )
+      },
+    },
+  ]
+}
+
+/** Let someone create projects who has no access anywhere yet: a company email, *Allow*. Unlocked by then. */
+function AllowDialog({
+  open,
+  page,
+  onClose,
+  onGiven,
+}: {
+  open: boolean
+  page: PeoplePageResponse
+  onClose: () => void
+  onGiven: (email: string) => void
+}) {
   const actions = useSecretsActions()
   const [text, setText] = useState("")
   const [error, setError] = useState("")
@@ -149,7 +195,7 @@ function CreateForm({ page, onGiven }: { page: PeoplePageResponse; onGiven: (ema
   const field = useRef<HTMLInputElement>(null)
   const id = useId()
 
-  async function give(event: SyntheticEvent) {
+  async function allow(event: SyntheticEvent) {
     event.preventDefault()
     if (inProgress) return
     const fault = createFieldError(text, page.signIn)
@@ -157,58 +203,218 @@ function CreateForm({ page, onGiven }: { page: PeoplePageResponse; onGiven: (ema
       setError(fault)
       return field.current?.focus()
     }
-    // Giving the right waits for the unlock, asked for now, then goes on.
-    actions.require(() => void allow(), { purpose: "let someone create projects" })
-  }
-
-  async function allow() {
     setInProgress(true)
     try {
       const email = text.trim().toLowerCase()
       const { status, body } = await setCreate(email, true)
-      if (status === 200) {
-        setText("")
-        setError("")
-        return onGiven(email)
-      }
+      if (status === 200) return onGiven(email)
       const message = actions.refusal(refusalOf(status, body))
-      if (message !== null) setError(message)
+      if (message === null) return onClose()
+      setError(message)
     } finally {
       setInProgress(false)
     }
   }
 
   return (
-    <form noValidate onSubmit={(event) => void give(event)} className="grid gap-2 border-t p-4">
-      <label htmlFor={id} className="text-sm leading-none font-medium">
-        Let someone create projects
-      </label>
-      <div className="flex flex-wrap gap-2">
-        <Input
-          ref={field}
-          id={id}
-          value={text}
-          inputMode="email"
-          autoComplete="off"
-          spellCheck={false}
-          placeholder="name@company.com"
-          onChange={(event) => {
-            setText(event.target.value)
-            setError("")
-          }}
-          aria-invalid={error !== "" || undefined}
-          aria-describedby={`${id}-help`}
-          className="h-10 min-w-0 flex-1 basis-60 sm:h-9"
-        />
-        <Button type="submit" variant="outline" disabled={inProgress} className="h-10 sm:h-9">
-          {inProgress ? "Saving…" : "Allow"}
-          {!inProgress && !actions.state.open && <LockGlyph />}
-        </Button>
-      </div>
-      <p id={`${id}-help`} role={error !== "" ? "alert" : undefined} className={cn("text-xs text-pretty", error !== "" ? "text-destructive" : "text-muted-foreground")}>
-        {error !== "" ? error : "With a token of their own, they deploy new projects, restricted, and become Admin of each."}
-      </p>
-    </form>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && !inProgress) onClose()
+      }}
+    >
+      <DialogContent className={cn("gap-5 sm:max-w-md", INPUT_DIALOG)} initialFocus={() => field.current}>
+        <form noValidate onSubmit={(event) => void allow(event)} className="grid gap-5">
+          <DialogHeader>
+            <DialogTitle>Let someone create projects</DialogTitle>
+            <DialogDescription className="text-pretty">
+              With a token of their own, they deploy new projects, restricted, and become Admin of each.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2">
+            <Label htmlFor={id}>Company email</Label>
+            <Input
+              ref={field}
+              id={id}
+              value={text}
+              inputMode="email"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="name@company.com"
+              onChange={(event) => {
+                setText(event.target.value)
+                setError("")
+              }}
+              aria-invalid={error !== "" || undefined}
+              aria-describedby={error !== "" ? `${id}-error` : undefined}
+              className="h-10 sm:h-9"
+            />
+            {error !== "" && (
+              <p id={`${id}-error`} role="alert" className="text-xs text-pretty text-destructive">
+                {error}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" className="max-sm:h-10" />} disabled={inProgress}>
+              Cancel
+            </DialogClose>
+            <Button type="submit" disabled={inProgress} className="max-sm:h-10">
+              {inProgress ? "Saving…" : "Allow"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** Someone's or a domain's sheet: what they are, each project and role, the create right, their tokens, their last actions. */
+function PersonSheet({
+  entry,
+  page,
+  now,
+  tokens,
+  busy,
+  onClose,
+  onCreate,
+  onRemove,
+}: {
+  entry: PeopleEntry | null
+  page: PeoplePageResponse
+  now: number
+  /** The tokens read for the sheet, null until they are. */
+  tokens: readonly TokenView[] | null
+  busy: boolean
+  onClose: () => void
+  onCreate: (person: PersonView, create: boolean) => void
+  onRemove: (person: PersonView) => void
+}) {
+  const person = entry === null || entry.kind === "domain" ? null : entry.person
+  const refusal = person === null ? null : createRefusal(person.who, page.signIn)
+  const description =
+    entry === null
+      ? undefined
+      : entry.kind === "domain"
+        ? `Everyone with a company account at ${entry.who.replace(/^@/, "")}.`
+        : entry.kind === "account" && !page.signIn.configured
+          ? "Can't sign in until company sign-in is set up."
+          : ENTRY_WORDS[entry.kind].description
+  const actions =
+    person === null ? undefined : person.create ? (
+      <Button variant="outline" size="sm" disabled={busy} onClick={() => onCreate(person, false)} className="max-md:h-10">
+        <FolderMinus />
+        Stop creating projects
+      </Button>
+    ) : refusal === null ? (
+      <WriteButton variant="outline" size="sm" disabled={busy} onPress={() => onCreate(person, true)} purpose="let someone create projects" className="max-md:h-10">
+        <FolderPlus />
+        Let create projects
+      </WriteButton>
+    ) : undefined
+
+  return (
+    <DetailSheet open={entry !== null} onClose={onClose} title={entry?.who ?? ""} description={description} actions={actions}>
+      {entry !== null && (
+        <>
+          <SheetFacts
+            facts={[
+              {
+                label: "Type",
+                value: (
+                  <LegendEntry icon={KIND_ICON[entry.kind]}>{ENTRY_WORDS[entry.kind].label}</LegendEntry>
+                ),
+              },
+              ...(person === null
+                ? []
+                : ([
+                    { label: "Creates projects", value: person.create ? "Yes, with a token of their own" : (refusal ?? "No") },
+                    ...(person.admin
+                      ? [
+                          {
+                            label: "Every site",
+                            value: (
+                              <>
+                                As admin: set on the server in <code className="font-mono text-xs">OIDC_ADMIN_EMAILS</code>.
+                              </>
+                            ),
+                          },
+                        ]
+                      : []),
+                  ] satisfies Fact[])),
+            ]}
+          />
+
+          <SheetSection title="Projects">
+            <EntryProjects entry={entry} now={now} />
+          </SheetSection>
+
+          {person !== null && entry.kind === "account" && <PersonTokens who={person.who} tokens={tokens} now={now} />}
+
+          {entry.kind === "account" && <SheetRecent filter={{ actor: entry.who }} />}
+
+          {person !== null && mayRemove(person) && (
+            <div className="grid justify-items-start gap-2 border-t pt-4">
+              <Button variant="outline" disabled={busy} onClick={() => onRemove(person)} className="text-destructive hover:text-destructive max-md:h-10">
+                <UserX />
+                Remove from every project
+              </Button>
+            </div>
+          )}
+        </>
+      )}
+    </DetailSheet>
+  )
+}
+
+/** Each project of a row, linked to its Access, with the role, a password access's end. */
+function EntryProjects({ entry, now }: { entry: PeopleEntry; now: number }) {
+  const projects = entryProjects(entry, now)
+  if (projects.length === 0) {
+    return <p className="text-muted-foreground">{entry.kind !== "domain" && entry.person.admin ? "Every site, as admin." : "No project yet."}</p>
+  }
+  return (
+    <ul className="divide-y divide-divider">
+      {projects.map((project) => {
+        const password = entry.kind === "domain" ? null : (entry.person.passwords.find((one) => one.slug === project.slug) ?? null)
+        const expiry = password === null ? null : passwordExpiry(password, now)
+        return (
+          <li key={project.slug} className="flex min-h-9 items-center justify-between gap-3 py-1.5">
+            <InternalLink href={siteUrl(project.slug, "access")} className={cn(TEXT_LINK, "min-w-0 truncate")}>
+              {project.slug}
+            </InternalLink>
+            <span className="shrink-0 text-xs text-secondary-foreground">
+              {project.role}
+              {expiry !== null && <span className={expiry.tone === "attention" ? TONE_TEXT.attention : "text-muted-foreground"}>, {expiry.text}</span>}
+            </span>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+/** The tokens someone holds, which go with them when they are removed. */
+function PersonTokens({ who, tokens, now }: { who: string; tokens: readonly TokenView[] | null; now: number }) {
+  if (tokens === null) return null
+  const theirs = tokens.filter((token) => token.member === who && isLive(token, now))
+  return (
+    <SheetSection title="Tokens">
+      {theirs.length === 0 ? (
+        <p className="text-muted-foreground">None.</p>
+      ) : (
+        <ul className="divide-y divide-divider">
+          {theirs.map((token) => (
+            <li key={token.id} className="flex min-h-9 items-center justify-between gap-3 py-1.5">
+              <InternalLink href={`/tokens/?token=${encodeURIComponent(token.id)}`} className={cn(TEXT_LINK, "min-w-0 truncate")}>
+                {token.label}
+              </InternalLink>
+              <span className="shrink-0 text-xs text-muted-foreground">{token.by === "owner" ? "Made by you" : "Made by them"}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </SheetSection>
   )
 }
 
@@ -217,9 +423,13 @@ export function PeoplePage() {
   const actions = useSecretsActions()
   const announce = useAnnounce()
   const serverNow = now + offset
+  const sheet = useSheet("person")
+  const list = useListState(SPEC)
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" })
+  const [tokens, setTokens] = useState<TokenView[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [rowError, setRowError] = useState("")
+  const [allowing, setAllowing] = useState<{ open: boolean; opening: number }>({ open: false, opening: 0 })
   const [removing, setRemoving] = useState<{ person: PersonView | null; tokens: string | null; open: boolean; inProgress: boolean; error: string }>({
     person: null,
     tokens: null,
@@ -241,11 +451,28 @@ export function PeoplePage() {
     [sessionExpired],
   )
 
+  /** The tokens, for a person's sheet and a removal's confirmation: which go with them. */
+  const readHeld = useCallback(async (): Promise<TokenView[] | null> => {
+    const { status, body } = await readTokens()
+    if (status === 401) {
+      sessionExpired()
+      return null
+    }
+    const read = status === 200 && body !== null && Array.isArray(body.tokens) ? body.tokens : null
+    setTokens(read)
+    return read
+  }, [sessionExpired])
+
   useEffect(() => {
     void reload()
   }, [reload])
 
-  /** Giving the right waits for the unlock, asked for when ticked; taking it away does not. */
+  // A sheet opened, by a click or by its address: its tokens, once.
+  useEffect(() => {
+    if (sheet.id !== null && tokens === null) void readHeld()
+  }, [sheet.id, tokens, readHeld])
+
+  /** Giving the right waits for the unlock, asked for when pressed; taking it away does not. */
   function changeCreate(person: PersonView, create: boolean) {
     setRowError("")
     if (create) return actions.require(() => void applyCreate(person, create), { purpose: "let someone create projects" })
@@ -269,10 +496,9 @@ export function PeoplePage() {
 
   /** The removal's confirmation, with the tokens it revokes: read first, so that the owner sees them before choosing. */
   async function askRemoval(person: PersonView) {
-    const { status, body } = await readTokens()
-    if (status === 401) return sessionExpired()
-    const tokens = status === 200 && body !== null && Array.isArray(body.tokens) ? revokedTokensLine(body.tokens, person.who, serverNow) : null
-    setRemoving({ person, tokens, open: true, inProgress: false, error: "" })
+    const held = await readHeld()
+    const line = held === null ? null : revokedTokensLine(held, person.who, serverNow)
+    setRemoving({ person, tokens: line, open: true, inProgress: false, error: "" })
   }
 
   /** Every password access that ended, taken off its project one by one: none of them opens anything any more. */
@@ -298,6 +524,8 @@ export function PeoplePage() {
     if (status === 200) {
       setRemoving((previous) => ({ ...previous, open: false, inProgress: false }))
       announce(`${person.who} no longer has access to any project.`)
+      if (sheet.id === person.who) sheet.close()
+      setTokens(null)
       return void reload()
     }
     const message = actions.refusal(refusalOf(status, body))
@@ -306,26 +534,54 @@ export function PeoplePage() {
   }
 
   const page = loaded.state === "ready" ? loaded.page : null
-  const domains = page === null ? [] : domainGroups(page.domains)
+  const entries = page === null ? [] : peopleEntries(page.people, page.domains)
   const expired = page === null ? [] : expiredAccesses(page.people, serverNow)
+  const filterable = entries.length >= FILTER_BAR_FROM
+  const { rows, counts } = narrowList(entries, filterable ? list : { query: "", facets: {}, sort: null }, {
+    search: entryMatches,
+    facets: { type: (entry) => entry.kind },
+  })
+  const facets: Facet[] = [
+    {
+      name: "type",
+      label: "Type",
+      options: ENTRY_KINDS.map((kind) => ({ value: kind, label: ENTRY_WORDS[kind].facet, icon: KIND_ICON[kind], count: counts.type?.[kind] ?? 0 })),
+    },
+  ]
+  const opened = sheet.id === null ? null : (entries.find((entry) => entry.key === sheet.id) ?? null)
+  const offersCreate = page !== null && page.available && page.signIn.configured
 
   return (
     <>
       <PageHeader
         title="People"
-        count={page?.available === true ? page.people.length : undefined}
+        count={page?.available === true ? entries.length : undefined}
         intro={
           <p>
-            Everyone with access to a project, and their role on each. Roles are given and changed in each project's Access
-            section; here you let someone create projects, or remove them from every project at once.
+            Everyone with access to a project, and every domain, with their role on each. Roles are given and changed in each
+            project's Access section; here you let someone create projects, or remove them from every project at once.
           </p>
+        }
+        actions={
+          offersCreate ? (
+            <WriteButton
+              variant="outline"
+              onPress={() => setAllowing((before) => ({ open: true, opening: before.opening + 1 }))}
+              purpose="let someone create projects"
+              resume="Let someone create projects"
+              className="max-md:h-10"
+            >
+              <FolderPlus />
+              Let someone create projects
+            </WriteButton>
+          ) : undefined
         }
         history={{ type: "access" }}
       />
       <PageBody>
-        {loaded.state === "loading" && <PanelSkeleton lines={5} />}
+        {loaded.state === "loading" && <PanelSkeleton lines={5} title={false} />}
         {loaded.state === "failed" && (
-          <Panel title="People">
+          <Panel>
             <ErrorState title="Can't read who has access" onRetry={() => void reload(true)}>
               {loaded.message}
             </ErrorState>
@@ -341,83 +597,126 @@ export function PeoplePage() {
         )}
         {rowError !== "" && <Banner tone="error">{rowError}</Banner>}
 
-        {page !== null && page.available && (
-          <Panel
-            title="People"
-            count={page.people.length}
-            full
-            actions={
-              expired.length > 0 ? (
-                <Button variant="outline" size="sm" onClick={() => setClearing({ open: true, inProgress: false, error: "" })} className="max-md:h-10">
-                  Remove expired
-                </Button>
-              ) : undefined
-            }
-          >
-            {page.people.length === 0 ? (
-              <EmptyState icon={UsersRound} title="Nobody has access to a project yet">
-                Add people from a project's Access section.
-              </EmptyState>
-            ) : (
-              <div className="@container">
-                <div aria-hidden="true" className={cn(ROW, "hidden h-10 border-b bg-cell mono-label @2xl:grid")}>
-                  <span>Person, and their role on each project</span>
-                  <span className="text-center">May create projects</span>
-                  <span />
-                </div>
-                <ul className="divide-y divide-divider" aria-label="People with access to a project">
-                {sortedPeople(page.people).map((person) => (
-                  <PersonRow
-                    key={person.who}
-                    person={person}
-                    page={page}
-                    now={serverNow}
-                    busy={busy === person.who}
-                    onCreate={(create) => changeCreate(person, create)}
-                    onRemove={() => void askRemoval(person)}
-                  />
-                ))}
-                </ul>
-              </div>
-            )}
-            {page.signIn.configured && (
-              <CreateForm
-                page={page}
-                onGiven={(email) => {
-                  announce(`${email} may create projects.`)
-                  void reload()
-                }}
-              />
-            )}
+        {page !== null && page.available && entries.length === 0 && (
+          <Panel>
+            <EmptyState icon={UsersRound} title="Nobody has access to a project yet">
+              Add people from a project's Access section.
+            </EmptyState>
           </Panel>
         )}
 
-        {page !== null && page.available && domains.length > 0 && (
-          <Panel title="Domains" count={domains.length} description="Everyone with a company account at the domain can open these sites." full>
-            <ul className="divide-y divide-divider">
-              {domains.map(({ domain, slugs }) => (
-                <li key={domain} className="flex flex-wrap items-baseline gap-x-4 gap-y-1 px-4 py-2.5">
-                  <span className="flex items-center gap-2 font-medium">
-                    <Globe aria-hidden="true" className="size-3.5 text-muted-foreground" />
-                    {domain}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    Can open{" "}
-                    {slugs.map((slug, index) => (
-                      <span key={slug}>
-                        {index > 0 && ", "}
-                        <InternalLink href={siteUrl(slug, "access")} className={LINK}>
-                          {slug}
-                        </InternalLink>
-                      </span>
-                    ))}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </Panel>
+        {page !== null && page.available && entries.length > 0 && (
+          <div className="grid gap-3">
+            {filterable && (
+              <FilterBar
+                list={list}
+                facets={facets}
+                shown={rows.length}
+                total={entries.length}
+                noun={{ one: "person", many: "people" }}
+                search={{ label: "Search people" }}
+              />
+            )}
+            <Panel full>
+              <DataTable
+                label="People"
+                caption="Everyone with access to a project, by name, then the domains"
+                rows={rows}
+                rowKey={(entry) => entry.key}
+                columns={columns(serverNow, (entry) => sheet.open(entry.key))}
+                onRowClick={(entry) => sheet.open(entry.key)}
+                selected={sheet.id}
+                menu={(entry) => {
+                  if (entry.kind === "domain") return null
+                  const person = entry.person
+                  const offered = !person.create && createRefusal(person.who, page.signIn) === null
+                  const removable = mayRemove(person)
+                  if (!person.create && !offered && !removable) return null
+                  return (
+                    <RowMenu label={`Actions for ${person.who}`}>
+                      {person.create && (
+                        <WriteMenuItem unlock={false} disabled={busy === person.who} onPress={() => changeCreate(person, false)}>
+                          <FolderMinus />
+                          Stop creating projects
+                        </WriteMenuItem>
+                      )}
+                      {offered && (
+                        <WriteMenuItem disabled={busy === person.who} onPress={() => changeCreate(person, true)} purpose="let someone create projects">
+                          <FolderPlus />
+                          Let create projects
+                        </WriteMenuItem>
+                      )}
+                      {removable && (
+                        <>
+                          {(person.create || offered) && <DropdownMenuSeparator />}
+                          <WriteMenuItem variant="destructive" unlock={false} disabled={busy === person.who} onPress={() => void askRemoval(person)}>
+                            <UserX />
+                            Remove from every project
+                          </WriteMenuItem>
+                        </>
+                      )}
+                    </RowMenu>
+                  )
+                }}
+                empty={
+                  <InlineEmpty
+                    icon={SearchX}
+                    action={
+                      <Button variant="link" className="h-auto p-0" onClick={list.clear}>
+                        Clear filters
+                      </Button>
+                    }
+                  >
+                    Nobody matches.
+                  </InlineEmpty>
+                }
+                foot={
+                  expired.length > 0 ? (
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      <span>{expired.length === 1 ? "1 password access has ended." : `${expired.length} password accesses have ended.`}</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setClearing({ open: true, inProgress: false, error: "" })}
+                        className="-ml-2 text-foreground max-md:h-9"
+                      >
+                        Remove expired
+                      </Button>
+                    </div>
+                  ) : undefined
+                }
+              />
+            </Panel>
+          </div>
         )}
       </PageBody>
+
+      {page !== null && (
+        <PersonSheet
+          entry={opened}
+          page={page}
+          now={serverNow}
+          tokens={tokens}
+          busy={opened !== null && busy === opened.who}
+          onClose={sheet.close}
+          onCreate={changeCreate}
+          onRemove={(person) => void askRemoval(person)}
+        />
+      )}
+
+      {page !== null && (
+        <AllowDialog
+          key={allowing.opening}
+          open={allowing.open}
+          page={page}
+          onClose={() => setAllowing((before) => ({ ...before, open: false }))}
+          onGiven={(email) => {
+            setAllowing((before) => ({ ...before, open: false }))
+            announce(`${email} may create projects.`)
+            void reload()
+          }}
+        />
+      )}
 
       <AlertDialog
         open={removing.open}

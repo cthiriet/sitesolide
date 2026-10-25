@@ -365,10 +365,9 @@ gutters, bottom margin, touch target size.
 |---|---|---|
 | `@container/table`, every `DataTable` | `narrowBelow`, 42 rem unless the page says 36, 48 or 56 | one line per row in columns under a sticky head, otherwise two lines and no head |
 | `@container/filters`, every `FilterBar` | `@xl/filters:` (36 rem) | the search, a button per facet, the count and the sort; otherwise the search and one *Filter* button that opens a bottom sheet |
-| `@container/body` | `@4xl/body:` (56 rem) | two columns: a site's Overview and Audience; Tokens' deployments and activity |
+| `@container/body` | `@4xl/body:` (56 rem) | two columns: a site's Overview and Audience |
 | list of sites on the home page | `@4xl:` | table, otherwise list |
-| a site's Activity panel (Secrets, Backups), the Connectors lists | `@2xl:` (42 rem) | table, otherwise list |
-| the People list | `@2xl:` | three columns under a header, *May create projects* said once there; otherwise the right under the roles, with its label |
+| a site's Activity panel (Secrets, Backups) | `@2xl:` (42 rem) | table, otherwise list |
 | the machine's Activity log, five columns | `@3xl:` (48 rem) | table, otherwise list |
 | Activity filters | `@4xl/body:` (56 rem) | five fields on one row, otherwise two columns |
 | machine plate | `@2xl:` | four columns, otherwise four rows |
@@ -593,6 +592,8 @@ with one meaning everywhere and its words in its tooltip (`lib/legend.ts`):
 | `ShieldAlert` | `sitesolide.json` and the server disagree on how it opens | destructive |
 | `CircleX`, `TriangleAlert` | an error, a warning, in the gutter | their tone |
 | `History` | Activity, narrowed | muted |
+| `User`, `RectangleEllipsis`, `Building2` | People's rows: someone with a company account, someone with password access, everyone at a domain | muted |
+| `Pause`, 12 px | a project or a permission a person's token holds but may not use now, their role being below it | muted |
 | `Lock`, 12 px, after a label | a write that asks for the unlock first | the label's |
 
 The facet menus show the same icons beside the same words: they are the
@@ -691,7 +692,7 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | Object | Word | Do not write |
 |---|---|---|
 | Machine pages | Sites (the home page), Activity, People, Tokens, Connectors | Dashboard, Home, Overview, Members, Team |
-| Connectors | Connector, Add connector, Change, Remove connector, Grant, Withdraw, Granted, Asked, not granted, No such connector, Not asked for, Site removed, Write-only | Integration, Secret, Token, Revoke access |
+| Connectors | Connector, Add connector, Change, Remove connector, Requests, Grant, Withdraw, Granted, Granted, asked for, Asked, not granted, No such connector, Not asked for, Site removed, Base address, Header, Changed, Write-only (in the dialog and the sheet, never in a row) | Integration, Secret, Token, Revoke access, Grants |
 | Site sections | Overview, Audience, Secrets, Access, Backups; the breadcrumb *All sites > cms*; *Switch site* | Settings, Details, Sharing, Guests, Members |
 | The machine | Server | VM, host |
 | Discrepancy | Refusal, issues; Error, Warning | Alert, Critical |
@@ -701,8 +702,8 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | Workers and scheduled services | Background; Runs hourly, or the schedule as written; Waiting, Running, Last run failed, Schedule stopped, No timer, Not loaded; Last run 3h ago, Failed 3h ago: exit code 1, Started 2m ago, Last started 5h ago, No run yet, Next run in 42m; Main unit; Runs in the background, serves no page | Idle, Cron, Job, Daemon, Down for a scheduled service between its runs |
 | General access | General access, Public, Restricted, Anyone with the code, Current; Make public, Restrict; in a disagreement, On the server, In sitesolide.json, Keep Public, Apply Restricted; Preview code, Replace the code, Remove the code; Open to anyone, guarded by the app alone (the exempt paths); See changes in Activity | Door, Gate, Portal on, Portal off, Turn on portal, Behind the portal, Private, Password protected, Enable, Disable |
 | People with access | People with access, Add people, Add, Remove; Can open, Viewer, Developer, Admin; company account, password access, Password access lasts, No expiry, expires in 5d, Expired, Added by; Can't sign in until company sign-in is set up; Copy message; What each role can do, a disclosure from Can open to Admin, (your role), (you); Also open it | Sharing, Share, Guest, Member, Team, Invite, Permissions, ACL, work account, Super admin, Project admin; an Owner row or rung |
-| People | People, May create projects, Let someone create projects, Allow, Remove from every project, Remove expired, Domains; Every site, as admin: set on the server in OIDC_ADMIN_EMAILS | Members, Invite |
-| Tokens | Tokens, New token, Create token, Name, Whose token, Mine, For someone in People, Projects it may deploy, New projects, Permissions, Manage secrets, Needed by cms, Expires; Made by you, Made by you for alice@example.com, Made by alice@example.com, Made by the owner for you; Can create projects, Can deploy public sites, Can declare a domain, Can use outbound network, Can manage secrets, Can create projects (paused: no longer allowed), Can manage secrets (paused: no project to deploy now); calendar (Admin), cms (paused: Viewer now); Revoke, Revoke token, Active, Expired, Revoked, Copy message, Recent deployments, Token activity, All activity | Team, API key, Yours, Their own, Public sites allowed, Restricted sites only, Write secrets, Secrets access |
+| People | People, Person, Projects, Expires, Type; Company account, Password access, Domain, as facets Company accounts, Password access, Domains; Creates projects (a row's tag), May create projects, Let someone create projects, Let create projects, Stop creating projects, Allow, Company email, Remove from every project, Remove expired, 1 password access has ended.; No project yet, Every site, as admin: set on the server in OIDC_ADMIN_EMAILS | Members, Invite |
+| Tokens | Tokens, New token, Create token, Name, Owner, Projects, Permissions, Last used, Expires; You, Never, No expiry, in 4d, Expired, Revoked, Paused; the chips Public sites, Secrets, Domain, Network, New projects, and their sentences Can deploy public sites, Can manage secrets, Can declare a domain, Can use outbound network, Can create projects; Paused: no longer allowed, Paused: Viewer now; Made by, Created by it; Whose token, Mine, For someone in People, Projects it may deploy, All projects (13), Filter projects, Permissions: None, Needed by cms, Deploys cms and photos, expires in 90 days, no extra permission.; Show 1 revoked or expired, View activity, Revoke token, Revoke "alice-ci"?, Copy message | Team, API key, Yours, Their own, Active, Public sites allowed, Restricted sites only, Write secrets, Secrets access, Recent deployments, Token activity |
 | The lock | Unlocked, 9 min, and its x, Lock changes now; in its dialog, Unlock changes, Unlock to create a token (the write that waits), Unlock, Sign in again; under a field, Giving Developer asks to unlock changes first.; after a person's re-sign-in, Unlocked. Press Add to finish.; in Activity, Unlocked changes, Locked changes | Unlock the secrets, Locked, Unlock to add, Unlock to create, Unlock to allow, an Unlock changes button |
 | Kind | Static site, App, Background, Scheduled, No manifest; as facets, Static, Apps, Background, Scheduled; Runs in the background, serves no page | Worker, Service, Job, Cron, Daemon |
 | Lists | Search sites, Filter, Clear filters, Sort, Issues first, Name, Last deployed, 3 of 14, All, Show all, Show 1 revoked or expired; an access facet's Public, Restricted, Anyone with the code, Mismatch; Access mismatch beside a name | Reset, Filter by, Results, No results |
@@ -797,81 +798,104 @@ that finds nothing goes on by itself a few times before handing the choice
 back. Under the panel, which sources only hand over their latest entries.
 
 **People.** The owner's alone. Its intro, behind the title's (i): roles are
-given and changed in each project's Access section, here someone is let create projects or removed
-from every project at once. A banner when company sign-in is not set up,
-since everyone added then gets password access. The **People** panel,
-everyone with access to a project, by email: their role on each project in
-words, each project linked to its Access section (`blog: Developer, shop:
-Password access, expires in 5d`, an expiry within a day in attention), and
-the admin emails marked "Every site, as admin: set on the server in
-OIDC_ADMIN_EMAILS."; a *May create projects* checkbox, a column of its own in
-a wide panel, offered only to someone with a company account and the reason
-otherwise; *Remove*, which takes them off every project in a destructive
+given and changed in each project's Access section, here someone is let
+create projects or removed from every project at once. In the header, while
+company sign-in is set up, *Let someone create projects*: it asks for the
+unlock, then a small dialog takes a company email and *Allow*; *History*
+opens Activity on access changes. A banner when company sign-in is not set
+up, since everyone added then gets password access.
+
+Then one list, the header counting its rows: everyone with access to a
+project, by email or name, then every domain; from ten rows a search and a
+*Type* facet, *Company accounts*, *Password access*, *Domains*, with the
+rows' icons. A row, 44 px: its kind as an icon, `User`, `RectangleEllipsis`
+or `Building2`, and who, *Creates projects* as a quiet tag on whoever may;
+its projects, each linked to its Access section with the role muted beside
+it, "calendar Admin, cms Developer +1", a password access's project alone, a
+domain's *Can open*, "Every site, as admin" for an admin email with no
+project; *Expires* for password access alone, the soonest end still open,
+"in 14h" in attention under a day, "in 6d", "No expiry", *Expired* muted.
+The row menu: *Let create projects*, offered only to someone with a company
+account, which asks for the unlock, or *Stop creating projects*, which does
+not; then, under a separator, *Remove from every project*, in a destructive
 confirmation: they lose every role and password access at their next
 request, may no longer create projects, are signed out, and the tokens it
 revokes are named, "Also revokes 2 tokens: Alice's laptop (made by you),
-alice-ci (made by them)." *Remove expired*, in the panel's header while a
-password access has ended, lists them in a confirmation and takes each off
-its project. Under the list, *Let someone create projects*: a company email,
-*Allow*, which asks for the unlock first. Giving the right waits for the
-unlock, taking it away does not. Then **Domains**: each domain with
-access, and the sites it opens, linked to their Access.
+alice-ci (made by them)." A click opens the sheet (`?person=`): what they
+are, the create right or why it is not offered, "Every site, as admin: set
+on the server in OIDC_ADMIN_EMAILS.", every project with its role and a
+password access's end, linked to its Access, the tokens they hold, their
+last ten actions, and *Remove from every project* at its foot; a domain's
+sheet, its projects alone. While a password access has ended, one line under
+the rows says how many, with *Remove expired*, which lists them in a
+confirmation and takes each off its project.
 
-**Tokens.** Its intro, behind the title's (i), says what a token does, the
-owner's or a person's. The **Tokens** panel, its count
-the number of rows: each token's label, who made it and for whom (*Made by
-you*, *Made by you for alice@example.com*, *Made by alice@example.com*; a
-person reads *Made by you* or *Made by the owner for you*), its state
-(*Active*, *Expires in 5d* in attention, *Expired*, *Revoked*), what it may
-do beyond deploying, only what is on (*Can create projects*, *Can deploy
-public sites*, *Can declare a domain*, *Can use outbound network*, *Can
-manage secrets*), a person's greyed and said paused while they no longer
-hold it, "Can create projects (paused: no longer allowed)", "Can use
-outbound network (paused: not Admin of cms now)", "Can manage secrets
-(paused: no project to deploy now)", the
-projects it reaches, a person's with their role there today, "calendar
-(Admin)", "cms (paused: Viewer now)", "photos (paused: no role now)", the
-owner's own with those it created, "notes (created)", when it was created,
-last used and until when, and *Revoke*, which needs no unlock. *New token*,
-which asks for the unlock first. Then **Recent deployments** and
-**Token activity**, with an *All activity* link, side by side in a wide body.
-Token activity holds the tokens' creations and deployments, and what tokens
-did through the steward, secret changes, restarts and access changes, newest
-first: those in Activity's words, "Set API_KEY", "Restarted", "Tried to
-list the secrets" for a listing refused, never "Tried to read", which says a
-value, in attention or error when refused or failed, over a line naming the
-token by its label,
-a person's followed by their email for the owner, then the project and how
-it ended: "Release agent · calendar", "alice-ci (alice@example.com) · cms ·
-Refused: no secrets permission".
-The owner sees every token; a person sees their own alone, and mints them
-under their own unlock, never beyond their roles; a person who is a Viewer
-everywhere reads "Tokens are for Developers and Admins. You're a Viewer on
-every project." The dialog takes a *Name*, and for the owner *Whose token*:
-a menu drawn by the page, not the browser's, with *Mine*, "Yours, for your
-own agents", then *For someone in People*, each person by their email over a
+**Tokens.** One table, OpenRouter's keys: the tokens, and nothing of equal
+weight beside them. Its intro, behind the title's (i), says what a token
+does, the owner's or a person's; *New token*, the header's primary action,
+asks for the unlock first; *History* opens what tokens did,
+`/activity/?actor=token:`. The header counts the tokens that deploy; the
+revoked and the expired fold under the rows, *Show 1 revoked or expired*.
+
+A row, 44 px: *Name*; *Owner*, "You" or the person's email, for the owner
+alone; *Projects*, "cms, photos" then "+2", a project where the person's
+role is below Developer muted after the `Pause` glyph; *Permissions*, what
+it may do beyond deploying, at most two chips then "+N", *Public sites*,
+*Secrets*, *Domain*, *Network*, *New projects*, a person's paused one dashed
+and muted with the glyph, why in its tooltip, "Can create projects (paused:
+no longer allowed)", "Can use outbound network (paused: not Admin of cms
+now)", "Can manage secrets (paused: no project to deploy now)", and nothing
+for a token that only deploys; *Last used*, "5h ago" or "Never"; *Expires*,
+"Jan 21", "in 4d" in attention within a week, "No expiry", *Expired*,
+*Revoked*. No *Active*: the normal state says nothing; a token every project
+of which is paused says *Paused* beside its name. Below 56 rem of the table,
+two lines: the name and Expires, then the owner and the projects. The row
+menu: *View activity*, then *Revoke token*, which needs no unlock.
+
+A click opens the sheet (`?token=`): whose it is, who made it when that is
+not its owner, created, last used and its expiry, each with its date; each
+project with the role today, "Developer", "Paused: Viewer now", "Created by
+it" for the owner's own; each permission with its sentence, a paused one
+with why; its last ten actions in Activity's words, each over the site it
+touched, and *All activity*; *Revoke token* at its foot. A person sees their
+own tokens alone, with no Owner column, and mints them under their own
+unlock, never beyond their roles; a person who is a Viewer everywhere reads
+"Tokens are for Developers and Admins. You're a Viewer on every project."
+
+The dialog fits a 900 px screen: its fields scroll between the title and
+the buttons. A *Name*, and for the owner *Whose token* beside it: a menu
+drawn by the page, not the browser's, with *Mine*, "Yours, for your own
+agents", then *For someone in People*, each person by their email over a
 line saying where they deploy and whether they may create projects, "Admin
 on calendar, Developer on cms", "May create projects". A Viewer everywhere is
 not offered, since the steward mints them no token, and with nobody to offer
-the menu is left out. Then *Projects it may deploy*, a list to
-tick, never slugs to type: the owner's own offered every project on the
-server but the platform's, a person's only those where they are a Developer
-or an Admin, each with that role; and below them *New projects*, the create
-right, for a person only while they hold it. Then *Permissions*, all off at
-first, one line each on when it is needed: *Deploy public sites*, *Use
-outbound network*, *Declare a domain*, the three of a person's only when
-they are an Admin of every project chosen, the note saying so, "Public
-sites, outbound network and a domain only when you are an Admin of every
-project chosen."; and *Manage secrets*, "Lists each project's secret names,
-and sets, generates and removes its variables and files on the server. Never
-reads a value back.", never greyed for a person, a Developer changing a project's
-secrets already, and sent only when ticked, so that a steward from before
-it still mints the rest; ticked against one, the dialog says "The server's
-steward predates this permission: run sitesolide upgrade." One a project
-chosen cannot be deployed
-without is ticked for you and says which, "Needed by bookshop and wheels":
-a public project for the owner's own, exempted paths, a declared domain.
-Then *Expires*. The token is then shown once, with *Copy message*.
+the menu is left out. Then *Projects it may deploy*, a list to tick, never
+slugs to type, six rows high before it scrolls, *All projects (13)* at its
+head to tick them all and, from eight projects, *Filter projects*: the
+owner's own offered every project on the server but the platform's, a
+person's only those where they are a Developer or an Admin, each with that
+role; and below them *New projects*, the create right, for a person only
+while they hold it. Then *Permissions*, a disclosure closed while all are
+off, its summary saying what is on, "Permissions None"; inside, one line each
+on when it is needed: *Deploy public sites*, *Use outbound network*,
+*Declare a domain*, the three of a person's only when they are an Admin of
+every project chosen, the note saying so, "Public sites, outbound network
+and a domain only when you are an Admin of every project chosen."; and
+*Manage secrets*, "Lists each project's secret names, and sets, generates
+and removes its variables and files on the server. Never reads a value
+back.", never greyed for a person, a Developer changing a project's secrets
+already, and sent only when ticked, so that a steward from before it still
+mints the rest; ticked against one, the dialog says "The server's steward
+predates this permission: run sitesolide upgrade." One a project chosen
+cannot be deployed without is ticked for you and says which, "Needed by
+bookshop and wheels": a public project for the owner's own, exempted paths,
+a declared domain; the disclosure then opens by itself, the reason in its
+summary. Then *Expires*, a segmented control. Above the buttons, one line
+says what the token will be, "Deploys cms and photos, expires in 90 days, no
+extra permission." The token is then shown once, with *Copy message*.
+Revoking asks "Revoke "alice-ci"?", "Its next request is refused; a
+deployment already running finishes.", and, for a token that created
+projects, that they stay and only a new token granted them deploys them.
 
 **The sign-in page** names the server under *Sign in*: the zone it serves,
 in mono, `example.com`, from `/api/session`, so that whoever runs a test
@@ -894,15 +918,27 @@ need more."; `no-role`, "This account has no access to any project
 here. Ask the owner, or an Admin of the project, to add you."; a domain not
 allowed, expired, not available.
 
-**Connectors.** Its intro behind the title's (i). Then three panels. **Connectors**: each one's name, base address, header, how many
-projects have it and when it changed, *Write-only* since its value is never
-shown; *Add connector*, *Change* and *Remove*, each asking for the unlock first. **Grants**: every
-pair of a site and a connector that matters, what needs a decision first (a
-grant whose site is gone in error, a request not granted in attention), with
-*Grant* or *Withdraw*. **Egress activity**: the proxy's refusals, connector
-calls and changes, read from the proxy itself. The add and change dialog types
-the value in a password field and leaves it empty on a change to keep it; a
-removal retypes the name.
+**Connectors.** Its intro behind the title's (i): what a connector is,
+and that a project gets one when its sitesolide.json asks for it under
+connectors and the owner grants it here, either alone lending nothing. *Add
+connector*, the header's primary action, asks for the unlock first;
+*History* opens Activity on the egress proxy's audit. First **Requests**,
+only while something waits, its count its rows': a grant left to a site
+that is gone, in error, with *Withdraw*; a project that asks for a connector
+not granted, *Asked, not granted* in attention, with *Grant*; one that asks
+for a connector the server lacks, *No such connector* in attention, with
+*Add connector*, its name filled in. Then the connectors, one 44 px row
+each: the name in mono, the base address without its scheme, muted and cut,
+the projects it is granted to, "cms, roster", one that does not ask for it
+muted, and when it changed; the row menu, *Change* and *Remove connector*,
+each asking for the unlock first. A click opens the sheet (`?connector=`):
+*Write-only*, said there and in the dialog rather than on every row; the
+whole base address, the header, when it changed; every project it concerns,
+its word and its one action, *Withdraw* or *Grant*; its last ten lines from
+the egress proxy itself, its calls, changes, grants and the refusals to reach
+it, and *All activity*; *Remove connector* at its foot. The add and change
+dialog types the value in a password field and leaves it empty on a change
+to keep it; a removal retypes the name.
 
 **A site's Overview.** Under the title, the state in one sentence, the
 description and the main address, "Runs in the background, serves no page"
@@ -1171,6 +1207,29 @@ change it.
 22. **Filters as one segmented control mixing dimensions**, All, Issues,
     Apps, Static, Restricted and Platform side by side: one facet per
     dimension, its menu showing the rows' own icons and counts.
+
+23. **A *May create projects* checkbox on every person's row**: a right
+    given by a click while scrolling, in a column empty for nearly everyone,
+    and a form for it under the list. The row's menu gives and takes it, a
+    quiet tag says who holds it, and the form is the header's *Let someone
+    create projects*.
+24. **Domains in a panel of their own** under People: the same question,
+    who gets in, answered twice. One list, its *Type* facet to narrow it.
+25. **A Grants panel of every pair**, its count the grants' while its rows
+    were the pairs, 3 over 6: a granted pair needs no decision. What waits
+    is *Requests*, which counts its rows; a granted pair lives in its
+    connector's row and sheet.
+26. **Created, used and until in a token's row, its made-by line, Write-only
+    on every connector**: the row keeps what a decision needs, Last used and
+    Expires; the rest, and what is true of every connector, is in the sheet
+    and the dialog.
+27. **The New token dialog at its full height**: 1002 px of content in an
+    868 px dialog, every project in two columns and four permissions always
+    open. Six rows of projects with a filter, the permissions closed until
+    one is on or needed, and a summary line in view of *Create token*.
+28. **Who added a person, and when, in People's sheet**: the People route
+    carries each person's roles, not who gave them. It is on the person's
+    row in each project's Access section.
 
 ## 9. Seeing the page, and looking at it
 

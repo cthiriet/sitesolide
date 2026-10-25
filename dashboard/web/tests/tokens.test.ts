@@ -6,30 +6,34 @@ import {
   neededLine,
   holderLine,
   neededOptions,
-  auditLine,
-  deploymentLabel,
-  deploymentTone,
+  expiryCell,
   expiryFrom,
   firstTokenField,
+  fitChips,
+  foldLabel,
+  lastUsed,
   messageText,
   isLive,
   loginCommand,
+  ownerLabel,
+  permissionChips,
+  projectChips,
   reachedProjects,
-  scopeSummary,
-  scopeLines,
+  shortDate,
+  splitTokens,
+  tokenPermissions,
   liveReach,
   madeByLine,
   requestScope,
   STEWARD_PREDATES_SECRETS,
-  tokenActivity,
-  tokenActor,
+  tokenMatches,
   tokenRefusal,
   tokenStatus,
+  tokenSummary,
   validateTokenForm,
   tokenHolders,
   tokenProjects,
 } from "../src/lib/tokens"
-import type { AuditEntry, AuditRow } from "../src/lib/types"
 import { site } from "./factory"
 
 const NOW = 1_800_000_000_000
@@ -47,17 +51,12 @@ describe("a token's state", () => {
     expect(isLive({ revokedAt: null, expiresAt: NOW }, NOW)).toBe(false)
   })
 
-  test("the scope in words, only what is on", () => {
-    expect(scopeSummary(SCOPE)).toEqual([])
-    expect(scopeSummary({ ...SCOPE, public: true, create: true, outbound: true, domain: true, secrets: true })).toEqual([
-      "Can create projects",
-      "Can deploy public sites",
-      "Can declare a domain",
-      "Can use outbound network",
-      "Can manage secrets",
-    ])
+  test("its permissions, only what is on, what opens a site to anyone first", () => {
+    const keys = (scope: typeof SCOPE & { secrets?: boolean }) => tokenPermissions({ owned: [], member: null, scope }, null).map((one) => one.key)
+    expect(keys(SCOPE)).toEqual([])
+    expect(keys({ ...SCOPE, public: true, create: true, outbound: true, domain: true, secrets: true })).toEqual(["public", "secrets", "domain", "outbound", "create"])
     // A token minted before the permission carries no `secrets`: it manages none.
-    expect(scopeSummary({ ...SCOPE, secrets: false })).toEqual([])
+    expect(keys({ ...SCOPE, secrets: false })).toEqual([])
   })
 
   test("the projects it reaches, created first, each once", () => {
@@ -118,29 +117,6 @@ describe("what the holder receives", () => {
       `Sign in: sitesolide login --url ${origin}`,
       `Token (paste it at the prompt): ${secret}`,
     ])
-  })
-})
-
-describe("deployments and the audit", () => {
-  test("a deployment's tone and word", () => {
-    expect(deploymentTone("succeeded")).toBe("ok")
-    expect(deploymentTone("failed")).toBe("error")
-    expect(deploymentTone("running")).toBe("attention")
-    expect(deploymentTone("expired")).toBe("neutral")
-    expect(deploymentLabel("awaiting-bundle")).toBe("Uploading")
-  })
-
-  test("an audit line says who did what, with no value", () => {
-    expect(auditLine({ actor: "owner", action: "token.create", target: null, detail: { email: "ada@test-zone.invalid", label: "Ada" } })).toBe(
-      "You created a token for ada@test-zone.invalid (Ada)",
-    )
-    expect(auditLine({ actor: "token:aaaaaaaaaaaa", action: "deploy.success", target: "shop", detail: { email: "ada@test-zone.invalid" } })).toBe(
-      "ada@test-zone.invalid deployed shop",
-    )
-    expect(auditLine({ actor: "token:aaaaaaaaaaaa", action: "deploy.failure", target: "shop", detail: { error: "install-failed" } })).toBe(
-      "token:aaaaaaaaaaaa failed to deploy shop (install-failed)",
-    )
-    expect(auditLine({ actor: "system", action: "something.else", target: "x", detail: null })).toBe("system: something.else x")
   })
 })
 
@@ -244,15 +220,15 @@ describe("whose a token is", () => {
 
   test("a person's token deploys where their role is Developer or Admin today, and is paused elsewhere", () => {
     const token = { owned: ["notes"], scope: { ...SCOPE, slugs: ["calendar", "cms", "photos"] }, member: "alice@acme.test" }
-    expect(liveReach(token, { calendar: "admin", cms: "viewer", notes: "admin" }).map((one) => one.text)).toEqual([
-      "notes (Admin)",
-      "calendar (Admin)",
-      "cms (paused: Viewer now)",
-      "photos (paused: no role now)",
+    expect(liveReach(token, { calendar: "admin", cms: "viewer", notes: "admin" })).toEqual([
+      { slug: "notes", detail: "Admin", paused: false },
+      { slug: "calendar", detail: "Admin", paused: false },
+      { slug: "cms", detail: "Viewer now", paused: true },
+      { slug: "photos", detail: "no role now", paused: true },
     ])
-    expect(liveReach(token, { cms: "visitor" }).find((one) => one.slug === "cms")).toEqual({ slug: "cms", text: "cms (paused: Can open now)", paused: true })
+    expect(liveReach(token, { cms: "visitor" }).find((one) => one.slug === "cms")).toEqual({ slug: "cms", detail: "Can open now", paused: true })
     // The owner's own token: which projects it created.
-    expect(liveReach({ ...token, member: null }, null).map((one) => one.text)).toEqual(["notes (created)", "calendar", "cms", "photos"])
+    expect(liveReach({ ...token, member: null }, null).map((one) => one.detail)).toEqual(["created", null, null, null])
   })
 })
 
@@ -260,96 +236,117 @@ describe("a person's token, what it may still do", () => {
   const token = { owned: [] as string[], member: "alice@example.com", scope: { slugs: ["cms", "calendar"], create: true, outbound: true, domain: false, public: false } }
 
   test("each option on, paused and said why while the person no longer holds it", () => {
-    expect(scopeLines(token, { roles: { cms: "admin", calendar: "admin" }, create: true })).toEqual([
-      { text: "Can create projects", paused: false },
-      { text: "Can use outbound network", paused: false },
+    expect(tokenPermissions(token, { roles: { cms: "admin", calendar: "admin" }, create: true })).toEqual([
+      { key: "outbound", pause: null },
+      { key: "create", pause: null },
     ])
-    expect(scopeLines(token, { roles: { cms: "developer", calendar: "admin" }, create: false })).toEqual([
-      { text: "Can create projects (paused: no longer allowed)", paused: true },
-      { text: "Can use outbound network (paused: not Admin of cms now)", paused: true },
+    expect(tokenPermissions(token, { roles: { cms: "developer", calendar: "admin" }, create: false })).toEqual([
+      { key: "outbound", pause: "not Admin of cms now" },
+      { key: "create", pause: "no longer allowed" },
     ])
     // A project where it no longer deploys does not hold an option back: it is paused there already.
-    expect(scopeLines(token, { roles: { cms: "viewer", calendar: "admin" }, create: true })[1]).toEqual({ text: "Can use outbound network", paused: false })
-    expect(scopeLines({ ...token, scope: { ...token.scope, create: false } }, { roles: {}, create: false })).toEqual([{ text: "Can use outbound network (paused: no project to deploy now)", paused: true }])
+    expect(tokenPermissions(token, { roles: { cms: "viewer", calendar: "admin" }, create: true })[0]).toEqual({ key: "outbound", pause: null })
+    expect(tokenPermissions({ ...token, scope: { ...token.scope, create: false } }, { roles: {}, create: false })).toEqual([{ key: "outbound", pause: "no project to deploy now" }])
   })
 
   test("the owner's own, or rights not known: as it was made", () => {
-    expect(scopeLines({ ...token, member: null }, null)).toEqual([
-      { text: "Can create projects", paused: false },
-      { text: "Can use outbound network", paused: false },
+    expect(tokenPermissions({ ...token, member: null }, null)).toEqual([
+      { key: "outbound", pause: null },
+      { key: "create", pause: null },
     ])
-    expect(scopeLines({ ...token, member: null, scope: { ...token.scope, secrets: true } }, null)).toContainEqual({ text: "Can manage secrets", paused: false })
+    expect(tokenPermissions({ ...token, member: null, scope: { ...token.scope, secrets: true } }, null)).toContainEqual({ key: "secrets", pause: null })
   })
 
   test("managing secrets, paused only while it deploys no project and may create none", () => {
     const secrets = { ...token, scope: { ...token.scope, secrets: true } }
     // A Developer manages a project's secrets already: not Admin of cms holds back the options, never this one.
-    expect(scopeLines(secrets, { roles: { cms: "developer", calendar: "admin" }, create: true })).toContainEqual({ text: "Can manage secrets", paused: false })
+    expect(tokenPermissions(secrets, { roles: { cms: "developer", calendar: "admin" }, create: true })).toContainEqual({ key: "secrets", pause: null })
     // A Viewer on both now, it still may create projects: the steward keeps it on.
-    expect(scopeLines(secrets, { roles: { cms: "viewer", calendar: "viewer" }, create: true })).toContainEqual({ text: "Can manage secrets", paused: false })
-    expect(scopeLines(secrets, { roles: { cms: "viewer" }, create: false })).toContainEqual({ text: "Can manage secrets (paused: no project to deploy now)", paused: true })
+    expect(tokenPermissions(secrets, { roles: { cms: "viewer", calendar: "viewer" }, create: true })).toContainEqual({ key: "secrets", pause: null })
+    expect(tokenPermissions(secrets, { roles: { cms: "viewer" }, create: false })).toContainEqual({ key: "secrets", pause: "no project to deploy now" })
   })
 })
 
-describe("Token activity", () => {
-  const AT = "2026-10-04T12:00:00.000Z"
-  const ms = Date.parse(AT)
-  const tokens = [
-    { id: "aaaaaaaaaaaa", label: "Release agent", member: null },
-    { id: "bbbbbbbbbbbb", label: "alice-ci", member: "alice@example.com" },
-  ]
-  const entry = (id: number, at: number, partial: Partial<AuditEntry>): AuditEntry => ({ id, at: new Date(at).toISOString(), actor: "owner", action: "token.create", target: null, detail: null, ...partial })
-  const work = (at: number, partial: Partial<AuditRow>): AuditRow => ({
-    id: `steward:${at}.0`,
-    source: "steward",
-    at: new Date(at).toISOString(),
-    actor: "token:aaaaaaaaaaaa",
-    action: "secrets.set",
-    target: "cms",
-    site: null,
-    detail: { result: "ok", file: "store", variable: "API_KEY" },
-    ...partial,
+describe("the table, one line per token", () => {
+  const token = (partial: Partial<{ revokedAt: number | null; expiresAt: number | null; lastUsedAt: number | null }>) => ({ revokedAt: null, expiresAt: null, lastUsedAt: null, ...partial })
+
+  test("revoked and expired fold under the list, the rest stays in its order", () => {
+    const tokens = [
+      { id: "a", ...token({ expiresAt: NOW + DAY }) },
+      { id: "b", ...token({ revokedAt: NOW - DAY }) },
+      { id: "c", ...token({}) },
+      { id: "d", ...token({ expiresAt: NOW - 1 }) },
+    ]
+    const { live, ended } = splitTokens(tokens, NOW)
+    expect(live.map((one) => one.id)).toEqual(["a", "c"])
+    expect(ended.map((one) => one.id)).toEqual(["b", "d"])
+    expect(foldLabel(1, false)).toBe("Show 1 revoked or expired")
+    expect(foldLabel(2, true)).toBe("Hide 2 revoked or expired")
   })
 
-  test("a token is named by its label; a person's with their email for the owner; one not listed as Activity names it", () => {
-    expect(tokenActor(work(ms, {}), tokens, "owner")).toBe("Release agent")
-    const hers = work(ms, { actor: "token:bbbbbbbbbbbb", detail: { result: "ok", variable: "API_KEY", member: "alice@example.com" } })
-    expect(tokenActor(hers, tokens, "owner")).toBe("alice-ci (alice@example.com)")
-    expect(tokenActor(hers, tokens, "person")).toBe("alice-ci")
-    expect(tokenActor({ ...hers, actor: "token:cccccccccccc" }, tokens, "owner")).toBe("alice@example.com (token)")
-    expect(tokenActor(work(ms, { actor: "token:cccccccccccc" }), tokens, "owner")).toBe("A token")
+  test("Expires: a date while far, within a week in attention, otherwise a muted word", () => {
+    const zone = "UTC"
+    const jan21 = Date.UTC(2027, 0, 21, 9, 0)
+    expect(expiryCell(token({ expiresAt: jan21 }), Date.UTC(2027, 0, 1), zone)).toMatchObject({ text: "Jan 21", tone: "plain" })
+    expect(expiryCell(token({ expiresAt: jan21 }), Date.UTC(2026, 11, 1), zone)).toMatchObject({ text: "Jan 21, 2027", tone: "plain" })
+    expect(expiryCell(token({ expiresAt: NOW + 4 * DAY }), NOW)).toMatchObject({ text: "in 4d", tone: "attention" })
+    expect(expiryCell(token({}), NOW)).toEqual({ text: "No expiry", tone: "muted", title: null })
+    expect(expiryCell(token({ expiresAt: NOW - DAY }), NOW)).toMatchObject({ text: "Expired", tone: "muted" })
+    expect(expiryCell(token({ revokedAt: NOW - DAY, expiresAt: NOW + 30 * DAY }), NOW)).toMatchObject({ text: "Revoked", tone: "muted" })
+    expect(shortDate(jan21, jan21, zone)).toBe("Jan 21")
   })
 
-  test("the dashboard's lines and the steward's, merged newest first, the steward's in Activity's words", () => {
-    const lines = tokenActivity(
-      [
-        entry(2, ms - 1000, { actor: "token:aaaaaaaaaaaa", action: "deploy.success", target: "cms", detail: { email: "owner" } }),
-        entry(1, ms - 5000, { detail: { email: "alice@example.com", label: "alice-ci" } }),
-      ],
-      [
-        work(ms, { action: "service.restart", detail: { result: "ok", note: "active, active/running, 0 restarts" } }),
-        work(ms - 2000, {}),
-        work(ms - 3000, { actor: "token:bbbbbbbbbbbb", target: "shop", detail: { result: "rejects", file: "store", note: "no secrets permission", member: "alice@example.com" } }),
-      ],
-      tokens,
-      "owner",
-    )
-    expect(lines.map(({ text, tone, meta }) => ({ text, tone, meta }))).toEqual([
-      { text: "Restarted", tone: "neutral", meta: "Release agent · cms · Active, active/running, 0 restarts" },
-      { text: "owner deployed cms", tone: "neutral", meta: null },
-      { text: "Set API_KEY", tone: "neutral", meta: "Release agent · cms" },
-      { text: "Tried to set", tone: "attention", meta: "alice-ci (alice@example.com) · shop · Refused: no secrets permission" },
-      { text: "You created a token for alice@example.com (alice-ci)", tone: "neutral", meta: null },
+  test("Last used, and whose a token is", () => {
+    expect(lastUsed(token({ lastUsedAt: NOW - 5 * 3_600_000 }), NOW)).toBe("5h ago")
+    expect(lastUsed(token({}), NOW)).toBe("Never")
+    expect(ownerLabel({ member: null, email: "owner" })).toBe("You")
+    expect(ownerLabel({ member: "alice@acme.test", email: "alice@acme.test" })).toBe("alice@acme.test")
+    // From before every token belonged to someone: the address it was made for.
+    expect(ownerLabel({ member: null, email: "bob@elsewhere.test" })).toBe("bob@elsewhere.test")
+  })
+
+  test("at most two chips, the second only when it fits beside a +N, the first always", () => {
+    const width = (text: string) => text.length
+    expect(fitChips(["Public sites", "Secrets", "Network"], width, { budget: 24 })).toEqual({ shown: ["Public sites", "Secrets"], more: 1 })
+    expect(fitChips(["New projects", "Public sites"], width, { budget: 24 })).toEqual({ shown: ["New projects"], more: 1 })
+    expect(fitChips(["Public sites", "Network"], width, { budget: 24 })).toEqual({ shown: ["Public sites", "Network"], more: 0 })
+    expect(fitChips(["a-very-long-project-name-indeed"], width, { budget: 24 })).toEqual({ shown: ["a-very-long-project-name-indeed"], more: 0 })
+    expect(fitChips([], width, { budget: 24 })).toEqual({ shown: [], more: 0 })
+  })
+
+  test("the live first, the paused after, in the Permissions and the Projects cells", () => {
+    const chips = permissionChips([
+      { key: "create", pause: "no longer allowed" },
+      { key: "outbound", pause: null },
     ])
-    expect(new Set(lines.map((line) => line.key)).size).toBe(lines.length)
+    expect(chips.shown.map((one) => one.key)).toEqual(["outbound", "create"])
+    const projects = projectChips([
+      { slug: "photos", detail: "Viewer now", paused: true },
+      { slug: "cms", detail: "Developer", paused: false },
+      { slug: "calendar", detail: "Admin", paused: false },
+    ])
+    expect(projects).toEqual({ shown: [{ slug: "cms", detail: "Developer", paused: false }, { slug: "calendar", detail: "Admin", paused: false }], more: 1 })
   })
 
-  test("the latest lines alone, and nothing when neither source has any", () => {
-    const many = Array.from({ length: 40 }, (_, index) => work(ms - index, { id: `steward:${ms - index}.0` }))
-    const older = Array.from({ length: 40 }, (_, index) => entry(index + 1, ms - 100 - index, {}))
-    const lines = tokenActivity(older, many, tokens, "owner")
-    expect(lines).toHaveLength(50)
-    expect(lines.slice(0, 40).every((line) => line.text === "Set API_KEY")).toBe(true)
-    expect(tokenActivity([], [], tokens, "person")).toEqual([])
+  test("the search finds a token by its name, its owner or a project, accents and case aside", () => {
+    const one = { label: "Release agent", member: "élise@acme.test", email: "élise@acme.test", owned: ["notes"], scope: { ...SCOPE, slugs: ["calendar"] } }
+    expect(tokenMatches(one, "release")).toBe(true)
+    expect(tokenMatches(one, "ELISE")).toBe(true)
+    expect(tokenMatches(one, "notes calendar")).toBe(true)
+    expect(tokenMatches(one, "cms")).toBe(false)
+  })
+})
+
+describe("the dialog's summary", () => {
+  test("what the token will be, in one line", () => {
+    expect(tokenSummary({ slugs: ["cms", "photos"], create: false, permissions: [], expiryDays: 90 })).toBe("Deploys cms and photos, expires in 90 days, no extra permission.")
+    expect(tokenSummary({ slugs: ["a", "b", "c"], create: true, permissions: ["secrets", "public"], expiryDays: 365 })).toBe(
+      "Deploys 3 projects and new projects, expires in 1 year, with public sites and secrets.",
+    )
+    expect(tokenSummary({ slugs: [], create: true, permissions: ["outbound"], expiryDays: null })).toBe("Deploys the new projects it creates, never expires, with outbound network.")
+    expect(tokenSummary({ slugs: [], create: false, permissions: [], expiryDays: 30 })).toBe("Deploys nothing yet, expires in 30 days, no extra permission.")
+    expect(tokenSummary({ slugs: ["cms"], create: false, permissions: ["domain", "outbound", "public"], expiryDays: 30 })).toBe(
+      "Deploys cms, expires in 30 days, with public sites, a domain and outbound network.",
+    )
   })
 })
