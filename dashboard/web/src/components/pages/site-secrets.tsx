@@ -3,7 +3,6 @@ import { Button } from "@/components/ui/button"
 import { useData } from "@/components/data"
 import { Banner, ErrorState, EmptyState, Panel, PanelSkeleton, useRetry } from "@/components/page"
 import { FilesPanel } from "@/components/secrets"
-import { SecretsLog } from "@/components/secrets-log"
 import { Code, StoreSection } from "@/components/secrets-store"
 import { SitePage, useSite } from "@/components/site"
 import { UNREACHABLE } from "@/lib/secrets"
@@ -17,18 +16,25 @@ import { isPerson, roleOn } from "@/lib/identity"
  */
 
 /**
- * The header's intro: when a change applies, and, for a Developer or an
- * Admin, that no value comes back to them. The unlock is asked for when a
- * write is pressed.
+ * The header's intro: when a change applies, who reads a value back, and
+ * where its history is. The unlock is asked for when a write is pressed.
  */
 function Intro({ slug }: { slug: string }) {
   const { identity } = useData()
   const role = roleOn(identity, slug)
-  const hidden = role === "developer" || role === "admin" ? " Only the owner of the server reads a value back." : ""
+  const reads =
+    role === "developer" || role === "admin"
+      ? "Only the owner of the server reads a value back."
+      : isPerson(identity)
+        ? ""
+        : "Only you reveal a value, for 30 seconds, and every reveal is journaled."
   return (
-    <p>
-      {slug} reads these when it starts: a change applies after a restart.{hidden}
-    </p>
+    <>
+      <p>
+        {slug} reads these when it starts: a change applies after a restart. {reads}
+      </p>
+      <p>The changes, reveals and restarts are in History.</p>
+    </>
   )
 }
 
@@ -122,17 +128,17 @@ function Content({ slug }: { slug: string }) {
         <FilesPanel key={project.slug} project={project} />
       )}
 
-      {projects !== null && <SecretsLog slug={slug} />}
     </>
   )
 }
 
 /**
- * A site's secrets, under `/site/secrets/?s=<slug>`: its service and what is
- * wrong, then its store (variables, what is missing, files, the build's
- * names, the public values) or, for the dashboard and the portal, each of
- * their own files and its actions; then its activity. No value at all, but
- * the one the owner reveals.
+ * A site's secrets, under `/site/secrets/?s=<slug>`: what is wrong with its
+ * service, then its store (one panel of variables, what is not set first,
+ * the files when there are any, the build's names and the public values
+ * folded) or, for the dashboard and the portal, each of their own files and
+ * its variables. No activity panel: the header's History opens Activity on
+ * the site's secrets. No value at all, but the one the owner reveals.
  */
 export function SecretsSection({ slug }: { slug: string }) {
   const { project } = useSite(slug)

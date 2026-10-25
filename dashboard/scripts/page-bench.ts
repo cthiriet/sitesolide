@@ -286,7 +286,8 @@ const FOLDERS: FakeFolder[] = [
       start: "bun run server.ts",
       port: 3041,
       memory: "512M",
-      secrets: { runtime: ["GITHUB_TOKEN", "NPM_TOKEN"], files: ["registry.json"] },
+      secrets: { runtime: ["GITHUB_TOKEN", "NPM_TOKEN"], files: ["registry.json"], build: ["SENTRY_AUTH_TOKEN"] },
+      env: { NODE_ENV: "production", REGISTRY_URL: "https://registry.npmjs.org" },
     },
     unit: { memory: 143 * MB, peak: 301 * MB, limit: 512 * MB, sinceMs: 9 * DAY, cpu: 3.4 },
     bytes: 186 * MB,
@@ -1320,7 +1321,11 @@ async function memberProjects(req: Request): Promise<Response> {
   const body = await readBody(req);
   const principal = await memberRoutes.authorize(body.session, null);
   if (principal instanceof Response) return principal;
-  const projects = PROJECTS.filter((p) => !PLATFORM.includes(p.slug) && may(principal.roles[p.slug] ?? null, "secrets.list")).map(projectView);
+  const projects = PROJECTS.filter((p) => !PLATFORM.includes(p.slug) && may(principal.roles[p.slug] ?? null, "secrets.list")).map((p) => {
+    const view = projectView(p);
+    // A person's store says what the real steward lets them do: no reveal, the restore for an Admin.
+    return view.store === null ? view : { ...view, store: { ...view.store, may: storeMay({ kind: "person", restore: principal.roles[p.slug] === "admin" }) } };
+  });
   return Response.json({ projects, until: await memberRoutes.unlockedUntil(body.session) });
 }
 

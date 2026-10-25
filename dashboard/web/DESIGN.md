@@ -367,7 +367,6 @@ gutters, bottom margin, touch target size.
 | `@container/filters`, every `FilterBar` | `@xl/filters:` (36 rem) | the search, a button per facet, the count and the sort; otherwise the search and one *Filter* button that opens a bottom sheet |
 | `@container/body` | `@4xl/body:` (56 rem) | two columns: a site's Overview |
 | Audience's rankings | `@2xl/body:`, `@5xl/body:` (42, 64 rem) | two panels a row, then three; one below; the chart's four figures a row from `@2xl/body:`, two by two below |
-| a site's Activity panel (Secrets, Backups) | `@2xl:` (42 rem) | table, otherwise list |
 | Activity's tables, one per day | `narrowBelow` 48 rem | five columns, otherwise two lines |
 | `@container/strip`, the machine strip | `@lg/strip:` (32 rem) | each gauge's caption beside its label, otherwise the label and the figure alone |
 | `@container/file` | `@xl/file:` (36 rem) | Name, Value and action columns |
@@ -598,6 +597,7 @@ with one meaning everywhere and its words in its tooltip (`lib/legend.ts`):
 | `User`, `RectangleEllipsis`, `Building2` | People's rows: someone with a company account, someone with password access, everyone at a domain | muted |
 | `Pause`, 12 px | a project or a permission a person's token holds but may not use now, their role being below it | muted |
 | `Lock`, 12 px, after a label | a write that asks for the unlock first | the label's |
+| `Server`, `Cloud` | where a snapshot lives: on this server, in the offsite copy | muted |
 
 The facet menus show the same icons beside the same words: they are the
 legend. A sheet's facts use `LegendEntry`, the icon and its word.
@@ -713,9 +713,9 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | The lock | Unlocked, 9 min, and its x, Lock changes now; in its dialog, Unlock changes, Unlock to create a token (the write that waits), Unlock, Sign in again; under a field, Giving Developer asks to unlock changes first.; after a person's re-sign-in, Unlocked. Press Add to finish.; in Activity, Unlocked changes, Locked changes | Unlock the secrets, Locked, Unlock to add, Unlock to create, Unlock to allow, an Unlock changes button |
 | Kind | Static site, App, Background, Scheduled, No manifest; as facets, Static, Apps, Background, Scheduled, Platform; Runs in the background, serves no page | Worker, Service, Job, Cron, Daemon |
 | Lists | Search sites, Filter, Clear filters, Sort, Issues first, Name, Last deployed, Memory, Disk, 3 of 14, All, Show all, Show 1 revoked or expired; an access facet's Public, Restricted, Anyone with the code, Mismatch; Access mismatch beside a name | Reset, Filter by, Results, No results |
-| Secrets | Restart pending, Unmanaged, Missing, Restart service, Restore previous, Add variable, Create file, Reveal; a store's: Variables, Files, Server, Not set, Declared, Not declared, Empty, Set, Generate, Type a value, Generate on the server, Upload, Upload file, Replace, Remove, Restore previous version, Build, kept by whoever deploys, Public, from the repository | Vault, Decrypt, Edit file, Rotate, Secret store, Environment |
+| Secrets | Restart pending, Unmanaged, Missing, Restart service, Restore previous version, Add variable, Create file, Change, Change password; Reveal value, Hide value, Copy value, Hides in 24s; a store's: Variables, Files, Not set, Not declared, Empty, Set, Generate, Add (Variable, Generated value, File), Type a value, Type a new value, Generate a new value, Generate on the server, Upload, Replace, Copy path, Remove variable, Remove file, Read at, Build and public names (3), Build, kept by whoever deploys, Public, from the repository | Vault, Decrypt, Edit file, Rotate, Secret store, Environment |
 | Passwords | Change password, Dashboard password, Generate a strong one, Set my own, New password, Copy password | Set hash, Regenerate |
-| Backups | Snapshot, Scheduled, Before restore, Server, Offsite only, Restore, Restoring..., Restored, Offsite copy, Show all | Backup file, Revert, Rollback, Recover |
+| Backups | Snapshot, Before restore, Last snapshot 45m ago, Hourly, Offsite copy, No offsite copy, Verified 9h ago, Last run failed, Details, Keeps, Last check, Last restore; Taken, Size, Where, On this server, In the offsite copy, encrypted; Restore, Restore this snapshot, Restore cms to Oct 25, 19:02, What comes back, What is set aside, Restoring..., Restored; Show all 37, Show the newest 12 | Backup file, Revert, Rollback, Recover |
 | Activity | Event, Actor, Action, Target, Source, Type, Date, Search activity, Any time, Last 24 hours, Last 7 days, Last 30 days, Custom range, From, To, Apply, Today, Yesterday, Recorded, Same actor, Same site, Same target, Load older, 50 events read, Nothing matches in the 250 latest events, Export, CSV, JSON lines, Clear filters; a type is Deployments, Access changes, Secrets, Sign-ins, Tokens, Backups, Egress; a source that is not read: Can't read, Needs updating, and its latest 50 entries under the log; an actor is Owner, The server, Someone, alice@example.com (token), Example Accounting (password access) | Log entry, Audit trail, Download, Reset, Details, Site or host |
 | Audience | Visits, Views, Pages per visit, Time on page; Pages, Entry pages, Hostnames, Sources, Campaigns, Visitors, Devices, Browsers, Systems, Languages; Show all; No visit recorded for cms yet; cms isn't measured yet; serves no page: there is nothing to measure | Analytics, Traffic, Pageviews, Unique visitors, Sessions |
 | Unreachable | Can't reach the dashboard., Can't reach the server's secrets., Can't reach the access service on the server. | is not answering |
@@ -1099,39 +1099,65 @@ deployment.", "courier serves no page: there is nothing to measure."; one
 with no visit yet gives the tag to paste, with its copy button; numbers
 older than ten minutes, a banner.
 
-**A site's Secrets.** Every write asks for the unlock when pressed, as
-everywhere (5, *Writes and the unlock*). The owner's dialog, titled after
-what waits or *Unlock changes*: "Enter the dashboard password to make
-changes for 10 minutes."; a person's: "Sign in again with Google to make
-changes for 10 minutes. Only what your roles allow." The
-dashboard and the portal, which have no store, show their own files, the
-owner's alone, in the **Files** panel: the service and *Restart service*, what
-is wrong, then each file and its variables; a password variable offers only
-*Change password*. Then **Activity**, that site's operations. Restarting the dashboard itself gives the
-*Restarting* verdict: the dialog waits out the cut, reconnects by itself, then
-asks you to unlock again.
+**A site's Secrets.** One object, the site's variables; their history is in
+Activity, behind the header's *History* (`type=secrets`), and the intro
+behind the (i): when a change applies, and that only the owner reveals a
+value, for thirty seconds. Every write asks for the unlock when pressed (5,
+*Writes and the unlock*), titled after what waits, "Unlock to set
+CMS_TOKEN", "Unlock to reveal CMS_TOKEN"; the owner's dialog says "Enter the
+dashboard password to make changes for 10 minutes.", a person's "Sign in
+again with Google to make changes for 10 minutes. Only what your roles
+allow." Above the panel, a banner while the service is down or keeps
+restarting, while its unit does not read its store yet, while the server
+refuses every change to the store.
 
-A project with a store, every app but the dashboard and the portal, shows it
-in one column (`components/secrets-store.tsx`):
-**Variables**, its service and *Restart service* in the header with *Restore
-previous version* for the owner and an Admin, then what needs attention, the
-names and files `sitesolide.json` declares and the server lacks, flagged
-first in red with *Set*, *Generate* or *Upload* each, then one row per
-variable: its name, *Server* or *Not set*, *Declared* or *Not declared*, and
-*Set*, *Generate* and *Remove* by the steward's `may`; *Add variable* at the
-foot. A value is typed into *Set*'s dialog, never prefilled, or drawn on the
-server by *Generate*, format and size chosen, never shown; over a value in
-force, *Generate* reads *Replace* and says the old one stops working at the
-next restart. Only the owner has *Reveal* and *Copy* on a row, for thirty
-seconds: an Admin and a Developer read no value back, and the intro says so. **Files**: each file, *Set*, *Missing*, *Empty* (on the server
-with nothing in it, which a service reads as missing) or *Unmanaged*, its size
-to the owner alone, and the path every service reads it at,
-`$CREDENTIALS_DIRECTORY/files_<name>`, with its copy button; *Upload* reads a
-file in the browser and sends it base64. **Build, kept by whoever deploys**
-and **Public, from the repository** list names, and the public values, for
-reference, with no action. A unit that does not read the store yet says, as attention, to deploy or refresh the
-project. The Overview's **Secrets** sums a store up in rows, its variables
-counted set and not set, its files by name, never a variable's name.
+A project with a store, every app but the dashboard and the portal
+(`components/secrets-store.tsx`), shows **Variables**, its count the number
+of rows: one `DataTable` of 44 px rows, *Name* and *Value*. The names
+`sitesolide.json` declares and the server lacks come first, the error icon in
+the gutter, *Not set* in red, *Set* and *Generate* in the row (on a phone
+*Set* alone, *Generate* in the menu). Then every name the store holds, quiet:
+*Not declared*, muted, its tooltip "Not in sitesolide.json", beside a name
+the manifest no longer declares, nothing beside the others. *Reveal* and
+*Copy*, the owner's alone, and *Set* come under the pointer and on focus; the
+row menu holds them too, then *Generate a new value*, which replaces it and
+says the old one stops working at the next restart, and last, under a
+separator, *Remove variable*. A revealed value shows in its row, one at a
+time, for thirty seconds, masked again on locking, tab hidden, page left,
+site or section changed; no row ever shows dots. A value is typed into
+*Set*'s dialog, never prefilled, or drawn on the server by *Generate*, format
+and size chosen, never shown. The panel's header holds one *Add* menu,
+*Variable* (a name and the value you type), *Generated value* (drawn on the
+server, never shown) and *File*, then a "..." with *Restart service* and,
+for the owner and an Admin, *Restore previous version*. While a restart is
+pending, and only then, the attention pill *Restart pending*, its tooltip
+naming what changed, and *Restart service* as the primary button beside it.
+Under the rows, a closed disclosure with its count, *Build and public names
+(3)*: the build's names, kept by whoever deploys, read from the environment
+or `~/.config/sitesolide/secrets/<slug>.env` and never on the server, and
+the public values from `env` in `sitesolide.json`, for reference, with no
+action.
+
+**Files**, only when the store declares or holds one: each file's name,
+*Missing* or *Empty* in red, *Unmanaged* in attention (its reason and command
+in a banner above), *Not declared*; the path every service reads it at,
+`$CREDENTIALS_DIRECTORY/files_<name>`, its copy under the pointer; its size,
+to the owner alone. *Upload* sits in the row while it is missing, *Replace*
+under the pointer, *Copy path* and *Remove file* in the menu; *Upload* reads
+a file in the browser and sends it base64. A unit that does not read the
+store yet says, as attention, to deploy or refresh the project.
+
+The dashboard and the portal, which have no store, show their own files, the
+owner's alone, as one **Files** list: each file a heading line (its name,
+*Missing* or *Unmanaged*, how many variables and when it changed, *Add
+variable* under the pointer, *Restore previous version* in its menu, *Create
+file* while it is missing), then its variables, one line each, with *Reveal*,
+*Copy* and *Change* under the pointer; a password variable offers only
+*Change password*. Restarting the dashboard itself gives the *Restarting*
+verdict: the dialog waits out the cut, reconnects by itself, then asks you to
+unlock again. The Overview's **Secrets** sums a store up in rows, its
+variables counted set and not set, its files by name, never a variable's
+name.
 
 **A site's Access.** Who can open the site, and what each person can do with
 it, in one place, laid out like a "Share" dialog, in one column. Behind the
@@ -1258,16 +1284,37 @@ and the landing named after the zone) shows one panel: how it opens, the same
 row without *Change*, then "portal is part of the platform. Only the owner
 opens it when restricted; no one can be given a role on it."
 
-**A site's Backups.** *Restore* asks for the unlock when pressed, like a
-secret's write, then confirms. **Schedule**: how fresh the last snapshot is (the last
-run's error in red, over two hours in attention), what the retention keeps,
-the offsite copy, the last restore. **Snapshots**: the newest twelve, then *Show
-all*, each with *Restore*, or the steward's reason not to under the title.
-**Activity**: the runs and the restores. The confirmation lists what the server
-does and makes you retype the slug; the wait shows the phase the steward reads
-from the restore and the time elapsed on a five-minute scale, then the result,
-which says how to undo it. A site with nothing to save says why, and what would
-change it.
+**A site's Backups.** One status row, then the snapshots; the runs and the
+restores are in Activity, behind *History* (`type=backups`), the intro behind
+the (i). The **status row**, 64 px, the backups' tile at its left: *Last
+snapshot 45m ago*, then *Hourly · Offsite copy · Verified 9h ago*, muted. It
+turns red, the error icon in the tile's place, when the last run failed (its
+reason under it, and the age of the snapshot before it among the facts),
+when the offsite copy is misconfigured or a check failed; attention past two
+hours without a snapshot, with what starts the timer again. *Details* opens
+what is kept (*24 hourly, 7 daily, 4 weekly, and the last 3 before a
+restore*), where the offsite copy goes, what the last check measured and the
+last restore. Then the **snapshots**, a dense `DataTable` of 40 px rows, the
+newest twelve: *Taken*, "Today 19:02" with "45m ago" muted, and a *Before
+restore* tag on such a snapshot alone; *Size*, what it added in its tooltip;
+*Where*, a server and a cloud, each with its words in its tooltip; *Restore*
+under the pointer and on focus, the row's one action, and in the row menu,
+which also says the date, the size and where, for a phone that has no
+tooltips. *Show all 37* lists every snapshot under the day it was taken,
+*Show the newest 12* folds them again. When no restore is offered, the
+steward's reason in one line above the rows, and no *Restore* anywhere. A
+restore asks for the unlock when pressed, then confirms: its title names the
+snapshot, "Restore cms to Oct 25, 19:02 GMT+1?"; it says what comes back,
+the data folder as it was then and its size, and what is set aside,
+everything saved after it, kept as a before-restore snapshot that undoes it,
+the site not answering while it restarts; then what the server does, in
+order, and the slug retyped; its button names the act, *Restore cms to Oct
+25, 19:02*. The wait shows the phase the steward reads from the restore and
+the time elapsed on a five-minute scale, then the result, which says how to
+undo it. A restore in progress, or one that failed within a day, is a banner
+above the status row. A site with nothing to save says why, and what would
+change it; with no snapshot yet, the status row says when the first comes,
+and no table.
 
 ## 8. What was set aside
 
@@ -1432,6 +1479,24 @@ change it.
 48. **Who added a person, and when, in People's sheet**: the People route
     carries each person's roles, not who gave them. It is on the person's
     row in each project's Access section.
+
+49. **A status line and an activity panel in Secrets**, "Running, up 20h,
+    cms" under the panel's title and a log of the site's operations below
+    it: the Overview says the service, Activity the history. A restart
+    pending is the panel's pill, and its button the primary only then.
+50. **Upload file and Add variable as two buttons at the panel's foot**,
+    and Build secrets and Public variables as two panels: one *Add* menu in
+    the panel's header, one disclosure with its count.
+51. **Masked dots in place of a value**: they say nothing the name does not,
+    and invite a read. A value shows on the owner's demand, otherwise
+    nothing does.
+52. **The Backups' Schedule table and its activity panel**, five rows and
+    six "Scheduled run, Done": one status row, the rest behind *Details*,
+    the runs in Activity.
+53. **Kind and Where in words on every snapshot**, "Scheduled" and "Server
+    and offsite" twelve times, and a *Restore* button on each: a tag for a
+    before-restore snapshot alone, two icons for where, *Restore* under the
+    pointer and in the row menu.
 
 ## 9. Seeing the page, and looking at it
 

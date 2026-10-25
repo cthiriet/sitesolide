@@ -1,6 +1,6 @@
 /**
  * What a site's backups say inside the page, and only that: the words of a
- * snapshot, of the schedule, of a restore and of its activity, and the wait.
+ * snapshot and of its day, of the status row, of a restore, and the wait.
  * Pure.
  *
  * No rule of what may be restored lives here: the steward decides, says why
@@ -9,7 +9,7 @@
  */
 import { ago, capitalise, duration, size } from "./format"
 import type { Tone } from "./tones"
-import type { BackupAuditEntry, BackupsView, CheckView, RestoreView, RetentionPolicy, SnapshotKind, SnapshotView } from "./types"
+import type { BackupsView, CheckView, RestoreView, RetentionPolicy, SnapshotKind, SnapshotView } from "./types"
 
 /** The page reads the backups again this often, and every two seconds while a restore runs. */
 export const BACKUPS_REFRESH_MS = 30_000
@@ -97,6 +97,114 @@ export function snapshotSize(snapshot: Pick<SnapshotView, "bytes" | "added">): s
   return snapshot.added === undefined || snapshot.added === null ? size(snapshot.bytes) : `${size(snapshot.bytes)}, ${size(snapshot.added)} new`
 }
 
+/** What a snapshot added to the repository when it was taken, for its size's tooltip: "23 KB new"; null when unknown. */
+export function addedText(snapshot: Pick<SnapshotView, "added">): string | null {
+  return snapshot.added === undefined || snapshot.added === null ? null : `${size(snapshot.added)} new`
+}
+
+// --- The status row --------------------------------------------------------------------
+
+export type StatusFact = { text: string; tone: Tone }
+
+/**
+ * The site's backups in one row: the freshness of its last snapshot first,
+ * in its tone, the detail of a failure or a stale timer under it, then the
+ * schedule, the offsite copy and the last check as short facts, each in its
+ * tone when it is wrong. `tone` is the worst of the three: a failed run, a
+ * misconfigured bucket or a failed check is an error, a stale timer
+ * attention. A fine row says it in muted words, with no dot.
+ */
+export type BackupStatus = { tone: Tone; label: string; detail: string | null; facts: StatusFact[] }
+
+const WORST: Readonly<Record<Tone, number>> = { error: 3, attention: 2, neutral: 1, ok: 0 }
+
+export function backupStatus(
+  view: Pick<BackupsView, "lastRun" | "snapshots" | "excluded" | "offsite" | "checks" | "repository">,
+  serverNow: number,
+): BackupStatus {
+  const fresh = freshness(view, serverNow)
+  const offsite = offsiteReading(view.offsite)
+  const check = checkReading(view.checks, view.repository, serverNow)
+  const facts: StatusFact[] = []
+  // A failed run leaves the snapshot before it, which is what a restore would bring back.
+  const newest = view.snapshots.find((snapshot) => snapshot.kind === "scheduled")
+  if (fresh.tone === "error" && newest !== undefined) facts.push({ text: `Last snapshot ${ago(serverNow - newest.takenAt)}`, tone: "neutral" })
+  // A site left out is owed no snapshot: it says why rather than a schedule it does not follow.
+  if (view.excluded === null) facts.push({ text: "Hourly", tone: "neutral" })
+  else if (fresh.tone === "ok") facts.push({ text: `No longer backed up: ${view.excluded}`, tone: "neutral" })
+  facts.push(
+    offsite.tone === "error"
+      ? { text: offsite.label, tone: "error" }
+      : { text: offsite.tone === "neutral" ? "No offsite copy" : "Offsite copy", tone: "neutral" },
+  )
+  facts.push(check.tone === "error" ? { text: check.label, tone: "error" } : { text: check.label, tone: "neutral" })
+  const tone = [fresh.tone, offsite.tone, check.tone].reduce((worst, one) => (WORST[one] > WORST[worst] ? one : worst), "ok" as Tone)
+  return { tone, label: fresh.label, detail: fresh.tone === "ok" ? null : fresh.detail, facts }
+}
+
+// --- When a snapshot was taken ------------------------------------------------------------
+
+const DAY_MS = 24 * 3_600_000
+
+/** The calendar day of a moment, in the browser's zone or `timeZone`: "2026-10-25", to compare two moments. */
+function dayKey(ms: number, timeZone?: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "2-digit", day: "2-digit", timeZone }).formatToParts(ms)
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((piece) => piece.type === type)?.value ?? ""
+  return `${value("year")}-${value("month")}-${value("day")}`
+}
+
+/** "19:02", in the browser's zone or `timeZone`. Assembled from its parts, as `dateTime` is, so that every engine writes the same. */
+export function clockTime(ms: number, timeZone?: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone }).formatToParts(ms)
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((piece) => piece.type === type)?.value ?? ""
+  return `${value("hour")}:${value("minute")}`
+}
+
+/** A snapshot's day, as a heading: "Today", "Yesterday", then "Thu, Oct 23". */
+export function snapshotDay(ms: number, serverNow: number, timeZone?: string): string {
+  const key = dayKey(ms, timeZone)
+  if (key === dayKey(serverNow, timeZone)) return "Today"
+  if (key === dayKey(serverNow - DAY_MS, timeZone)) return "Yesterday"
+  const parts = new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric", timeZone }).formatToParts(ms)
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((piece) => piece.type === type)?.value ?? ""
+  return `${value("weekday")}, ${value("month")} ${value("day")}`
+}
+
+/** When a snapshot was taken, in a row: "Today 19:02", "Yesterday 23:02", "Thu, Oct 23 02:02". */
+export function takenLabel(ms: number, serverNow: number, timeZone?: string): string {
+  return `${snapshotDay(ms, serverNow, timeZone)} ${clockTime(ms, timeZone)}`
+}
+
+/** A snapshot's day and time in a sentence, without the zone: "Oct 25, 19:02". */
+export function snapshotMoment(ms: number, timeZone?: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone }).formatToParts(ms)
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((piece) => piece.type === type)?.value ?? ""
+  return `${value("month")} ${value("day")}, ${clockTime(ms, timeZone)}`
+}
+
+/**
+ * What a restore's button says it does, the snapshot named by its day and
+ * time: "Restore cms to Oct 25, 19:02". The zone is the browser's, as in
+ * every time the page shows; the dialog's title names it.
+ */
+export function restoreAct(slug: string, ms: number, timeZone?: string): string {
+  return `Restore ${slug} to ${snapshotMoment(ms, timeZone)}`
+}
+
+export type SnapshotDay = { day: string; snapshots: SnapshotView[] }
+
+/** The snapshots under the day they were taken, newest first as they come: the list once *Show all* is open. */
+export function snapshotsByDay(snapshots: readonly SnapshotView[], serverNow: number, timeZone?: string): SnapshotDay[] {
+  const days: SnapshotDay[] = []
+  for (const snapshot of snapshots) {
+    const day = snapshotDay(snapshot.takenAt, serverNow, timeZone)
+    const last = days.at(-1)
+    if (last !== undefined && last.day === day) last.snapshots.push(snapshot)
+    else days.push({ day, snapshots: [snapshot] })
+  }
+  return days
+}
+
 /** What the server does, in the order it does it: the dialog lists it before the confirmation. */
 export function restoreSteps(slug: string): string[] {
   return [
@@ -144,37 +252,4 @@ export function restoreProgress(elapsedMs: number): { part: number; elapsed: str
     elapsed: seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`,
     slow: bounded >= RESTORE_SCALE_MS,
   }
-}
-
-export type AuditLine = { what: string; tone: Tone; outcome: string | null; who: string; at: number }
-
-function detailText(detail: Record<string, unknown> | null, key: string): string | null {
-  const value = detail?.[key]
-  return typeof value === "string" ? value : null
-}
-
-/** An audit entry in words: what was done, how it ended, who did it. Never a value: the audit holds none. */
-export function auditLine(entry: BackupAuditEntry, slug: string): AuditLine {
-  const at = Date.parse(entry.at)
-  const who = entry.actor === "system" ? "Timer" : entry.actor === "owner" ? "Dashboard" : entry.actor
-  if (entry.action === "backup.restore") {
-    const result = detailText(entry.detail, "result")
-    const snapshot = detailText(entry.detail, "snapshot")
-    return {
-      what: snapshot === null ? "Restore" : `Restore from ${snapshot}`,
-      tone: result === "ok" ? "ok" : result === "rejects" ? "neutral" : "error",
-      outcome: result === "ok" ? "Done" : result === "rejects" ? "Refused" : "Failed",
-      who,
-      at,
-    }
-  }
-  if (entry.action === "backup.run") {
-    // A run fails for this site, or as a whole; another site's failure is not this one's.
-    const failed = Array.isArray(entry.detail?.failed) ? (entry.detail.failed as unknown[]) : []
-    const whole = typeof entry.detail?.error === "string"
-    if (whole) return { what: "Scheduled run", tone: "error", outcome: "Failed", who, at }
-    const mine = failed.includes(slug)
-    return { what: "Scheduled run", tone: mine ? "error" : "ok", outcome: mine ? "Failed for this site" : "Done", who, at }
-  }
-  return { what: entry.action, tone: "neutral", outcome: null, who, at }
 }

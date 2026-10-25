@@ -1,16 +1,26 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { flushSync } from "react-dom"
-import { Check, Copy, Ellipsis, Eye, EyeOff, KeyRound, LoaderCircle, Pencil, Trash2 } from "lucide-react"
+import { Check, Copy, Eye, EyeOff, LoaderCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { CopyFallback, useAnnounce } from "@/components/copy"
+import { LockGlyph } from "@/components/unlock"
 import { copyShortcut } from "@/lib/signin"
 import { REVEAL_MS, hideCountdown } from "@/lib/secrets"
+import { cn } from "@/lib/utils"
+
+/*
+ * A list of values the owner may reveal or copy, a store's variables or a
+ * platform file's: one value on screen at a time, for thirty seconds, masked
+ * again on locking, the tab going to the background, the page being left
+ * and the list unmounting, on changing site or section. A value only lives
+ * in the state for as long as it is on screen; a copy reads it without
+ * showing it.
+ *
+ * The state is the list's, not a row's: the value shows in one cell, its
+ * buttons sit in another, and the row menu has them too, all of a row that
+ * the list pattern (components/data-table.tsx) draws cell by cell.
+ */
 
 /** What a read returns to the row: the value, or the message to show (null if the page has already reacted). */
 export type ReadResult = { value: string } | { message: string | null }
@@ -50,46 +60,45 @@ async function writeClipboardLater(reading: Promise<ReadResult>): Promise<boolea
   }
 }
 
-/**
- * The column headers, when the file is wide enough to align them: the
- * measurement is the `file` container's, set by the file's block, and not
- * the screen's. Decorative: every button carries the name.
- */
-export function VariablesHeader() {
-  return (
-    <div
-      aria-hidden="true"
-      className="hidden h-8 grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto] items-center gap-x-4 border-y bg-cell px-4 mono-label @xl/file:grid"
-    >
-      <span>Name</span>
-      <span>Value</span>
-      <span />
-    </div>
-  )
+/** The value on screen: whose, since when, and whether it shows because a copy was refused. */
+type Shown = { key: string; value: string; at: number; fallback: boolean }
+
+export type ValueTable = {
+  unlocked: boolean
+  /** The value of `key` on screen, or null. */
+  shown: (key: string) => { value: string; fallback: boolean; remainingMs: number } | null
+  /** `key`'s read in flight, and which. */
+  reading: (key: string) => "reveal" | "copy" | null
+  /** Any read in flight: the rows' writes wait for it. */
+  busy: boolean
+  copied: (key: string) => boolean
+  error: (key: string) => string
+  toggle: (key: string, name: string) => Promise<void>
+  copy: (key: string, name: string) => Promise<void>
+  closeFallback: () => void
 }
 
-const ICON_BUTTON = "text-muted-foreground hover:text-foreground max-md:size-11"
-
 /**
- * A value on screen, and everything that masks it again: thirty seconds, the
- * lock, the tab going to the background, the page being left, and the
- * unmounting of whatever displays it, on changing site or section. It only
- * lives in the state for as long as it is on screen.
- *
- * `fallback`: the value is shown selected because a copy was refused, for the
- * length of one reveal.
+ * The reveal and the copy of a list's values, `key` naming a row ("CMS_TOKEN",
+ * "dashboard-monitor.env/HEARTBEAT_URL") and `name` what is announced. Locked,
+ * both ask for the unlock, `onUnlock` titled after what waits, "reveal
+ * CMS_TOKEN", and the gesture has to be made again, which the page never
+ * replays.
  */
-function useRevealedValue(unlocked: boolean) {
-  const [value, setValue] = useState<string | null>(null)
-  const [revealedAt, setRevealedAt] = useState<number | null>(null)
+export function useValueTable(unlocked: boolean, read: (key: string) => Promise<ReadResult>, onUnlock: (purpose: string) => void): ValueTable {
+  const announce = useAnnounce()
+  const [current, setCurrent] = useState<Shown | null>(null)
   const [clock, setClock] = useState(() => Date.now())
-  const [fallback, setFallback] = useState(false)
+  const [reading, setReading] = useState<{ key: string; kind: "reveal" | "copy" } | null>(null)
+  const [copied, setCopied] = useState<string | null>(null)
+  const [errors, setErrors] = useState<Readonly<Record<string, string>>>({})
   const open = useRef(unlocked)
+  const copyTimer = useRef<number | undefined>(undefined)
+
+  useEffect(() => () => window.clearTimeout(copyTimer.current), [])
 
   function hide() {
-    setValue(null)
-    setRevealedAt(null)
-    setFallback(false)
+    setCurrent(null)
   }
 
   useEffect(() => {
@@ -98,8 +107,8 @@ function useRevealedValue(unlocked: boolean) {
   }, [unlocked])
 
   useEffect(() => {
-    if (value === null) return
-    const timer = window.setTimeout(hide, REVEAL_MS)
+    if (current === null) return
+    const timer = window.setTimeout(hide, current.at + REVEAL_MS - Date.now())
     const countdown = window.setInterval(() => setClock(Date.now()), 1000)
     // Rendered straight away, and not on the next turn: a page cached by the
     // browser, or a capture for the tab preview, must not keep the value on
@@ -116,289 +125,183 @@ function useRevealedValue(unlocked: boolean) {
       document.removeEventListener("visibilitychange", handleVisibility)
       window.removeEventListener("pagehide", hideNow)
     }
-  }, [value])
+  }, [current])
 
   /** A value that arrives after a lock or a tab change is not displayed. */
   function canShow(): boolean {
     return open.current && document.visibilityState !== "hidden"
   }
 
-  function show(text: string, asFallback: boolean) {
-    const start = Date.now()
-    setValue(text)
-    setRevealedAt(start)
-    setClock(start)
-    setFallback(asFallback)
+  function show(key: string, value: string, fallback: boolean) {
+    const at = Date.now()
+    setCurrent({ key, value, at, fallback })
+    setClock(at)
   }
 
-  const remainingMs = revealedAt === null ? null : revealedAt + REVEAL_MS - clock
-  return { value, fallback, remainingMs, hide, show, canShow, closeFallback: () => setFallback(false) }
-}
+  function setError(key: string, message: string) {
+    setErrors((before) => ({ ...before, [key]: message }))
+  }
 
-/**
- * What a row that holds a value does with it, a platform file's variable or
- * a store's: reveal it for thirty seconds, or copy it without displaying it,
- * a refused copy showing it selected instead. Locked, both ask for the
- * unlock, and the gesture has to be made again, which the page never replays.
- */
-export function useValueActions(name: string, unlocked: boolean, read: () => Promise<ReadResult>, onUnlock: () => void) {
-  const announce = useAnnounce()
-  const { value, fallback, remainingMs, hide, show, canShow, closeFallback } = useRevealedValue(unlocked)
-  const [reading, setReading] = useState<"reveal" | "copy" | null>(null)
-  const [copied, setCopied] = useState(false)
-  const [error, setError] = useState("")
-  const copyTimer = useRef<number | undefined>(undefined)
-
-  useEffect(() => () => window.clearTimeout(copyTimer.current), [])
-
-  function showError(message: string | null) {
+  function showError(key: string, message: string | null) {
     if (message === null) return
-    setError(message)
+    setError(key, message)
     announce(message)
   }
 
-  async function toggle() {
-    if (!unlocked) return onUnlock()
-    if (value !== null) {
+  async function toggle(key: string, name: string) {
+    if (!unlocked) return onUnlock(`reveal ${name}`)
+    if (current?.key === key) {
       hide()
       return announce(`${name} hidden`)
     }
     if (reading !== null) return
-    setError("")
-    setReading("reveal")
+    setError(key, "")
+    setReading({ key, kind: "reveal" })
     try {
-      const result = await read()
-      if (!("value" in result)) return showError(result.message)
+      const result = await read(key)
+      if (!("value" in result)) return showError(key, result.message)
       if (!canShow()) return
-      show(result.value, false)
+      show(key, result.value, false)
       announce(`${name} shown for ${REVEAL_MS / 1000} seconds`)
     } finally {
       setReading(null)
     }
   }
 
-  function copySucceeded() {
-    setCopied(true)
+  function copySucceeded(key: string, name: string) {
+    setCopied(key)
     announce(`${name} copied`)
     window.clearTimeout(copyTimer.current)
-    copyTimer.current = window.setTimeout(() => setCopied(false), FEEDBACK_MS)
+    copyTimer.current = window.setTimeout(() => setCopied(null), FEEDBACK_MS)
   }
 
   /** The fallback for a refused copy: the value selected, for the length of one reveal. */
-  function copyRefused(text: string) {
+  function copyRefused(key: string, text: string) {
     if (!canShow()) return
-    show(text, true)
+    show(key, text, true)
     announce(`Couldn't copy automatically. Press ${copyShortcut(navigator.userAgent)} to copy the selected text.`)
   }
 
-  async function copy() {
-    if (!unlocked) return onUnlock()
+  async function copy(key: string, name: string) {
+    if (!unlocked) return onUnlock(`copy ${name}`)
     if (reading !== null) return
-    setError("")
-    if (value !== null) {
-      if (await writeClipboard(value)) return copySucceeded()
-      return copyRefused(value)
+    setError(key, "")
+    if (current?.key === key) {
+      if (await writeClipboard(current.value)) return copySucceeded(key, name)
+      return copyRefused(key, current.value)
     }
-    setReading("copy")
+    setReading({ key, kind: "copy" })
     try {
-      const pending = read()
-      if (await writeClipboardLater(pending)) return copySucceeded()
+      const pending = read(key)
+      if (await writeClipboardLater(pending)) return copySucceeded(key, name)
       const result = await pending
-      if (!("value" in result)) return showError(result.message)
-      if (await writeClipboard(result.value)) return copySucceeded()
-      copyRefused(result.value)
+      if (!("value" in result)) return showError(key, result.message)
+      if (await writeClipboard(result.value)) return copySucceeded(key, name)
+      copyRefused(key, result.value)
     } finally {
       setReading(null)
     }
   }
 
-  return { value, fallback, remainingMs, closeFallback, reading, copied, error, toggle, copy }
+  return {
+    unlocked,
+    shown: (key) =>
+      current?.key === key ? { value: current.value, fallback: current.fallback, remainingMs: current.at + REVEAL_MS - clock } : null,
+    reading: (key) => (reading?.key === key ? reading.kind : null),
+    busy: reading !== null,
+    copied: (key) => copied === key,
+    error: (key) => errors[key] ?? "",
+    toggle,
+    copy,
+    closeFallback: () => setCurrent((before) => (before !== null && before.fallback ? null : before)),
+  }
 }
 
 /**
- * A variable: its name, its masked value, and its actions.
- *
- * Unlocked, the value is revealed for thirty seconds then masked again. It is
- * also masked again on locking, when the tab goes to the background or the page
- * is left, and when the row unmounts, on changing project or page. It only
- * lives in the state for as long as it is on screen. The copy reads it without
- * displaying it.
- *
- * Locked, the buttons stay in place: touching them asks for the password, then
- * the gesture has to be made again, which the page never replays.
+ * The value cell: the value while it is on screen, with its countdown, a
+ * refused copy's text selected, a refused read's reason, or `idle`, what the
+ * row says when nothing shows. Never dots: a value comes back to nobody but
+ * the owner, on demand.
  */
-export function VariableRow({
-  name,
-  unlocked,
-  read,
-  onUnlock,
-  onEdit,
-  onRemove,
-}: {
-  name: string
-  unlocked: boolean
-  read: () => Promise<ReadResult>
-  onUnlock: () => void
-  onEdit: () => void
-  onRemove: () => void
-}) {
-  const { value, fallback, remainingMs, closeFallback, reading, copied, error, toggle, copy } = useValueActions(name, unlocked, read, onUnlock)
-  const busy = reading !== null
+export function ValueCell({ table, rowKey, idle = null }: { table: ValueTable; rowKey: string; idle?: ReactNode }) {
+  const shown = table.shown(rowKey)
+  const error = table.error(rowKey)
+  if (shown !== null && shown.fallback) return <CopyFallback text={shown.value} onClose={table.closeFallback} />
+  if (shown !== null) {
+    return (
+      <span className="grid w-full min-w-0 gap-1 py-1.5">
+        <code className="block max-h-24 overflow-y-auto rounded-md bg-sunk px-2 py-1 font-mono text-xs break-all text-foreground shadow-well select-all">
+          {shown.value}
+        </code>
+        <span className="text-xs text-muted-foreground tabular-nums">{hideCountdown(shown.remainingMs)}</span>
+      </span>
+    )
+  }
+  if (error !== "") return <span className="text-xs text-pretty text-destructive">{error}</span>
+  return <>{idle}</>
+}
+
+/** A row's actions that appear under the pointer and on focus, and stay while they are in use. */
+export const ON_HOVER = "opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+
+/**
+ * The owner's Reveal and Copy, as two icon buttons: under the pointer and
+ * on focus, and in sight while the value shows, a read runs or a copy has
+ * just succeeded.
+ */
+export function RevealButtons({ table, rowKey, name }: { table: ValueTable; rowKey: string; name: string }) {
+  const shown = table.shown(rowKey) !== null
+  const reading = table.reading(rowKey)
+  const copied = table.copied(rowKey)
   const seconds = REVEAL_MS / 1000
-  const lockedTitle = "Unlock to use"
-
+  const locked = table.unlocked ? "" : ", asks to unlock first"
+  const quiet = !shown && reading === null && !copied
+  const style = cn("text-muted-foreground hover:text-foreground", quiet && ON_HOVER)
   return (
-    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 py-1 pr-2 pl-4 @xl/file:min-h-11 @xl/file:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto] @xl/file:gap-x-4 @xl/file:py-1.5">
-      <code className="font-mono text-[0.8125rem] wrap-anywhere">{name}</code>
-
-      {/* In a narrow file, the value only takes a line of its own once revealed. */}
-      <div
-        className={
-          value === null
-            ? "hidden min-w-0 overflow-hidden @xl/file:col-start-2 @xl/file:row-start-1 @xl/file:block"
-            : "col-span-2 row-start-2 min-w-0 pr-2 pb-2 @xl/file:col-span-1 @xl/file:col-start-2 @xl/file:row-start-1 @xl/file:pr-0 @xl/file:pb-0"
-        }
+    <>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        title={shown ? "Hide value" : `Reveal for ${seconds} seconds`}
+        aria-label={shown ? `Hide ${name}` : `Reveal ${name} for ${seconds} seconds${locked}`}
+        aria-busy={reading === "reveal" || undefined}
+        disabled={reading === "copy"}
+        onClick={() => void table.toggle(rowKey, name)}
+        className={style}
       >
-        {value !== null && fallback ? (
-          <CopyFallback text={value} onClose={closeFallback} />
-        ) : value !== null ? (
-          <div className="grid gap-1">
-            <code className="block max-h-24 overflow-y-auto rounded-md bg-sunk px-2 py-1 font-mono shadow-well text-xs break-all select-all">
-              {value}
-            </code>
-            {remainingMs !== null && <span className="text-xs text-muted-foreground tabular-nums">{hideCountdown(remainingMs)}</span>}
-          </div>
-        ) : (
-          <span className="block truncate font-mono text-sm tracking-widest text-muted-foreground">
-            <span aria-hidden="true">••••••••••••</span>
-            <span className="sr-only">Value hidden</span>
-          </span>
-        )}
-      </div>
-
-      <div className="col-start-2 row-start-1 flex items-center justify-end @xl/file:col-start-3">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          title={!unlocked ? lockedTitle : value !== null ? "Hide value" : `Show for ${seconds} seconds`}
-          aria-label={
-            !unlocked ? `Show ${name}, unlock first` : value !== null ? `Hide ${name}` : `Show ${name} for ${seconds} seconds`
-          }
-          aria-busy={reading === "reveal" || undefined}
-          disabled={reading === "copy"}
-          onClick={() => void toggle()}
-          className={ICON_BUTTON}
-        >
-          {reading === "reveal" ? (
-            <LoaderCircle className="motion-safe:animate-spin" />
-          ) : value !== null ? (
-            <EyeOff />
-          ) : (
-            <Eye />
-          )}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          title={!unlocked ? lockedTitle : "Copy value"}
-          aria-label={unlocked ? `Copy ${name}` : `Copy ${name}, unlock first`}
-          aria-busy={reading === "copy" || undefined}
-          disabled={reading === "reveal"}
-          onClick={() => void copy()}
-          className={ICON_BUTTON}
-        >
-          {reading === "copy" ? (
-            <LoaderCircle className="motion-safe:animate-spin" />
-          ) : copied ? (
-            <Check className="text-ok-text" />
-          ) : (
-            <Copy />
-          )}
-        </Button>
-
-        {/* Reading on one side, writing on the other: the rule separates them. */}
-        <span aria-hidden="true" className="mx-1.5 hidden h-4 w-px bg-border @xl/file:block" />
-
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          title="Change value"
-          aria-label={`Change ${name}`}
-          disabled={busy}
-          onClick={onEdit}
-          className="hidden text-muted-foreground hover:text-foreground @xl/file:inline-flex"
-        >
-          <Pencil />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          title="Remove variable"
-          aria-label={`Remove ${name}`}
-          disabled={busy}
-          onClick={onRemove}
-          className="hidden text-muted-foreground hover:bg-destructive/10 hover:text-destructive @xl/file:inline-flex dark:hover:bg-destructive/15"
-        >
-          <Trash2 />
-        </Button>
-
-        {/* In a narrow file, the two writes go into a menu: four 44 px targets would crush the name. */}
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`More actions for ${name}`}
-                disabled={busy}
-                className={`${ICON_BUTTON} @xl/file:hidden`}
-              />
-            }
-          >
-            <Ellipsis />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuItem onClick={onEdit} className="h-11">
-              <Pencil />
-              Change value
-            </DropdownMenuItem>
-            <DropdownMenuItem variant="destructive" onClick={onRemove} className="h-11">
-              <Trash2 />
-              Remove variable
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-
-      {error !== "" && <p className="col-span-full pb-2 text-xs text-destructive">{error}</p>}
-    </li>
+        {reading === "reveal" ? <LoaderCircle className="motion-safe:animate-spin" /> : shown ? <EyeOff /> : <Eye />}
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        title="Copy value"
+        aria-label={`Copy ${name}${locked}`}
+        aria-busy={reading === "copy" || undefined}
+        disabled={reading === "reveal"}
+        onClick={() => void table.copy(rowKey, name)}
+        className={style}
+      >
+        {reading === "copy" ? <LoaderCircle className="motion-safe:animate-spin" /> : copied ? <Check className="text-ok-text" /> : <Copy />}
+      </Button>
+    </>
   )
 }
 
-/**
- * A variable that only changes through *Change password*: no value, no reveal,
- * no edit, no removal. The steward keeps a hash, which nobody reads back or
- * pastes, changed only with the dashboard's own password, which is the
- * owner's. `onChangePassword` null: a person, who sees the name and nothing
- * to do with it.
- */
-export function PasswordRow({ name, onChangePassword }: { name: string; onChangePassword: (() => void) | null }) {
+/** The same two, as the row menu's first items: the way to them on a phone, which has no pointer to hover with. */
+export function RevealMenuItems({ table, rowKey, name }: { table: ValueTable; rowKey: string; name: string }) {
+  const shown = table.shown(rowKey) !== null
   return (
-    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 py-1.5 pr-2 pl-4 @xl/file:min-h-11 @xl/file:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto] @xl/file:gap-x-4">
-      <code className="font-mono text-[0.8125rem] wrap-anywhere">{name}</code>
-      <span className="col-span-2 row-start-2 pb-1 text-xs text-pretty text-muted-foreground @xl/file:col-span-1 @xl/file:col-start-2 @xl/file:row-start-1 @xl/file:pb-0 @xl/file:text-sm">
-        {onChangePassword === null
-          ? "A password hash. It never shows, and only the owner changes it."
-          : "A password hash. It never shows: change the password instead."}
-      </span>
-      <div className="col-start-2 row-start-1 flex justify-end @xl/file:col-start-3">
-        {onChangePassword !== null && (
-          <Button variant="outline" size="sm" data-password-variable={name} onClick={onChangePassword} className="max-md:h-10">
-            <KeyRound />
-            Change password
-          </Button>
-        )}
-      </div>
-    </li>
+    <>
+      <DropdownMenuItem onClick={() => void table.toggle(rowKey, name)} className="h-9">
+        {shown ? <EyeOff /> : <Eye />}
+        {shown ? "Hide value" : "Reveal value"}
+        {!table.unlocked && <LockGlyph className="ml-auto" />}
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => void table.copy(rowKey, name)} className="h-9">
+        <Copy />
+        Copy value
+        {!table.unlocked && <LockGlyph className="ml-auto" />}
+      </DropdownMenuItem>
+    </>
   )
 }

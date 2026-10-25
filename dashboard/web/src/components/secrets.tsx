@@ -1,146 +1,18 @@
 import { type ReactNode } from "react"
-import { FilePlus, FileText, Plus, RotateCcw, Undo2 } from "lucide-react"
+import { FilePlus, FileText, Pencil, Plus, RectangleEllipsis, RotateCcw, Trash2, Undo2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { Command } from "@/components/copy"
-import { EmptyState, SeverityIcon, Panel, Status } from "@/components/page"
+import { CellText, DataTable, RowMenu, type Column } from "@/components/data-table"
+import { Banner, Panel, StateLabel, Status } from "@/components/page"
 import { fileKey, useSecretsActions, type FileTarget } from "@/components/secrets-actions"
 import { LockGlyph } from "@/components/unlock"
-import { VariablesHeader, PasswordRow, VariableRow } from "@/components/secrets-variables"
-import { ago } from "@/lib/format"
-import {
-  splitReason,
-  readService,
-  fileOffer,
-  variableOffer,
-  projectProblems,
-  fileSummary,
-  type Problem,
-} from "@/lib/secrets"
+import { ON_HOVER, RevealButtons, RevealMenuItems, ValueCell, useValueTable, type ValueTable } from "@/components/secrets-variables"
+import { ago, capitalise } from "@/lib/format"
+import { PENDING_LABEL, splitReason, fileOffer, variableOffer, projectProblems, fileSummary, type Problem } from "@/lib/secrets"
 import type { FileView, ProjectView } from "@/lib/types"
-
-// --- A file ----------------------------------------------------------------------
-
-function Terminal({ children }: { children: ReactNode }) {
-  return <code className="font-mono text-xs whitespace-nowrap">{children}</code>
-}
-
-/**
- * One file, a card of its own with its name on a tinted bar: as rows of one
- * table, two files read as one, the column header weighing more than the name
- * that starts the next file.
- */
-function FileBlock({ slug, file }: { slug: string; file: FileView }) {
-  const actions = useSecretsActions()
-  const target: FileTarget = { slug, file: file.name }
-  const key = fileKey(target)
-  const error = actions.errors[key] ?? ""
-  const offer = fileOffer(file)
-  const count = fileSummary(file)
-  const change = file.modifiedAt === null ? null : `changed ${ago(actions.serverNow - file.modifiedAt)}`
-  const meta = [count, change].filter((piece): piece is string => piece !== null).join(", ")
-  const reason = file.state === "unmanaged" ? splitReason(file.reason ?? "") : null
-
-  return (
-    <section aria-label={file.name} className="@container/file overflow-hidden rounded-lg border">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 bg-cell px-4 py-3">
-        <div className="flex min-w-0 flex-1 basis-56 flex-wrap items-center gap-x-2.5 gap-y-1">
-          <FileText aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-          <h3 className="font-mono text-[0.8125rem] font-semibold wrap-anywhere">{file.name}</h3>
-          {file.state === "absent" && <Status tone="error">Missing</Status>}
-          {file.state === "unmanaged" && <Status tone="attention">Unmanaged</Status>}
-          {meta !== "" && <span className="text-xs text-muted-foreground tabular-nums">{meta}</span>}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {offer.restore && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => actions.restore(target)}
-              className="text-muted-foreground hover:text-foreground max-md:h-10"
-            >
-              <Undo2 />
-              Restore previous
-              {!actions.state.open && <LockGlyph />}
-            </Button>
-          )}
-          {offer.create && (
-            <Button variant="outline" size="sm" disabled={actions.creation === key} onClick={() => actions.create(target)} className="max-md:h-10">
-              <FilePlus />
-              {actions.creation === key ? "Creating…" : "Create file"}
-              {!actions.state.open && <LockGlyph />}
-            </Button>
-          )}
-          {offer.add && (
-            <Button
-              variant="outline"
-              size="sm"
-              data-add-variable={key}
-              data-after-creation={key}
-              onClick={() => actions.add(target)}
-              className="max-md:h-10"
-            >
-              <Plus />
-              Add variable
-              {!actions.state.open && <LockGlyph />}
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {file.state === "absent" && (
-        <p className="max-w-prose px-4 py-3 text-sm text-pretty text-muted-foreground">
-          Not on the server: {slug} starts without it.
-        </p>
-      )}
-
-      {reason !== null && (
-        <div className="grid max-w-2xl gap-2 px-4 pt-3 pb-4">
-          <p className="text-sm text-pretty">{reason.text}</p>
-          {reason.command !== null && <Command text={reason.command} />}
-          <p className="text-xs text-pretty text-muted-foreground">
-            Expected: <Terminal>{file.expected}</Terminal>. Fix it on the server, then refresh this page.
-          </p>
-        </div>
-      )}
-
-      {offer.add && file.variables.length === 0 && (
-        <p className="border-t px-4 py-3 text-sm text-muted-foreground">No variables yet. Add the first one.</p>
-      )}
-
-      {offer.add && file.variables.length > 0 && (
-        <>
-          <VariablesHeader />
-          <ul aria-label={`Variables in ${file.name}`} className="divide-y divide-divider @max-xl/file:border-t">
-            {file.variables.map((variable) => {
-              const variableTarget = { ...target, variable }
-              const rowOffer = variableOffer(file, variable)
-              if (rowOffer === "password") {
-                return <PasswordRow key={variable} name={variable} onChangePassword={actions.person ? null : () => actions.changePassword(variableTarget)} />
-              }
-              return (
-                <VariableRow
-                  key={variable}
-                  name={variable}
-                  unlocked={actions.state.open}
-                  read={() => actions.read(variableTarget)}
-                  onUnlock={actions.unlock}
-                  onEdit={() => actions.edit(variableTarget)}
-                  onRemove={() => actions.remove(variableTarget)}
-                />
-              )
-            })}
-          </ul>
-        </>
-      )}
-
-      {error !== "" && (
-        <p role="alert" className="border-t px-4 py-3 text-sm text-destructive">
-          {error}
-        </p>
-      )}
-    </section>
-  )
-}
+import { cn } from "@/lib/utils"
+import type { Severity } from "@/lib/verdict"
 
 // --- What is wrong ---------------------------------------------------------------
 
@@ -162,119 +34,362 @@ export function NameList({ names, lead = null }: { names: readonly string[]; lea
   )
 }
 
-/** What is wrong at the project level: its service, and the restart that is pending. The files say the rest. */
-export function ProblemRow({ problem, slug }: { problem: Problem; slug: string }) {
-  const severity = problem.tone === "error" ? "error" : "warning"
-  let text: ReactNode = null
+/** "The variables and registry.json changed since cms last started.": the pending restart's pill says it in its tooltip. */
+export function pendingSentence(problem: Problem, slug: string): string {
+  if (problem.key !== "pending") return ""
+  const pieces = [...(problem.variables ? ["The variables"] : []), ...problem.files]
+  const names = pieces.length <= 1 ? pieces.join("") : `${pieces.slice(0, -1).join(", ")} and ${pieces[pieces.length - 1]}`
+  return `${capitalise(names)} changed since ${slug} last started. A restart applies them.`
+}
+
+/**
+ * What is wrong with the project as a whole, above its secrets: its service
+ * down or restarting, a store its unit does not read yet. The restart that is
+ * pending is the panel's pill, and what is not set its rows.
+ */
+export function ProblemBanner({ problem, slug }: { problem: Problem; slug: string }) {
   if (problem.key === "service") {
     const systemd = problem.systemd === null ? "" : ` systemd reports ${problem.systemd}.`
-    text =
-      problem.label === "Restarting" ? (
-        <>
-          <strong className="font-medium">{slug} keeps restarting.</strong>
-          {systemd} A value it reads at startup may be wrong: check the latest change below and in Activity, or its logs
-          with journalctl on the server.
-        </>
-      ) : problem.label === "Down" ? (
-        <>
-          <strong className="font-medium">{slug} is down.</strong>
-          {systemd} Check its logs with journalctl on the server before restarting it.
-        </>
-      ) : (
-        <>
-          <strong className="font-medium">
-            {slug} is {problem.label.toLowerCase()}.
-          </strong>
-          {systemd}
-        </>
-      )
-  } else if (problem.key === "pending") {
-    text = (
-      <>
-        <strong className="font-medium">Restart pending.</strong>{" "}
-        <NameList names={problem.files} lead={problem.variables ? "The variables" : null} /> changed since {slug} started.
-      </>
+    const tone = problem.tone === "error" ? "error" : "attention"
+    return (
+      <Banner tone={tone}>
+        {problem.label === "Restarting" ? (
+          <>
+            <strong className="font-medium">{slug} keeps restarting.</strong>
+            {systemd} A value it reads at startup may be wrong: check the latest change in History, or its logs with journalctl on
+            the server.
+          </>
+        ) : problem.label === "Down" ? (
+          <>
+            <strong className="font-medium">{slug} is down.</strong>
+            {systemd} Check its logs with journalctl on the server before restarting it.
+          </>
+        ) : (
+          <>
+            <strong className="font-medium">
+              {slug} is {problem.label.toLowerCase()}.
+            </strong>
+            {systemd}
+          </>
+        )}
+      </Banner>
     )
-  } else if (problem.key === "store-unread") {
-    text = (
-      <>
-        <strong className="font-medium">{slug} does not read its store yet.</strong> What is set here reaches it once it
-        is deployed again, or refreshed: <code className="font-mono text-xs whitespace-nowrap">sitesolide refresh {slug}</code>
-      </>
-    )
-  } else {
-    return null
   }
-  return (
-    <li className="flex gap-3 px-4 py-3">
-      <SeverityIcon severity={severity} label className="mt-0.5" />
-      <p className="min-w-0 flex-1 text-sm text-pretty">{text}</p>
-    </li>
-  )
+  if (problem.key === "store-unread") {
+    return (
+      <Banner tone="attention">
+        <strong className="font-medium">{slug} does not read its store yet.</strong> What is set here reaches it once it is
+        deployed again, or refreshed: <code className="font-mono text-xs whitespace-nowrap">sitesolide refresh {slug}</code>
+      </Banner>
+    )
+  }
+  return null
 }
 
 // --- A site's files --------------------------------------------------------------
 
-/** A panel's line on the project's service: its word, how long it has run, its unit; `none` when it has no service. */
-export function ServiceLine({ project, serverNow, none }: { project: ProjectView; serverNow: number; none: string }) {
-  if (project.service === null) return <span className="text-sm">{none}</span>
-  const service = readService(project.service, serverNow)
-  return (
-    <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-      <span className="sr-only">Service: </span>
-      <Status tone={service.tone}>{service.text}</Status>
-      {service.detail !== null && <span className="text-muted-foreground tabular-nums">{service.detail}</span>}
-      <code className="font-mono text-xs text-muted-foreground">{project.service.unit}</code>
-    </span>
-  )
+/**
+ * A line of the platform's files: a file, under which come its variables, or
+ * what it says instead of them, missing or unmanaged.
+ */
+type FileLine =
+  | { kind: "file"; file: FileView }
+  | { kind: "variable"; file: FileView; name: string }
+  | { kind: "note"; file: FileView }
+
+function linesOf(files: readonly FileView[]): FileLine[] {
+  return files.flatMap((file): FileLine[] => {
+    if (file.state === "managed") return [{ kind: "file", file }, ...file.variables.map((name): FileLine => ({ kind: "variable", file, name }))]
+    return [{ kind: "file", file }, { kind: "note", file }]
+  })
 }
 
+const lineKey = (line: FileLine) => (line.kind === "file" ? line.file.name : line.kind === "note" ? `${line.file.name} note` : `${line.file.name}/${line.name}`)
+
+/** Hidden in a narrow list, where the row menu holds the same action. */
+const WIDE_ONLY = "@max-xl/table:hidden"
+
 /**
- * The platform's own files, on the dashboard's and the portal's sites: the
- * service and its restart, what is wrong, then each file, its actions and its
- * variables. Changing site or section unmounts the
- * rows, and with them any revealed value.
+ * The platform's own files, on the dashboard's and the portal's sites: one
+ * list, each file a heading line with its actions and its variables under
+ * it, one line each. The restart is prominent while one is pending, in the
+ * panel's menu otherwise. Changing site or section unmounts the rows, and
+ * with them any revealed value.
  */
 export function FilesPanel({ project }: { project: ProjectView }) {
   const actions = useSecretsActions()
-  const problems = projectProblems(project, actions.serverNow).filter(
-    (problem) => problem.key === "service" || problem.key === "pending",
+  const slug = project.slug
+  const locked = !actions.state.open
+  const problems = projectProblems(project, actions.serverNow)
+  const service = problems.filter((problem) => problem.key === "service")
+  const pending = problems.find((problem) => problem.key === "pending") ?? null
+  const restartable = project.service !== null
+  const restartLocked = locked && !actions.person
+  const values: ValueTable = useValueTable(
+    actions.state.open,
+    (key) => {
+      const [file, ...rest] = key.split("/")
+      return actions.read({ slug, file: file ?? "", variable: rest.join("/") })
+    },
+    (purpose) => actions.unlock({ purpose }),
   )
-  const wait = problems.some((problem) => problem.key === "pending")
+  const lines = linesOf(project.files)
+
+  const severity = (line: FileLine): Severity | null =>
+    line.kind !== "file" ? null : line.file.state === "absent" ? "error" : line.file.state === "unmanaged" ? "warning" : null
+
+  const columns: Column<FileLine>[] = [
+    {
+      key: "name",
+      head: "Name",
+      width: "minmax(13rem,20rem)",
+      slot: "primary",
+      cell: (line) => {
+        if (line.kind === "file") {
+          return (
+            <>
+              <FileText aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+              <CellText title={line.file.name} className="font-mono text-[0.8125rem] font-semibold text-strong">
+                {line.file.name}
+              </CellText>
+              {line.file.state === "absent" && (
+                <StateLabel tone="error" className="shrink-0">
+                  Missing
+                </StateLabel>
+              )}
+              {line.file.state === "unmanaged" && (
+                <StateLabel tone="attention" className="shrink-0">
+                  Unmanaged
+                </StateLabel>
+              )}
+            </>
+          )
+        }
+        if (line.kind === "note") return null
+        return (
+          <CellText title={line.name} className="pl-6 font-mono text-[0.8125rem]">
+            {line.name}
+          </CellText>
+        )
+      },
+    },
+    {
+      key: "value",
+      head: "Value",
+      width: "minmax(0,1fr)",
+      slot: "meta",
+      cell: (line) => {
+        if (line.kind === "file") {
+          const count = fileSummary(line.file)
+          const change = line.file.modifiedAt === null ? null : `changed ${ago(actions.serverNow - line.file.modifiedAt)}`
+          const meta = [count, change].filter((piece): piece is string => piece !== null).join(", ")
+          return meta === "" ? null : <span className="text-xs text-muted-foreground tabular-nums">{meta}</span>
+        }
+        if (line.kind === "note") {
+          if (line.file.state === "absent") return <span className="py-2 text-sm text-pretty text-muted-foreground">Not on the server: {slug} starts without it.</span>
+          const reason = splitReason(line.file.reason ?? "")
+          return (
+            <span className="grid min-w-0 gap-2 py-2">
+              <span className="text-sm text-pretty">{reason.text}</span>
+              {reason.command !== null && <Command text={reason.command} />}
+              <span className="text-xs text-pretty text-muted-foreground">
+                Expected: <code className="font-mono">{line.file.expected}</code>. Fix it on the server, then refresh this page.
+              </span>
+            </span>
+          )
+        }
+        if (variableOffer(line.file, line.name) === "password") {
+          return (
+            <span className="text-xs text-pretty text-muted-foreground">
+              {actions.person ? "A password hash. It never shows, and only the owner changes it." : "A password hash. It never shows: change the password instead."}
+            </span>
+          )
+        }
+        return <ValueCell table={values} rowKey={lineKey(line)} />
+      },
+    },
+    {
+      key: "actions",
+      head: "",
+      srHead: "Actions",
+      width: "13rem",
+      align: "end",
+      slot: "state",
+      cell: (line) => {
+        const target: FileTarget = { slug, file: line.file.name }
+        const key = fileKey(target)
+        if (line.kind === "file") {
+          const offer = fileOffer(line.file)
+          return (
+            <>
+              {offer.create && (
+                <Button variant="outline" size="sm" disabled={actions.creation === key} onClick={() => actions.create(target)} className="max-md:h-10">
+                  <FilePlus />
+                  {actions.creation === key ? "Creating…" : "Create file"}
+                  {locked && <LockGlyph />}
+                </Button>
+              )}
+              {offer.add && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  data-add-variable={key}
+                  data-after-creation={key}
+                  onClick={() => actions.add(target)}
+                  className={cn("text-muted-foreground hover:text-foreground", ON_HOVER, WIDE_ONLY)}
+                >
+                  <Plus />
+                  Add variable
+                  {locked && <LockGlyph />}
+                </Button>
+              )}
+            </>
+          )
+        }
+        if (line.kind === "note") return null
+        const variable = { ...target, variable: line.name }
+        if (variableOffer(line.file, line.name) === "password") {
+          if (actions.person) return null
+          return (
+            <Button variant="outline" size="sm" data-password-variable={line.name} onClick={() => actions.changePassword(variable)} className={cn("max-md:h-10", WIDE_ONLY)}>
+              <RectangleEllipsis />
+              Change password
+              {locked && <LockGlyph />}
+            </Button>
+          )
+        }
+        return (
+          <span className={cn("flex items-center gap-0.5", WIDE_ONLY)}>
+            <RevealButtons table={values} rowKey={lineKey(line)} name={line.name} />
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={values.busy}
+              onClick={() => actions.edit(variable)}
+              aria-label={`Change ${line.name}`}
+              className={cn("text-muted-foreground hover:text-foreground", ON_HOVER)}
+            >
+              <Pencil />
+              Change
+              {locked && <LockGlyph />}
+            </Button>
+          </span>
+        )
+      },
+    },
+  ]
+
+  const menu = (line: FileLine) => {
+    const target: FileTarget = { slug, file: line.file.name }
+    if (line.kind === "note") return null
+    if (line.kind === "file") {
+      const offer = fileOffer(line.file)
+      if (!offer.add && !offer.restore) return null
+      return (
+        <RowMenu label={`Actions for ${line.file.name}`}>
+          {offer.add && (
+            <DropdownMenuItem onClick={() => actions.add(target)} className="h-9">
+              <Plus />
+              Add variable
+              {locked && <LockGlyph className="ml-auto" />}
+            </DropdownMenuItem>
+          )}
+          {offer.restore && (
+            <DropdownMenuItem onClick={() => actions.restore(target)} className="h-9">
+              <Undo2 />
+              Restore previous version
+              {locked && <LockGlyph className="ml-auto" />}
+            </DropdownMenuItem>
+          )}
+        </RowMenu>
+      )
+    }
+    const variable = { ...target, variable: line.name }
+    if (variableOffer(line.file, line.name) === "password") {
+      if (actions.person) return null
+      return (
+        <RowMenu label={`Actions for ${line.name}`}>
+          <DropdownMenuItem onClick={() => actions.changePassword(variable)} className="h-9">
+            <RectangleEllipsis />
+            Change password
+            {locked && <LockGlyph className="ml-auto" />}
+          </DropdownMenuItem>
+        </RowMenu>
+      )
+    }
+    return (
+      <RowMenu label={`Actions for ${line.name}`}>
+        <RevealMenuItems table={values} rowKey={lineKey(line)} name={line.name} />
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => actions.edit(variable)} className="h-9">
+          <Pencil />
+          Change value
+          {locked && <LockGlyph className="ml-auto" />}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem variant="destructive" onClick={() => actions.remove(variable)} className="h-9">
+          <Trash2 />
+          Remove variable
+          {locked && <LockGlyph className="ml-auto" />}
+        </DropdownMenuItem>
+      </RowMenu>
+    )
+  }
+
+  const errors = project.files
+    .map((file) => ({ file: file.name, error: actions.errors[fileKey({ slug, file: file.name })] ?? "" }))
+    .filter((entry) => entry.error !== "")
 
   return (
-    <Panel
-      title="Files"
-      count={project.files.length}
-      full
-      description={<ServiceLine project={project} serverNow={actions.serverNow} none="No service: nothing reads these files at startup." />}
-      actions={
-        project.service === null ? undefined : (
-          <Button variant={wait ? "default" : "outline"} size="sm" onClick={() => actions.restart(project.slug)} className="max-md:h-10">
-            <RotateCcw />
-            Restart service
-            {!actions.state.open && !actions.person && <LockGlyph />}
-          </Button>
-        )
-      }
-    >
-      {problems.length > 0 && (
-        <ul aria-label={`What needs attention in ${project.slug}`} className="divide-y divide-divider border-b">
-          {problems.map((problem) => (
-            <ProblemRow key={problem.key} problem={problem} slug={project.slug} />
-          ))}
-        </ul>
-      )}
-
-      {project.files.length === 0 ? (
-        <EmptyState icon={FileText} title="No secret files" compact />
-      ) : (
-        <div className="grid gap-3 p-3">
-          {project.files.map((file) => (
-            <FileBlock key={file.name} slug={project.slug} file={file} />
-          ))}
-        </div>
-      )}
-    </Panel>
+    <>
+      {service.map((problem) => (
+        <ProblemBanner key={problem.key} problem={problem} slug={slug} />
+      ))}
+      <Panel
+        title="Files"
+        count={project.files.length}
+        full
+        actions={
+          restartable ? (
+            pending !== null ? (
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <Status tone="attention" shape="pill" title={pendingSentence(pending, slug)}>
+                  {PENDING_LABEL}
+                </Status>
+                <Button size="sm" onClick={() => actions.restart(slug)} className="max-md:h-10">
+                  <RotateCcw />
+                  Restart service
+                  {restartLocked && <LockGlyph />}
+                </Button>
+              </div>
+            ) : (
+              <RowMenu label={`More actions for ${slug}`} className="size-8">
+                <DropdownMenuItem onClick={() => actions.restart(slug)} className="h-9">
+                  <RotateCcw />
+                  Restart service
+                  {restartLocked && <LockGlyph className="ml-auto" />}
+                </DropdownMenuItem>
+              </RowMenu>
+            )
+          ) : undefined
+        }
+      >
+        <DataTable
+          label={`Files of ${slug}`}
+          caption="Each file, then its variables"
+          narrowBelow="36rem"
+          rows={lines}
+          rowKey={lineKey}
+          columns={columns}
+          severity={severity}
+          menu={menu}
+        />
+        {errors.map((entry) => (
+          <p key={entry.file} role="alert" className="border-t px-4 py-3 text-sm text-destructive">
+            <span className="font-mono">{entry.file}</span>: {entry.error}
+          </p>
+        ))}
+      </Panel>
+    </>
   )
 }
