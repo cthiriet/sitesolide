@@ -100,7 +100,7 @@ describe("gauge colour", () => {
 })
 
 describe("thresholds engraved on the track", () => {
-  /** The machine plate ticks every gauge at the thresholds: the position has to follow the constant. */
+  /** The machine strip ticks every gauge at the thresholds: the position has to follow the constant. */
   test("one position per threshold, following its value, spelled out in full", async () => {
     const source = await Bun.file(new URL("../src/lib/gauges.ts", import.meta.url)).text()
     expect(THRESHOLD_POSITIONS.map(({ threshold }) => threshold)).toEqual([WARNING_THRESHOLD, CRITICAL_THRESHOLD])

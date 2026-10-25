@@ -506,17 +506,25 @@ export function kindLine(site: Pick<Site, "type" | "headless" | "services">): { 
 }
 
 /**
- * The state said beside the kind under the title, quiet when fine: nothing
- * for a running app, nor for a static site or a folder with no manifest,
- * whose kind already says there is nothing to run; the word in its tone
- * otherwise, with what the discrepancies count. Null when there is nothing
- * to say.
+ * The state said beside the kind under the title, and on the site's card in
+ * the sidebar, quiet when fine: nothing for a running app, nor for a static
+ * site or a folder with no manifest, whose kind already says there is
+ * nothing to run. Otherwise what is wrong, in its tone: the service's word
+ * when the service itself is in trouble, "Restarting, 3 errors", and the
+ * discrepancies' count alone when it is not, "1 warning" rather than
+ * "Running, 1 warning" or "Static files, 1 warning", which the kind beside
+ * it already says. Null when there is nothing to say.
  */
 export function headerState(site: Pick<Site, "type" | "service">, discrepancies: readonly Discrepancy[]): ServiceState | null {
   const state = siteState(site, discrepancies)
   if (state.tone === "ok") return null
   if (state.tone === "neutral" && site.type !== "app") return null
-  return state
+  const service = serviceState(site)
+  const quietService = service.tone === "ok" || (service.tone === "neutral" && site.type !== "app")
+  if (!quietService || discrepancies.length === 0) return state
+  const { errors, warnings } = countBySeverity(discrepancies)
+  const label = [errors > 0 ? plural(errors, "error") : null, warnings > 0 ? plural(warnings, "warning") : null].filter((part) => part !== null).join(", ")
+  return { tone: state.tone, label }
 }
 
 // --- The Site panel --------------------------------------------------------------

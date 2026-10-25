@@ -540,9 +540,15 @@ describe("the Overview as a hub", () => {
   test("the state beside the kind only when it is not fine", () => {
     expect(headerState(site(), [])).toBeNull()
     expect(headerState(site({ type: "static", service: null }), [])).toBeNull()
-    expect(headerState(site(), [discrepancy("warning")])).toEqual({ tone: "attention", label: "Running, 1 warning" })
+    // A service that runs says nothing of itself: the count alone, the kind beside it saying what the site is.
+    expect(headerState(site(), [discrepancy("warning")])).toEqual({ tone: "attention", label: "1 warning" })
     expect(headerState(site({ service: service({ active: "activating", subState: "auto-restart" }) }), [])).toEqual({ tone: "error", label: "Restarting" })
-    expect(headerState(site({ type: "static", service: null }), [discrepancy("error")])).toEqual({ tone: "error", label: "Static files, 1 error" })
+    expect(headerState(site({ type: "static", service: null }), [discrepancy("error")])).toEqual({ tone: "error", label: "1 error" })
+    // A service in trouble keeps its word beside the count.
+    expect(headerState(site({ service: service({ active: "activating", subState: "auto-restart" }) }), [discrepancy("error"), discrepancy("warning")])).toEqual({
+      tone: "error",
+      label: "Restarting, 1 error, 1 warning",
+    })
   })
 
   test("the address that answers is the link; a domain not answering as asked says its state; the others are listed under it", () => {

@@ -1021,8 +1021,10 @@ to keep it; a removal retypes the name.
 **A site's Overview.** The site's hub: is it working, and which of its
 sections needs me. Under the title, what the project is, its kind's icon and
 word (`kindLine`: *App*, *Static site*, *Background, 3 services*), its state
-only when it is not fine (*Restarting, 3 errors* in its tone, nothing for a
-running app nor a static site), the description and the main address, which a
+only when it is not fine (*Restarting, 3 errors* in its tone, the service's
+word only when the service is in trouble, "1 warning" for a running app or a
+static site with a discrepancy, nothing for a running app nor a static site
+without), the description and the main address, which a
 project serving no page does not offer as a page; its discrepancies as
 banners of one line each. Then two panels side by side, a single column below
 56 rem of the body, in this order:

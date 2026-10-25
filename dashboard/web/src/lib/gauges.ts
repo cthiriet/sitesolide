@@ -28,7 +28,7 @@ export const MEMORY_CRITICAL_SHARE = 0.9
 export type Level = "normal" | "warn" | "critical"
 
 /**
- * Where the two thresholds sit on a gauge's track, which the machine plate
+ * Where the two thresholds sit on a gauge's track, which the machine strip
  * engraves. Spelled out in full, like every class Tailwind has to generate:
  * tests/gauges.test.ts checks that they follow the thresholds.
  */
