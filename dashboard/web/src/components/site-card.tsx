@@ -307,7 +307,8 @@ const SERVICE_COLUMNS: readonly Column<ServiceRow>[] = [
   {
     key: "memory",
     head: "Memory",
-    width: "7rem",
+    // Room for the longest, "900 MB of 3.8 GB", on one line.
+    width: "9rem",
     align: "end",
     // On two lines an empty cell goes, its dot with it; in columns it keeps its track.
     className: "@max-2xl/table:empty:hidden",

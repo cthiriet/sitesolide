@@ -519,7 +519,9 @@ the dashboard:
   16 px, a cell's 12, the first column's none.
 - **Columns**: the name first, then at most four short ones. Machine
   strings in muted mono, 13 px; numbers and ages right-aligned and
-  tabular; an icon column centred, 64 to 76 px. A cell that may not fit
+  tabular, a figure and its unit never broken across two lines ("237 of
+  768 MB"), the column as wide as its longest value; an icon column
+  centred, 64 to 76 px. A cell that may not fit
   cuts with an ellipsis and keeps its whole text in its tooltip (`CellText`).
 - **Two lines** below the width the columns need (`narrowBelow`, the
   table's own width): 56 to 60 px, each column where its `slot` says,

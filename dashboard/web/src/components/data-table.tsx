@@ -116,9 +116,14 @@ const SLOT_ORDER: Readonly<Record<Exclude<Slot, "hide">, string>> = {
   time: "order-5 ml-auto shrink-0",
 }
 
+/**
+ * A column aligned at its end holds figures and ages: tabular, and never
+ * broken across two lines, "237 of 768 MB" being one figure. Its width is
+ * set for its longest value.
+ */
 const ALIGN: Readonly<Record<NonNullable<Column<unknown>["align"]>, string>> = {
   start: "justify-start text-left",
-  end: "justify-end text-right tabular-nums",
+  end: "justify-end text-right tabular-nums whitespace-nowrap",
   center: "justify-center",
 }
 
