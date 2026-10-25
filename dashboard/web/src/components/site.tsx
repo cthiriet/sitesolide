@@ -13,6 +13,7 @@ import { SidebarMenuButton } from "@/components/ui/sidebar"
 import { useData } from "@/components/data"
 import { InternalLink } from "@/components/navigation"
 import { WithSnapshot, PageBody, EmptyState, PageHeader, Panel, Status } from "@/components/page"
+import type { HistoryFilter } from "@/lib/history"
 import { isPerson } from "@/lib/identity"
 import { pageTitle, siteUrl, type Section } from "@/lib/pages"
 import { siteDiscrepancies, siteState } from "@/lib/site-card"
@@ -221,12 +222,15 @@ export function SectionLink({
 /**
  * A site's section: the header with its breadcrumb and, on a phone, the
  * switcher; then the body, which only receives a site the snapshot knows. An
- * unknown slug says so, in every section, with the way back.
+ * unknown slug says so, in every section, with the way back. `intro`,
+ * `history` and `actions` are the page header's (components/page.tsx).
  */
 export function SitePage({
   slug,
   section,
   count,
+  intro,
+  history,
   description,
   actions,
   skeleton,
@@ -235,6 +239,8 @@ export function SitePage({
   slug: string
   section: Section
   count?: ReactNode
+  intro?: ReactNode
+  history?: HistoryFilter
   description?: ReactNode
   actions?: ReactNode
   skeleton: ReactNode
@@ -248,6 +254,8 @@ export function SitePage({
         breadcrumb={<SiteBreadcrumb slug={slug} section={section} />}
         afterTitle={<HeaderSitePicker slug={slug} section={section} />}
         count={count}
+        intro={intro}
+        history={history}
         description={description}
         actions={actions}
       />

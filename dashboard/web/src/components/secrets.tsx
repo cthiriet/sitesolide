@@ -1,9 +1,10 @@
 import { type ReactNode } from "react"
-import { FilePlus, FileText, KeyRound, Lock, LockOpen, Plus, RotateCcw, Undo2 } from "lucide-react"
+import { FilePlus, FileText, Plus, RotateCcw, Undo2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Command } from "@/components/copy"
 import { EmptyState, SeverityIcon, Panel, Status } from "@/components/page"
 import { fileKey, useSecretsActions, type FileTarget } from "@/components/secrets-actions"
+import { LockGlyph } from "@/components/unlock"
 import { VariablesHeader, PasswordRow, VariableRow } from "@/components/secrets-variables"
 import { ago } from "@/lib/format"
 import {
@@ -15,52 +16,7 @@ import {
   fileSummary,
   type Problem,
 } from "@/lib/secrets"
-import { TONE_PILL } from "@/lib/tones"
 import type { FileView, ProjectView } from "@/lib/types"
-import { cn } from "@/lib/utils"
-
-// --- The lock, in the page header ------------------------------------------------
-
-/**
- * The lock, among the header's actions: visible from the whole page, since the
- * header stays at the top.
- *
- * Locked, a single button says what it does, with a key rather than a padlock:
- * a closed "Locked" pill beside an open padlock on the button read as two
- * states at once. Unlocked, a warning pill with the time left joins it, since
- * the values are then one click away, and the button locks again. `quiet`
- * where the page's own primary action is elsewhere, Add on Access and the
- * like: one primary per view.
- */
-export function SecretsLockControl({ quiet = false }: { quiet?: boolean }) {
-  const { state, locking, lockButtonRef, unlock, lock } = useSecretsActions()
-  return (
-    <>
-      {state.open && (
-        <span
-          className={cn(
-            "inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium whitespace-nowrap tabular-nums",
-            TONE_PILL.attention,
-          )}
-        >
-          <LockOpen aria-hidden="true" className="size-3.5" />
-          {state.label}
-        </span>
-      )}
-      {/* One single button, whose label changes: focus stays on it from one state to the next. */}
-      <Button
-        ref={lockButtonRef}
-        variant={state.open || quiet ? "outline" : "default"}
-        disabled={locking}
-        onClick={state.open ? lock : () => unlock()}
-        className="max-md:h-10 max-md:px-3"
-      >
-        {state.open ? <Lock /> : <KeyRound />}
-        {state.open ? (locking ? "Locking…" : "Lock") : "Unlock changes"}
-      </Button>
-    </>
-  )
-}
 
 // --- A file ----------------------------------------------------------------------
 
@@ -104,12 +60,14 @@ function FileBlock({ slug, file }: { slug: string; file: FileView }) {
             >
               <Undo2 />
               Restore previous
+              {!actions.state.open && <LockGlyph />}
             </Button>
           )}
           {offer.create && (
             <Button variant="outline" size="sm" disabled={actions.creation === key} onClick={() => actions.create(target)} className="max-md:h-10">
               <FilePlus />
               {actions.creation === key ? "Creating…" : "Create file"}
+              {!actions.state.open && <LockGlyph />}
             </Button>
           )}
           {offer.add && (
@@ -123,6 +81,7 @@ function FileBlock({ slug, file }: { slug: string; file: FileView }) {
             >
               <Plus />
               Add variable
+              {!actions.state.open && <LockGlyph />}
             </Button>
           )}
         </div>
@@ -294,6 +253,7 @@ export function FilesPanel({ project }: { project: ProjectView }) {
           <Button variant={wait ? "default" : "outline"} size="sm" onClick={() => actions.restart(project.slug)} className="max-md:h-10">
             <RotateCcw />
             Restart service
+            {!actions.state.open && !actions.person && <LockGlyph />}
           </Button>
         )
       }

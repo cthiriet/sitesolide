@@ -28,6 +28,22 @@ function buildVersion() {
 }
 
 /**
+ * The pattern gallery, `/gallery/`: every shared component of the dashboard
+ * drawn with fictitious rows inside the real shell, for whoever builds a
+ * screen on them. Built only when asked, `DASHBOARD_GALLERY=1 bun run build`,
+ * for the page bench: never part of what is deployed.
+ */
+const gallery = {
+  name: "sitesolide-gallery",
+  hooks: {
+    /** @param {{ injectRoute: (route: { pattern: string, entrypoint: string }) => void }} options */
+    "astro:config:setup": ({ injectRoute }) => {
+      if (Bun.env.DASHBOARD_GALLERY === "1") injectRoute({ pattern: "/gallery", entrypoint: "./src/gallery/index.astro" })
+    },
+  },
+}
+
+/**
  * The page is built here and dropped into ../public, the manifest's
  * `publicDir`: the platform sends it with its own rsync and Caddy serves it
  * without ever waking Bun. This `web/` directory never goes up to the VM,
@@ -55,5 +71,5 @@ export default defineConfig({
     // Read by src/lib/version.ts.
     define: { SITESOLIDE_BUILD_VERSION: JSON.stringify(buildVersion()) },
   },
-  integrations: [react()],
+  integrations: [react(), gallery],
 })

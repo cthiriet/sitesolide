@@ -59,23 +59,24 @@ export type UnlockStatus =
   | { open: false; expired: boolean; label: string }
   | { open: true; remainingMs: number; remainingText: string; label: string }
 
-/** "9 min left", and "< 1 min left" rather than a zero that would read as locked. */
+/** "9 min", and "< 1 min" rather than a zero that would read as locked. */
 export function remainingLabel(remainingMs: number): string {
-  if (remainingMs < 60_000) return "< 1 min left"
-  return `${Math.floor(remainingMs / 60_000)} min left`
+  if (remainingMs < 60_000) return "< 1 min"
+  return `${Math.floor(remainingMs / 60_000)} min`
 }
 
 /**
- * The header's state. Expires at the very millisecond the steward stops
- * accepting the token: an unlock that ends now is over. `expired` tells the end
- * of an unlock apart from a lock that was never opened.
+ * The header's state, the pill's "Unlocked, 9 min" while open. Expires at the
+ * very millisecond the steward stops accepting the token: an unlock that ends
+ * now is over. `expired` tells the end of an unlock apart from a lock that
+ * was never opened.
  */
 export function unlockStatus(until: number | null, now: number, offset = 0): UnlockStatus {
   if (until === null) return { open: false, expired: false, label: "Locked" }
   const remainingMs = until - (now + offset)
   if (remainingMs <= 0) return { open: false, expired: true, label: "Locked" }
   const remainingText = remainingLabel(remainingMs)
-  return { open: true, remainingMs, remainingText, label: `Changes unlocked, ${remainingText}` }
+  return { open: true, remainingMs, remainingText, label: `Unlocked, ${remainingText}` }
 }
 
 /** What a revealed value says about its remasking: "Hides in 24s", never "in 0s". */

@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label"
 import { Command, useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
 import { Banner, EmptyState, ErrorState, FormError, INPUT_DIALOG, Panel, PanelSkeleton, RowsSkeleton, Status, useRetry } from "@/components/page"
-import { SecretsLockControl } from "@/components/secrets"
+import { WriteButton } from "@/components/unlock"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { Track, useClock } from "@/components/secrets-dialogs"
 import { SitePage } from "@/components/site"
@@ -186,17 +186,19 @@ function SnapshotsPanel({
   const hidden = view.snapshots.length - shown.length
   const caption = `Snapshots of ${view.slug}, newest first`
   const restoreButton = (snapshot: SnapshotView) => (
-    <Button
+    <WriteButton
       variant="outline"
       size="sm"
       disabled={!view.restorable}
-      onClick={() => onRestore(snapshot)}
+      onPress={() => onRestore(snapshot)}
+      purpose={`restore ${view.slug}`}
+      resume="Restore"
       aria-label={`Restore ${view.slug} from ${dateTime(snapshot.takenAt)}`}
       className="max-md:h-10"
     >
       <ArchiveRestore />
       Restore
-    </Button>
+    </WriteButton>
   )
   return (
     <Panel
@@ -555,7 +557,6 @@ function RestoreDialog({
 
 function Content({ slug, backups, onRestore }: { slug: string; backups: ReturnType<typeof useBackups>; onRestore: (snapshot: SnapshotView) => void }) {
   const { now, offset } = useData()
-  const actions = useSecretsActions()
   const serverNow = now + offset
   const { load, reload } = backups
   const { retrying, retry } = useRetry(reload)
@@ -634,13 +635,6 @@ function Content({ slug, backups, onRestore }: { slug: string; backups: ReturnTy
 
   return (
     <>
-      <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
-        The server saves {slug}'s data folder every hour. Restoring puts a snapshot in place of the current data, which is
-        saved first, so a restore can be undone. {actions.person ? "It asks you to sign in again with your provider." : "It asks for the dashboard password."}
-      </p>
-
-      {actions.unlockNotice !== null && <Banner tone="error">{actions.unlockNotice}</Banner>}
-
       {restore?.state === "running" && (
         <Banner tone="attention" icon={ArchiveRestore}>
           <span className="font-medium">A restore of {slug} is in progress.</span> {restore.message}
@@ -661,8 +655,9 @@ function Content({ slug, backups, onRestore }: { slug: string; backups: ReturnTy
 }
 
 /**
- * A site's backups, under `/site/backups/?s=<slug>`: the lock in the header,
- * the schedule, the snapshots with their restore, then the activity.
+ * A site's backups, under `/site/backups/?s=<slug>`: the schedule, the
+ * snapshots with their restore, then the activity. A restore asks for the
+ * unlock when pressed, then opens its confirmation.
  */
 export function BackupsSection({ slug }: { slug: string }) {
   const { secrets, refresh } = useData()
@@ -672,12 +667,9 @@ export function BackupsSection({ slug }: { slug: string }) {
   const openings = useRef(0)
 
   const view = backups.load.state === "ready" ? backups.load.view : null
-  // The lock appears once both have been read: a steward that does not answer would refuse it.
-  const headerActions = view !== null && view.installed && secrets.projects !== null ? <SecretsLockControl /> : undefined
 
+  /** Unlocked by then: `WriteButton` asked first. The confirmation follows, as before. */
   function askRestore(snapshot: SnapshotView) {
-    // Locked, the password comes first, and the restore is not replayed after it.
-    if (!actions.state.open) return actions.unlock()
     openings.current += 1
     setOpening({ snapshot, opening: openings.current, open: true })
   }
@@ -694,7 +686,16 @@ export function BackupsSection({ slug }: { slug: string }) {
         slug={slug}
         section="backups"
         count={view !== null && view.snapshots.length > 0 ? view.snapshots.length : undefined}
-        actions={headerActions}
+        intro={
+          view !== null && view.installed ? (
+            <p>
+              The server saves {slug}'s data folder every hour. Restoring puts a snapshot in place of the current data, which is
+              saved first, so a restore can be undone.{" "}
+              {actions.person ? "It asks you to sign in again with your provider." : "It asks for the dashboard password."}
+            </p>
+          ) : undefined
+        }
+        history={{ target: slug, type: "backups" }}
         skeleton={<PanelSkeleton lines={5} />}
       >
         {() => <Content slug={slug} backups={backups} onRestore={askRestore} />}

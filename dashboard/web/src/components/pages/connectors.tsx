@@ -19,7 +19,7 @@ import { useData } from "@/components/data"
 import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
 import { Banner, EmptyState, ErrorState, FormError, INPUT_DIALOG, PageBody, PageHeader, Panel, RowsSkeleton, Status, When, useRetry } from "@/components/page"
-import { SecretsLockControl } from "@/components/secrets"
+import { WriteButton } from "@/components/unlock"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { returnTo, type FocusReturn } from "@/components/secrets-dialogs"
 import {
@@ -46,9 +46,9 @@ import { cn } from "@/lib/utils"
  * handing them over, who asks for which, who has been granted which, and what
  * the egress proxy did with them.
  *
- * Every write goes through the steward under the secrets' unlock, the lock in
- * the header being the same one. A value is typed once, sent once, and never
- * shown: there is no Reveal here.
+ * Every write goes through the steward under the secrets' unlock, the same
+ * one, asked for when a write is pressed. A value is typed once, sent once,
+ * and never shown: there is no Reveal here.
  */
 
 type ListState =
@@ -374,10 +374,10 @@ function ConnectorsPanel({
       full
       actions={
         canWrite ? (
-          <Button variant="outline" size="sm" onClick={onAdd} className="max-md:h-10">
+          <WriteButton variant="outline" size="sm" onPress={onAdd} purpose="add a connector" resume="Add connector" className="max-md:h-10">
             <Plus />
             Add connector
-          </Button>
+          </WriteButton>
         ) : undefined
       }
     >
@@ -408,19 +408,28 @@ function ConnectorsPanel({
                 </div>
                 {canWrite && (
                   <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={() => onEdit(connector)} className="max-md:h-10">
+                    <WriteButton
+                      variant="outline"
+                      size="sm"
+                      onPress={() => onEdit(connector)}
+                      purpose={`change ${connector.name}`}
+                      resume="Change"
+                      className="max-md:h-10"
+                    >
                       <Pencil />
                       Change
-                    </Button>
-                    <Button
+                    </WriteButton>
+                    <WriteButton
                       variant="ghost"
                       size="sm"
-                      onClick={() => onRemove(connector)}
+                      onPress={() => onRemove(connector)}
+                      purpose={`remove ${connector.name}`}
+                      resume="Remove"
                       className="text-muted-foreground hover:text-foreground max-md:h-10"
                     >
                       <Trash2 />
                       Remove
-                    </Button>
+                    </WriteButton>
                   </div>
                 )}
               </li>
@@ -455,15 +464,16 @@ function GrantsPanel({
     const key = `${row.slug}/${row.connector}`
     const busy = inFlight === key
     return (
-      <Button
+      <WriteButton
         variant={words.action === "grant" ? "outline" : "ghost"}
         size="sm"
         disabled={inFlight !== null}
-        onClick={() => onToggle(row)}
+        onPress={() => onToggle(row)}
+        purpose={words.action === "grant" ? `grant ${row.connector} to ${row.slug}` : `withdraw ${row.connector} from ${row.slug}`}
         className={cn("max-md:h-10", words.action === "withdraw" && "text-muted-foreground hover:text-foreground")}
       >
         {words.action === "grant" ? (busy ? "Granting…" : "Grant") : busy ? "Withdrawing…" : "Withdraw"}
-      </Button>
+      </WriteButton>
     )
   }
 
@@ -719,8 +729,8 @@ export function ConnectorsPage() {
     actions.unlock()
   }
 
+  /** Unlocked by then: `WriteButton` asked first. A lock met on the way asks again, without replaying. */
   async function toggle(row: GrantRow) {
-    if (!actions.state.open) return locked()
     const words = grantWords(row)
     const granted = words.action === "grant"
     setGrantError("")
@@ -743,20 +753,22 @@ export function ConnectorsPage() {
 
   const known = new Set(snapshot?.sites.map((site) => site.slug) ?? [])
   const ready = list.state === "ready" ? list.view : null
-  const writable = ready !== null && ready.installed && ready.state === "managed"
-  const canWrite = writable && actions.state.open
-  // No lock until something has been read: a steward that does not answer would refuse.
-  const headerActions = secrets.projects === null ? undefined : <SecretsLockControl />
+  // The writes are offered locked too: each asks for the unlock when pressed.
+  const canWrite = ready !== null && ready.installed && ready.state === "managed"
 
   return (
     <>
-      <PageHeader title="Connectors" actions={headerActions} />
+      <PageHeader
+        title="Connectors"
+        intro={
+          <p>
+            Credentials this server lends to projects without handing them over. A project calls the egress proxy, which adds
+            the credential on the way out: it never appears in the project's code, repository or environment.
+          </p>
+        }
+        history={{ type: "egress" }}
+      />
       <PageBody>
-        <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
-          Credentials this server lends to projects without handing them over. A project calls the egress proxy, which adds the
-          credential on the way out: it never appears in the project's code, repository or environment.
-        </p>
-
         {list.state === "loading" && (
           <div aria-busy="true" aria-label="Loading connectors" className="overflow-hidden rounded-xl border bg-card">
             <RowsSkeleton lines={3} />
@@ -783,9 +795,6 @@ export function ConnectorsPage() {
           <Banner tone="error">
             The connectors aren't managed here: {ready.reason}. Nothing is written until the files are repaired on the server.
           </Banner>
-        )}
-        {writable && !actions.state.open && (
-          <p className="text-sm text-muted-foreground">Unlock to add, change or grant connectors.</p>
         )}
 
         {ready !== null && (

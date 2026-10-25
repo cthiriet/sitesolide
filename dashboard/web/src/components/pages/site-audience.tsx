@@ -227,6 +227,25 @@ function NoVisits({ slug, zone }: { slug: string; zone: string }) {
   )
 }
 
+/**
+ * The header's intro: what is counted and how, then how two of the figures
+ * read, which the page used to say above and below its panels.
+ */
+function Intro({ slug, days, measure }: { slug: string; days: number; measure: Measure }) {
+  return (
+    <>
+      <p>
+        Who reads {slug}, over the last {days} days. No cookie, no local storage: a visitor is a fingerprint that the salt of
+        the day destroys, so the same reader coming back tomorrow counts twice.
+      </p>
+      <p className="text-muted-foreground">
+        Bounce rate: {measure.bounceRate}% of visits read a single page. Time on page averages only the views whose departure
+        was signalled: a browser killed outright sends none.
+      </p>
+    </>
+  )
+}
+
 function Content({ site, audience, zone }: { site: Site; audience: Audience; zone: string }) {
   if (!audience.present) return <NoSnapshot />
 
@@ -244,11 +263,6 @@ function Content({ site, audience, zone }: { site: Site; audience: Audience; zon
 
   return (
     <>
-      <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
-        Who reads {site.slug}, over the last {audience.days} days. No cookie, no local storage: a visitor is a
-        fingerprint that the salt of the day destroys, so the same reader coming back tomorrow counts twice.
-      </p>
-
       {audience.stale && (
         <Banner tone="attention">
           These numbers are {ago(audience.age ?? 0)} old. The analytics service or the collector has stopped.
@@ -283,10 +297,6 @@ function Content({ site, audience, zone }: { site: Site; audience: Audience; zon
         </div>
       )}
 
-      <p className="max-w-2xl text-xs leading-relaxed text-pretty text-muted-foreground">
-        Bounce rate {measure.bounceRate}% of visits read a single page. Time on page averages only the views whose departure
-        was signalled: a browser killed outright sends none.
-      </p>
     </>
   )
 }
@@ -306,9 +316,10 @@ export function AudienceSection({ slug }: { slug: string }) {
       ? reading.audience
       : { present: false, age: null, stale: false, days: 0, from: "", to: "", sites: {} }
   const zone = reading !== null && reading.present ? reading.snapshot.zone : ""
+  const measure: Measure | undefined = audience.present ? audience.sites[slug] : undefined
 
   return (
-    <SitePage slug={slug} section="audience" skeleton={<PanelSkeleton lines={5} />}>
+    <SitePage slug={slug} section="audience" intro={measure === undefined ? undefined : <Intro slug={slug} days={audience.days} measure={measure} />} skeleton={<PanelSkeleton lines={5} />}>
       {(site) => <Content site={site} audience={audience} zone={zone} />}
     </SitePage>
   )

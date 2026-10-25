@@ -6,7 +6,6 @@ import { useData } from "@/components/data"
 import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
 import { Banner, ErrorState, Panel, PanelSkeleton } from "@/components/page"
-import { SecretsLockControl } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { SitePage } from "@/components/site"
 import { readAccess } from "@/lib/api"
@@ -26,7 +25,6 @@ import {
   stewardChoices,
   type GeneralReader,
 } from "@/lib/access"
-import { activityUrl } from "@/lib/audit"
 import { isPerson, roleOn } from "@/lib/identity"
 import { siteUrl } from "@/lib/pages"
 import type { AccessPageResponse, Site } from "@/lib/types"
@@ -106,15 +104,6 @@ function Content({ site }: { site: Site }) {
 
   return (
     <>
-      <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
-        Who can open {slug}, and what each person can do with it here. Changes apply from each person's next visit.{" "}
-        <InternalLink href={activityUrl({ action: "access", target: slug })} className={TEXT_LINK}>
-          See changes in Activity
-        </InternalLink>
-      </p>
-
-      {actions.unlockNotice !== null && <Banner tone="error">{actions.unlockNotice}</Banner>}
-
       {problem !== null && <Banner tone={problem.tone}>{problem.text}</Banner>}
 
       {page !== null && !person && !page.signIn.configured && (
@@ -139,6 +128,7 @@ function Content({ site }: { site: Site }) {
         stewardReason={stewardReason}
         failedNote={admin && loaded.state === "failed" ? "Shown as last read: it can't change until the server answers." : null}
         addresses={addresses}
+        locked={!actions.state.open}
         onChoose={(target) =>
           actions.changeAccess(
             slug,
@@ -169,17 +159,21 @@ function Content({ site }: { site: Site }) {
  * A site's Access, under `/site/access/?s=<slug>`: its general access, how
  * anyone may open it; then its people with access, each with a role, and the
  * field that adds someone. The owner and the project's Admins change them,
- * under their unlock for what lets more in; a Viewer or a Developer reads
- * both, and whom to ask.
+ * under their unlock for what lets more in, asked for when pressed; a Viewer
+ * or a Developer reads both, and whom to ask. Its changes are in Activity,
+ * behind the header's History.
  */
 export function AccessSection({ slug }: { slug: string }) {
-  const { identity, secrets, snapshot } = useData()
-  const admin = !isPerson(identity) || roleOn(identity, slug) === "admin"
+  const { snapshot } = useData()
   const platform = isPlatform(slug, snapshot?.zone ?? null)
-  // The lock appears once the secrets were read: a steward that does not answer would refuse it.
-  const actions = admin && !platform && secrets.projects !== null ? <SecretsLockControl quiet /> : undefined
   return (
-    <SitePage slug={slug} section="access" actions={actions} skeleton={<PanelSkeleton lines={5} />}>
+    <SitePage
+      slug={slug}
+      section="access"
+      intro={<p>Who can open {slug}, and what each person can do with it here. Changes apply from each person's next visit.</p>}
+      history={platform ? undefined : { target: slug, type: "access" }}
+      skeleton={<PanelSkeleton lines={5} />}
+    >
       {(site) => <Content site={site} />}
     </SitePage>
   )

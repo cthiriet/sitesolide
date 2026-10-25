@@ -51,15 +51,15 @@ describe("unlocking", () => {
   test("the time left is counted in whole minutes", () => {
     expect(unlockStatus(NOW + 10 * MINUTE, NOW)).toMatchObject({
       open: true,
-      label: "Changes unlocked, 10 min left",
+      label: "Unlocked, 10 min",
     })
-    expect(unlockStatus(NOW + 10 * MINUTE - 1, NOW)).toMatchObject({ remainingText: "9 min left" })
-    expect(unlockStatus(NOW + MINUTE, NOW)).toMatchObject({ remainingText: "1 min left" })
+    expect(unlockStatus(NOW + 10 * MINUTE - 1, NOW)).toMatchObject({ remainingText: "9 min" })
+    expect(unlockStatus(NOW + MINUTE, NOW)).toMatchObject({ remainingText: "1 min" })
   })
 
   test("under a minute, never a zero that would read as locked", () => {
-    expect(remainingLabel(MINUTE - 1)).toBe("< 1 min left")
-    expect(unlockStatus(NOW + 1, NOW)).toMatchObject({ open: true, remainingText: "< 1 min left" })
+    expect(remainingLabel(MINUTE - 1)).toBe("< 1 min")
+    expect(unlockStatus(NOW + 1, NOW)).toMatchObject({ open: true, remainingText: "< 1 min" })
   })
 
   /** The steward refuses the token at the exact instant of its expiry: so does the page. */
@@ -73,9 +73,9 @@ describe("unlocking", () => {
     // The workstation is five minutes slow: five are left, not ten.
     const offset = 5 * MINUTE
     expect(unlockStatus(NOW + 10 * MINUTE, NOW - offset, offset)).toMatchObject({
-      remainingText: "10 min left",
+      remainingText: "10 min",
     })
-    expect(unlockStatus(NOW + 10 * MINUTE, NOW, offset)).toMatchObject({ remainingText: "5 min left" })
+    expect(unlockStatus(NOW + 10 * MINUTE, NOW, offset)).toMatchObject({ remainingText: "5 min" })
     // The workstation is twelve minutes fast: without correction, every unlock would look already over.
     expect(unlockStatus(NOW + 10 * MINUTE, NOW + 12 * MINUTE, -12 * MINUTE).open).toBe(true)
   })

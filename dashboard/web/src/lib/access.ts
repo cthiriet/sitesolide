@@ -515,12 +515,12 @@ export function needsUnlock(role: AccessRole, password: boolean): boolean {
 }
 
 /**
- * What waits for the unlock, said under the field before Add is pressed:
- * "Giving Developer needs Unlock changes first.", "Password access needs
- * Unlock changes first." The words of the button that unlocks.
+ * What waits for the unlock, said under the field before Add is pressed,
+ * which then asks for it: "Giving Developer asks to unlock changes first.",
+ * "Password access asks to unlock changes first."
  */
 export function unlockLine(role: AccessRole, password: boolean): string {
-  return password ? "Password access needs Unlock changes first." : `Giving ${roleLabel(role)} needs Unlock changes first.`
+  return password ? "Password access asks to unlock changes first." : `Giving ${roleLabel(role)} asks to unlock changes first.`
 }
 
 /** Does changing someone from one role to another wait for the unlock? Raising above Can open does; lowering never. */

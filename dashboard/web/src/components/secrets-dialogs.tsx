@@ -85,9 +85,15 @@ export function useOrigin(): { remember: () => void; focusReturn: FocusReturn } 
 
 // --- Unlocking -----------------------------------------------------------------
 
-/** What an unlock opens, and for how long: the same sentence for the owner's password and a person's provider. */
-const UNLOCK_SCOPE = (how: string) =>
-  `${how} to change secrets, general access, roles, password access, tokens and restores for 10 minutes.`
+/**
+ * How long an unlock lasts, the same sentence for the owner's password and a
+ * person's provider. What it opens is the button's to say: the unlock is
+ * asked for when a write is pressed, and its title names what waits.
+ */
+const UNLOCK_SCOPE = (how: string) => `${how} to make changes for 10 minutes.`
+
+/** "Unlock to create a token" when a write waits, "Unlock changes" otherwise. */
+const unlockTitle = (purpose: string | null) => (purpose === null ? "Unlock changes" : `Unlock to ${purpose}`)
 
 /**
  * The dashboard password, typed a second time and checked by the steward, not
@@ -97,12 +103,15 @@ const UNLOCK_SCOPE = (how: string) =>
  */
 export function UnlockDialog({
   open,
+  purpose = null,
   onClose,
   onUnlocked,
   onRefusal,
   focusReturn,
 }: {
   open: boolean
+  /** What waits for the unlock, for the title: "create a token". */
+  purpose?: string | null
   onClose: () => void
   onUnlocked: (until: number) => void
   onRefusal: OnRefusal
@@ -121,8 +130,8 @@ export function UnlockDialog({
     >
       <DialogContent initialFocus={field} finalFocus={focusReturn} className={cn("sm:max-w-md", INPUT_DIALOG)}>
         <DialogHeader>
-          <DialogTitle>Unlock changes</DialogTitle>
-          <DialogDescription>{UNLOCK_SCOPE("Enter the dashboard password again")}</DialogDescription>
+          <DialogTitle>{unlockTitle(purpose)}</DialogTitle>
+          <DialogDescription>{UNLOCK_SCOPE("Enter the dashboard password")}</DialogDescription>
         </DialogHeader>
         <UnlockForm
           field={field}
@@ -145,6 +154,7 @@ export function UnlockDialog({
  */
 export function PersonUnlockDialog({
   open,
+  purpose = null,
   providerName,
   href,
   onLeave,
@@ -152,6 +162,8 @@ export function PersonUnlockDialog({
   focusReturn,
 }: {
   open: boolean
+  /** What waits for the unlock, for the title: "create a token". */
+  purpose?: string | null
   providerName: string | null
   href: string
   /** Just before leaving for the provider: what the page keeps for the way back. */
@@ -165,7 +177,7 @@ export function PersonUnlockDialog({
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent initialFocus={action} finalFocus={focusReturn} className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Unlock changes</DialogTitle>
+          <DialogTitle>{unlockTitle(purpose)}</DialogTitle>
           <DialogDescription>{UNLOCK_SCOPE(`Sign in again with ${provider}`)} Only what your roles allow.</DialogDescription>
         </DialogHeader>
         <DialogFooter>

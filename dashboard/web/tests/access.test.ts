@@ -509,8 +509,8 @@ describe("a lowering or a removal that takes someone out of the dashboard", () =
   })
 
   test("what waits for the unlock, in the button's words", () => {
-    expect(unlockLine("developer", false)).toBe("Giving Developer needs Unlock changes first.")
-    expect(unlockLine("visitor", true)).toBe("Password access needs Unlock changes first.")
+    expect(unlockLine("developer", false)).toBe("Giving Developer asks to unlock changes first.")
+    expect(unlockLine("visitor", true)).toBe("Password access asks to unlock changes first.")
   })
 })
 

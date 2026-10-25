@@ -7,7 +7,7 @@ import { Who } from "@/components/access-word"
 import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
 import { Banner, EmptyState, ErrorState, PageBody, PageHeader, Panel, PanelSkeleton, Status } from "@/components/page"
-import { SecretsLockControl } from "@/components/secrets"
+import { WriteButton } from "@/components/unlock"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { CreateTokenDialog, RevokeTokenDialog } from "@/components/token-dialogs"
 import { readPeople, readTokens, revokeToken } from "@/lib/api"
@@ -150,9 +150,8 @@ export function TokensPage() {
     void reload()
   }, [reload])
 
+  /** Unlocked by then, as for a secret: `WriteButton` asked first, the dialog would only end in a 423. */
   async function openCreation() {
-    // The unlock first, as for a secret: the dialog would only end in a 423.
-    if (!actions.state.open) return actions.unlock()
     // The owner may make a token for a person of People: who they are, and their roles now.
     if (!signedPerson) await readHolders()
     setCreating((previous) => ({ open: true, opening: previous.opening + 1 }))
@@ -185,14 +184,18 @@ export function TokensPage() {
 
   return (
     <>
-      <PageHeader title="Tokens" actions={<SecretsLockControl quiet />} />
+      <PageHeader
+        title="Tokens"
+        intro={
+          <p>
+            {signedPerson
+              ? "Your tokens let your CLI or an agent deploy with sitesolide deploy, without SSH. A token never does more than your roles do now: below Developer on a project, it is paused there."
+              : "A token lets your agents, or a person, deploy with sitesolide deploy, without SSH. Every token is someone's: yours deploys what you allow it; a person's never does more than their roles, and goes with them."}
+          </p>
+        }
+        history={{ type: "tokens" }}
+      />
       <PageBody>
-        <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
-          {signedPerson
-            ? "Your tokens let your CLI or an agent deploy with sitesolide deploy, without SSH. A token never does more than your roles do now: below Developer on a project, it is paused there."
-            : "A token lets your agents, or a person, deploy with sitesolide deploy, without SSH. Every token is someone's: yours deploys what you allow it; a person's never does more than their roles, and goes with them."}
-        </p>
-
         {loaded.state === "loading" && <PanelSkeleton lines={4} />}
         {loaded.state === "failed" && (
           <Panel title="Tokens">
@@ -210,10 +213,10 @@ export function TokensPage() {
             count={list.tokens.length}
             full
             actions={
-              <Button size="sm" onClick={() => void openCreation()} className="max-md:h-10">
+              <WriteButton size="sm" onPress={() => void openCreation()} purpose="create a token" resume="New token" className="max-md:h-10">
                 <Plus />
-                {actions.state.open ? "New token" : "Unlock to create"}
-              </Button>
+                New token
+              </WriteButton>
             }
           >
             {list.tokens.length === 0 ? (

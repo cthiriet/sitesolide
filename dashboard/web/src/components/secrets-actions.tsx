@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
 import { GeneralAccessDialog, type ChangeState } from "@/components/access-general"
@@ -46,16 +46,28 @@ import type { GeneralAccess } from "@/lib/types"
  * shared by every section: unlock, read, set, remove, create, restore,
  * change a password, restart, change a site's general access: Public, Restricted, Anyone with the code, a new code.
  *
- * Everything that writes goes through the steward, which judges. An action
- * asked while locked opens the unlock, then carries on once unlocked here;
- * a person's unlock leaves for their provider and comes back to the page,
- * where what they were doing may be kept (`beforeLeave`). A 423 locks and
- * asks for the password without replaying the action, a 401 hands over to
- * the sign-in, an unreachable steward raises the page's banner, a busy
- * steward is reported where the action took place.
+ * Everything that writes goes through the steward, which judges. The unlock
+ * is asked for just in time: a write pressed while locked opens the unlock,
+ * then carries on once unlocked here (`require`, which `WriteButton` in
+ * components/unlock.tsx wraps). A person's unlock leaves for their provider
+ * and comes back to the page, where what they were doing may be kept
+ * (`beforeLeave`) and the header says what to press again (`resume`). A 423
+ * locks and asks for the password without replaying the action, a 401 hands
+ * over to the sign-in, an unreachable steward raises the page's banner, a
+ * busy steward is reported where the action took place.
  */
 
 export type FileTarget = { slug: string; file: string }
+
+/** What a write that needs the unlock says about itself, for the unlock and the way back from it. */
+export type RequireOptions = {
+  /** Just before a person leaves for their provider: what the page keeps for the way back. */
+  beforeLeave?: () => void
+  /** The control's label, said again on a person's way back: "Unlocked. Press New token to finish." */
+  resume?: string
+  /** What waits, for the unlock's title: "create a token" reads "Unlock to create a token". */
+  purpose?: string
+}
 export type VariableTarget = FileTarget & { variable: string }
 
 export type SecretsActions = {
@@ -68,6 +80,8 @@ export type SecretsActions = {
   lockError: string
   /** A person's unlock that came back without unlocking, and why, to be shown at the top of the page. */
   unlockNotice: string | null
+  /** A person's unlock that came back unlocked: what to press again, "Unlocked. Press New token to finish." */
+  resumeNote: string | null
   /**
    * A person signed in, not the owner: they unlock through a forced
    * sign-in at the provider, and their role decides what the steward accepts.
@@ -79,21 +93,19 @@ export type SecretsActions = {
   creation: string | null
   /** Per file, the refusal of a creation. */
   errors: Readonly<Record<string, string>>
-  /** The header's lock button, where focus returns after a forced lock. */
-  lockButtonRef: (element: HTMLButtonElement | null) => void
   /**
    * The unlock, asked for. `then` runs once unlocked on this page, the
    * owner's; a person leaves for their provider instead, `beforeLeave` run
    * just before, to keep what they were doing for when they come back.
    */
-  unlock: (options?: { then?: () => void; beforeLeave?: () => void }) => void
+  unlock: (options?: RequireOptions & { then?: () => void }) => void
   lock: () => void
   /**
    * An action that needs the unlock: run now when unlocked, otherwise once
    * unlocked here; a person's unlock leaves for their provider and the
    * gesture is made again on the way back, never replayed.
    */
-  require: (action: () => void) => void
+  require: (action: () => void, options?: RequireOptions) => void
   /** After a change made elsewhere on the page, a store's: the secrets and the log are read again. */
   changed: () => void
   /** A restart with no confirmation, its verdict in the dialog: after *Save & restart*. */
@@ -125,6 +137,52 @@ export function useSecretsActions(): SecretsActions {
   return actions
 }
 
+/** The actions where a page has them, null elsewhere: a page header shown outside a page, *Only the owner's*. */
+export function useOptionalSecretsActions(): SecretsActions | null {
+  return useContext(ActionsContext)
+}
+
+/**
+ * Where a person's way back from their provider finds what to press again:
+ * this tab's session storage, which may refuse, and then only the header's
+ * pill says the unlock went through.
+ */
+const RESUME_KEY = "sitesolide-resume"
+
+/** A note older than this is left: the unlock it was for is over anyway. */
+const RESUME_MS = 10 * 60_000
+
+type Resume = { path: string; label: string; at: number }
+
+function keepResume(resume: Resume) {
+  try {
+    window.sessionStorage.setItem(RESUME_KEY, JSON.stringify(resume))
+  } catch {
+    // A storage that refuses loses the note, never the unlock.
+  }
+}
+
+/** The note left for this address, taken once. */
+function takeResume(path: string, now: number): string | null {
+  try {
+    const text = window.sessionStorage.getItem(RESUME_KEY)
+    if (text === null) return null
+    window.sessionStorage.removeItem(RESUME_KEY)
+    const resume = JSON.parse(text) as Partial<Resume>
+    if (resume.path !== path || typeof resume.label !== "string" || typeof resume.at !== "number") return null
+    return now - resume.at < RESUME_MS ? resume.label : null
+  } catch {
+    return null
+  }
+}
+
+/** The address a person's unlock comes back to, without the reason a refused one leaves in it. */
+function currentPath(): string {
+  const url = new URL(window.location.href)
+  url.searchParams.delete("unlock")
+  return `${url.pathname}${url.search}`
+}
+
 type Confirmation = FileTarget & { variable: string | null; open: boolean }
 
 /** A dialog that remounts on every opening: nothing from a previous entry reappears. */
@@ -141,6 +199,11 @@ const NEW_RESTART: RestartState = {
   restored: null,
   reconnect: null,
 }
+
+/** What waits for an unlock: the action, what a person keeps before leaving, what they press again. */
+type Waiting = { then: (() => void) | null; beforeLeave: (() => void) | null; resume: string | null }
+
+const NOTHING_WAITS: Waiting = { then: null, beforeLeave: null, resume: null }
 
 /** Between two reconnection attempts after the dashboard's restart. */
 const RECONNECT_MS = 2000
@@ -169,14 +232,18 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   const [locking, setLocking] = useState(false)
   const [lockError, setLockError] = useState("")
   const [unlockNotice, setUnlockNotice] = useState<string | null>(null)
+  const [resumeLabel, setResumeLabel] = useState<string | null>(null)
+  const [unlockPurpose, setUnlockPurpose] = useState<string | null>(null)
   const [revision, setRevision] = useState(0)
 
   // A person's unlock comes back to this page, with why when it did not go
-  // through: said once, and taken off the address.
+  // through: said once, and taken off the address. When it went through,
+  // what they pressed is said again, so that they press it once more.
   useEffect(() => {
     const url = new URL(window.location.href)
     const reason = url.searchParams.get("unlock")
-    if (reason === null) return
+    const label = takeResume(currentPath(), Date.now())
+    if (reason === null) return setResumeLabel(label)
     setUnlockNotice(unlockFailure(reason))
     url.searchParams.delete("unlock")
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`)
@@ -185,31 +252,25 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   /** The element an action starts from, where focus returns when its dialog closes. */
   const origin = useRef<HTMLElement | null>(null)
   /** What asked for the unlock, carried on once unlocked; dropped when the unlock is cancelled. */
-  const afterUnlock = useRef<{ then: (() => void) | null; beforeLeave: (() => void) | null }>({ then: null, beforeLeave: null })
+  const afterUnlock = useRef<Waiting>(NOTHING_WAITS)
 
-  function askUnlock(then: (() => void) | null = null, beforeLeave: (() => void) | null = null) {
-    afterUnlock.current = { then, beforeLeave }
+  function askUnlock(then: (() => void) | null = null, options: RequireOptions = {}) {
+    afterUnlock.current = { then, beforeLeave: options.beforeLeave ?? null, resume: options.resume ?? null }
+    setUnlockPurpose(options.purpose ?? null)
     setUnlockOpen(true)
   }
 
   function cancelUnlock() {
-    afterUnlock.current = { then: null, beforeLeave: null }
+    afterUnlock.current = NOTHING_WAITS
     setUnlockOpen(false)
   }
-  /**
-   * The lock buttons: the page header renders its actions twice, for the
-   * computer and for the phone, and only one of the two is displayed.
-   */
-  const lockButtons = useRef(new Set<HTMLButtonElement>())
-  const lockButtonRef = useCallback((element: HTMLButtonElement | null) => {
-    if (element === null) {
-      for (const button of lockButtons.current) if (!button.isConnected) lockButtons.current.delete(button)
-      return
-    }
-    lockButtons.current.add(element)
-  }, [])
-  const visibleLockButton = () =>
-    [...lockButtons.current].find((button) => button.isConnected && button.getClientRects().length > 0) ?? null
+
+  /** A person leaves for their provider: what they keep, and what to press again on the way back. */
+  function leaveToUnlock() {
+    const { beforeLeave, resume } = afterUnlock.current
+    beforeLeave?.()
+    if (resume !== null) keepResume({ path: currentPath(), label: resume, at: Date.now() })
+  }
 
   /** A button that only exists after the next render, to focus as soon as it appears. */
   const focusAfter = useRef<string | null>(null)
@@ -302,10 +363,15 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  /** An action that requires the token: locked, the page asks for the password first, without replaying the action. */
-  function require(action: () => void) {
+  /**
+   * An action that requires the token: locked, the page asks for the unlock
+   * first, then performs it here; a person's comes back from their provider
+   * and presses again.
+   */
+  function require(action: () => void, options: RequireOptions = {}) {
     rememberOrigin()
-    if (!state.open) return askUnlock(action)
+    setResumeLabel(null)
+    if (!state.open) return askUnlock(action, options)
     action()
   }
 
@@ -319,9 +385,10 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     setUnlockedUntil(until)
     setUnlockOpen(false)
     setLockError("")
-    announce(`Secrets ${unlockStatus(until, Date.now(), offset).label.toLowerCase()}`)
+    const status = unlockStatus(until, Date.now(), offset)
+    announce(status.open ? `Changes unlocked for ${status.remainingText}.` : "Changes unlocked.")
     const { then } = afterUnlock.current
-    afterUnlock.current = { then: null, beforeLeave: null }
+    afterUnlock.current = NOTHING_WAITS
     // What asked for the unlock carries on: its dialog, or its change.
     if (then !== null) return then()
     afterAction()
@@ -337,7 +404,8 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
       // Already locked on the server side: the goal is reached.
       if (refusal === null || refusal.kind === "locked") {
         setUnlockedUntil(null)
-        announce("Secrets locked")
+        setResumeLabel(null)
+        announce("Changes locked")
         return afterAction()
       }
       const message = onRefusal(refusal)
@@ -359,8 +427,8 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
       return { value }
     }
     const refusal = refusalOf(status, body)
-    // Locked, focus will return to the lock button after the password.
-    if (refusal.kind === "locked") origin.current = visibleLockButton()
+    // Locked, the password is asked for, and focus returns to the reveal or the copy pressed.
+    if (refusal.kind === "locked") rememberOrigin()
     return { message: onRefusal(refusal) }
   }
 
@@ -592,14 +660,14 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     locking,
     lockError,
     unlockNotice,
+    resumeNote: resumeLabel !== null && state.open ? `Unlocked. Press ${resumeLabel} to finish.` : null,
     person,
     revision,
     creation,
     errors: fileErrors,
-    lockButtonRef,
     unlock: (options) => {
       rememberOrigin()
-      askUnlock(options?.then ?? null, options?.beforeLeave ?? null)
+      askUnlock(options?.then ?? null, options)
     },
     lock: () => void lock(),
     require,
@@ -629,15 +697,17 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
       {person ? (
         <PersonUnlockDialog
           open={unlockOpen}
+          purpose={unlockPurpose}
           providerName={sso.providerName}
           href={reauthUrl(window.location.pathname, window.location.search)}
-          onLeave={() => afterUnlock.current.beforeLeave?.()}
+          onLeave={leaveToUnlock}
           onClose={cancelUnlock}
           focusReturn={returnFocus}
         />
       ) : (
         <UnlockDialog
           open={unlockOpen}
+          purpose={unlockPurpose}
           onClose={cancelUnlock}
           onUnlocked={unlocked}
           onRefusal={onRefusal}

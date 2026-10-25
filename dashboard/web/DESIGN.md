@@ -28,22 +28,53 @@ brand's, and it only says error. The only remarkable piece is **the machine
 plate** at the top of the home page, where the 70 and 90 % thresholds are
 ticked on each gauge. Everything else is calm, dense and aligned.
 
+The owner's attention is the scarce thing. A page that shows everything at
+equal weight pulls it everywhere at once; these rules decide what a page
+shows, and what waits one gesture away.
+
 1. **The verdict first.** Every page carries, in the same place, the machine's
    verdict and the age of the data. A stale snapshot never says "All clear".
-2. **Red means error, and nothing else.** Neither a link, nor the current page,
-   nor a focus ring is red. **Teal means "here"**: the current page, the
-   focused element, a gauge's fill, the primary button; never a state.
-3. **Structure carries information.** A hairline separates the rows of a
-   list, a panel groups what is read together, a tick on a gauge marks a
-   threshold, a tile labels what it sits beside. No decorative frames, numbers
-   or labels.
-4. **Panels, not stacked cards.** One panel per readable set, divided lists
-   inside.
-5. **Dense without being cramped.** Rows of 40 to 44 px on a computer, 40 to
-   44 px touch targets, tabular figures wherever numbers are compared.
-6. **Nothing moves without a reason.** No entrance animation; only what answers
-   a gesture moves, and nothing under `prefers-reduced-motion`.
-7. **A write is a decision.** A button that writes says exactly what it will do.
+2. **One primary object per page.** A page shows its list or its object, and
+   nothing of equal weight beside it. Its history lives in Activity, reached
+   by the quiet *History* link of its header, narrowed to it (3.3); a page
+   never carries an activity panel of its own.
+3. **One line per item.** Rows of 44 px on a computer, 40 for Activity and
+   Backups; two lines of 56 to 60 px below the width the row needs, decided
+   by the list's own width. Name first, at most four short columns, machine
+   strings in muted mono, numbers right-aligned and tabular.
+4. **Quiet when fine, loud when not.** A healthy row says nothing: no
+   *Running*, no *Active*, no green dot. A row in trouble carries the
+   severity icon in its 28 px gutter and a short word in its tone. The
+   verdict says *All clear* once for the page.
+5. **Details on demand.** A secondary fact goes to the detail sheet, a
+   tooltip, the row menu, or a disclosure that shows its count ("Build and
+   public names (5)"), never into the row. The count says what is folded, so
+   folding costs no trust.
+6. **One action in the row at most**, and only when it is the page's job:
+   *Set* a missing secret, *Grant* a request, *Restore* on hover. Everything
+   else is in the row menu, destructive last under a separator, still
+   confirmed.
+7. **Icons that mean one thing everywhere** (5, *Icons*), 16 px in a row,
+   muted unless they carry a state. The facet menus show the same icons
+   beside their words, so they are the legend.
+8. **Empty is small.** Inside a panel, one 44 px line: an icon, the state,
+   one action. A section with nothing in it and nothing to ask disappears.
+   The tiled empty state is for a page with nothing at all.
+9. **A write says what it does, and asks for the unlock just in time.** No
+   *Unlock changes* button, no *Unlock to ...*: a write is *New token*,
+   *Add*, *Restore*, with a small lock glyph while locked; pressed, it asks
+   for the password, then performs.
+10. **Counts agree.** The sidebar's badge, the verdict, the header's count and
+    the rows count the same things.
+11. **Red means error, and nothing else.** Neither a link, nor the current
+    page, nor a focus ring is red. **Teal means "here"**: the current page,
+    the focused element, a gauge's fill, the primary button; never a state.
+12. **Structure carries information.** A hairline separates the rows of a
+    list, a panel groups what is read together, a tick on a gauge marks a
+    threshold, a tile labels what it sits beside. No decorative frames,
+    numbers or labels; panels, not stacked cards.
+13. **Nothing moves without a reason.** No entrance animation; only what
+    answers a gesture moves, and nothing under `prefers-reduced-motion`.
 
 ## 2. Tokens
 
@@ -154,10 +185,18 @@ Each tone's text clears 4.5:1 on its tinted pill, in both themes: in light
 on its badge clears 5.6:1 in light and 7.1:1 in dark. Every dot but the
 neutral one clears 3:1 on `card` and on `background`, and the attention fill
 3:1 on the track; the neutral dot is faint on purpose, its word saying all
-there is. Colour never carries meaning alone: a dot comes with a word, a
-severity icon with text for screen readers. `severityTone` gives a
-discrepancy's tone, `verdictTone` the verdict's (a stale snapshot is an
-error).
+there is. `severityTone` gives a discrepancy's tone, `verdictTone` the
+verdict's (a stale snapshot is an error).
+
+**Quiet when fine.** One health state per object, and the fine one is not
+drawn: no word, no dot, nothing in the gutter. Fine is said once per page,
+by the verdict. Anything not fine always has its word in its tone
+(`StateLabel`), and in a list its severity icon in the gutter
+(`SeverityGutter`), with text for screen readers: colour still never carries
+meaning alone, since every state that is drawn comes with its word. A
+neutral word, information without judgement ("Not declared", "Unknown"),
+stays muted. A pill (`Status shape="pill"`) is for what has to be seen from
+afar: the verdict, the unlocked pill.
 
 ### 2.3 Typography
 
@@ -324,6 +363,8 @@ gutters, bottom margin, touch target size.
 
 | Container | Threshold | What changes |
 |---|---|---|
+| `@container/table`, every `DataTable` | `narrowBelow`, 42 rem unless the page says 36, 48 or 56 | one line per row in columns under a sticky head, otherwise two lines and no head |
+| `@container/filters`, every `FilterBar` | `@xl/filters:` (36 rem) | the search, a button per facet, the count and the sort; otherwise the search and one *Filter* button that opens a bottom sheet |
 | `@container/body` | `@4xl/body:` (56 rem) | two columns: a site's Overview and Audience; Tokens' deployments and activity |
 | list of sites on the home page | `@4xl:` | table, otherwise list |
 | a site's Activity panel (Secrets, Backups), the Connectors lists | `@2xl:` (42 rem) | table, otherwise list |
@@ -339,28 +380,43 @@ Useful content widths: 1088 px at 1440 with the sidebar expanded, 984 at 1280,
 
 ### 3.3 The page header
 
-`PageHeader` is the first element of every page. It carries the focusable `h1`,
-a count, the breadcrumb above the title, what follows the title on its line, a
-description under it, the page actions, then on the right the verdict (a link to
-the home page when not on it), the age and the refresh control. On a phone the
-verdict and the age move under the title, and the actions share their row when
-they fit, rather than taking one of their own. Page-wide banners follow the
-header.
+`PageHeader` is the first element of every page:
 
+```
+[breadcrumb]
+Title [count] (i)        [primary action] [History] [Unlocked, 9 min x]  * All clear  26s  [R]
+```
+
+- **Left**: the breadcrumb inside a site (*All sites > cms*), the focusable
+  `h1`, its `count`, the number of what the page lists and the same the
+  sidebar and the rows count, and the (i) that opens the page's `intro` in a
+  popover: what the page is for and what it never shows, the paragraph a
+  page used to open with. No intro paragraph in a page's body.
+- **Right**: the page's controls, `actions`, one primary among them at most,
+  default size (`max-md:h-10`); then *History* (`history`, a filter of
+  lib/history.ts), a ghost button with its clock that opens Activity
+  narrowed to this page's object, its icon alone on a phone; then, while
+  changes are unlocked, the attention pill *Unlocked, 9 min* whose x locks
+  again (`UnlockedPill`, drawn by the header itself on every page); then the
+  machine's verdict, the age of the data, the refresh control.
 - **Look.** A sticky band in the page's colour, ruled below, at least 68 px
-  tall on a computer like the sidebar's header. The verdict stays on the right
-  on every page: there it reads as the machine's, where beside a site's title
-  it would read as that site's state.
+  tall on a computer like the sidebar's header; its height is `--page-header`
+  on the root, under which a table's head sticks. The verdict stays on the
+  right on every page: there it reads as the machine's, where beside a
+  site's title it would read as that site's state.
+- **Phone.** The title row keeps the logo, the title, the count and the (i),
+  with refresh and the menu; the verdict, the age and the pill move under
+  it, the actions and History sharing their row when they fit.
 - **Title.** The home page is called *Sites*. Inside a site, Overview carries
-  the slug, the other sections their name, and the breadcrumb says
-  *All sites > cms*.
-- Page actions: default-size button (`max-md:h-10`), one primary only. State
-  pills beside it at `h-6`, like the verdict.
+  the slug, the other sections their name.
+- **Banners** follow the header: data unreachable or stale, a person's unlock
+  that came back refused, a lock refused, and, after a person's re-sign-in,
+  "Unlocked. Press New token to finish.".
 - Panel actions: `size="sm"`.
-- An action does not appear until what it presupposes has been read: the
-  lock waits for the secrets, *Add people* and the role menus for the list of
-  people with access, *Make public* and *Restrict* for the steward's word on
-  whether the site may change.
+- An action does not appear until what it presupposes has been read: *Add
+  people* and the role menus wait for the list of people with access, *Make
+  public* and *Restrict* for the steward's word on whether the site may
+  change.
 
 ## 4. The primitives
 
@@ -371,7 +427,10 @@ A page does not write its own version of any of them.
 | Name | File | Use |
 |---|---|---|
 | `useData()` | `data.tsx` | everything the pages read: snapshot, verdict, age, secrets, who is signed in (`identity`), `sessionExpired`, `refresh` |
-| `useNavigation()` | `navigation.tsx` | `{ page, params, fromHistory, navigate(href, { replace? }) }` |
+| `useNavigation()` | `navigation.tsx` | `{ page, path, params, fromHistory, navigate(href, { replace? }) }` |
+| `useListState(spec)` | `filter-bar.tsx` | a list's search, facets and sort, read from the address and written back to it (`?q=`, a parameter per facet, `?sort=`), replacing the entry; the pure half in `lib/list-state.ts`, `narrowList` for the rows and the facets' counts |
+| `useSheet(param)` | `detail-sheet.tsx` | `{ id, open(id), close() }`: a sheet addressed by `?token=`, `?person=`, `?event=`, `?connector=`; open adds a history entry, so Back closes it |
+| `historyUrl(filter)`, `readHistory(params)` | `lib/history.ts` | Activity's address, the one every History link speaks: `actor`, `action`, `target`, `source`, `type`, `since` |
 | `InternalLink` | `navigation.tsx` | every link to another dashboard page, a real `<a href>` |
 | `readAddress`, `requestedSite` | `lib/pages.ts` | the page and parameters of an address |
 | `pageUrl`, `siteUrl(slug, section)` | `lib/pages.ts` | addresses, always with the trailing slash |
@@ -391,7 +450,11 @@ afterwards. A page never reads `window.location` itself.
 |---|---|
 | `PageBody` | the content container, and the `body` query container |
 | `SitePage` | a site's section: header with breadcrumb and switcher, body, "No site named x" for an unknown slug, "No project named x that you have a role on" for a person, with whom to ask |
-| `Panel` | a panel, `rounded-xl`, its hairline and `shadow-panel`; with `title`, a 44 px header row; `full` for a table or list that touches the edges |
+| `Panel` | a panel, `rounded-xl`, its hairline and `shadow-panel`, clipped rather than scrolled so that a head can stick; with `title`, a 44 px header row; `full` for a table or list that touches the edges |
+| `DataTable` | `data-table.tsx`: the one list pattern (5, *Lists*), inside a `Panel full` |
+| `FilterBar` | `filter-bar.tsx`: the one filter row (5, *Search and filters*) |
+| `DetailSheet`, `SheetFacts`, `SheetSection`, `SheetRecent` | `detail-sheet.tsx`: the one detail pattern (5, *Details*) |
+| `InlineEmpty` | a panel or a section with nothing in it: one 44 px line, a 16 px icon, the state, one action |
 | `WithSnapshot` | loading, dashboard unreachable, snapshot incomplete, rendered the same everywhere |
 | `EmptyState` | nothing to show: its icon on a tile, the title states the state, the text says what to do |
 | `Tile` | an icon on its tile, 40, 32 or 24 px, neutral or in a feature's tint and ink; it labels the title beside or under it |
@@ -408,6 +471,14 @@ on screen.
 |---|---|
 | `Status` | a dot with its halo and a word. `point` in lists and tables, `pill` for what has to be seen from afar |
 | `SeverityIcon` | crossed circle (error) or triangle (warning) before a discrepancy, with hidden text |
+| `SeverityGutter` | a row's 28 px gutter: the `SeverityIcon` when it is in trouble, nothing when it is fine |
+| `StateLabel` | a row's state, quiet when fine: nothing for `ok`, a muted word for `neutral`, the word in its tone, 13 px, otherwise; `more` adds "+2" with every message in its tooltip |
+| `KindIcon`, `AccessIcon`, `LegendEntry` | `legend.tsx`: the icon vocabulary (5, *Icons*), each with its tooltip in the Access section's words |
+| `RowMenu`, `RowMenuLink` | the row's "..." and its items, navigation first, copies, writes, destructive last under a separator |
+| `RowLink`, `RowButton`, `CellText` | a row's name as the real link to its page or the button that opens its sheet; a cell's text cut with an ellipsis, whole in its tooltip |
+| `WriteButton`, `WriteMenuItem`, `useWrite`, `LockGlyph` | `unlock.tsx`: a write that asks for the unlock when pressed while locked, carrying the glyph until then |
+| `UnlockedPill` | the header's *Unlocked, 9 min* and its x, drawn by `PageHeader` |
+| `HistoryLink` | the header's *History*, Activity narrowed |
 | `Count` | the number beside a title, the landing page's mono chip: `cell`, the hairline, Plex Mono |
 | `CHIP`, `AccessWord` | a 20 or 24 px chip; a site's general access as the landing page's badges, *Restricted* with a lock, *Public* with a globe and quieter, *Anyone with the code* with a key over the code in its well |
 | `RoleBars` | a role as four rising bars, as many lit in `share-ink` as the role has rungs, before its word: beside a site's name, in a role's menu, in what each role can do |
@@ -419,8 +490,10 @@ on screen.
 | `scheduledWord`, `runLines` | a scheduled service's word, *Waiting* between two runs and never *Down*, and its last and next runs under it |
 
 shadcn components available in `src/components/ui/`: `alert-dialog`, `badge`,
-`button`, `card`, `dialog`, `dropdown-menu`, `input`, `label`, `progress`,
-`separator`, `sheet`, `sidebar`, `skeleton`, `table`, `tooltip`.
+`button`, `card`, `dialog`, `dropdown-menu`, `input`, `label`, `popover`,
+`progress`, `select`, `separator`, `sheet`, `sidebar`, `skeleton`, `table`,
+`tooltip`. The sheet's scrim is light and unblurred, a list being read
+beside its sheet.
 Add with `bunx --bun shadcn@latest add <name>`. The Ledger look lives in their
 own class strings, which were edited for it (the pressable and raised
 buttons, the sunk fields and selects, the floating menus and dialogs, the
@@ -431,24 +504,115 @@ or wrapped.
 
 ## 5. Content rules
 
-**Tables and lists.** A table lives in a `Panel full` and becomes a divided
-list below the width it needs (3.2). Header `h-10 bg-cell mono-label`, the
-column heads in mono capitals on the cell's band, ruled in `border`;
-cells `px-3 py-3`, which makes 44 px rows, ruled in `divider`; first column
-`pl-4`, last `pr-4`, numbers right-aligned. A divided list rules its rows in
-`divider` too (`divide-y divide-divider`), a panel's own frame and header stay
-`border`.
-`caption` in `sr-only` stating the order and the filter. A row in discrepancy
-carries the `SeverityIcon` before the name, with no tinted background.
+**Lists.** One pattern, `DataTable`, in a `Panel full`, for every list of
+the dashboard:
 
-**A row that leads to a page**: the name is the real link, the one for the
-keyboard and for screen readers; the rest of the row follows the click in code,
-so an address stays selectable. Cmd, Ctrl and the middle button open a new tab.
+```
+| 28 gutter | NAME minmax(..)    | COLUMN | COLUMN | AGE 96 | 44 menu |    one line, 44 px (40 dense)
+[x] [icon] roster  Restarting +2   roster.example.com   [icon]   24m ago   ...
+```
 
-**A section with nothing in it stays open** and says why and what to do: the
-people with access of a site nobody else has access to say who opens it and
-how to add someone, Secrets of a site with no file says to declare `secrets`
-in `sitesolide.json` and then run `sitesolide deploy`.
+- **Head**: 40 px, `bg-cell`, the mono capitals of `mono-label`, ruled in
+  `border`, sticky under the page header. **Rows**: 44 px, ruled in
+  `divider`; `dense` makes 40 for Activity and Backups. The row's padding is
+  16 px, a cell's 12, the first column's none.
+- **Columns**: the name first, then at most four short ones. Machine
+  strings in muted mono, 13 px; numbers and ages right-aligned and
+  tabular; an icon column centred, 64 to 76 px. A cell that may not fit
+  cuts with an ellipsis and keeps its whole text in its tooltip (`CellText`).
+- **Two lines** below the width the columns need (`narrowBelow`, the
+  table's own width): 56 to 60 px, each column where its `slot` says,
+  `primary` top left, `state` top right, `meta` bottom left in 12 px muted,
+  `time` bottom right, `hide` nowhere; the menu at the right across both
+  lines. The head goes: the rows say what they are.
+- **Gutter**: given `severity`, a 28 px first column holds the
+  `SeverityIcon` of a row in trouble and nothing for a fine one, the line
+  the eye scans for problems; the row's word, a `StateLabel`, follows the
+  name. No tinted background, no word for a fine row.
+- **Click**: a row is a page (`rowHref`) or a sheet (`onRowClick`). Its name
+  is the real link (`RowLink`) or the sheet's button (`RowButton`), the one
+  for the keyboard and for screen readers; the rest of the row follows the
+  click in code, so an address stays selectable. Cmd, Ctrl and the middle
+  button open a page in a new tab. The row whose sheet is open takes the
+  `highlight` tint.
+- **One action in the row at most**, the page's job, as a small outline or
+  ghost button in its own column or on hover; everything else in the
+  `RowMenu`.
+- `label` names the table for screen readers, `caption` says the order and
+  the filter. Under the rows, `foot` for one quiet line: *Show 1 revoked or
+  expired*, *Show all 37*, *Load older*. Many rows: the same 44 px, the
+  sticky head and the filters, no pagination.
+
+**The row menu.** `RowMenu`, a 32 px ghost "..." at the row's end (40 on a
+phone): where to go first (`RowMenuLink`, *Open site*, *Access*), then what
+to copy, then the writes (`WriteMenuItem`), and last, under a separator, the
+destructive one in `variant="destructive"`, still confirmed in its dialog.
+Each item names its object: *Revoke token*, *Remove from every project*. A
+destructive action is never a bare cross in the row.
+
+**Details.** A list whose rows are not pages opens each row in the
+`DetailSheet`: from the right at 440 px on a computer, from the bottom at
+up to 90 % of the height on a phone. Its head: the object's name, its
+`StateLabel`, its actions as buttons, destructive last. Its body: every
+field as a key and its value (`SheetFacts`, 36 px lines), the sections the
+object needs (`SheetSection`, a mono label over its content), then
+*Recent*, the object's last ten lines of Activity, and *All activity*
+(`history`). Its address is the page's (`useSheet`): `?token=`, `?person=`,
+`?event=`, `?connector=`; Back closes it, a link opens it.
+
+**History.** A page's own activity is in Activity, never in a panel of the
+page: the header's *History* opens it narrowed (`historyUrl`), a sheet's
+*Recent* shows its object's last ten lines. The address's six parameters
+are the contract: `actor` (part of it, `token:`, an email, `owner`),
+`action` (the start of a dotted action, `access`), `target` (a slug or a
+host), `source` (`dashboard`, `portal`, `egress`, `backups`, `steward`),
+`type` (`deployments`, `access`, `secrets`, `signins`, `tokens`, `backups`,
+`egress`, `HISTORY_TYPES`), `since` (`24h`, `7d`, `30d` or a day,
+`2026-10-21`).
+
+**Empty is small.** Inside a panel, `InlineEmpty`: one 44 px line, a 16 px
+icon, the state, one action ("No token yet." *New token*). A section with
+nothing in it and nothing to ask disappears: an issues list at zero, revoked
+tokens, requests, files. The tiled `EmptyState` stays for a page with
+nothing at all: a first run, *Only the owner's*, *Not part of your role*,
+a search that finds nothing. An empty list is never a bordered box with "0".
+
+**Icons.** lucide's, 16 px in a row, muted unless they carry a state, each
+with one meaning everywhere and its words in its tooltip (`lib/legend.ts`):
+
+| Icon | Means | Colour |
+|---|---|---|
+| `Files` | Static site: serves its files, no service runs | muted |
+| `AppWindow` | App: serves pages through a service | muted |
+| `Cog` | Background: serves no page, runs for good | muted |
+| `CalendarClock` | Scheduled: every service runs on a schedule, serves no page | muted |
+| `FileQuestion` | No manifest | muted |
+| `Globe` | Public, the quiet default | muted |
+| `Lock` | Restricted to the people with access, once signed in; the tooltip names the exempt paths, "Open to anyone, guarded by the app alone" | foreground |
+| `KeyRound` | Anyone with the code; the tooltip shows the code to whoever may read it | foreground |
+| `ShieldAlert` | `sitesolide.json` and the server disagree on how it opens | destructive |
+| `CircleX`, `TriangleAlert` | an error, a warning, in the gutter | their tone |
+| `History` | Activity, narrowed | muted |
+| `Lock`, 12 px, after a label | a write that asks for the unlock first | the label's |
+
+The facet menus show the same icons beside the same words: they are the
+legend. A sheet's facts use `LegendEntry`, the icon and its word.
+
+**Writes and the unlock.** The unlock is asked for just in time, as a sudo
+mode: no page carries an *Unlock changes* button nor an *Unlock to ...*
+one. A write says what it does, *New token*, *Add*, *Make public*,
+*Restore*, and while changes are locked carries `LockGlyph`, 12 px after its
+label; pressed, it opens the unlock, titled after what waits ("Unlock to
+create a token", the write's `purpose`), then performs (`WriteButton`,
+`WriteMenuItem`, `useWrite().run` for a form or a checkbox). A write the
+steward takes without the unlock, *Restrict*, *Revoke*, a person's
+*Restart*, has `unlock={false}` and no glyph. The confirmations stay where
+they were, after the unlock. A person unlocks by signing in again at their
+provider: they leave the page and come back to it, what they typed kept by
+`beforeLeave`, and the header says what to press again, "Unlocked. Press
+New token to finish." (`resume`). A 423 met on the way locks and asks
+again, without replaying the write. While unlocked, the header's pill says
+*Unlocked, 9 min*; its x locks at once.
 
 **Buttons.** One primary per view, the pressable teal; the others raised
 (`outline`) or quiet (`ghost`). `destructive` is used only for a
@@ -466,14 +630,31 @@ reach the access service on the server. Retry in a moment; if it persists, run
 sitesolide status." Under the offending field (`role="alert"`), in a `Banner`
 when the page stays readable, in an `ErrorState` when there is nothing to show.
 
-**Search and filters.** In a toolbar under the header, on the left: the search
-field, with a `/` key hint, then the filters as a segmented control, a well
-sunk below the paper whose chosen segment rises out of it, raised with its
-hairline, in `strong` text; one not chosen takes `muted` under the pointer,
-a step past the well that shows in both themes. `/` focuses the
-site search, Escape clears it then returns focus. The count and the order on
-the right: "3 of 13 sites, issues first". The count is of what All lists
-before the search, and the page header's agrees with it.
+**Search and filters.** One `FilterBar`, under the header:
+
+```
+[Search sites   /] [Access v] [Kind: Apps v|x] [Clear filters]          3 of 14  [Issues first v]
+```
+
+- The search on the left, 240 px, its `/` hint for the mouse and the
+  keyboard; `/` focuses it from anywhere but a field, Escape clears it, then
+  gives focus back.
+- A button per facet, single choice, a menu of its values, each with the
+  rows' own icon, its word and its live count, taken under the search and
+  the other facets (`narrowList`); the menu is the legend. Once chosen, the
+  button reads "Access: Restricted" and an x clears it; *Clear filters*
+  appears from two filters.
+- On the right "3 of 14" only while narrowed, the header counting the
+  whole list; then the sort, its order's name, a menu of the orders.
+- Below 36 rem of its own width: the search and one *Filter* button with
+  the count of facets chosen, which opens a bottom sheet holding the facets
+  and the sort as 44 px choices, applied as chosen, with *Clear filters*
+  and "Show 3 sites".
+- Its state is the address's (`useListState`): `?q=`, one parameter per
+  facet, `?sort=` when not the default, written by replacing the entry, so
+  that a reload, a link and Back give the same list and a keystroke is not
+  a history entry.
+- Shown from ten items (`FILTER_BAR_FROM`); always on Sites and Activity.
 
 **The platform's own projects**, the dashboard, the portal and analytics,
 known by their slug on their own port (`Site.platform`), have their chip,
@@ -519,16 +700,18 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | Service | Running, Starting, Restarting, Stopping, Down; Static files, No manifest; Unknown; Scheduled, for a project whose every service is | Up, Offline, Dead |
 | Workers and scheduled services | Background; Runs hourly, or the schedule as written; Waiting, Running, Last run failed, Schedule stopped, No timer, Not loaded; Last run 3h ago, Failed 3h ago: exit code 1, Started 2m ago, Last started 5h ago, No run yet, Next run in 42m; Main unit; Runs in the background, serves no page | Idle, Cron, Job, Daemon, Down for a scheduled service between its runs |
 | General access | General access, Public, Restricted, Anyone with the code, Current; Make public, Restrict; in a disagreement, On the server, In sitesolide.json, Keep Public, Apply Restricted; Preview code, Replace the code, Remove the code; Open to anyone, guarded by the app alone (the exempt paths); See changes in Activity | Door, Gate, Portal on, Portal off, Turn on portal, Behind the portal, Private, Password protected, Enable, Disable |
-| People with access | People with access, Add people, Add, Unlock to add, Remove; Can open, Viewer, Developer, Admin; company account, password access, Password access lasts, No expiry, expires in 5d, Expired, Added by; Can't sign in until company sign-in is set up; Copy message; What each role can do, a disclosure from Can open to Admin, (your role), (you); Also open it | Sharing, Share, Guest, Member, Team, Invite, Permissions, ACL, work account, Super admin, Project admin; an Owner row or rung |
-| People | People, May create projects, Let someone create projects, Allow, Unlock to allow, Remove from every project, Remove expired, Domains; Every site, as admin: set on the server in OIDC_ADMIN_EMAILS | Members, Invite |
-| Tokens | Tokens, New token, Unlock to create, Create token, Name, Whose token, Mine, For someone in People, Projects it may deploy, New projects, Permissions, Manage secrets, Needed by cms, Expires; Made by you, Made by you for alice@example.com, Made by alice@example.com, Made by the owner for you; Can create projects, Can deploy public sites, Can declare a domain, Can use outbound network, Can manage secrets, Can create projects (paused: no longer allowed), Can manage secrets (paused: no project to deploy now); calendar (Admin), cms (paused: Viewer now); Revoke, Revoke token, Active, Expired, Revoked, Copy message, Recent deployments, Token activity, All activity | Team, API key, Yours, Their own, Public sites allowed, Restricted sites only, Write secrets, Secrets access |
-| The lock | Unlock changes, Lock, Changes unlocked, 9 min left; in its dialog, Unlock, Sign in again; in Activity, Unlocked changes, Locked changes | Unlock the secrets, Locked |
+| People with access | People with access, Add people, Add, Remove; Can open, Viewer, Developer, Admin; company account, password access, Password access lasts, No expiry, expires in 5d, Expired, Added by; Can't sign in until company sign-in is set up; Copy message; What each role can do, a disclosure from Can open to Admin, (your role), (you); Also open it | Sharing, Share, Guest, Member, Team, Invite, Permissions, ACL, work account, Super admin, Project admin; an Owner row or rung |
+| People | People, May create projects, Let someone create projects, Allow, Remove from every project, Remove expired, Domains; Every site, as admin: set on the server in OIDC_ADMIN_EMAILS | Members, Invite |
+| Tokens | Tokens, New token, Create token, Name, Whose token, Mine, For someone in People, Projects it may deploy, New projects, Permissions, Manage secrets, Needed by cms, Expires; Made by you, Made by you for alice@example.com, Made by alice@example.com, Made by the owner for you; Can create projects, Can deploy public sites, Can declare a domain, Can use outbound network, Can manage secrets, Can create projects (paused: no longer allowed), Can manage secrets (paused: no project to deploy now); calendar (Admin), cms (paused: Viewer now); Revoke, Revoke token, Active, Expired, Revoked, Copy message, Recent deployments, Token activity, All activity | Team, API key, Yours, Their own, Public sites allowed, Restricted sites only, Write secrets, Secrets access |
+| The lock | Unlocked, 9 min, and its x, Lock changes now; in its dialog, Unlock changes, Unlock to create a token (the write that waits), Unlock, Sign in again; under a field, Giving Developer asks to unlock changes first.; after a person's re-sign-in, Unlocked. Press Add to finish.; in Activity, Unlocked changes, Locked changes | Unlock the secrets, Locked, Unlock to add, Unlock to create, Unlock to allow, an Unlock changes button |
+| Kind | Static site, App, Background, Scheduled, No manifest; as facets, Static, Apps, Background, Scheduled; Runs in the background, serves no page | Worker, Service, Job, Cron, Daemon |
+| Lists | Search sites, Filter, Clear filters, Sort, Issues first, Name, Last deployed, 3 of 14, All, Show all, Show 1 revoked or expired; an access facet's Public, Restricted, Anyone with the code, Mismatch; Access mismatch beside a name | Reset, Filter by, Results, No results |
 | Secrets | Restart pending, Unmanaged, Missing, Restart service, Restore previous, Add variable, Create file, Reveal; a store's: Variables, Files, Server, Not set, Declared, Not declared, Empty, Set, Generate, Type a value, Generate on the server, Upload, Upload file, Replace, Remove, Restore previous version, Build, kept by whoever deploys, Public, from the repository | Vault, Decrypt, Edit file, Rotate, Secret store, Environment |
 | Passwords | Change password, Dashboard password, Generate a strong one, Set my own, New password, Copy password | Set hash, Regenerate |
 | Backups | Snapshot, Scheduled, Before restore, Server, Offsite only, Restore, Restoring..., Restored, Offsite copy, Show all | Backup file, Revert, Rollback, Recover |
 | Activity | Event, Actor, Action, Target, Source, Site or host, From, To, Details, Load older, Export, CSV, JSON lines, Clear filters, Access changes; a source is Read, Latest 50, Can't read, Needs updating, Not installed; an actor is Owner, The server, Someone, alice@example.com (token), Example Accounting (password access) | Log entry, Audit trail, Download, Reset |
 | Unreachable | Can't reach the dashboard., Can't reach the server's secrets., Can't reach the access service on the server. | is not answering |
-| Common actions | Refresh, Retry, Sign in, Sign out, Copy, Copied, Cancel, Close, Done, Manage, See | Reload, Try again, Log out, Submit |
+| Common actions | Refresh, Retry, Sign in, Sign out, Copy, Copied, Cancel, Close, Done, Manage, See, History, All activity, Recent | Reload, Try again, Log out, Submit, Audit, Logs |
 | Empty states | No issues, No sites match "x", No site is restricted, No sites deployed yet, No project of yours yet, No project named x that you have a role on, Nobody else has access to cms yet, Nobody has access to a project yet, cms has no secret files, Not part of your role, Only the owner's | Nothing here! |
 
 "Portal" names the component, on the machine: Activity's source for sign-ins,
@@ -613,9 +796,8 @@ and value, text only. *Load older* at the foot while a source has more; a page
 that finds nothing goes on by itself a few times before handing the choice
 back. Under the panel, which sources only hand over their latest entries.
 
-**People.** The owner's alone. The lock in the header, the same as the
-secrets'; one sentence under it: roles are given and changed in each
-project's Access section, here someone is let create projects or removed
+**People.** The owner's alone. Its intro, behind the title's (i): roles are
+given and changed in each project's Access section, here someone is let create projects or removed
 from every project at once. A banner when company sign-in is not set up,
 since everyone added then gets password access. The **People** panel,
 everyone with access to a project, by email: their role on each project in
@@ -631,12 +813,12 @@ revokes are named, "Also revokes 2 tokens: Alice's laptop (made by you),
 alice-ci (made by them)." *Remove expired*, in the panel's header while a
 password access has ended, lists them in a confirmation and takes each off
 its project. Under the list, *Let someone create projects*: a company email,
-*Allow* once unlocked, *Unlock to allow* before. Giving the right waits for
-the unlock, taking it away does not. Then **Domains**: each domain with
+*Allow*, which asks for the unlock first. Giving the right waits for the
+unlock, taking it away does not. Then **Domains**: each domain with
 access, and the sites it opens, linked to their Access.
 
-**Tokens.** The lock in the header, the same as the secrets'. One sentence on
-what a token does, the owner's or a person's. The **Tokens** panel, its count
+**Tokens.** Its intro, behind the title's (i), says what a token does, the
+owner's or a person's. The **Tokens** panel, its count
 the number of rows: each token's label, who made it and for whom (*Made by
 you*, *Made by you for alice@example.com*, *Made by alice@example.com*; a
 person reads *Made by you* or *Made by the owner for you*), its state
@@ -650,8 +832,8 @@ outbound network (paused: not Admin of cms now)", "Can manage secrets
 projects it reaches, a person's with their role there today, "calendar
 (Admin)", "cms (paused: Viewer now)", "photos (paused: no role now)", the
 owner's own with those it created, "notes (created)", when it was created,
-last used and until when, and *Revoke*, which needs no unlock. *New token*
-once unlocked, *Unlock to create* before. Then **Recent deployments** and
+last used and until when, and *Revoke*, which needs no unlock. *New token*,
+which asks for the unlock first. Then **Recent deployments** and
 **Token activity**, with an *All activity* link, side by side in a wide body.
 Token activity holds the tokens' creations and deployments, and what tokens
 did through the steward, secret changes, restarts and access changes, newest
@@ -691,9 +873,13 @@ without is ticked for you and says which, "Needed by bookshop and wheels":
 a public project for the owner's own, exempted paths, a declared domain.
 Then *Expires*. The token is then shown once, with *Copy message*.
 
-**The sign-in page** is the portal's card (`portal/src/page.ts`), which a
-visitor meets in front of a restricted site, so that both read as one
-product: the landing page's 24 px panel, `rounded-3xl`, and its 44 px
+**The sign-in page** names the server under *Sign in*: the zone it serves,
+in mono, `example.com`, from `/api/session`, so that whoever runs a test
+install beside production sees which server the password goes to before
+typing it; "Server dashboard" from a service that does not say it. An
+expired session's overlay keeps the zone and says why below it. The card
+is the portal's (`portal/src/page.ts`), which a visitor meets in front of a
+restricted site, so that both read as one product: the landing page's 24 px panel, `rounded-3xl`, and its 44 px
 controls with 12 px corners, the field the same well as every other, the
 same pressable teal. It is the one place the dashboard takes the landing
 page's sizes, being a page read once (section 8, point 15).
@@ -708,10 +894,9 @@ need more."; `no-role`, "This account has no access to any project
 here. Ask the owner, or an Admin of the project, to add you."; a domain not
 allowed, expired, not available.
 
-**Connectors.** The lock in the header, the same as the secrets'. Then three
-panels. **Connectors**: each one's name, base address, header, how many
+**Connectors.** Its intro behind the title's (i). Then three panels. **Connectors**: each one's name, base address, header, how many
 projects have it and when it changed, *Write-only* since its value is never
-shown; *Add connector*, *Change* and *Remove* once unlocked. **Grants**: every
+shown; *Add connector*, *Change* and *Remove*, each asking for the unlock first. **Grants**: every
 pair of a site and a connector that matters, what needs a decision first (a
 grant whose site is gone in error, a request not granted in attention), with
 *Grant* or *Withdraw*. **Egress activity**: the proxy's refusals, connector
@@ -752,14 +937,11 @@ stopped* or *No timer* in error, with its last run ("Last run 3h ago",
 The column reads *Receives* when every service is a server, *How it runs*
 otherwise.
 
-**A site's Secrets.** The lock in the header, the same on Access, People,
-Tokens, Backups and Connectors: locked, a single *Unlock changes* button with
-a key, no state pill beside it; unlocked, a warning pill, *Changes unlocked,
-9 min left*, and a *Lock* button. The owner's dialog, *Unlock changes*: "Enter
-the dashboard password again to change secrets, general access, roles,
-password access, tokens and restores for 10 minutes."; a person's: "Sign in
-again with Google to change secrets, general access, roles, password access,
-tokens and restores for 10 minutes. Only what your roles allow." The
+**A site's Secrets.** Every write asks for the unlock when pressed, as
+everywhere (5, *Writes and the unlock*). The owner's dialog, titled after
+what waits or *Unlock changes*: "Enter the dashboard password to make
+changes for 10 minutes."; a person's: "Sign in again with Google to make
+changes for 10 minutes. Only what your roles allow." The
 dashboard and the portal, which have no store, show their own files, the
 owner's alone, in the **Files** panel: the service and *Restart service*, what
 is wrong, then each file and its variables; a password variable offers only
@@ -790,12 +972,11 @@ project. The Overview's **Secrets** sums a store up in rows, its variables
 counted set and not set, its files by name, never a variable's name.
 
 **A site's Access.** Who can open the site, and what each person can do with
-it, in one place, laid out like a "Share" dialog, in one column. Under the
-title, one sentence, "Who can open cms, and what each person can do with it
-here. Changes apply from each person's next visit.", and *See changes in
-Activity*, the log narrowed to the site's access changes
-(`/activity/?action=access&target=cms`). For the owner and the project's
-Admins, the lock in the header, once the secrets are read. Banners: an unlock
+it, in one place, laid out like a "Share" dialog, in one column. Behind the
+title's (i), one sentence, "Who can open cms, and what each person can do
+with it here. Changes apply from each person's next visit."; the header's
+*History* opens the log narrowed to the site's access changes
+(`/activity/?target=cms&type=access`). Banners: an unlock
 that failed; the portal on the server still reading its own lists, or unable
 to read who has access (`sitesolide upgrade`); for the owner, company sign-in
 not set up, so that everyone added gets password access, with where to set
@@ -858,9 +1039,9 @@ its end; "Nobody at acme.com can sign in here: only example.com accounts can.
 Add people from acme.com by email: they get password access.", with no *Add*;
 "Already covered by @example.com."; "owner@example.com already opens every
 site, as admin: it's set on the server."; "erin@example.com is already on the
-list, as Viewer." *Unlock to add* stands for *Add* when the role or the
-password waits for the unlock, said under the field: "Giving Developer needs
-Unlock changes first.", "Password access needs Unlock changes first." The
+list, as Viewer." *Add* carries the lock glyph when the role or the
+password waits for the unlock, said under the field: "Giving Developer asks
+to unlock changes first.", "Password access asks to unlock changes first." The
 owner, once unlocked, finds the addition made; a person, back from signing in
 again at their provider, finds the field and the role as they left them, and
 "Unlocked. Press Add to finish." After adding, "dana@example.com can now open
@@ -904,8 +1085,8 @@ and the landing named after the zone) shows one panel: how it opens, in one
 line, then "portal is part of the platform. Only the owner opens it when
 restricted; no one can be given a role on it."
 
-**A site's Backups.** The lock in the header, a restore asking for the dashboard
-password like a secret. **Schedule**: how fresh the last snapshot is (the last
+**A site's Backups.** *Restore* asks for the unlock when pressed, like a
+secret's write, then confirms. **Schedule**: how fresh the last snapshot is (the last
 run's error in red, over two hours in attention), what the retention keeps,
 the offsite copy, the last restore. **Snapshots**: the newest twelve, then *Show
 all*, each with *Restore*, or the steward's reason not to under the title.
@@ -967,6 +1148,29 @@ change it.
     read once; at the dashboard's density they would cost a row in four. The
     panels take its cards' 14 px, the buttons its small sizes, 32 and 36 px.
     The sign-in alone keeps them, being such a page, and the portal's.
+16. **An unlock button in every header**, *Unlock changes*, and *Unlock to
+    ...* buttons in the panels under it: two controls for one gesture on six
+    pages, the button primary on three and outline on the other three, and a
+    header crowded with two pills and a button once unlocked. The unlock is
+    asked for when a write is pressed, and one pill says it is open.
+17. **An intro paragraph opening every page**: 40 to 60 px on each, the
+    whole first phone screen of Activity, read once and then in the way of
+    the list. It lives behind the title's (i), whole.
+18. **An activity panel on an object's page**, Tokens twice, Secrets,
+    Backups, Connectors: history at the weight of the object, mostly routine,
+    "Scheduled run, Done" six times. Activity holds it, behind *History* and
+    a sheet's *Recent*.
+19. **A status word and a dot on every healthy row**, *Running* fourteen
+    times, *Active* on every token: words that say nothing, which hid the
+    one that did. The verdict says fine once; a row speaks when it is not.
+20. **Rows as paragraphs**, 63 to 105 px with a made-by line, dotted actions,
+    resource bars and a button each: the secondary facts went to the sheet,
+    a tooltip or the row menu, and a row is one line.
+21. **A tiled empty state inside a panel**, 190 px to say nothing is there:
+    one line now, or no section at all.
+22. **Filters as one segmented control mixing dimensions**, All, Issues,
+    Apps, Static, Restricted and Platform side by side: one facet per
+    dimension, its menu showing the rows' own icons and counts.
 
 ## 9. Seeing the page, and looking at it
 
@@ -996,6 +1200,21 @@ and `reports`, whose every service is scheduled. The platform's own three,
 well), `BENCH_PLATFORM_DOWN=1` (the portal's unit failed, alone or with
 `BENCH_FRESH=1`), `BENCH_SHOWCASE=1`. After `bun run web:build`, a reload is
 enough.
+
+**The pattern gallery**, for whoever builds a screen: every shared pattern
+drawn by the real components with fictitious rows, inside the real shell
+and signed in against the bench, its sheet's *Recent*, its History links and
+its unlock the bench's own. The header and its (i), the FilterBar and the
+DataTable in both layouts, dense rows and the row's one action, quiet when
+fine, the icons and their tooltips, the writes and the unlock, the empty
+states, the banners, the sheet. It is built only when asked, so that it
+never ships:
+
+```bash
+cd dashboard
+DASHBOARD_GALLERY=1 bun run build
+bun run page-bench       # http://localhost:4322/gallery/, password demo
+```
 
 A visible change is looked at before being shipped, through headless Chrome
 screenshots of the bench, in light and in dark:

@@ -21,6 +21,7 @@ import { Command, CopyFallback, useAnnounce, useCopy } from "@/components/copy"
 import { Banner, EmptyState, Panel, Status } from "@/components/page"
 import { ProblemRow, ServiceLine } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
+import { LockGlyph, useWrite } from "@/components/unlock"
 import { ConfirmDialog, useOrigin } from "@/components/secrets-dialogs"
 import {
   StoreFileDialog,
@@ -227,6 +228,7 @@ function MissingBlock({
   onGenerate: (name: string) => void
   onUpload: (name: string) => void
 }) {
+  const { locked } = useWrite()
   const { variables, files } = storeMissing(store)
   if (variables.length + files.length === 0) return null
   const write = store.may.write && store.state !== "unmanaged"
@@ -245,10 +247,12 @@ function MissingBlock({
                 <Button variant="outline" size="sm" onClick={() => onSet(name)} aria-label={`Set ${name}`} className="max-md:h-10">
                   <Pencil />
                   Set
+                  {locked && <LockGlyph />}
                 </Button>
                 <Button variant="outline" size="sm" onClick={() => onGenerate(name)} aria-label={`Generate ${name}`} className="max-md:h-10">
                   <Dices />
                   Generate
+                  {locked && <LockGlyph />}
                 </Button>
               </div>
             )}
@@ -263,6 +267,7 @@ function MissingBlock({
                 <Button variant="outline" size="sm" onClick={() => onUpload(name)} aria-label={`Upload ${name}`} className="max-md:h-10">
                   <FileUp />
                   Upload
+                  {locked && <LockGlyph />}
                 </Button>
               </div>
             )}
@@ -482,12 +487,15 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
               >
                 <Undo2 />
                 <span className="max-sm:sr-only">Restore previous version</span>
+                {!actions.state.open && <LockGlyph />}
               </Button>
             )}
             {restartable && (
               <Button variant={waiting ? "default" : "outline"} size="sm" onClick={() => actions.restart(slug)} className="max-md:h-10">
                 <RotateCcw />
                 Restart service
+                {/* A person restarts with their session alone; the owner from an unlock. */}
+                {!actions.state.open && !actions.person && <LockGlyph />}
               </Button>
             )}
           </>
@@ -541,11 +549,13 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
               <Button variant="outline" size="sm" onClick={() => openFile(null)} className="max-md:h-10">
                 <FileUp />
                 Upload file
+                {!actions.state.open && <LockGlyph />}
               </Button>
             )}
             <Button variant="outline" size="sm" onClick={() => openValue(null, "type")} className="max-md:h-10">
               <Plus />
               Add variable
+              {!actions.state.open && <LockGlyph />}
             </Button>
           </div>
         )}
@@ -562,6 +572,7 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
               <Button variant="outline" size="sm" onClick={() => openFile(null)} className="max-md:h-10">
                 <FileUp />
                 Upload file
+                {!actions.state.open && <LockGlyph />}
               </Button>
             ) : undefined
           }

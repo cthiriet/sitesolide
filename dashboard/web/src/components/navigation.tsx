@@ -28,6 +28,8 @@ import { plainClick, readAddress, redirect, type Page, type SearchParams } from 
 
 export type Navigation = {
   page: Page
+  /** The current path, `/site/secrets/`: what a page's own query, its list's filters or its sheet, is written onto. */
+  path: string
   /** The current query's parameters, `?s=cms`. */
   params: SearchParams
   /** True when the current page comes from a back or a forward, whose scroll the browser restores. */
@@ -86,7 +88,7 @@ export function Router({ path, children }: { path: string; children: ReactNode }
   }, [address, navigate])
 
   const value = useMemo<Navigation>(
-    () => ({ ...readAddress(address), fromHistory, navigate }),
+    () => ({ ...readAddress(address), path: new URL(address, "http://page.invalid").pathname, fromHistory, navigate }),
     [address, navigate],
   )
 

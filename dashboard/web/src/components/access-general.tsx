@@ -8,6 +8,7 @@ import { useAnnounce } from "@/components/copy"
 import { Banner, FormError, INPUT_DIALOG, Panel } from "@/components/page"
 import { CodeChip } from "@/components/access-word"
 import { Track, useClock, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
+import { LockGlyph } from "@/components/unlock"
 import { setGeneralAccess } from "@/lib/api"
 import {
   addressesLine,
@@ -79,6 +80,7 @@ export function GeneralAccessPanel({
   stewardReason,
   failedNote,
   addresses,
+  locked = false,
   onChoose,
 }: {
   slug: string
@@ -93,6 +95,8 @@ export function GeneralAccessPanel({
   stewardReason: string | null
   /** When who has access could not be read: the choices wait for the server. */
   failedNote: string | null
+  /** Changes are locked: a way that lets more people in carries the lock glyph, and asks for the unlock when pressed. */
+  locked?: boolean
   onChoose: (target: ChangeTarget) => void
 }) {
   const problem =
@@ -153,6 +157,7 @@ export function GeneralAccessPanel({
                       <Button variant="outline" size="sm" data-general="renew" onClick={() => onChoose("renew")} className="max-md:h-10">
                         <RefreshCw aria-hidden="true" />
                         New code
+                        {locked && <LockGlyph />}
                       </Button>
                     )}
                   </div>
@@ -173,6 +178,8 @@ export function GeneralAccessPanel({
                   className="max-md:h-10"
                 >
                   {option.action}
+                  {/* Restricting lets nobody new in: it asks for no unlock. */}
+                  {locked && option.access !== "restricted" && <LockGlyph />}
                 </Button>
               )}
             </li>

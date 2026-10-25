@@ -1,15 +1,18 @@
-import { useId, useState, type ComponentProps, type ReactNode } from "react"
+import { useEffect, useId, useRef, useState, type ComponentProps, type ReactNode } from "react"
 import {
+  CircleCheck,
   CircleX,
   CloudOff,
   Ellipsis,
+  History,
+  Info,
   LogOut,
   RefreshCw,
   ServerOff,
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,12 +20,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useData } from "@/components/data"
 import { Logo } from "@/components/logo"
 import { InternalLink, useNavigation } from "@/components/navigation"
+import { useOptionalSecretsActions } from "@/components/secrets-actions"
 import { useTheme } from "@/components/theme"
+import { UnlockedPill } from "@/components/unlock"
 import { ABSENT, JUST_NOW_MS, dateTime, duration, ago } from "@/lib/format"
+import { historyUrl, type HistoryFilter } from "@/lib/history"
 import { PAGE_TITLE_ID } from "@/lib/pages"
 import { TONE_BANNER, TONE_HALO, TONE_PILL, TONE_DOT, TONE_TEXT, verdictTone, type Tone } from "@/lib/tones"
 import type { Snapshot } from "@/lib/types"
@@ -120,6 +127,44 @@ export function SeverityIcon({
       />
       {label && <span className="sr-only">{error ? "Error: " : "Warning: "}</span>}
     </>
+  )
+}
+
+/**
+ * A row's state, quiet when fine: nothing at all for `ok`, which the page's
+ * verdict says once; a muted word for `neutral`, a piece of information; the
+ * word in its tone, 13 px, for `attention` and `error`. `more` adds the
+ * "+2" chip of the states not shown, whose tooltip, `title`, lists every
+ * message in full. A fine row carries no status word, a row in trouble its
+ * word and the severity icon in its gutter (`SeverityGutter`), so that colour
+ * never says anything alone.
+ */
+export function StateLabel({
+  tone,
+  more = 0,
+  title,
+  className,
+  children,
+}: {
+  tone: Tone
+  more?: number
+  title?: string
+  className?: string
+  children: ReactNode
+}) {
+  if (tone === "ok") return null
+  return (
+    <span
+      title={title}
+      className={cn(
+        "inline-flex min-w-0 items-center gap-1.5 text-[0.8125rem] whitespace-nowrap",
+        tone === "neutral" ? "text-muted-foreground" : cn("font-medium", TONE_TEXT[tone]),
+        className,
+      )}
+    >
+      <span className="truncate">{children}</span>
+      {more > 0 && <Count className="h-[1.125rem] px-1 text-[0.6875rem]">+{more}</Count>}
+    </span>
   )
 }
 
@@ -225,7 +270,9 @@ export function Panel({
     <section
       id={id}
       aria-labelledby={title === undefined ? undefined : titleId}
-      className={cn("min-w-0 overflow-hidden rounded-xl border bg-card text-sm text-card-foreground shadow-panel", className)}
+      // `clip` and not `hidden`: it rounds the corners without making the panel
+      // a scroll container, so that a table's head can stick under the page header.
+      className={cn("min-w-0 overflow-clip rounded-xl border bg-card text-sm text-card-foreground shadow-panel", className)}
     >
       {title !== undefined && (
         <div className="flex min-h-11 flex-wrap items-center gap-x-2.5 gap-y-1 border-b px-4 py-2">
@@ -307,6 +354,32 @@ export function EmptyState({
       <p className="max-w-full font-medium text-balance wrap-anywhere">{title}</p>
       {children !== undefined && <div className="max-w-md text-sm text-pretty text-muted-foreground">{children}</div>}
       {action !== undefined && <div className="mt-3">{action}</div>}
+    </div>
+  )
+}
+
+/**
+ * Empty is small: inside a panel, one 44 px line, a 16 px icon, the state,
+ * and at most one action, a quiet button or link. "No token yet." with *New
+ * token*. The tiled `EmptyState` stays for a page with nothing at all; a
+ * section with nothing in it and nothing to ask disappears instead.
+ */
+export function InlineEmpty({
+  icon: Icon,
+  action,
+  className,
+  children,
+}: {
+  icon: LucideIcon
+  action?: ReactNode
+  className?: string
+  children: ReactNode
+}) {
+  return (
+    <div className={cn("flex min-h-11 flex-wrap items-center gap-x-2.5 gap-y-1 px-4 py-2 text-sm text-muted-foreground", className)}>
+      <Icon aria-hidden="true" className="size-4 shrink-0" />
+      <p className="min-w-0 text-pretty">{children}</p>
+      {action !== undefined && <div className="flex items-center">{action}</div>}
     </div>
   )
 }
@@ -535,14 +608,31 @@ function MobileMenu() {
   )
 }
 
-/** The whole page's problems, under the header: data unreachable or stale. */
+/**
+ * The whole page's problems, under the header: data unreachable or stale;
+ * and what became of an unlock, which every page may ask for: a person's
+ * that came back refused, a lock refused, or what to press again once a
+ * person's came back unlocked.
+ */
 function ShellBanners() {
   const { reading, failure, inProgress, age, refresh } = useData()
+  const actions = useOptionalSecretsActions()
   const stale = reading !== null && reading.present && reading.stale
   const unreachable = failure && reading !== null
-  if (!stale && !unreachable) return null
+  const unlockNotice = actions?.unlockNotice ?? null
+  const lockError = actions?.lockError ?? ""
+  const resumeNote = actions?.resumeNote ?? null
+  if (!stale && !unreachable && unlockNotice === null && lockError === "" && resumeNote === null) return null
   return (
     <div className={cn(CONTAINER, "grid gap-2 pt-4")}>
+      {unlockNotice !== null && <Banner tone="error">{unlockNotice}</Banner>}
+      {lockError !== "" && <Banner tone="error">Couldn't lock changes. {lockError}</Banner>}
+      {resumeNote !== null && (
+        <p role="status" className="flex items-center gap-2 text-sm">
+          <CircleCheck aria-hidden="true" className="size-4 shrink-0 text-ok-text" />
+          {resumeNote}
+        </p>
+      )}
       {unreachable && (
         <Banner
           tone="attention"
@@ -568,33 +658,117 @@ function ShellBanners() {
 }
 
 /**
- * Every page's header, and its first element: the title, focusable so that
- * focus returns to it after a navigation, the machine's verdict, the age of the
- * data and the refresh control, then the page-wide banners.
+ * A page's intro, read on demand: the (i) beside the title opens it. What
+ * the page is for and what it never shows, the paragraph a page used to open
+ * with, kept whole and moved out of the way of its list.
+ */
+function IntroButton({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`About ${title}`}
+            className="shrink-0 text-muted-foreground hover:text-foreground max-md:size-9"
+          />
+        }
+      >
+        <Info />
+      </PopoverTrigger>
+      <PopoverContent className="grid gap-2 text-pretty text-secondary-foreground">{children}</PopoverContent>
+    </Popover>
+  )
+}
+
+/**
+ * The quiet way to a page's history: Activity, narrowed to this object
+ * (lib/history.ts). A ghost button with its clock; the icon alone on a phone.
+ */
+export function HistoryLink({ filter, className }: { filter: HistoryFilter; className?: string }) {
+  return (
+    <InternalLink
+      href={historyUrl(filter)}
+      aria-label="History"
+      title="See this in Activity"
+      className={cn(buttonVariants({ variant: "ghost" }), "text-muted-foreground hover:text-foreground max-md:size-10 max-md:px-0", className)}
+    >
+      <History />
+      <span aria-hidden="true" className="max-md:hidden">
+        History
+      </span>
+    </InternalLink>
+  )
+}
+
+/**
+ * The header's height, as `--page-header` on the root: a table's sticky head
+ * sits right under it, whatever the header wraps to.
+ */
+function useHeaderHeight() {
+  const header = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const element = header.current
+    if (element === null || typeof ResizeObserver === "undefined") return
+    const root = document.documentElement
+    const observer = new ResizeObserver(() => root.style.setProperty("--page-header", `${element.offsetHeight}px`))
+    observer.observe(element)
+    return () => {
+      observer.disconnect()
+      root.style.removeProperty("--page-header")
+    }
+  }, [])
+  return header
+}
+
+/**
+ * Every page's header, and its first element. On the left the breadcrumb,
+ * the title, focusable so that focus returns to it after a navigation, its
+ * count and its (i); on the right the page's one primary action, its History
+ * link, the unlocked pill while changes are unlocked, then the machine's
+ * verdict, the age of the data and the refresh control. The page-wide
+ * banners follow it.
  *
- * `actions`: the buttons specific to the page, to the right of the title on a
- * computer, under it on a phone. `breadcrumb`: the breadcrumb up to the page, above
- * the title, inside a site. `afterTitle`: what follows the title on its line,
- * the site switcher on a phone.
+ * - `count`: the number the page lists, the same the sidebar and the rows count.
+ * - `intro`: the page's intro paragraph, behind the (i) beside the title.
+ * - `actions`: the page's own controls, one primary among them at most; on
+ *   a phone, under the title beside the verdict.
+ * - `history`: what the History link narrows Activity to; no link without it.
+ * - `breadcrumb`: the path up to the page, above the title, inside a site.
+ * - `afterTitle`: what follows the title on its line, the site switcher on a phone.
+ * - `description`: a line under the title, a site's state and address on its Overview.
  */
 export function PageHeader({
   title,
   count,
+  intro,
   breadcrumb,
   afterTitle,
   description,
   actions,
+  history,
 }: {
   title: string
   count?: ReactNode
+  intro?: ReactNode
   breadcrumb?: ReactNode
   afterTitle?: ReactNode
   description?: ReactNode
   actions?: ReactNode
+  history?: HistoryFilter
 }) {
+  const header = useHeaderHeight()
+  const pageActions =
+    actions === undefined && history === undefined ? null : (
+      <>
+        {actions}
+        {history !== undefined && <HistoryLink filter={history} />}
+      </>
+    )
   return (
     <>
-      <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur-md">
+      <header ref={header} className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur-md">
         <div className={cn(CONTAINER, "flex flex-wrap items-center gap-x-4 gap-y-2 py-3 md:min-h-[4.25rem]")}>
           <div className="flex min-w-0 flex-1 items-center gap-2.5">
             <InternalLink
@@ -615,14 +789,16 @@ export function PageHeader({
                   {title}
                 </h1>
                 {count !== undefined && <Count>{count}</Count>}
+                {intro !== undefined && <IntroButton title={title}>{intro}</IntroButton>}
                 {afterTitle}
               </div>
             </div>
           </div>
 
-          {actions !== undefined && <div className="hidden items-center gap-2 md:flex">{actions}</div>}
+          {pageActions !== null && <div className="hidden items-center gap-1.5 md:flex">{pageActions}</div>}
 
           <div className="hidden items-center gap-3 md:flex">
+            <UnlockedPill />
             <Verdict />
             <Age />
             <RefreshButton className="-mr-2" />
@@ -636,7 +812,8 @@ export function PageHeader({
           <div className="flex basis-full flex-wrap items-center gap-x-1.5 gap-y-2 md:hidden">
             <Verdict />
             <Age short />
-            {actions !== undefined && <div className="ml-auto flex flex-wrap items-center gap-2">{actions}</div>}
+            <UnlockedPill />
+            {pageActions !== null && <div className="ml-auto flex flex-wrap items-center gap-1.5">{pageActions}</div>}
           </div>
           {description !== undefined && <div className="basis-full text-sm text-muted-foreground">{description}</div>}
         </div>

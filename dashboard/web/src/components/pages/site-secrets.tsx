@@ -2,8 +2,7 @@ import { CloudOff, FileText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useData } from "@/components/data"
 import { Banner, ErrorState, EmptyState, Panel, PanelSkeleton, useRetry } from "@/components/page"
-import { FilesPanel, SecretsLockControl } from "@/components/secrets"
-import { useSecretsActions } from "@/components/secrets-actions"
+import { FilesPanel } from "@/components/secrets"
 import { SecretsLog } from "@/components/secrets-log"
 import { Code, StoreSection } from "@/components/secrets-store"
 import { SitePage, useSite } from "@/components/site"
@@ -18,15 +17,16 @@ import { isPerson, roleOn } from "@/lib/identity"
  */
 
 /**
- * One line: when a change applies, and, for a Developer or an Admin, that no
- * value comes back to them. How to unlock is the lock's to say.
+ * The header's intro: when a change applies, and, for a Developer or an
+ * Admin, that no value comes back to them. The unlock is asked for when a
+ * write is pressed.
  */
 function Intro({ slug }: { slug: string }) {
   const { identity } = useData()
   const role = roleOn(identity, slug)
   const hidden = role === "developer" || role === "admin" ? " Only the owner of the server reads a value back." : ""
   return (
-    <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
+    <p>
       {slug} reads these when it starts: a change applies after a restart.{hidden}
     </p>
   )
@@ -35,7 +35,6 @@ function Intro({ slug }: { slug: string }) {
 function Content({ slug }: { slug: string }) {
   const { secrets, identity } = useData()
   const person = isPerson(identity)
-  const actions = useSecretsActions()
   const { project, site } = useSite(slug)
   const store = project?.store ?? null
   const shown = store !== null || (project !== null && project.files.length > 0)
@@ -44,11 +43,6 @@ function Content({ slug }: { slug: string }) {
 
   return (
     <>
-      {(project === null || shown) && <Intro slug={slug} />}
-
-      {actions.unlockNotice !== null && <Banner tone="error">{actions.unlockNotice}</Banner>}
-      {actions.lockError !== "" && <Banner tone="error">Couldn't lock secrets. {actions.lockError}</Banner>}
-
       {problem !== null && projects !== null && (
         <Banner
           tone="attention"
@@ -134,18 +128,24 @@ function Content({ slug }: { slug: string }) {
 }
 
 /**
- * A site's secrets, under `/site/secrets/?s=<slug>`: the lock in the header,
- * its service and what is wrong, then its store (variables, what is missing,
- * files, the build's names, the public values) or, for the dashboard and the
- * portal, each of their own files and its actions; then its activity. No value
- * at all, but the one the owner reveals.
+ * A site's secrets, under `/site/secrets/?s=<slug>`: its service and what is
+ * wrong, then its store (variables, what is missing, files, the build's
+ * names, the public values) or, for the dashboard and the portal, each of
+ * their own files and its actions; then its activity. No value at all, but
+ * the one the owner reveals.
  */
 export function SecretsSection({ slug }: { slug: string }) {
-  const { secrets } = useData()
-  // No lock until something has been read: a steward that does not answer would refuse.
-  const actions = secrets.projects === null ? undefined : <SecretsLockControl />
+  const { project } = useSite(slug)
+  // A site with nothing to read has no intro about reading: its empty state says why.
+  const reads = project === null || project.store !== null || project.files.length > 0
   return (
-    <SitePage slug={slug} section="secrets" actions={actions} skeleton={<PanelSkeleton lines={5} />}>
+    <SitePage
+      slug={slug}
+      section="secrets"
+      intro={reads ? <Intro slug={slug} /> : undefined}
+      history={{ target: slug, type: "secrets" }}
+      skeleton={<PanelSkeleton lines={5} />}
+    >
       {() => <Content slug={slug} />}
     </SitePage>
   )

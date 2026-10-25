@@ -292,7 +292,8 @@ portal, which keep their own files flat, show each of them: the expected
 owner and mode, and the states *Restart pending*, *Unmanaged* and *Missing*.
 Then that site's activity. Changing site or section unmounts the rows, and
 with them any revealed value. **Without unlocking, no values, and no
-change.** After *Unlock changes* and retyping the password, for ten minutes,
+change.** A write pressed while locked asks for the password first, then
+goes on; after that, for ten minutes, the header saying *Unlocked, 9 min*,
 the owner may also:
 
 - from one of these files, show a value for thirty seconds, copy it, set or
@@ -950,7 +951,7 @@ unlock, the way the owner's asks for the password. A person has no password:
 they sign in again, made to by the provider.
 
 ```
-page, Unlock changes                          the person's session open
+page, a write pressed while locked           the person's session open
    |  GET /api/sso/begin?reauth=1&return=...   their session kept against the binding
    v
 server.ts  --  POST /admin/dashboard/flow { reauth: true }  -->  portal: a flow sealed with reauth
@@ -1447,8 +1448,9 @@ server.ts          reads, merges, bounds; writes nothing
   or an empty one: a source read to the end of its budget before the page is
   full holds back the older rows of the others, so the order holds, and the
   next page goes further. *Access changes* is the action filter `access`;
-  the page's address may carry `actor`, `action`, `target` and `source`, as a
-  site's *See changes in Activity* link does.
+  the page's address may carry `actor`, `action`, `target`, `source`, `type`
+  and `since` (web/src/lib/history.ts), as every page header's *History*
+  link does.
 - **In words.** Each row reads as a sentence, "Gave dana@example.com
   Developer on cms", "Restricted cms", "Signed in with the owner's password",
   and names its actor: *Owner*, *The server*, *Someone*, `alice@example.com

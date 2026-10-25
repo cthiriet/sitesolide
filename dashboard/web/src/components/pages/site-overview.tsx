@@ -89,6 +89,7 @@ export function OverviewSection({ slug }: { slug: string }) {
     <SitePage
       slug={slug}
       section="overview"
+      history={{ target: slug }}
       description={site === null ? undefined : <Summary site={site} discrepancies={discrepancies} />}
       skeleton={<OverviewSkeleton />}
     >

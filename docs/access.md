@@ -149,7 +149,7 @@ control, and whom to ask to add someone.
 **Unlocking, for a person, is signing in again.** Whatever writes a
 secret, makes a site public, opens it with a code or gives it a new one,
 restores data, mints a token, gives someone a role above Can open, or gives
-password access asks for the person's own unlock: *Unlock changes* sends them to the identity provider, which asks them
+password access asks for the person's own unlock: pressed, the write sends them to the identity provider, which asks them
 to prove themselves once more even if they are signed in there, and brings
 them back unlocked for ten minutes, for their session alone. The owner
 unlocks with the dashboard's password; neither unlock replaces the other, nor
@@ -181,7 +181,7 @@ A Viewer everywhere, without the create right, mints nothing, and sees no
 *Tokens* page.
 
 - **Minted under their own unlock**, the forced sign-in at the provider that
-  every secret write asks for: *Unlock to create*, then *New token*. The
+  every secret write asks for: *New token* asks for it, then opens. The
   dialog offers the projects where they are Developer or Admin, creating
   projects only with the right, *Manage secrets*, and the options only for
   projects they administer. The token carries their email, whatever is sent, and is shown

@@ -225,13 +225,17 @@ export function ActivityPage() {
 
   return (
     <>
-      <PageHeader title="Activity" actions={actions} />
+      <PageHeader
+        title="Activity"
+        intro={
+          <p>
+            Who did what on this server, from every component's own audit: deployments and tokens, sign-ins and who gets in,
+            egress refusals and connectors, backups and restores, secrets and access changes. Values never appear here.
+          </p>
+        }
+        actions={actions}
+      />
       <PageBody>
-        <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
-          Who did what on this server, from every component's own audit: deployments and tokens, sign-ins and who gets in,
-          egress refusals and connectors, backups and restores, secrets and access changes. Values never appear here.
-        </p>
-
         <SourceStates statuses={seen} />
 
         <AuditFilterBar

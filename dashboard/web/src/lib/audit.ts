@@ -10,6 +10,7 @@
 import { ROLE_TEXTS } from "./access"
 import { callApi } from "./api"
 import { activityLine } from "./connectors"
+import { historyUrl } from "./history"
 import { capitalise, dateTime, plural } from "./format"
 import { operationOutcome, operationParts } from "./secrets"
 import type { Tone } from "./tones"
@@ -114,16 +115,8 @@ export function filtersFrom(params: { get: (name: string) => string | null }): A
   return { ...NO_FILTERS, source, actor: value("actor"), action: value("action"), target: value("target") }
 }
 
-/** The Activity page's address, narrowed: what a link from elsewhere opens. */
-export function activityUrl(filters: Partial<Pick<AuditFilters, "action" | "target" | "actor">>): string {
-  const query = new URLSearchParams()
-  for (const key of ["actor", "action", "target"] as const) {
-    const value = filters[key]?.trim() ?? ""
-    if (value !== "") query.set(key, value)
-  }
-  const text = query.toString()
-  return `/activity/${text === "" ? "" : `?${text}`}`
-}
+/** The Activity page's address, narrowed: the History links' contract, lib/history.ts. */
+export const activityUrl = historyUrl
 
 export function hasFilters(filters: AuditFilters): boolean {
   return (

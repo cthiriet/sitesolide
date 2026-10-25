@@ -18,7 +18,7 @@ import { useData } from "@/components/data"
 import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
 import { Banner, EmptyState, ErrorState, PageBody, PageHeader, Panel, PanelSkeleton } from "@/components/page"
-import { SecretsLockControl } from "@/components/secrets"
+import { LockGlyph } from "@/components/unlock"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { readPeople, readTokens, removeAccess, removePerson, setCreate } from "@/lib/api"
 import { ACCESS_UNREACHABLE, refusalText } from "@/lib/access"
@@ -157,7 +157,11 @@ function CreateForm({ page, onGiven }: { page: PeoplePageResponse; onGiven: (ema
       setError(fault)
       return field.current?.focus()
     }
-    if (!actions.state.open) return actions.unlock()
+    // Giving the right waits for the unlock, asked for now, then goes on.
+    actions.require(() => void allow(), { purpose: "let someone create projects" })
+  }
+
+  async function allow() {
     setInProgress(true)
     try {
       const email = text.trim().toLowerCase()
@@ -197,7 +201,8 @@ function CreateForm({ page, onGiven }: { page: PeoplePageResponse; onGiven: (ema
           className="h-10 min-w-0 flex-1 basis-60 sm:h-9"
         />
         <Button type="submit" variant="outline" disabled={inProgress} className="h-10 sm:h-9">
-          {inProgress ? "Saving…" : actions.state.open ? "Allow" : "Unlock to allow"}
+          {inProgress ? "Saving…" : "Allow"}
+          {!inProgress && !actions.state.open && <LockGlyph />}
         </Button>
       </div>
       <p id={`${id}-help`} role={error !== "" ? "alert" : undefined} className={cn("text-xs text-pretty", error !== "" ? "text-destructive" : "text-muted-foreground")}>
@@ -240,9 +245,14 @@ export function PeoplePage() {
     void reload()
   }, [reload])
 
-  async function changeCreate(person: PersonView, create: boolean) {
+  /** Giving the right waits for the unlock, asked for when ticked; taking it away does not. */
+  function changeCreate(person: PersonView, create: boolean) {
     setRowError("")
-    if (create && !actions.state.open) return actions.unlock()
+    if (create) return actions.require(() => void applyCreate(person, create), { purpose: "let someone create projects" })
+    void applyCreate(person, create)
+  }
+
+  async function applyCreate(person: PersonView, create: boolean) {
     setBusy(person.who)
     try {
       const { status, body } = await setCreate(person.who, create)
@@ -301,13 +311,18 @@ export function PeoplePage() {
 
   return (
     <>
-      <PageHeader title="People" count={page?.available === true ? page.people.length : undefined} actions={<SecretsLockControl quiet />} />
+      <PageHeader
+        title="People"
+        count={page?.available === true ? page.people.length : undefined}
+        intro={
+          <p>
+            Everyone with access to a project, and their role on each. Roles are given and changed in each project's Access
+            section; here you let someone create projects, or remove them from every project at once.
+          </p>
+        }
+        history={{ type: "access" }}
+      />
       <PageBody>
-        <p className="max-w-2xl text-sm text-pretty text-muted-foreground">
-          Everyone with access to a project, and their role on each. Roles are given and changed in each project's Access
-          section; here you let someone create projects, or remove them from every project at once.
-        </p>
-
         {loaded.state === "loading" && <PanelSkeleton lines={5} />}
         {loaded.state === "failed" && (
           <Panel title="People">
@@ -358,7 +373,7 @@ export function PeoplePage() {
                     page={page}
                     now={serverNow}
                     busy={busy === person.who}
-                    onCreate={(create) => void changeCreate(person, create)}
+                    onCreate={(create) => changeCreate(person, create)}
                     onRemove={() => void askRemoval(person)}
                   />
                 ))}

@@ -9,7 +9,6 @@
  */
 import { ago, duration, fromNow, size, sizeOutOf } from "./format"
 import { serviceLevel, type Level } from "./gauges"
-import type { Click } from "./pages"
 import type { SiteSecretsPanel } from "./secrets"
 import type { Tone } from "./tones"
 import type { Site, SiteService } from "./types"
@@ -441,26 +440,8 @@ export function sortSites<T extends Pick<Site, "slug">>(sites: readonly T[], wor
 
 // --- The click on a row ----------------------------------------------------------
 
-/**
- * What a click on a site row does, outside its link.
- *
- * The name is a real link, the one for the keyboard and for screen readers. The
- * rest of the row follows the click in code rather than through a link stretched
- * over the whole row: a link laid on top would stop you selecting an address, a
- * path or a number. A click on an element that already acts (link, button,
- * field) belongs to it; a click that ends a text selection does not navigate.
- * Cmd, Ctrl and the middle button open the site in a new tab, as on a link;
- * Shift and Alt do nothing.
- */
-export function rowClickOutcome(click: Click, interactive: boolean, selection: string): "page" | "tab" | null {
-  if (click.defaultPrevented || interactive || selection !== "") return null
-  if (click.button === 1) return "tab"
-  if (click.button !== 0 || click.shiftKey || click.altKey) return null
-  return click.metaKey || click.ctrlKey ? "tab" : "page"
-}
-
-/** The elements that keep their click to themselves, inside a clickable row. */
-export const INTERACTIVE = "a, button, input, textarea, select, label, [role='button']"
+/** Every list's row click, which the sites list was the first to need: see lib/rows.ts. */
+export { rowClickOutcome, INTERACTIVE } from "./rows"
 
 // --- The caption -----------------------------------------------------------------
 

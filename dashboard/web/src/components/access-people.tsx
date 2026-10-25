@@ -17,6 +17,7 @@ import { RoleBars, Who } from "@/components/access-word"
 import { CopyFallback, useAnnounce, useCopy } from "@/components/copy"
 import { Banner, EmptyState, INPUT_DIALOG, Panel } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
+import { LockGlyph } from "@/components/unlock"
 import { putAccess, removeAccess } from "@/lib/api"
 import {
   DEFAULT_PASSWORD_DURATION_S,
@@ -289,8 +290,8 @@ function AddPeople({
     const password = plan.password
     // Unlocked here, the addition goes on; a person who leaves to unlock comes back to the field as it was.
     if (unlockFirst) {
-      return actions.unlock({
-        then: () => void send(who, chosen, password),
+      return actions.require(() => void send(who, chosen, password), {
+        purpose: "add someone",
         beforeLeave: () => keepPending({ slug: page.slug, text, role: chosen, duration, at: Date.now() }),
       })
     }
@@ -344,9 +345,10 @@ function AddPeople({
             ))}
           </Select>
         )}
-        <Button type="submit" variant={unlockFirst ? "outline" : "default"} disabled={inProgress || !offered} className="h-10 shrink-0 sm:h-9">
+        <Button type="submit" disabled={inProgress || !offered} className="h-10 shrink-0 sm:h-9">
           <UserRoundPlus />
-          {inProgress ? "Adding…" : unlockFirst ? "Unlock to add" : "Add"}
+          {inProgress ? "Adding…" : "Add"}
+          {unlockFirst && !inProgress && <LockGlyph />}
         </Button>
       </div>
       <div id={hintId} className="grid gap-0.5 text-xs text-pretty wrap-break-word">
@@ -598,7 +600,9 @@ export function PeopleWithAccess({
     if (role === entry.role) return
     setRowError("")
     // Unlocked here, the role picked is given at once.
-    if (raiseNeedsUnlock(entry.role, role) && !actions.state.open) return actions.unlock({ then: () => void applyRole(entry, role) })
+    if (raiseNeedsUnlock(entry.role, role) && !actions.state.open) {
+      return actions.require(() => void applyRole(entry, role), { purpose: `give ${roleLabel(role)}` })
+    }
     // An Admin lowering themselves gives up managing the project, and a
     // lowering may take someone out of the dashboard: said first.
     if ((own(entry) && entry.role === "admin" && lowers(entry.role, role)) || leavingWarning(entry.who, role, page) !== null) {

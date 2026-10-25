@@ -1,0 +1,13 @@
+---
+import Layout from "@/layouts/main.astro"
+import { GalleryApplication } from "@/components/gallery"
+---
+
+<Layout title="Patterns · sitesolide">
+  <!--
+    The pattern gallery, built only with DASHBOARD_GALLERY=1 (astro.config.mjs)
+    and served by the page bench: the shared components in the real shell,
+    signed in against the bench's data.
+  -->
+  <GalleryApplication client:load />
+</Layout>
