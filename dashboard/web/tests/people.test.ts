@@ -1,5 +1,20 @@
 import { describe, expect, test } from "bun:test"
-import { createFieldError, createRefusal, domainGroups, expiredAccesses, mayGetCreate, mayRemove, projectRoles, removalSentence, revokedTokensLine } from "../src/lib/people"
+import {
+  accessExpiry,
+  createFieldError,
+  createRefusal,
+  domainGroups,
+  entryMatches,
+  entryProjects,
+  expiredAccesses,
+  mayGetCreate,
+  mayRemove,
+  peopleEntries,
+  personKind,
+  projectRoles,
+  removalSentence,
+  revokedTokensLine,
+} from "../src/lib/people"
 import type { SignIn } from "../src/lib/access"
 
 const NOW = 1_791_000_000_000
@@ -83,5 +98,61 @@ describe("removing someone from every project", () => {
       "They lose every role and password access at their next request.",
     )
     expect(removalSentence(null)).toBe("")
+  })
+})
+
+describe("one list of people, password access and domains", () => {
+  const person = (who: string, partial: Partial<{ roles: Record<string, "visitor" | "viewer" | "developer" | "admin">; create: boolean; passwords: { slug: string; expiresAt: number | null; expired: boolean }[]; admin: boolean }> = {}) => ({
+    who,
+    roles: {},
+    create: false,
+    passwords: [],
+    admin: false,
+    ...partial,
+  })
+
+  test("a row's kind: password access when every project is through a password, a company account otherwise", () => {
+    expect(personKind(person("bob@acme.test", { roles: { blog: "developer" } }))).toBe("account")
+    expect(personKind(person("Client Bob", { roles: { shop: "visitor" }, passwords: [{ slug: "shop", expiresAt: null, expired: false }] }))).toBe("password")
+    // A role with an account beside a password on another project: an account, who also has a password somewhere.
+    expect(personKind(person("ann@acme.test", { roles: { blog: "viewer", shop: "visitor" }, passwords: [{ slug: "shop", expiresAt: null, expired: false }] }))).toBe("account")
+    expect(personKind(person("maya@acme.test", { create: true }))).toBe("account")
+  })
+
+  test("people by name, ignoring case, then the domains, each keyed for its sheet", () => {
+    const entries = peopleEntries(
+      [person("bob@acme.test", { roles: { blog: "developer" } }), person("Ann", { roles: { shop: "visitor" }, passwords: [{ slug: "shop", expiresAt: null, expired: false }] })],
+      [
+        { slug: "shop", domain: "@acme.test" },
+        { slug: "blog", domain: "@acme.test" },
+      ],
+    )
+    expect(entries.map((entry) => [entry.key, entry.kind])).toEqual([
+      ["Ann", "password"],
+      ["bob@acme.test", "account"],
+      ["@acme.test", "domain"],
+    ])
+    // Rows and count agree: one row per person and per domain, a domain on two projects once.
+    expect(entries).toHaveLength(3)
+    expect(entryProjects(entries[2]!, NOW)).toEqual([
+      { slug: "blog", role: "Can open", password: false },
+      { slug: "shop", role: "Can open", password: false },
+    ])
+    expect(entryProjects(entries[0]!, NOW)).toEqual([{ slug: "shop", role: "Password access", password: true }])
+  })
+
+  test("the search finds a row by who or by a project, accents and case aside", () => {
+    const [one] = peopleEntries([person("Élodie Martin", { roles: { calendar: "visitor" }, passwords: [{ slug: "calendar", expiresAt: null, expired: false }] })], [])
+    expect(entryMatches(one!, "elodie")).toBe(true)
+    expect(entryMatches(one!, "CALENDAR")).toBe(true)
+    expect(entryMatches(one!, "shop")).toBe(false)
+  })
+
+  test("Expires, for password access alone: the soonest end still open, in attention under a day", () => {
+    expect(accessExpiry(person("bob@acme.test"), NOW)).toBeNull()
+    expect(accessExpiry(person("A", { passwords: [{ slug: "shop", expiresAt: NOW + 5 * HOUR, expired: false }] }), NOW)).toEqual({ text: "in 5h", tone: "attention" })
+    expect(accessExpiry(person("A", { passwords: [{ slug: "shop", expiresAt: NOW + 6 * 24 * HOUR, expired: false }, { slug: "blog", expiresAt: null, expired: false }] }), NOW)).toEqual({ text: "in 6d", tone: "plain" })
+    expect(accessExpiry(person("A", { passwords: [{ slug: "shop", expiresAt: null, expired: false }] }), NOW)).toEqual({ text: "No expiry", tone: "muted" })
+    expect(accessExpiry(person("A", { passwords: [{ slug: "shop", expiresAt: NOW - HOUR, expired: true }] }), NOW)).toEqual({ text: "Expired", tone: "muted" })
   })
 })

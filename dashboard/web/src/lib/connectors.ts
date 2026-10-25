@@ -1,6 +1,7 @@
 /**
- * What the Connectors page decides: its calls, the state of each grant, the
- * words of the egress proxy's activity, and which field a refusal belongs to.
+ * What the Connectors page decides: its calls, the state of each grant and
+ * what waits for a decision, the words of the egress proxy's activity, and
+ * which field a refusal belongs to.
  * Pure apart from the calls, tested by tests/connectors.test.ts.
  *
  * The page judges no rule on a connector: it sends, and shows the steward's
@@ -99,6 +100,43 @@ export function grantWords(row: GrantRow): GrantWords {
   }
 }
 
+/** The states that wait for the owner: a removed site still granted, a request not granted, a connector the server lacks. */
+const DECISIONS: ReadonlySet<GrantState> = new Set(["gone", "asked", "missing"])
+
+/**
+ * The Requests panel: what needs a decision, first on the page and only
+ * while something waits. Its count is its rows'.
+ */
+export function requestRows(view: Pick<ConnectorsView, "connectors" | "grants" | "requests" | "sites">): GrantRow[] {
+  return grantRows(view).filter((row) => DECISIONS.has(row.state))
+}
+
+/** A request's mark in the gutter: a grant left to a removed site is an error, a request waiting a warning. */
+export function grantSeverity(state: GrantState): "error" | "warning" | null {
+  if (state === "gone") return "error"
+  return DECISIONS.has(state) ? "warning" : null
+}
+
+/**
+ * The projects a connector is granted to, as its row lists them: the
+ * deployed sites, each once, those that do not ask for it among them (it
+ * lends them nothing until they do). A grant left to a removed site is a
+ * request, not a project.
+ */
+export function grantedProjects(view: Pick<ConnectorsView, "connectors" | "grants" | "requests" | "sites">, name: string): GrantRow[] {
+  return grantRows(view).filter((row) => row.connector === name && (row.state === "granted" || row.state === "unasked"))
+}
+
+/** Every pair that concerns one connector, for its sheet, what needs a decision first. */
+export function connectorPairs(view: Pick<ConnectorsView, "connectors" | "grants" | "requests" | "sites">, name: string): GrantRow[] {
+  return grantRows(view).filter((row) => row.connector === name && row.state !== "missing")
+}
+
+/** A base address as the row shows it: without its scheme or a trailing slash, "api.github.com/repos/example". */
+export function shortAddress(url: string): string {
+  return url.replace(/^https?:\/\//, "").replace(/\/$/, "")
+}
+
 // --- The activity ----------------------------------------------------------------
 
 function detailOf(row: EgressAuditRow): Record<string, unknown> {
@@ -184,6 +222,17 @@ export function activityLine(row: EgressAuditRow): ActivityLine {
     default:
       return { summary: row.action, site: row.target, detail: null, tone: "neutral", at }
   }
+}
+
+/** The lines of the proxy's audit that concern one connector, for its sheet: its changes, its grants, its calls, the refusals to reach it. */
+export function connectorRows(rows: readonly EgressAuditRow[], name: string): EgressAuditRow[] {
+  return rows.filter((row) => {
+    const detail = detailOf(row)
+    if (row.action === "connector.update") return row.target === name
+    if (row.action === "connector.use" || row.action === "connector.grant") return detail.connector === name
+    if (row.action === "egress.denied") return detail.destination === `connector:${name}`
+    return false
+  })
 }
 
 // --- Refusals --------------------------------------------------------------------

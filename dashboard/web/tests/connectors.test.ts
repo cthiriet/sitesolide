@@ -1,5 +1,16 @@
 import { describe, expect, test } from "bun:test"
-import { activityLine, grantRows, grantWords, refusalField } from "../src/lib/connectors"
+import {
+  activityLine,
+  connectorPairs,
+  connectorRows,
+  grantRows,
+  grantSeverity,
+  grantWords,
+  grantedProjects,
+  refusalField,
+  requestRows,
+  shortAddress,
+} from "../src/lib/connectors"
 import type { ConnectorsView, EgressAuditRow } from "../src/lib/types"
 
 const AT = "2026-10-04T12:00:00.000Z"
@@ -39,6 +50,59 @@ describe("the grants", () => {
 
   test("nothing asked, nothing granted: no row", () => {
     expect(grantRows({ connectors: [connector("chat")], grants: [], requests: [], sites: ["shop"] })).toEqual([])
+  })
+})
+
+describe("the page: Requests, then the connectors", () => {
+  test("Requests lists what waits for a decision alone: its count is its rows', never the grants'", () => {
+    const rows = requestRows(VIEW)
+    expect(rows.map((row) => [row.state, row.slug, row.connector])).toEqual([
+      ["gone", "gone", "chat"],
+      ["asked", "shop", "code"],
+      ["missing", "blog", "mail"],
+    ])
+    expect(requestRows({ ...VIEW, grants: [grant("shop", "chat"), grant("shop", "code")], requests: [{ slug: "shop", connectors: ["chat", "code"] }] })).toEqual([])
+  })
+
+  test("a request's mark: a removed site is an error, a request waiting a warning, a granted pair nothing", () => {
+    expect(grantSeverity("gone")).toBe("error")
+    expect(grantSeverity("asked")).toBe("warning")
+    expect(grantSeverity("missing")).toBe("warning")
+    expect(grantSeverity("granted")).toBeNull()
+    expect(grantSeverity("unasked")).toBeNull()
+  })
+
+  test("a connector's projects: the deployed sites it is granted to, a removed one left to Requests", () => {
+    expect(grantedProjects(VIEW, "chat").map((row) => [row.slug, row.state])).toEqual([["shop", "granted"]])
+    expect(grantedProjects(VIEW, "code").map((row) => [row.slug, row.state])).toEqual([["notes", "unasked"]])
+    // Its sheet: every pair that concerns it, with its action, what needs a decision first.
+    expect(connectorPairs(VIEW, "chat").map((row) => [row.slug, row.state])).toEqual([
+      ["gone", "gone"],
+      ["shop", "granted"],
+    ])
+    expect(connectorPairs(VIEW, "code").map((row) => [row.slug, row.state])).toEqual([
+      ["shop", "asked"],
+      ["notes", "unasked"],
+    ])
+  })
+
+  test("a base address without its scheme or a trailing slash", () => {
+    expect(shortAddress("https://api.github.com/repos/example")).toBe("api.github.com/repos/example")
+    expect(shortAddress("https://slack.com/api/")).toBe("slack.com/api")
+  })
+
+  test("the proxy's lines about one connector: its changes, grants, calls and the refusals to reach it", () => {
+    const line = (id: number, action: string, target: string | null, detail: unknown): EgressAuditRow => ({ id, at: AT, actor: "system", action, target, detail: JSON.stringify(detail) })
+    const rows = [
+      line(1, "connector.update", "chat", { change: "created" }),
+      line(2, "connector.grant", "shop", { connector: "chat", granted: true }),
+      line(3, "connector.use", "shop", { connector: "code", count: 2 }),
+      line(4, "egress.denied", "shop", { destination: "connector:chat", reason: "not granted" }),
+      line(5, "egress.denied", "shop", { destination: "evil.test-zone.invalid:443", reason: "not in the list" }),
+      line(6, "connector.update", "code", { change: "updated" }),
+    ]
+    expect(connectorRows(rows, "chat").map((row) => row.id)).toEqual([1, 2, 4])
+    expect(connectorRows(rows, "code").map((row) => row.id)).toEqual([3, 6])
   })
 })
 

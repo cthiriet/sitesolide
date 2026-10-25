@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type SyntheticEvent } from "react"
-import { History, KeyRound, Pencil, Plug, Plus, Trash2 } from "lucide-react"
+import { History, Pencil, Plug, Plus, Trash2 } from "lucide-react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -12,39 +12,67 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Command, useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
+import { CellText, DataTable, RowButton, RowMenu, type Column } from "@/components/data-table"
+import { DetailSheet, SheetFacts, SheetSection, useSheet } from "@/components/detail-sheet"
+import { FilterBar, useListState } from "@/components/filter-bar"
 import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
-import { Banner, EmptyState, ErrorState, FormError, INPUT_DIALOG, PageBody, PageHeader, Panel, RowsSkeleton, Status, When, useRetry } from "@/components/page"
-import { WriteButton } from "@/components/unlock"
+import {
+  Banner,
+  Count,
+  ErrorState,
+  FormError,
+  INPUT_DIALOG,
+  InlineEmpty,
+  PageBody,
+  PageHeader,
+  Panel,
+  RowsSkeleton,
+  StateLabel,
+  When,
+  useRetry,
+} from "@/components/page"
+import { WriteButton, WriteMenuItem } from "@/components/unlock"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { returnTo, type FocusReturn } from "@/components/secrets-dialogs"
 import {
   activityLine,
-  grantRows,
+  connectorPairs,
+  connectorRows,
+  grantSeverity,
   grantWords,
+  grantedProjects,
   putConnector,
   readConnectors,
   readConnectorsActivity,
   refusalField,
   removeConnector,
+  requestRows,
   setGrant,
+  shortAddress,
   type ConnectorField,
   type GrantRow,
 } from "@/lib/connectors"
-import { ago } from "@/lib/format"
+import { ago, dateTime } from "@/lib/format"
+import { RECENT_LINES, historyUrl } from "@/lib/history"
+import { FILTER_BAR_FROM, type ListSpec } from "@/lib/list-state"
 import { siteUrl } from "@/lib/pages"
+import { normalize } from "@/lib/search"
 import { refusalOf } from "@/lib/secrets"
-import type { ConnectorView, ConnectorsView, EgressAuditRow, EgressStatus } from "@/lib/types"
+import type { ConnectorView, ConnectorsView, EgressAuditRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /**
  * The Connectors page: the credentials this server lends to projects without
- * handing them over, who asks for which, who has been granted which, and what
- * the egress proxy did with them.
+ * handing them over. First what waits for the owner, the Requests, only while
+ * something does; then the connectors, one line each, the projects each is
+ * granted to and its recent calls in its sheet. What the egress proxy did is
+ * in Activity, under History.
  *
  * Every write goes through the steward under the secrets' unlock, the same
  * one, asked for when a write is pressed. A value is typed once, sent once,
@@ -57,12 +85,16 @@ type ListState =
   | { state: "ready"; view: ConnectorsView }
 
 type ActivityState =
+  | { state: "idle" }
   | { state: "loading" }
   | { state: "error"; message: string }
-  | { state: "ready"; rows: EgressAuditRow[]; status: EgressStatus }
+  | { state: "ready"; rows: EgressAuditRow[] }
 
-/** A connector's dialog, remounted on every opening; `connector` null adds one. */
-type Opened = { open: boolean; opening: number; connector: ConnectorView | null }
+/** A connector's dialog, remounted on every opening; `connector` null adds one, with the `name` a project asks for when it came from a request. */
+type Opened = { open: boolean; opening: number; connector: ConnectorView | null; name?: string }
+
+/** The list's address: a search, from ten connectors. */
+const SPEC: ListSpec = {}
 
 /** The proxy records a change within five seconds of seeing it: the activity is read again after that. */
 const ACTIVITY_AFTER_WRITE_MS = 6_000
@@ -122,7 +154,7 @@ function ConnectorDialog({
 }) {
   const { sessionExpired } = useData()
   const existing = editing.connector
-  const [name, setName] = useState(existing?.name ?? "")
+  const [name, setName] = useState(existing?.name ?? editing.name ?? "")
   const [baseUrl, setBaseUrl] = useState(existing?.baseUrl ?? "https://")
   const [header, setHeader] = useState(existing?.header ?? "Authorization")
   const [value, setValue] = useState("")
@@ -173,7 +205,7 @@ function ConnectorDialog({
       <DialogContent
         className={cn("gap-5 sm:max-w-md", INPUT_DIALOG)}
         finalFocus={focusReturn}
-        initialFocus={() => (existing === null ? fields.name.current : fields.baseUrl.current)}
+        initialFocus={() => (existing === null && editing.name === undefined ? fields.name.current : fields.baseUrl.current)}
       >
         <form noValidate onSubmit={save} className="grid gap-5">
           <DialogHeader>
@@ -349,319 +381,371 @@ function RemoveDialog({
   )
 }
 
-// --- The panels --------------------------------------------------------------------
+// --- Requests ---------------------------------------------------------------------
 
-function ConnectorsPanel({
-  view,
-  serverNow,
-  canWrite,
-  onAdd,
-  onEdit,
-  onRemove,
-}: {
-  view: ConnectorsView
-  serverNow: number
-  canWrite: boolean
-  onAdd: () => void
-  onEdit: (connector: ConnectorView) => void
-  onRemove: (connector: ConnectorView) => void
-}) {
-  const used = (name: string) => view.grants.filter((grant) => grant.connector === name).length
-  return (
-    <Panel
-      title="Connectors"
-      count={view.connectors.length}
-      full
-      actions={
-        canWrite ? (
-          <WriteButton variant="outline" size="sm" onPress={onAdd} purpose="add a connector" resume="Add connector" className="max-md:h-10">
-            <Plus />
-            Add connector
-          </WriteButton>
-        ) : undefined
-      }
-    >
-      {view.connectors.length === 0 ? (
-        <EmptyState icon={Plug} title="No connectors yet" compact>
-          Add one to lend a credential to a project without putting it in its code, its repository or its environment.
-        </EmptyState>
-      ) : (
-        <ul className="divide-y divide-divider">
-          {view.connectors.map((connector) => {
-            const grants = used(connector.name)
-            const changed = Date.parse(connector.updatedAt)
-            return (
-              <li key={connector.name} className="@container flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
-                <div className="grid min-w-0 flex-1 basis-64 gap-1">
-                  <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                    <KeyRound aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-                    <h3 className="font-mono text-[0.8125rem] font-semibold wrap-anywhere">{connector.name}</h3>
-                    <Status tone="neutral" title="Replaced, never read back" className="text-muted-foreground">
-                      Write-only
-                    </Status>
-                  </div>
-                  <p className="text-xs text-muted-foreground wrap-anywhere">
-                    <code className="font-mono">{connector.baseUrl}</code>, header <code className="font-mono">{connector.header}</code>,{" "}
-                    {grants === 0 ? "granted to no project" : `granted to ${grants} project${grants === 1 ? "" : "s"}`}
-                    {Number.isNaN(changed) ? "" : `, changed ${ago(serverNow - changed)}`}
-                  </p>
-                </div>
-                {canWrite && (
-                  <div className="flex items-center gap-2">
-                    <WriteButton
-                      variant="outline"
-                      size="sm"
-                      onPress={() => onEdit(connector)}
-                      purpose={`change ${connector.name}`}
-                      resume="Change"
-                      className="max-md:h-10"
-                    >
-                      <Pencil />
-                      Change
-                    </WriteButton>
-                    <WriteButton
-                      variant="ghost"
-                      size="sm"
-                      onPress={() => onRemove(connector)}
-                      purpose={`remove ${connector.name}`}
-                      resume="Remove"
-                      className="text-muted-foreground hover:text-foreground max-md:h-10"
-                    >
-                      <Trash2 />
-                      Remove
-                    </WriteButton>
-                  </div>
-                )}
-              </li>
-            )
-          })}
-        </ul>
-      )}
-    </Panel>
-  )
-}
-
-function GrantsPanel({
-  view,
+/**
+ * What waits for the owner, first on the page and only while something does:
+ * a project that asks for a connector not granted, one that asks for a
+ * connector this server lacks, a grant left to a site that is gone. Each with
+ * its one action. Its count is its rows'.
+ */
+function RequestsPanel({
+  rows,
   known,
   canWrite,
   inFlight,
   error,
   onToggle,
+  onAdd,
 }: {
-  view: ConnectorsView
+  rows: readonly GrantRow[]
   known: ReadonlySet<string>
   canWrite: boolean
   inFlight: string | null
   error: string
   onToggle: (row: GrantRow) => void
+  onAdd: (name: string) => void
 }) {
-  const rows = grantRows(view)
-  const caption = "Who asks for which connector, and who has been granted it, what needs a decision first"
-  const action = (row: GrantRow) => {
-    const words = grantWords(row)
-    if (!canWrite || words.action === null) return null
-    const key = `${row.slug}/${row.connector}`
-    const busy = inFlight === key
-    return (
-      <WriteButton
-        variant={words.action === "grant" ? "outline" : "ghost"}
-        size="sm"
-        disabled={inFlight !== null}
-        onPress={() => onToggle(row)}
-        purpose={words.action === "grant" ? `grant ${row.connector} to ${row.slug}` : `withdraw ${row.connector} from ${row.slug}`}
-        className={cn("max-md:h-10", words.action === "withdraw" && "text-muted-foreground hover:text-foreground")}
-      >
-        {words.action === "grant" ? (busy ? "Granting…" : "Grant") : busy ? "Withdrawing…" : "Withdraw"}
-      </WriteButton>
-    )
-  }
-
+  const columns: Column<GrantRow>[] = [
+    {
+      key: "connector",
+      head: "Connector",
+      width: "minmax(120px,0.8fr)",
+      slot: "primary",
+      cell: (row) => <span className="truncate font-mono text-[0.8125rem] font-medium text-strong">{row.connector}</span>,
+    },
+    {
+      key: "site",
+      head: "Site",
+      width: "minmax(140px,1fr)",
+      slot: "meta",
+      cell: (row) => <SiteLink slug={row.slug} known={known} />,
+    },
+    {
+      key: "state",
+      head: "State",
+      width: "minmax(170px,1.2fr)",
+      slot: "state",
+      cell: (row) => {
+        const words = grantWords(row)
+        return (
+          <>
+            <StateLabel tone={words.tone} title={words.help}>
+              {words.word}
+            </StateLabel>
+            <span className="sr-only">. {words.help}</span>
+          </>
+        )
+      },
+    },
+    {
+      key: "action",
+      head: "",
+      srHead: "Action",
+      // Room for "Add connector" and its lock glyph.
+      width: "172px",
+      align: "end",
+      slot: "time",
+      cell: (row) => <GrantAction row={row} canWrite={canWrite} inFlight={inFlight} onToggle={onToggle} onAdd={onAdd} />,
+    },
+  ]
   return (
-    <Panel
-      title="Grants"
-      count={view.grants.length}
-      description="A project gets a connector when its sitesolide.json asks for it under connectors and you grant it here. Either alone lends nothing."
-      full
-    >
+    <Panel title="Requests" count={rows.length} full>
       {error !== "" && (
         <div className="border-b p-3">
           <Banner tone="error">{error}</Banner>
         </div>
       )}
-      {rows.length === 0 ? (
-        <EmptyState icon={Plug} title="No project asks for a connector" compact>
-          A project asks with <code className="font-mono text-xs">"connectors": ["slack"]</code> in its sitesolide.json, then{" "}
-          <code className="font-mono text-xs">sitesolide deploy</code>.
-        </EmptyState>
-      ) : (
-        <div className="@container">
-          <table className="hidden w-full text-sm @2xl:table">
-            <caption className="sr-only">{caption}</caption>
-            <thead>
-              <tr className="h-10 border-b bg-cell text-left mono-label">
-                <th scope="col" className="px-3 pl-4 font-medium">
-                  Site
-                </th>
-                <th scope="col" className="px-3 font-medium">
-                  Connector
-                </th>
-                <th scope="col" className="px-3 font-medium">
-                  State
-                </th>
-                <th scope="col" className="px-3 pr-4 text-right font-medium">
-                  <span className="sr-only">Action</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-divider">
-              {rows.map((row) => {
-                const words = grantWords(row)
-                return (
-                  <tr key={`${row.slug}/${row.connector}`}>
-                    <td className="px-3 py-3 pl-4">
-                      <SiteLink slug={row.slug} known={known} />
-                    </td>
-                    <td className="px-3 py-3">
-                      <code className="font-mono text-[0.8125rem]">{row.connector}</code>
-                    </td>
-                    <td className="px-3 py-3">
-                      <Status tone={words.tone} title={words.help}>
-                        {words.word}
-                      </Status>
-                      <span className="sr-only">. {words.help}</span>
-                    </td>
-                    <td className="px-3 py-1.5 pr-4 text-right">{action(row)}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-
-          <ul aria-label={caption} className="divide-y divide-divider @2xl:hidden">
-            {rows.map((row) => {
-              const words = grantWords(row)
-              return (
-                <li key={`${row.slug}/${row.connector}`} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
-                  <div className="grid min-w-0 flex-1 basis-48 gap-1">
-                    <span className="text-sm">
-                      <code className="font-mono text-[0.8125rem]">{row.connector}</code> <span className="text-muted-foreground">for</span>{" "}
-                      <SiteLink slug={row.slug} known={known} />
-                    </span>
-                    <span className="text-xs">
-                      <Status tone={words.tone}>{words.word}</Status>
-                    </span>
-                    <span className="text-xs text-muted-foreground">{words.help}</span>
-                  </div>
-                  {action(row)}
-                </li>
-              )
-            })}
-          </ul>
-        </div>
-      )}
+      <DataTable
+        label="Requests"
+        caption="What waits for a decision: a removed site still granted first, then what projects ask for"
+        rows={rows}
+        rowKey={(row) => `${row.slug}/${row.connector}`}
+        columns={columns}
+        severity={(row) => grantSeverity(row.state)}
+      />
     </Panel>
   )
 }
 
-function ActivityPanel({
-  activity,
+/** A pair's one action: Grant what is asked, Withdraw what is granted, Add the connector a project asks for and the server lacks. */
+function GrantAction({
+  row,
+  canWrite,
+  inFlight,
+  onToggle,
+  onAdd,
+}: {
+  row: GrantRow
+  canWrite: boolean
+  inFlight: string | null
+  onToggle: (row: GrantRow) => void
+  onAdd: (name: string) => void
+}) {
+  if (!canWrite) return null
+  const words = grantWords(row)
+  if (row.state === "missing") {
+    return (
+      <WriteButton variant="outline" size="sm" onPress={() => onAdd(row.connector)} purpose={`add ${row.connector}`} resume="Add connector" className="max-md:h-9">
+        <Plus />
+        Add connector
+      </WriteButton>
+    )
+  }
+  if (words.action === null) return null
+  const busy = inFlight === `${row.slug}/${row.connector}`
+  return (
+    <WriteButton
+      variant={words.action === "grant" ? "outline" : "ghost"}
+      size="sm"
+      disabled={inFlight !== null}
+      onPress={() => onToggle(row)}
+      purpose={words.action === "grant" ? `grant ${row.connector} to ${row.slug}` : `withdraw ${row.connector} from ${row.slug}`}
+      className={cn("max-md:h-9", words.action === "withdraw" && "text-muted-foreground hover:text-foreground")}
+    >
+      {words.action === "grant" ? (busy ? "Granting…" : "Grant") : busy ? "Withdrawing…" : "Withdraw"}
+    </WriteButton>
+  )
+}
+
+// --- The connectors ---------------------------------------------------------------
+
+/** The projects a connector is granted to, in its row: "cms, roster", one that does not ask for it muted. */
+function ProjectsCell({ rows }: { rows: readonly GrantRow[] }) {
+  if (rows.length === 0) return <span className="text-muted-foreground">None yet</span>
+  const shown = rows.slice(0, 2)
+  const all = rows.map((row) => (row.state === "unasked" ? `${row.slug} (not asked for)` : row.slug)).join(", ")
+  return (
+    <span title={all} className="flex min-w-0 items-center gap-1.5">
+      <span className="truncate">
+        {shown.map((row, index) => (
+          <span key={row.slug} className={cn(row.state === "unasked" && "text-muted-foreground")}>
+            {index > 0 && <span className="text-muted-foreground">, </span>}
+            {row.slug}
+          </span>
+        ))}
+      </span>
+      {rows.length > shown.length && (
+        <span className="shrink-0">
+          <Count className="h-[1.125rem] px-1 text-[0.6875rem]">+{rows.length - shown.length}</Count>
+          <span className="sr-only">: {all}</span>
+        </span>
+      )}
+    </span>
+  )
+}
+
+function connectorColumns(view: ConnectorsView, serverNow: number, open: (connector: ConnectorView) => void): Column<ConnectorView>[] {
+  return [
+    {
+      key: "name",
+      head: "Connector",
+      width: "minmax(140px,1fr)",
+      slot: "primary",
+      cell: (connector) => (
+        <RowButton onClick={() => open(connector)} className="font-mono text-[0.8125rem]">
+          {connector.name}
+        </RowButton>
+      ),
+    },
+    {
+      key: "address",
+      head: "Base address",
+      width: "minmax(200px,1.6fr)",
+      slot: "meta",
+      cell: (connector) => (
+        <CellText title={connector.baseUrl} className="font-mono text-[0.8125rem] text-muted-foreground max-md:text-xs">
+          {shortAddress(connector.baseUrl)}
+        </CellText>
+      ),
+    },
+    {
+      key: "projects",
+      head: "Projects",
+      width: "minmax(140px,1fr)",
+      // On two lines, top right: the address alone fills the second, cut rather than wrapped.
+      slot: "state",
+      cell: (connector) => <ProjectsCell rows={grantedProjects(view, connector.name)} />,
+    },
+    {
+      key: "changed",
+      head: "Changed",
+      width: "96px",
+      align: "end",
+      slot: "hide",
+      cell: (connector) => <When at={Date.parse(connector.updatedAt)} serverNow={serverNow} />,
+    },
+  ]
+}
+
+/** A connector's sheet: where it calls and with which header, the projects it concerns with their action, its recent calls. */
+function ConnectorSheet({
+  connector,
+  view,
   known,
   serverNow,
-  onRetry,
-  retrying,
+  canWrite,
+  inFlight,
+  error,
+  activity,
+  onClose,
+  onToggle,
+  onEdit,
+  onRemove,
 }: {
-  activity: ActivityState
+  connector: ConnectorView | null
+  view: ConnectorsView
   known: ReadonlySet<string>
   serverNow: number
-  onRetry: () => void
-  retrying: boolean
+  canWrite: boolean
+  inFlight: string | null
+  error: string
+  activity: ActivityState
+  onClose: () => void
+  onToggle: (row: GrantRow) => void
+  onEdit: (connector: ConnectorView) => void
+  onRemove: (connector: ConnectorView) => void
 }) {
-  const caption = "The egress proxy's latest refusals, connector uses and changes, most recent first"
+  const changed = connector === null ? Number.NaN : Date.parse(connector.updatedAt)
+  const pairs = connector === null ? [] : connectorPairs(view, connector.name)
   return (
-    <Panel title="Egress activity" description="From the egress proxy itself, counted by the minute. Values never appear here." full>
-      {activity.state === "loading" && (
-        <div aria-busy="true" aria-label="Loading activity">
-          <RowsSkeleton lines={4} />
-        </div>
-      )}
-      {activity.state === "error" && (
-        <ErrorState title={activity.message} onRetry={onRetry} inProgress={retrying} compact>
-          <span className="grid justify-items-center gap-2">
-            Check that it runs, on the server:
-            <Command text="sudo systemctl status sitesolide-egress" />
-          </span>
-        </ErrorState>
-      )}
-      {activity.state === "ready" && activity.rows.length === 0 && (
-        <EmptyState icon={History} title="No egress activity yet" compact>
-          Refused destinations, connector calls and changes show up here, within a minute.
-        </EmptyState>
-      )}
-      {activity.state === "ready" && activity.rows.length > 0 && (
-        <div className="@container">
-          <table className="hidden w-full text-sm @2xl:table">
-            <caption className="sr-only">{caption}</caption>
-            <thead>
-              <tr className="h-10 border-b bg-cell text-left mono-label">
-                <th scope="col" className="px-3 pl-4 font-medium">
-                  What
-                </th>
-                <th scope="col" className="px-3 font-medium">
-                  Site
-                </th>
-                <th scope="col" className="px-3 pr-4 text-right font-medium">
-                  When
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-divider">
-              {activity.rows.map((row) => {
-                const line = activityLine(row)
-                return (
-                  <tr key={row.id}>
-                    <td className="px-3 py-3 pl-4">
-                      <div className="grid gap-0.5">
-                        {line.tone === "attention" ? <Status tone="attention">{line.summary}</Status> : <span className="wrap-anywhere">{line.summary}</span>}
-                        {line.detail !== null && <span className="text-xs text-muted-foreground wrap-anywhere">{line.detail}</span>}
-                      </div>
-                    </td>
-                    <td className="px-3 py-3">
-                      <SiteLink slug={line.site} known={known} />
-                    </td>
-                    <td className="px-3 py-3 pr-4 text-right">
-                      <When at={line.at} serverNow={serverNow} />
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+    <DetailSheet
+      open={connector !== null}
+      onClose={onClose}
+      title={connector?.name ?? ""}
+      description="Write-only: its value is replaced, never read back."
+      actions={
+        connector !== null && canWrite ? (
+          <WriteButton variant="outline" size="sm" onPress={() => onEdit(connector)} purpose={`change ${connector.name}`} resume="Change" className="max-md:h-10">
+            <Pencil />
+            Change
+          </WriteButton>
+        ) : undefined
+      }
+    >
+      {connector !== null && (
+        <>
+          <SheetFacts
+            facts={[
+              { label: "Base address", value: <span className="font-mono text-[0.8125rem]">{connector.baseUrl}</span> },
+              { label: "Header", value: <span className="font-mono text-[0.8125rem]">{connector.header}</span> },
+              {
+                label: "Changed",
+                value: Number.isNaN(changed) ? "-" : (
+                  <>
+                    {dateTime(changed)} <span className="text-muted-foreground">({ago(serverNow - changed)})</span>
+                  </>
+                ),
+              },
+            ]}
+          />
 
-          <ol aria-label={caption} className="divide-y divide-divider @2xl:hidden">
-            {activity.rows.map((row) => {
-              const line = activityLine(row)
-              return (
-                <li key={row.id} className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 px-4 py-3">
-                  <span className="text-sm wrap-anywhere">
-                    {line.tone === "attention" ? <Status tone="attention">{line.summary}</Status> : line.summary}
-                  </span>
-                  <span className="text-xs">
-                    <When at={line.at} serverNow={serverNow} />
-                  </span>
-                  {(line.site !== null || line.detail !== null) && (
-                    <span className="col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                      <SiteLink slug={line.site} known={known} />
-                      {line.detail !== null && <span className="wrap-anywhere">{line.detail}</span>}
-                    </span>
-                  )}
-                </li>
-              )
-            })}
-          </ol>
-        </div>
+          <SheetSection title="Projects">
+            {error !== "" && <Banner tone="error">{error}</Banner>}
+            {pairs.length === 0 ? (
+              <p className="text-pretty text-muted-foreground">
+                Granted to no project yet. A project asks for it with <code className="font-mono text-xs">"connectors": ["{connector.name}"]</code> in
+                its sitesolide.json.
+              </p>
+            ) : (
+              <ul className="divide-y divide-divider">
+                {pairs.map((row) => {
+                  const words = grantWords(row)
+                  return (
+                    <li key={row.slug} className="flex min-h-11 items-center justify-between gap-3 py-1.5">
+                      <span className="grid min-w-0 gap-0.5">
+                        <SiteLink slug={row.slug} known={known} />
+                        {row.state === "granted" ? (
+                          <span className="text-xs text-muted-foreground">Granted, asked for</span>
+                        ) : (
+                          <StateLabel tone={words.tone} title={words.help} className="text-xs">
+                            {words.word}
+                          </StateLabel>
+                        )}
+                      </span>
+                      <GrantAction row={row} canWrite={canWrite} inFlight={inFlight} onToggle={onToggle} onAdd={() => undefined} />
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </SheetSection>
+
+          <ConnectorRecent name={connector.name} activity={activity} known={known} serverNow={serverNow} />
+
+          {canWrite && (
+            <div className="grid justify-items-start gap-2 border-t pt-4">
+              <WriteButton
+                variant="outline"
+                onPress={() => onRemove(connector)}
+                purpose={`remove ${connector.name}`}
+                resume="Remove connector"
+                className="text-destructive hover:text-destructive max-md:h-10"
+              >
+                <Trash2 />
+                Remove connector
+              </WriteButton>
+            </div>
+          )}
+        </>
       )}
-    </Panel>
+    </DetailSheet>
+  )
+}
+
+/** The connector's last calls, changes, grants and refusals, from the egress proxy itself; then all of the proxy's in Activity. */
+function ConnectorRecent({ name, activity, known, serverNow }: { name: string; activity: ActivityState; known: ReadonlySet<string>; serverNow: number }) {
+  const rows = activity.state === "ready" ? connectorRows(activity.rows, name).slice(0, RECENT_LINES) : []
+  return (
+    <SheetSection
+      title="Recent"
+      action={
+        <InternalLink href={historyUrl({ source: "egress" })} className={cn(TEXT_LINK, "text-xs text-muted-foreground")}>
+          All activity
+        </InternalLink>
+      }
+    >
+      {activity.state === "idle" || activity.state === "loading" ? (
+        <div aria-busy="true" aria-label="Loading recent activity" className="-mx-4">
+          <RowsSkeleton lines={3} />
+        </div>
+      ) : activity.state === "error" ? (
+        <InlineEmpty icon={History} className="-mx-4">
+          {activity.message}
+        </InlineEmpty>
+      ) : rows.length === 0 ? (
+        <InlineEmpty icon={History} className="-mx-4">
+          Nothing yet.
+        </InlineEmpty>
+      ) : (
+        <ol className="divide-y divide-divider">
+          {rows.map((row) => {
+            const line = activityLine(row)
+            const meta = [line.site, line.detail].filter((part): part is string => part !== null && part !== "").join(" · ")
+            return (
+              <li key={row.id} className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 py-2">
+                <span className={cn("min-w-0 text-pretty", line.tone === "attention" && "font-medium text-attention-text")}>{line.summary}</span>
+                <When at={line.at} serverNow={serverNow} />
+                {meta !== "" && (
+                  <span className="col-span-2 truncate text-xs text-muted-foreground">
+                    {line.site !== null && known.has(line.site) ? (
+                      <>
+                        <InternalLink href={siteUrl(line.site)} className={TEXT_LINK}>
+                          {line.site}
+                        </InternalLink>
+                        {line.detail !== null && ` · ${line.detail}`}
+                      </>
+                    ) : (
+                      meta
+                    )}
+                  </span>
+                )}
+              </li>
+            )
+          })}
+        </ol>
+      )}
+    </SheetSection>
   )
 }
 
@@ -671,8 +755,10 @@ export function ConnectorsPage() {
   const { generation, snapshot, secrets, sessionExpired } = useData()
   const actions = useSecretsActions()
   const announce = useAnnounce()
+  const sheet = useSheet("connector")
+  const search = useListState(SPEC)
   const [list, setList] = useState<ListState>({ state: "loading" })
-  const [activity, setActivity] = useState<ActivityState>({ state: "loading" })
+  const [activity, setActivity] = useState<ActivityState>({ state: "idle" })
   const [editing, setEditing] = useState<Opened>({ open: false, opening: 0, connector: null })
   const [removal, setRemoval] = useState<Opened>({ open: false, opening: 0, connector: null })
   const [grantInFlight, setGrantInFlight] = useState<string | null>(null)
@@ -696,11 +782,11 @@ export function ConnectorsPage() {
     setList((before) => (before.state === "ready" ? before : { state: "error", message, stewardOutdated }))
   }, [sessionExpired])
 
+  /** The proxy's own audit, read for a sheet: what one connector did lately. */
   const loadActivity = useCallback(async () => {
+    setActivity((before) => (before.state === "ready" ? before : { state: "loading" }))
     const { status, body } = await readConnectorsActivity()
-    if (status === 200 && body !== null && Array.isArray(body.rows) && typeof body.status === "object" && body.status !== null) {
-      return setActivity({ state: "ready", rows: body.rows, status: body.status })
-    }
+    if (status === 200 && body !== null && Array.isArray(body.rows)) return setActivity({ state: "ready", rows: body.rows })
     if (status === 401) return sessionExpired()
     const message = typeof body?.message === "string" && body.message !== "" ? body.message : "Can't reach the egress proxy."
     setActivity((before) => (before.state === "ready" ? before : { state: "error", message }))
@@ -708,8 +794,12 @@ export function ConnectorsPage() {
 
   useEffect(() => {
     void load()
-    void loadActivity()
-  }, [generation, load, loadActivity])
+  }, [generation, load])
+
+  // A sheet opened, by a click or by its address: the proxy's audit, once, then after each write.
+  useEffect(() => {
+    if (sheet.id !== null && activity.state === "idle") void loadActivity()
+  }, [sheet.id, activity.state, loadActivity])
 
   useEffect(() => () => {
     if (later.current !== null) window.clearTimeout(later.current)
@@ -749,24 +839,53 @@ export function ConnectorsPage() {
     }
   }
 
-  const { retrying, retry } = useRetry(() => Promise.all([load(), loadActivity()]))
+  const { retrying, retry } = useRetry(load)
 
   const known = new Set(snapshot?.sites.map((site) => site.slug) ?? [])
   const ready = list.state === "ready" ? list.view : null
   // The writes are offered locked too: each asks for the unlock when pressed.
   const canWrite = ready !== null && ready.installed && ready.state === "managed"
+  const requests = ready === null ? [] : requestRows(ready)
+  const connectors = ready?.connectors ?? []
+  const filterable = connectors.length >= FILTER_BAR_FROM
+  const query = filterable ? normalize(search.query.trim()) : ""
+  const shown = query === "" ? connectors : connectors.filter((connector) => normalize(`${connector.name} ${connector.baseUrl}`).includes(query))
+  const opened = sheet.id === null ? null : (connectors.find((connector) => connector.name === sheet.id) ?? null)
+
+  const add = (name?: string) => {
+    remember()
+    setEditing((before) => ({ open: true, opening: before.opening + 1, connector: null, name }))
+  }
+  const edit = (connector: ConnectorView) => {
+    remember()
+    setEditing((before) => ({ open: true, opening: before.opening + 1, connector }))
+  }
+  const askRemoval = (connector: ConnectorView) => {
+    remember()
+    setRemoval((before) => ({ open: true, opening: before.opening + 1, connector }))
+  }
 
   return (
     <>
       <PageHeader
         title="Connectors"
+        count={ready === null ? undefined : connectors.length}
         intro={
           <p>
             Credentials this server lends to projects without handing them over. A project calls the egress proxy, which adds
-            the credential on the way out: it never appears in the project's code, repository or environment.
+            the credential on the way out: it never appears in the project's code, repository or environment. A project gets
+            one when its sitesolide.json asks for it under connectors and you grant it here; either alone lends nothing.
           </p>
         }
-        history={{ type: "egress" }}
+        actions={
+          canWrite ? (
+            <WriteButton onPress={() => add()} purpose="add a connector" resume="Add connector" className="max-md:h-10">
+              <Plus />
+              Add connector
+            </WriteButton>
+          ) : undefined
+        }
+        history={{ source: "egress" }}
       />
       <PageBody>
         {list.state === "loading" && (
@@ -781,7 +900,9 @@ export function ConnectorsPage() {
               The steward on the server predates connectors. Bring it up to date from your workstation.
             </Banner>
           ) : (
-            <ErrorState title={list.message} onRetry={retry} inProgress={retrying} />
+            <Panel>
+              <ErrorState title={list.message} onRetry={retry} inProgress={retrying} />
+            </Panel>
           ))}
 
         {ready !== null && !ready.installed && (
@@ -797,38 +918,98 @@ export function ConnectorsPage() {
           </Banner>
         )}
 
-        {ready !== null && (
-          <>
-            <ConnectorsPanel
-              view={ready}
-              serverNow={actions.serverNow}
-              canWrite={canWrite}
-              onAdd={() => {
-                remember()
-                setEditing((before) => ({ open: true, opening: before.opening + 1, connector: null }))
-              }}
-              onEdit={(connector) => {
-                remember()
-                setEditing((before) => ({ open: true, opening: before.opening + 1, connector }))
-              }}
-              onRemove={(connector) => {
-                remember()
-                setRemoval((before) => ({ open: true, opening: before.opening + 1, connector }))
-              }}
-            />
-            <GrantsPanel
-              view={ready}
-              known={known}
-              canWrite={canWrite}
-              inFlight={grantInFlight}
-              error={grantError}
-              onToggle={(row) => void toggle(row)}
-            />
-          </>
+        {ready !== null && requests.length > 0 && (
+          <RequestsPanel
+            rows={requests}
+            known={known}
+            canWrite={canWrite}
+            inFlight={grantInFlight}
+            error={opened === null ? grantError : ""}
+            onToggle={(row) => void toggle(row)}
+            onAdd={add}
+          />
         )}
 
-        <ActivityPanel activity={activity} known={known} serverNow={actions.serverNow} onRetry={retry} retrying={retrying} />
+        {ready !== null && (
+          <div className="grid gap-3">
+            {filterable && (
+              <FilterBar list={search} shown={shown.length} total={connectors.length} noun={{ one: "connector", many: "connectors" }} search={{ label: "Search connectors" }} />
+            )}
+            <Panel full>
+              <DataTable
+                label="Connectors"
+                caption="By name"
+                rows={shown}
+                rowKey={(connector) => connector.name}
+                columns={connectorColumns(ready, actions.serverNow, (connector) => sheet.open(connector.name))}
+                onRowClick={(connector) => sheet.open(connector.name)}
+                selected={sheet.id}
+                menu={
+                  canWrite
+                    ? (connector) => (
+                        <RowMenu label={`Actions for ${connector.name}`}>
+                          <WriteMenuItem onPress={() => edit(connector)} purpose={`change ${connector.name}`} resume="Change">
+                            <Pencil />
+                            Change
+                          </WriteMenuItem>
+                          <DropdownMenuSeparator />
+                          <WriteMenuItem variant="destructive" onPress={() => askRemoval(connector)} purpose={`remove ${connector.name}`} resume="Remove connector">
+                            <Trash2 />
+                            Remove connector
+                          </WriteMenuItem>
+                        </RowMenu>
+                      )
+                    : undefined
+                }
+                empty={
+                  query !== "" ? (
+                    <InlineEmpty
+                      icon={Plug}
+                      action={
+                        <Button variant="link" className="h-auto p-0" onClick={search.clear}>
+                          Clear search
+                        </Button>
+                      }
+                    >
+                      No connectors match "{search.query.trim()}".
+                    </InlineEmpty>
+                  ) : (
+                    <InlineEmpty
+                      icon={Plug}
+                      action={
+                        canWrite ? (
+                          <WriteButton variant="link" className="h-auto p-0" onPress={() => add()} purpose="add a connector" resume="Add connector">
+                            Add connector
+                          </WriteButton>
+                        ) : undefined
+                      }
+                    >
+                      No connector yet. Lend a credential to a project without putting it in its code.
+                    </InlineEmpty>
+                  )
+                }
+              />
+            </Panel>
+          </div>
+        )}
       </PageBody>
+
+      {ready !== null && (
+        <ConnectorSheet
+          connector={opened}
+          view={ready}
+          known={known}
+          serverNow={actions.serverNow}
+          canWrite={canWrite}
+          inFlight={grantInFlight}
+          error={opened === null ? "" : grantError}
+          activity={activity}
+          onClose={sheet.close}
+          onToggle={(row) => void toggle(row)}
+          onEdit={edit}
+          onRemove={askRemoval}
+        />
+      )}
 
       <ConnectorDialog
         key={editing.opening}
@@ -847,6 +1028,7 @@ export function ConnectorsPage() {
         onClose={() => setRemoval((before) => ({ ...before, open: false }))}
         onRemoved={(view, name) => {
           setRemoval((before) => ({ ...before, open: false }))
+          if (sheet.id === name) sheet.close()
           written(view, `Connector ${name} removed.`)
         }}
         onLocked={locked}

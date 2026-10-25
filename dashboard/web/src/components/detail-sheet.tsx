@@ -174,9 +174,11 @@ type Recent = { state: "loading" } | { state: "failed" } | { state: "ready"; row
 /**
  * The object's last ten lines of Activity, read when the sheet opens, each
  * in Activity's words and its tone when it went wrong; then *All activity*,
- * the same filter on the Activity page.
+ * the same filter on the Activity page. Under each line, who did it, or
+ * `meta`'s line where the actor is the object itself: a token's sheet says
+ * the site each action touched.
  */
-export function SheetRecent({ filter }: { filter: HistoryFilter }) {
+export function SheetRecent({ filter, meta = actorLabel }: { filter: HistoryFilter; meta?: (row: AuditRow) => string | null }) {
   const { now, offset, sessionExpired } = useData()
   const [recent, setRecent] = useState<Recent>({ state: "loading" })
   const key = historyUrl(filter)
@@ -228,7 +230,7 @@ export function SheetRecent({ filter }: { filter: HistoryFilter }) {
               <li key={row.id} className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 py-2">
                 <span className={cn("min-w-0 text-pretty", failed && cn("font-medium", TONE_TEXT[words.tone]))}>{words.summary}</span>
                 <When at={Date.parse(row.at)} serverNow={serverNow} />
-                <span className="col-span-2 truncate text-xs text-muted-foreground">{actorLabel(row)}</span>
+                {meta(row) !== null && <span className="col-span-2 truncate text-xs text-muted-foreground">{meta(row)}</span>}
               </li>
             )
           })}

@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type SyntheticEvent } from "react"
-import { Check, Copy } from "lucide-react"
+import { Check, ChevronRight, Copy, Search } from "lucide-react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -16,11 +16,13 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectGroup, SelectGroupLabel, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Command, CopyFallback, useAnnounce, useCopy } from "@/components/copy"
-import { Banner, FormError, INPUT_DIALOG } from "@/components/page"
+import { Banner, FormError, INPUT_DIALOG, SEGMENTED } from "@/components/page"
 import { createToken } from "@/lib/api"
 import {
   DEFAULT_EXPIRY_DAYS,
   EXPIRY_CHOICES,
+  PERMISSION_ORDER,
+  PERMISSION_WORDS,
   expiryFrom,
   firstTokenField,
   holderLine,
@@ -33,7 +35,9 @@ import {
   optionsAllowed,
   requestScope,
   tokenRefusal,
+  tokenSummary,
   validateTokenForm,
+  type PermissionKey,
   type TokenErrors,
   type TokenField,
   type TokenProject,
@@ -86,33 +90,45 @@ function Field({ id, labelText, error, children }: { id: string; labelText: stri
  */
 function Choice({
   checked,
+  mixed = false,
   onChange,
   title,
   meta,
   disabled = false,
   locked = false,
+  dense = false,
   note,
   children,
 }: {
   checked: boolean
+  /** Some of what it ticks, not all: the box reads as mixed. */
+  mixed?: boolean
   onChange: (next: boolean) => void
   title: string
   /** Beside the title, right aligned: a person's role on a project. */
   meta?: string
   disabled?: boolean
   locked?: boolean
+  /** A project in the list: 36 px, so that six rows fit before it scrolls. */
+  dense?: boolean
   note?: string
   children?: ReactNode
 }) {
+  const box = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (box.current !== null) box.current.indeterminate = mixed
+  }, [mixed])
   return (
     <label
       className={cn(
-        "flex items-start gap-2.5 rounded-md px-2.5 py-2 transition-colors select-none has-focus-visible:ring-2 has-focus-visible:ring-ring",
+        "flex items-start gap-2.5 rounded-md px-2.5 transition-colors select-none has-focus-visible:ring-2 has-focus-visible:ring-ring",
+        dense ? "py-1.5" : "py-2",
         disabled ? "cursor-not-allowed opacity-60" : locked ? "cursor-default" : "cursor-pointer hover:bg-muted",
       )}
     >
       {/* Locked, it stays focusable and drawn as ticked: `disabled` would grey it out as if it were off. */}
       <input
+        ref={box}
         type="checkbox"
         checked={checked}
         disabled={disabled}
@@ -137,6 +153,9 @@ function Choice({
 }
 
 const NO_OPTION = { public: [], domain: [] }
+
+/** From this many projects, the list has a filter above it. */
+const PROJECTS_FILTER_FROM = 8
 
 /** Every permission off, as a token starts and as choosing another holder resets it. */
 const NO_SCOPE: Omit<Scope, "slugs"> = { create: false, outbound: false, domain: false, public: false, secrets: false }
@@ -178,6 +197,9 @@ export function CreateTokenDialog({
   const [expiry, setExpiry] = useState<number | null>(DEFAULT_EXPIRY_DAYS)
   const [scope, setScope] = useState(NO_SCOPE)
   const [chosen, setChosen] = useState<string[]>([])
+  // The projects list's filter, and the permissions' disclosure, closed while nothing asks for one.
+  const [filter, setFilter] = useState("")
+  const [permissionsOpen, setPermissionsOpen] = useState(false)
   // The person the token will be made for: the one minting their own, or the one the owner chose.
   const target = person ?? (holder === "owner" ? null : (holders.find((one) => one.email === holder) ?? null))
   // The person the owner makes it for, by name; null for the owner's own, or a person's own.
@@ -205,6 +227,12 @@ export function CreateTokenDialog({
   const holderId = useId()
   const projectsId = useId()
   const expiryId = useId()
+  const permissionsId = useId()
+  // A project chosen that needs a permission opens the disclosure by itself, its reason in view.
+  const neededKey = [...needed.public, ...needed.domain].join(",")
+  useEffect(() => {
+    if (neededKey !== "") setPermissionsOpen(true)
+  }, [neededKey])
 
   function focusField(field: TokenField) {
     if (field === "label") return labelField.current?.focus()
@@ -255,6 +283,18 @@ export function CreateTokenDialog({
   }
 
   const empty = target === null ? "No project on the server yet." : noProjectText(target.roles, person !== null ? null : holderEmail)
+  const shown = filter.trim() === "" ? offered : offered.filter(({ slug }) => slug.includes(filter.trim().toLowerCase()))
+  const allShown = shown.length > 0 && shown.every(({ slug }) => chosen.includes(slug))
+  const someShown = shown.some(({ slug }) => chosen.includes(slug))
+  const held = PERMISSION_ORDER.filter((key): key is Exclude<PermissionKey, "create"> => key !== "create" && (key === "secrets" ? effective.secrets === true : effective[key]))
+  const neededBy = [...new Set([...needed.public, ...needed.domain])].sort()
+  const summary = tokenSummary({ slugs: chosen, create: effective.create, permissions: held, expiryDays: expiry })
+
+  function toggleShown(next: boolean) {
+    const slugs = shown.map(({ slug }) => slug)
+    setChosen((before) => (next ? [...new Set([...before, ...slugs])] : before.filter((one) => !slugs.includes(one))))
+    setErrors(({ slugs: _, ...rest }) => rest)
+  }
 
   return (
     <Dialog
@@ -263,10 +303,13 @@ export function CreateTokenDialog({
         if (!next) askToClose()
       }}
     >
-      {/* Taller than a phone's screen with every project: it scrolls within itself. */}
-      <DialogContent className={cn("max-h-[calc(100svh-2rem)] gap-5 overflow-y-auto sm:max-w-xl", INPUT_DIALOG)} initialFocus={() => labelField.current}>
+      {/* The fields scroll between the title and the buttons, which stay in view: the summary and Create token are never below the fold. */}
+      <DialogContent
+        className={cn("flex max-h-[calc(100svh-2rem)] flex-col sm:max-w-xl", created === null ? "gap-0" : "gap-5 overflow-y-auto", INPUT_DIALOG)}
+        initialFocus={() => labelField.current}
+      >
         {created === null ? (
-          <form noValidate onSubmit={create} className="grid gap-5">
+          <form noValidate onSubmit={create} className="flex min-h-0 flex-col gap-4">
             <DialogHeader>
               <DialogTitle>New token</DialogTitle>
               <DialogDescription className="text-pretty">
@@ -278,163 +321,230 @@ export function CreateTokenDialog({
               </DialogDescription>
             </DialogHeader>
 
-            <div className={cn("grid gap-4", person === null && holders.length > 0 && "sm:grid-cols-2")}>
-              <Field id={labelId} labelText="Name" error={errors.label}>
-                <Input
-                  ref={labelField}
-                  id={labelId}
-                  value={label}
-                  maxLength={64}
-                  autoComplete="off"
-                  placeholder="Laptop, CI, agent…"
-                  onChange={(event) => {
-                    setLabel(event.target.value)
-                    setErrors(({ label: _, ...rest }) => rest)
-                  }}
-                  aria-invalid={errors.label !== undefined || undefined}
-                  aria-describedby={errors.label !== undefined ? `${labelId}-error` : undefined}
-                  className="h-10 sm:h-9"
-                />
-              </Field>
-              {person === null && holders.length > 0 && (
-                <Field id={holderId} labelText="Whose token">
-                  <Select
-                    id={holderId}
-                    value={holder}
-                    items={{ owner: "Mine", ...Object.fromEntries(holders.map((one) => [one.email, one.email])) }}
-                    onValueChange={(next) => {
-                      if (next === null) return
-                      setHolder(next)
-                      setChosen([])
-                      setScope(NO_SCOPE)
-                      setErrors({})
+            {/* One track that never grows past the dialog: a long line, the permissions' summary, cuts with an ellipsis instead. */}
+            <div className="-mx-4 grid min-h-0 grid-cols-1 gap-4 overflow-y-auto px-4 pt-0.5 pb-1">
+              <div className={cn("grid grid-cols-1 gap-4", person === null && holders.length > 0 && "sm:grid-cols-2")}>
+                <Field id={labelId} labelText="Name" error={errors.label}>
+                  <Input
+                    ref={labelField}
+                    id={labelId}
+                    value={label}
+                    maxLength={64}
+                    autoComplete="off"
+                    placeholder="Laptop, CI, agent…"
+                    onChange={(event) => {
+                      setLabel(event.target.value)
+                      setErrors(({ label: _, ...rest }) => rest)
                     }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="owner" description="Yours, for your own agents">
-                        Mine
-                      </SelectItem>
-                      <SelectSeparator />
-                      <SelectGroup>
-                        <SelectGroupLabel>For someone in People</SelectGroupLabel>
-                        {holders.map((one) => (
-                          <SelectItem key={one.email} value={one.email} description={holderLine(one)}>
-                            {one.email}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
+                    aria-invalid={errors.label !== undefined || undefined}
+                    aria-describedby={errors.label !== undefined ? `${labelId}-error` : undefined}
+                    className="h-10 sm:h-9"
+                  />
                 </Field>
-              )}
-            </div>
+                {person === null && holders.length > 0 && (
+                  <Field id={holderId} labelText="Whose token">
+                    <Select
+                      id={holderId}
+                      value={holder}
+                      items={{ owner: "Mine", ...Object.fromEntries(holders.map((one) => [one.email, one.email])) }}
+                      onValueChange={(next) => {
+                        if (next === null) return
+                        setHolder(next)
+                        setChosen([])
+                        setScope(NO_SCOPE)
+                        setErrors({})
+                        setFilter("")
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="owner" description="Yours, for your own agents">
+                          Mine
+                        </SelectItem>
+                        <SelectSeparator />
+                        <SelectGroup>
+                          <SelectGroupLabel>For someone in People</SelectGroupLabel>
+                          {holders.map((one) => (
+                            <SelectItem key={one.email} value={one.email} description={holderLine(one)}>
+                              {one.email}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                )}
+              </div>
 
-            <fieldset ref={projectsField} aria-describedby={errors.slugs !== undefined ? `${projectsId}-error` : undefined}>
-              <legend className="mb-2 text-sm leading-none font-medium">Projects it may deploy</legend>
-              <div className="rounded-lg border border-input">
-                {offered.length === 0 ? (
-                  <p className="px-3 py-2.5 text-xs text-muted-foreground">{empty}</p>
-                ) : (
-                  <div className="grid grid-cols-2 gap-x-1 p-1 sm:max-h-64 sm:overflow-y-auto">
-                    {/* Two columns even on a phone, a slug being short; a long list scrolls within itself where the dialog has the room. */}
-                    {offered.map(({ slug, role }) => (
+              <fieldset ref={projectsField} aria-describedby={errors.slugs !== undefined ? `${projectsId}-error` : undefined}>
+                <legend className="mb-2 text-sm leading-none font-medium">Projects it may deploy</legend>
+                <div className="overflow-clip rounded-lg border border-input">
+                  {offered.length === 0 ? (
+                    <p className="px-3 py-2.5 text-xs text-muted-foreground">{empty}</p>
+                  ) : (
+                    <>
+                      {offered.length > 1 && (
+                        <div className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1 border-b border-input bg-cell py-1 pr-1 pl-1">
+                          <Choice
+                            checked={allShown}
+                            mixed={!allShown && someShown}
+                            onChange={toggleShown}
+                            title={filter.trim() === "" ? `All projects (${offered.length})` : `All ${shown.length} matching`}
+                          />
+                          {offered.length > PROJECTS_FILTER_FROM && (
+                            <div className="relative ml-auto min-w-0 flex-1 basis-40 sm:max-w-52">
+                              <Search aria-hidden="true" className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                              <Input
+                                type="search"
+                                value={filter}
+                                onChange={(event) => setFilter(event.target.value)}
+                                onKeyDown={(event) => {
+                                  // Enter would send the form; Escape clears the field before it closes the dialog.
+                                  if (event.key === "Enter") event.preventDefault()
+                                  if (event.key === "Escape" && filter !== "") {
+                                    event.preventDefault()
+                                    event.stopPropagation()
+                                    setFilter("")
+                                  }
+                                }}
+                                placeholder="Filter projects"
+                                aria-label="Filter projects"
+                                autoComplete="off"
+                                spellCheck={false}
+                                className="h-8 pl-8 text-sm [&::-webkit-search-cancel-button]:appearance-none"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {shown.length === 0 ? (
+                        <p className="px-3 py-2.5 text-xs text-muted-foreground">No project matches "{filter.trim()}".</p>
+                      ) : (
+                        // Two columns even on a phone, a slug being short; six rows, then it scrolls within itself.
+                        <div className="grid max-h-[13.5rem] grid-cols-2 gap-x-1 overflow-y-auto p-1">
+                          {shown.map(({ slug, role }) => (
+                            <Choice
+                              key={slug}
+                              checked={chosen.includes(slug)}
+                              onChange={(next) => {
+                                setChosen((before) => (next ? [...before, slug] : before.filter((one) => one !== slug)))
+                                setErrors(({ slugs: _, ...rest }) => rest)
+                              }}
+                              title={slug}
+                              meta={role === null ? undefined : roleLabel(role)}
+                              dense
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {(target === null || target.create) && (
+                    <div className="border-t border-input p-1">
                       <Choice
-                        key={slug}
-                        checked={chosen.includes(slug)}
+                        checked={effective.create}
                         onChange={(next) => {
-                          setChosen((before) => (next ? [...before, slug] : before.filter((one) => one !== slug)))
+                          setScope({ ...scope, create: next })
                           setErrors(({ slugs: _, ...rest }) => rest)
                         }}
-                        title={slug}
-                        meta={role === null ? undefined : roleLabel(role)}
-                      />
-                    ))}
-                  </div>
+                        title="New projects"
+                      >
+                        {target === null
+                          ? "Projects it creates itself, which it then deploys."
+                          : person !== null
+                            ? "Projects it creates itself. You become Admin of each."
+                            : "Projects it creates itself. They become Admin of each."}
+                      </Choice>
+                    </div>
+                  )}
+                </div>
+                {errors.slugs !== undefined && (
+                  <p id={`${projectsId}-error`} role="alert" className="mt-2 text-xs text-destructive">
+                    {errors.slugs}
+                  </p>
                 )}
-                {(target === null || target.create) && (
-                  <div className="border-t border-input p-1">
+              </fieldset>
+
+              {/* Closed while nothing is on: every permission starts off. It opens by itself when a project chosen needs one. */}
+              <div className="overflow-clip rounded-lg border border-input">
+                <button
+                  type="button"
+                  aria-expanded={permissionsOpen}
+                  aria-controls={permissionsId}
+                  onClick={() => setPermissionsOpen((before) => !before)}
+                  className="flex min-h-10 w-full items-center gap-2 px-3 py-2 text-left text-sm outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                >
+                  <ChevronRight aria-hidden="true" className={cn("size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none", permissionsOpen && "rotate-90")} />
+                  <span className="font-medium">Permissions</span>
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                    {held.length === 0 ? "None" : held.map((key) => PERMISSION_WORDS[key].chip).join(", ")}
+                    {neededBy.length > 0 && <span className="text-secondary-foreground"> · {neededLine(neededBy)}</span>}
+                  </span>
+                </button>
+                <div id={permissionsId} hidden={!permissionsOpen} className="border-t border-input">
+                  <p id={`${projectsId}-options`} className="px-3 pt-2 text-xs text-pretty text-muted-foreground">
+                    {options
+                      ? "Off unless you tick them. One a chosen project needs is ticked for you."
+                      : `Public sites, outbound network and a domain only when ${person !== null ? "you are" : "they are"} an Admin of every project chosen.`}
+                  </p>
+                  {/* No rule between them: each choice is a rounded row, and a rule under one bent up at its corners. */}
+                  <fieldset aria-describedby={`${projectsId}-options`} className="grid gap-0.5 p-1">
+                    <legend className="sr-only">Permissions</legend>
                     <Choice
-                      checked={effective.create}
-                      onChange={(next) => {
-                        setScope({ ...scope, create: next })
-                        setErrors(({ slugs: _, ...rest }) => rest)
-                      }}
-                      title="New projects"
+                      checked={effective.public}
+                      disabled={!options}
+                      locked={needed.public.length > 0}
+                      note={needed.public.length > 0 ? neededLine(needed.public) : undefined}
+                      onChange={(next) => setScope({ ...scope, public: next })}
+                      title="Deploy public sites"
                     >
-                      {target === null
-                        ? "Projects it creates itself, which it then deploys."
-                        : person !== null
-                          ? "Projects it creates itself. You become Admin of each."
-                          : "Projects it creates itself. They become Admin of each."}
+                      Sites anyone opens without signing in. Off: what it deploys asks to sign in.
                     </Choice>
-                  </div>
-                )}
+                    <Choice checked={effective.outbound} disabled={!options} onChange={(next) => setScope({ ...scope, outbound: next })} title="Use outbound network">
+                      For services that call an outside API. Connectors you grant work without it.
+                    </Choice>
+                    <Choice
+                      checked={effective.domain}
+                      disabled={!options}
+                      locked={needed.domain.length > 0}
+                      note={needed.domain.length > 0 ? neededLine(needed.domain) : undefined}
+                      onChange={(next) => setScope({ ...scope, domain: next })}
+                      title="Declare a domain"
+                    >
+                      A domain of its own in sitesolide.json. Switching to it stays {person === null ? "yours" : "the owner's"}.
+                    </Choice>
+                    {/* Never disabled: every project offered to a person's token is one where they may change secrets. */}
+                    <Choice checked={effective.secrets === true} onChange={(next) => setScope({ ...scope, secrets: next })} title="Manage secrets">
+                      Lists each project's secret names, and sets, generates and removes its variables and files on the server. Never reads a value back.
+                    </Choice>
+                  </fieldset>
+                </div>
               </div>
-              {errors.slugs !== undefined && (
-                <p id={`${projectsId}-error`} role="alert" className="mt-2 text-xs text-destructive">
-                  {errors.slugs}
-                </p>
-              )}
-            </fieldset>
 
-            <fieldset aria-describedby={`${projectsId}-options`}>
-              <legend className="mb-1 text-sm leading-none font-medium">Permissions</legend>
-              <p id={`${projectsId}-options`} className="mb-2 text-xs text-pretty text-muted-foreground">
-                {options
-                  ? "Off unless you tick them. One a chosen project needs is ticked for you."
-                  : `Public sites, outbound network and a domain only when ${person !== null ? "you are" : "they are"} an Admin of every project chosen.`}
+              <fieldset>
+                <legend className="mb-2 text-sm leading-none font-medium">Expires</legend>
+                <div className={cn(SEGMENTED, "grid grid-cols-2 gap-0.5 sm:grid-cols-4")}>
+                  {EXPIRY_CHOICES.map((choice) => (
+                    <label
+                      key={choice.label}
+                      className="flex h-9 cursor-pointer items-center justify-center rounded-md px-2 text-[0.8125rem] whitespace-nowrap text-secondary-foreground select-none hover:bg-muted hover:text-strong has-checked:bg-popover has-checked:font-medium has-checked:text-strong has-checked:shadow-raised has-checked:ring-1 has-checked:ring-border has-focus-visible:ring-2 has-focus-visible:ring-ring sm:h-[1.875rem]"
+                    >
+                      <input type="radio" name={expiryId} checked={expiry === choice.days} onChange={() => setExpiry(choice.days)} className="sr-only" />
+                      {choice.label}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            </div>
+
+            <div className="grid gap-2">
+              <p role="status" className="text-sm text-pretty text-secondary-foreground">
+                {summary}
               </p>
-              {/* No rule between them: each choice is a rounded row, and a rule under one bent up at its corners. */}
-              <div className="grid gap-0.5 rounded-lg border border-input p-1">
-                <Choice
-                  checked={effective.public}
-                  disabled={!options}
-                  locked={needed.public.length > 0}
-                  note={needed.public.length > 0 ? neededLine(needed.public) : undefined}
-                  onChange={(next) => setScope({ ...scope, public: next })}
-                  title="Deploy public sites"
-                >
-                  Sites anyone opens without signing in. Off: what it deploys asks to sign in.
-                </Choice>
-                <Choice checked={effective.outbound} disabled={!options} onChange={(next) => setScope({ ...scope, outbound: next })} title="Use outbound network">
-                  For services that call an outside API. Connectors you grant work without it.
-                </Choice>
-                <Choice
-                  checked={effective.domain}
-                  disabled={!options}
-                  locked={needed.domain.length > 0}
-                  note={needed.domain.length > 0 ? neededLine(needed.domain) : undefined}
-                  onChange={(next) => setScope({ ...scope, domain: next })}
-                  title="Declare a domain"
-                >
-                  A domain of its own in sitesolide.json. Switching to it stays {person === null ? "yours" : "the owner's"}.
-                </Choice>
-                {/* Never disabled: every project offered to a person's token is one where they may change secrets. */}
-                <Choice checked={effective.secrets === true} onChange={(next) => setScope({ ...scope, secrets: next })} title="Manage secrets">
-                  Lists each project's secret names, and sets, generates and removes its variables and files on the server. Never reads a value back.
-                </Choice>
-              </div>
-            </fieldset>
-
-            <fieldset className="grid gap-2">
-              <legend className="mb-2 text-sm leading-none font-medium">Expires</legend>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {EXPIRY_CHOICES.map((choice) => (
-                  <label
-                    key={choice.label}
-                    className="flex h-10 cursor-pointer items-center justify-center rounded-lg border border-input px-2 text-sm whitespace-nowrap transition-colors select-none hover:bg-muted has-checked:border-primary has-checked:bg-highlight has-checked:font-medium has-checked:text-strong has-checked:ring-1 has-checked:ring-primary has-focus-visible:ring-2 has-focus-visible:ring-ring sm:h-9"
-                  >
-                    <input type="radio" name={expiryId} checked={expiry === choice.days} onChange={() => setExpiry(choice.days)} className="sr-only" />
-                    {choice.label}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-
-            <FormError>{formError}</FormError>
+              <FormError>{formError}</FormError>
+            </div>
 
             <DialogFooter>
               <DialogClose render={<Button variant="outline" className="max-sm:h-10" />} disabled={inProgress}>
@@ -557,10 +667,10 @@ export function RevokeTokenDialog({
     >
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle className="wrap-anywhere">Revoke {token?.label}'s token?</AlertDialogTitle>
-          <AlertDialogDescription>
-            The next request with it is refused, a deployment already running finishes. The projects it created stay where they
-            are, and only a new token you grant them to can deploy them.
+          <AlertDialogTitle className="wrap-anywhere">Revoke "{token?.label}"?</AlertDialogTitle>
+          <AlertDialogDescription className="text-pretty">
+            Its next request is refused; a deployment already running finishes.
+            {token !== null && token.owned.length > 0 && " The projects it created stay where they are, and only a new token granted them can deploy them."}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <FormError>{error}</FormError>
