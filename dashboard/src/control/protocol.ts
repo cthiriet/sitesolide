@@ -26,7 +26,6 @@
  * page imports nothing from here but types.
  */
 import type { EntryView, GeneralView } from "../access/protocol";
-import type { AuditRow } from "../audit/protocol";
 import type { ServiceKind } from "../../borrowed/manifest";
 import type { Verdict } from "../secrets/protocol";
 import type { StoreMissing } from "../../borrowed/store-protocol";
@@ -497,20 +496,6 @@ export type AuditEntry = {
   detail: Record<string, unknown> | null;
 };
 
-/** A deployment as the Tokens page lists it. */
-export type TeamDeployment = {
-  id: string;
-  tokenId: string;
-  email: string;
-  slug: string;
-  state: DeploymentState;
-  creating: boolean;
-  createdAt: number;
-  startedAt: number | null;
-  finishedAt: number | null;
-  message: string | null;
-};
-
 export type TeamPageResponse = {
   /** False when the steward does not carry the control routes yet; `reason` says what to run. */
   available: boolean;
@@ -521,16 +506,12 @@ export type TeamPageResponse = {
    */
   member: { email: string; roles: Record<string, "viewer" | "developer" | "admin">; create: boolean } | null;
   tokens: TokenView[];
-  /** End of this session's unlock, null if locked. */
-  until: number | null;
-  deployments: TeamDeployment[];
-  audit: AuditEntry[];
   /**
-   * What tokens did through the steward, secret changes, restarts and access
-   * changes, read from its journal, newest first: a person, their own
-   * tokens' alone. Empty when the journal could not be read.
+   * End of this session's unlock, null if locked. What the tokens did is
+   * Activity's, read there with `actor=token:<id>`: the page lists the
+   * tokens alone.
    */
-  work: AuditRow[];
+  until: number | null;
 };
 
 // --- The dashboard's public API, under /api/v1, with `Authorization: Bearer` ---

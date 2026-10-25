@@ -1,9 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { openDatabase } from "../src/database";
-import { createControlStore } from "../src/control/store";
 import type { IdentityResolver, Resolved } from "../src/people/identity";
 import { createMemberRelay, MEMBER_LOCKED } from "../src/people/relay";
 import { createTokens } from "../src/secrets/tokens";
@@ -25,7 +20,6 @@ const ADA = "ada@acme.test";
 type Act = { method: string; path: string; body: Record<string, unknown>; long: boolean | undefined };
 
 function mount(options: { signedIn?: boolean; unlocked?: boolean; answer?: (act: Act) => Response } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "people-relay-"));
   const acts: Act[] = [];
   const resolved: Resolved =
     options.signedIn === false
@@ -54,9 +48,8 @@ function mount(options: { signedIn?: boolean; unlocked?: boolean; answer?: (act:
     tokens,
     secrets: { readLog: unreachable },
     backups: { readBackups: unreachable, readBackupAudit: unreachable },
-    control: createControlStore(openDatabase(join(root, "dashboard.db"))),
   });
-  return { relay, acts, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { relay, acts };
 }
 
 function requested(body: unknown, origin: string | null = PUBLIC_URL, method = "POST"): Request {
@@ -78,25 +71,17 @@ const ROUTES = [
 
 describe("a person's writes to a store, relayed", () => {
   test("each to its people route, with their session and unlock, the fields it takes alone, waiting the long delay", async () => {
-    const { relay, acts, cleanup } = mount();
-    try {
-      for (const { route, method, path, body } of ROUTES) {
-        const response = await relay[route](requested({ ...body, token: "from-the-page", session: "from-the-page", intruder: 1 }, PUBLIC_URL, method));
-        expect({ route, status: response.status }).toEqual({ route, status: 200 });
-        expect(acts.at(-1)).toEqual({ method, path, body: { ...body, session: SESSION, token: UNLOCK }, long: true });
-      }
-    } finally {
-      cleanup();
+    const { relay, acts } = mount();
+    for (const { route, method, path, body } of ROUTES) {
+      const response = await relay[route](requested({ ...body, token: "from-the-page", session: "from-the-page", intruder: 1 }, PUBLIC_URL, method));
+      expect({ route, status: response.status }).toEqual({ route, status: 200 });
+      expect(acts.at(-1)).toEqual({ method, path, body: { ...body, session: SESSION, token: UNLOCK }, long: true });
     }
   });
 
   test("no route reads a value back, nor writes the platform's files: those are the owner's", () => {
-    const { relay, cleanup } = mount();
-    try {
-      for (const name of ["revealStoreValue", "readStore", "readValue", "readContent", "setVariable", "removeVariable", "createFile", "restoreFile"]) expect(Object.hasOwn(relay, name)).toBe(false);
-    } finally {
-      cleanup();
-    }
+    const { relay } = mount();
+    for (const name of ["revealStoreValue", "readStore", "readValue", "readContent", "setVariable", "removeVariable", "createFile", "restoreFile"]) expect(Object.hasOwn(relay, name)).toBe(false);
   });
 
   test("the origin first, then the session, then the unlock: nothing goes off before", async () => {
@@ -106,51 +91,39 @@ describe("a person's writes to a store, relayed", () => {
       [{ signedIn: false }, PUBLIC_URL, 401, { error: "no-session" }],
       [{ unlocked: false }, PUBLIC_URL, 423, { error: "locked", message: MEMBER_LOCKED }],
     ] as const) {
-      const { relay, acts, cleanup } = mount(options);
-      try {
-        for (const { route, method, body: sent } of ROUTES) {
-          const response = await relay[route](requested(sent, origin, method));
-          expect({ route, status: response.status, body: await response.json() }).toEqual({ route, status, body });
-        }
-        expect(acts).toEqual([]);
-      } finally {
-        cleanup();
+      const { relay, acts } = mount(options);
+      for (const { route, method, body: sent } of ROUTES) {
+        const response = await relay[route](requested(sent, origin, method));
+        expect({ route, status: response.status, body: await response.json() }).toEqual({ route, status, body });
       }
+      expect(acts).toEqual([]);
     }
   });
 
   test("a value set or a file's content that the steward's answer copies back does not come out", async () => {
     for (const { route, method, body } of ROUTES.filter((one) => one.route === "setStoreVariable" || one.route === "setStoreFile")) {
       const echoed = route === "setStoreVariable" ? (body as { value: string }).value : '{"k":"file-content-of-ada-55"}';
-      const { relay, cleanup } = mount({ answer: () => Response.json({ error: "invalid", message: `refused: ${echoed}` }, { status: 400 }) });
-      try {
-        const response = await relay[route](requested(body, PUBLIC_URL, method));
-        const text = await response.text();
-        expect({ route, status: response.status }).toEqual({ route, status: 502 });
-        expect(text).not.toContain(echoed);
-        expect(text).not.toContain(UNLOCK);
-        expect(text).not.toContain(SESSION);
-      } finally {
-        cleanup();
-      }
+      const { relay } = mount({ answer: () => Response.json({ error: "invalid", message: `refused: ${echoed}` }, { status: 400 }) });
+      const response = await relay[route](requested(body, PUBLIC_URL, method));
+      const text = await response.text();
+      expect({ route, status: response.status }).toEqual({ route, status: 502 });
+      expect(text).not.toContain(echoed);
+      expect(text).not.toContain(UNLOCK);
+      expect(text).not.toContain(SESSION);
     }
   });
 
   test("a field of another type, or a list that is none: 400, nothing goes off", async () => {
-    const { relay, acts, cleanup } = mount();
-    try {
-      for (const [route, method, body] of [
-        ["setStoreVariable", "PUT", { slug: "shop", name: "A", value: 42 }],
-        ["removeStoreVariables", "DELETE", { slug: "shop", names: "A" }],
-        ["generateStoreVariable", "POST", { slug: "shop", name: "A", bytes: "32" }],
-        ["setStoreFile", "PUT", { slug: "shop", name: "x.json" }],
-        ["restoreStore", "POST", { slug: "shop", dryRun: "yes" }],
-      ] as const) {
-        expect((await relay[route](requested(body, PUBLIC_URL, method))).status).toBe(400);
-      }
-      expect(acts).toEqual([]);
-    } finally {
-      cleanup();
+    const { relay, acts } = mount();
+    for (const [route, method, body] of [
+      ["setStoreVariable", "PUT", { slug: "shop", name: "A", value: 42 }],
+      ["removeStoreVariables", "DELETE", { slug: "shop", names: "A" }],
+      ["generateStoreVariable", "POST", { slug: "shop", name: "A", bytes: "32" }],
+      ["setStoreFile", "PUT", { slug: "shop", name: "x.json" }],
+      ["restoreStore", "POST", { slug: "shop", dryRun: "yes" }],
+    ] as const) {
+      expect((await relay[route](requested(body, PUBLIC_URL, method))).status).toBe(400);
     }
+    expect(acts).toEqual([]);
   });
 });

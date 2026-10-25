@@ -133,15 +133,12 @@ const api = createApiRoutes({
   publicUrl: PUBLIC_URL,
   zone: ZONE,
 });
-// Token activity reads the steward's journal too: a token's secret changes and
-// restarts are written there, never in dashboard.db.
 const team = createTeamRoutes({
   session: ownerReader,
   publicUrl: PUBLIC_URL,
   steward: controlSteward,
   tokens: unlockTokens,
   store: controlStore,
-  journal: localSteward(STEWARD_SOCKET),
 });
 setInterval(() => void tracker.tick(), 3_000);
 
@@ -179,7 +176,6 @@ const memberRelay = createMemberRelay({
   tokens: memberUnlocks,
   secrets: localSteward(STEWARD_SOCKET),
   backups: localBackupSteward(STEWARD_SOCKET),
-  control: controlStore,
 });
 
 // The names the stores lack, read from the steward's listing beside every

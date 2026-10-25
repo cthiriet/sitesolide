@@ -29,19 +29,16 @@
  *
  * **A person's own tokens** answer at the Tokens page's addresses too: their
  * tokens alone, minted under their unlock within their roles, revoked
- * without it. The steward judges and journals each (src/control/steward.ts);
- * the dashboard adds what it keeps itself, the deployments of those tokens,
- * and what those tokens did through the steward, read from its journal and
- * kept to their ids.
+ * without it. The steward judges and journals each (src/control/steward.ts).
+ * What those tokens did is Activity's, filtered to the person's projects
+ * and their own rows there (src/audit/merge.ts).
  */
 import { isAcceptableOrigin, tokenHash } from "../sessions";
 import { extractPortal, fields, MAX_BODY_BYTES, MAX_CONTENT_BODY_BYTES, reach, relay, STORE_EXTRACTIONS, STORE_WITHHELD, type Extraction, type Received } from "../secrets/routes";
 import type { Steward } from "../secrets/client";
 import type { Tokens } from "../secrets/tokens";
 import type { BackupSteward } from "../backup/client";
-import type { ControlStore } from "../control/store";
 import type { TeamPageResponse, TokenView } from "../control/protocol";
-import { readJournal, tokenWork } from "../control/team";
 import type { MembersSteward } from "./client";
 import type { Identity, IdentityResolver, Resolved } from "./identity";
 import { may, roleOn, type Power } from "./powers";
@@ -56,11 +53,9 @@ export type MemberRelayDependencies = {
   steward: Pick<MembersSteward, "act" | "lock">;
   /** The members' unlock tokens, by session hash: never the owner's store. */
   tokens: Tokens;
-  /** The steward's journal: a site's history in its Secrets section, and what a person's tokens did there. */
+  /** The steward's journal: a site's history in its Secrets section. */
   secrets: Pick<Steward, "readLog">;
   backups: Pick<BackupSteward, "readBackups" | "readBackupAudit">;
-  /** The deployments and the audit the dashboard keeps, for a member's Tokens page: those of their own tokens. */
-  control: Pick<ControlStore, "recent" | "listAudit">;
 };
 
 export type MemberRelay = {
@@ -257,50 +252,29 @@ export function createMemberRelay(dependencies: MemberRelayDependencies, clock: 
     backupAudit: projectRead("backups", (slug) => dependencies.backups.readBackupAudit(slug)),
 
     /**
-     * The member's Tokens page: their tokens, what they may mint them for, and
-     * the deployments those tokens made. A steward that predates members'
-     * tokens is said, as for the owner.
+     * The member's Tokens page: their tokens, and what they may mint them
+     * for. A steward that predates members' tokens is said, as for the owner.
      */
     async team(req) {
       const open = await member(req, false);
       if (open instanceof Response) return open;
-      // The journal is read beside the list, and kept to the ids the list names
-      // once both are in: never a line of another person's token.
-      const [received, entries] = await Promise.all([
-        reach(() => steward.act("POST", "/tokens/person/list", { session: open.token }), null, [open.token]),
-        readJournal(dependencies.secrets),
-      ]);
+      const received = await reach(() => steward.act("POST", "/tokens/person/list", { session: open.token }), null, [open.token]);
       const until = tokens.read(open.session.hash)?.expiresAt ?? null;
       const self = { email: open.identity.email, roles: open.identity.roles, create: open.identity.create };
       if (received.kind === "received" && received.status === 404 && received.body?.message === "no such route") {
-        const page: TeamPageResponse = { available: false, reason: TOKENS_OUTDATED, member: self, tokens: [], until, deployments: [], audit: [], work: [] };
+        const page: TeamPageResponse = { available: false, reason: TOKENS_OUTDATED, member: self, tokens: [], until };
         return json(page);
       }
       if (received.kind !== "received" || received.status !== 200) return answer(open, received);
       const listed = received.body?.tokens;
       const rights = received.body?.rights;
       if (!Array.isArray(listed) || !isObject(rights)) return error(502, "failure", "The server sent an unreadable answer.");
-      const mine = listed as TokenView[];
-      const ids = new Set(mine.map((token) => token.id));
-      const deployments = dependencies.control
-        .recent(200)
-        .filter((row) => ids.has(row.tokenId))
-        .slice(0, 20)
-        .map(({ manifest: _manifest, ...row }) => row);
-      const audit = dependencies.control
-        .listAudit(500, "deploy.")
-        .filter((entry) => entry.actor.startsWith("token:") && ids.has(entry.actor.slice("token:".length)))
-        .slice(0, 50);
-      const work = tokenWork(entries, (id) => ids.has(id));
       const page: TeamPageResponse = {
         available: true,
         reason: null,
         member: { email: open.identity.email, roles: (rights.roles ?? open.identity.roles) as Roles, create: rights.create === true },
-        tokens: mine,
+        tokens: listed as TokenView[],
         until,
-        deployments,
-        audit,
-        work,
       };
       return json(page);
     },
