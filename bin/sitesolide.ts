@@ -131,6 +131,7 @@ import { hintFor } from "./cli/hints";
 import { inferManifest, renderManifest, slugFromFolder, type Inference } from "./cli/infer";
 import {
   buildEnvOf,
+  domainHosts,
   hasStore,
   isApp,
   isHeadless,
@@ -239,7 +240,23 @@ import {
 } from "./cli/refresh";
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, reachesOwnPorts, type ProjectAccount } from "./cli/loopback";
 import { FIRST_CERTIFICATE_MS, readZoneNamesAnswer, ZONE_NAMES_COMMAND, ZONE_NAMES_FILE } from "./cli/tls";
-import { askAddress, WARM_UP_MS } from "./cli/verify";
+import {
+  caddyHandshakeCommand,
+  caddyReasonCommand,
+  domainCarriers,
+  EDGE_TRACE_PATH,
+  edgeOrigin,
+  readCaddyHandshake,
+  readCaddyReason,
+  readEdgeTrace,
+  TUNNEL_KIT_FILES,
+  tunnelRouteProblem,
+  tunnelTarget,
+  type EdgeReading,
+} from "./cli/tunnel";
+import { tunnelRecordLines } from "./cli/cloudflare";
+import { shellQuote } from "./cli/harden";
+import { askAddress, VERIFY_RETRY_MS, WARM_UP_MS } from "./cli/verify";
 import { realClock } from "./cli/providers/provider";
 import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
 import { machine, sshLogin } from "./cli/machine";
@@ -2915,6 +2932,153 @@ async function domainPointsHere(domain: string, config: Config): Promise<boolean
   return found.length > 0 && found.some((address) => expected.has(address));
 }
 
+/**
+ * Whether Cloudflare's edge serves `name`: its trace answers there, over
+ * HTTPS, which takes the edge's certificate for the name, as a visitor's
+ * request does. Behind a tunnel, what stands for domainPointsHere: a name
+ * routed into the tunnel resolves to Cloudflare, never to the machine, and
+ * the edge answers its trace before the domain is activated, while the
+ * machine itself would answer nothing yet.
+ */
+async function servedByEdge(name: string): Promise<boolean> {
+  try {
+    const response = await fetch(`https://${name}${EDGE_TRACE_PATH}`, { redirect: "manual", signal: AbortSignal.timeout(10000) });
+    return response.status === 200 && readEdgeTrace(await response.text(), name);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A site's own domain switched on behind a tunnel goes through the tunnel's
+ * two files of this release, domainCarriers in bin/cli/tunnel.ts: over the
+ * files of 0.10.0 the switch would succeed, and the domain get the
+ * connector's 404. Read before anything is written, in a dry run too, a
+ * reading changing nothing. --force skips the DNS, never this: no record
+ * makes those files carry the domain.
+ */
+async function requireTunnelCarriers(config: Config, executor: Executor, tunnel: string): Promise<void> {
+  const caddy = readFileSync(join(fromKit(kitRoot), TUNNEL_KIT_FILES.caddy), "utf8");
+  const stale: string[] = [];
+  for (const { path, content } of domainCarriers(tunnel, caddy)) {
+    const reading = await readRemoteFile(config, executor, path);
+    if (reading.kind === "unreadable") {
+      die("cannot tell whether the machine's tunnel carries a site's own domain", [`${path}: the server answered neither an absence nor the file`, "nothing was written"]);
+    }
+    if (reading.kind === "absent" || reading.content !== content) stale.push(path);
+  }
+  if (stale.length === 0) return;
+  die("the machine's tunnel files are not this release's, and would not carry a site's own domain", [
+    ...stale.map((path) => `${path} is not the one this release lays`),
+    "the files of 0.10.0 answer 404 for any name outside the zone, and give Caddy no way to certify one",
+    "bring the machine to this release first, `sitesolide upgrade --dry-run` then `sitesolide upgrade`, then run this again",
+    "nothing was written",
+  ]);
+}
+
+/**
+ * Behind a tunnel, the check before a site's own domain is switched on, in
+ * the DNS check's place, on every name the table would add, the domain, its
+ * aliases and the `www` of a second level one: each served by Cloudflare's
+ * edge and routed into the tunnel, as far as the workstation can tell, see
+ * tunnelRouteProblem in bin/cli/tunnel.ts. Cloudflare routes into the tunnel
+ * the names whose records point at it, proxied, in its owner's account alone,
+ * and the owner makes them: a name that does not reach it never reaches the
+ * machine. The certificate does not wait on it, the DNS challenge needing no
+ * request; the visitors do.
+ *
+ * Said whatever the check finds, since the switch goes on with --force: the
+ * records, and the token. Caddy obtains the domain's certificate through the
+ * DNS challenge with the machine's own Cloudflare token
+ * (infra/tunnel/tunnel.caddy), which setup laid for the zone: the owner allows
+ * it on the domain's zone too. Cloudflare keeps a token's value when its
+ * permissions change, so nothing changes on the machine.
+ */
+async function checkTunnelRoute(domain: NonNullable<Manifest["domain"]>, config: Config, tunnel: string, force: boolean): Promise<void> {
+  const names = domainHosts(domain);
+  const target = tunnelTarget(tunnel);
+  const records = tunnelRecordLines(names, target);
+  const readings = await Promise.all(
+    names.map(async (name): Promise<EdgeReading> => {
+      const here = await domainPointsHere(name, config);
+      const edge = !here && (await servedByEdge(name));
+      return { name, here, edge, root: edge ? await httpsCode(name) : null };
+    }),
+  );
+  const problems = readings.flatMap((reading) => {
+    const problem = tunnelRouteProblem(reading, serverHost(config));
+    return problem === null ? [] : [{ name: reading.name, problem }];
+  });
+  if (problems.length > 0) {
+    if (!force) {
+      die(`not served by Cloudflare's edge through the tunnel: ${problems.map((one) => one.name).join(", ")}`, [
+        ...problems.map((one) => one.problem),
+        "Cloudflare routes into the tunnel the names whose records point at it, proxied, in a zone of the tunnel's own account:",
+        ...records.map((line) => `  ${line}`),
+        "create them in the domain's zone there, in place of any other record of those names, then run this again once the edge serves them, a few minutes later",
+        "to switch anyway:  sitesolide domain --activate --force",
+      ]);
+    }
+    say(`   --force: ${problems.map((one) => one.name).join(", ")} not served by Cloudflare's edge through the tunnel, switching anyway`);
+  }
+  note({ tunnelRecords: names.map((name) => ({ name, type: "CNAME", content: target, proxied: true })) });
+  say("   behind the tunnel, Caddy obtains the domain's certificate through the DNS challenge with the machine's own Cloudflare");
+  say("   token, which must hold Zone / Zone / Read and Zone / DNS / Edit on the domain's zone too: edited at");
+  say("   dash.cloudflare.com/profile/api-tokens, a token keeps its value, and nothing changes on the machine");
+  say("   the records, proxied, in that zone of the tunnel's own Cloudflare account:");
+  for (const line of records) say(`     ${line}`);
+}
+
+/** The HTTP code at a name's root, or why nothing answered. */
+async function httpsCode(name: string): Promise<string> {
+  try {
+    const response = await fetch(`https://${name}/`, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(15000),
+    });
+    return String(response.status);
+  } catch (err) {
+    return `unreachable: ${(err as Error).message}`;
+  }
+}
+
+/**
+ * Why an active domain behind a tunnel answers what it answers, when that is
+ * an origin's failure, printed under its HTTPS line; null for any other
+ * answer. A 520 to 526 is the edge failing to reach an address, never the
+ * tunnel: the record is not the tunnel's. A 502 is the connector's, and the
+ * machine says which: a verified handshake for the name on its loopback
+ * means Caddy holds the certificate, and the 502 comes from behind it; none
+ * means the certificate is missing, most often the token's permissions on
+ * the domain's zone, and Caddy's journal says why.
+ */
+async function tunnelCause(name: string, code: string, config: Config, executor: Executor, tunnel: string): Promise<{ cause: string; reason?: string } | null> {
+  const origin = edgeOrigin(code);
+  if (origin === "address") {
+    say("   cause      Cloudflare's own answer for an origin it reaches by its address: the name's record most likely points at an");
+    say("              address, proxied, rather than at the tunnel; it should be:");
+    for (const line of tunnelRecordLines([name], tunnelTarget(tunnel))) say(`              ${line}`);
+    return { cause: "address" };
+  }
+  if (origin !== "tunnel") return null;
+  const handshake = readCaddyHandshake(await executor.read(config, caddyHandshakeCommand(name)));
+  if (handshake === null) {
+    say("   cause      unknown: the machine did not say whether Caddy completes a handshake for the name");
+    return { cause: "unknown" };
+  }
+  if (handshake.kind === "answered") {
+    say(`   cause      behind Caddy: it holds a certificate for the name and answers ${handshake.status} on the machine itself,`);
+    say("              the 502 coming from the app or its service rather than from the certificate (sitesolide logs)");
+    return { cause: "behind-caddy" };
+  }
+  say("   cause      Caddy completes no verified handshake for the name on the machine: most likely it has no certificate,");
+  say("              the machine's Cloudflare token lacking Zone / Zone / Read and Zone / DNS / Edit on the domain's zone");
+  const reason = readCaddyReason((await executor.read(config, caddyReasonCommand(name))).trim());
+  if (reason !== null) say(`   caddy      ${reason}`);
+  say(`   more       ssh ${config.server} sudo journalctl -u caddy --since -1h --no-pager | grep -F ${name}`);
+  return reason === null ? { cause: "certificate" } : { cause: "certificate", reason };
+}
+
 /** The declared domain, or the stop: without it there is nothing to switch. */
 function requireDomain(manifest: Manifest): NonNullable<Manifest["domain"]> {
   const domain = manifest.domain;
@@ -2933,15 +3097,24 @@ function requireDomain(manifest: Manifest): NonNullable<Manifest["domain"]> {
  * Four lines that may diverge, and that is the whole point: the manifest says
  * what is wanted, the table what is installed, the DNS where the visitors go,
  * the HTTP code what they really get.
+ *
+ * Behind a tunnel the DNS line says whether Cloudflare's edge serves the
+ * name, where its visitors go then, and an origin's failure through it gets
+ * a line of its own, see tunnelCause. `patienceMs`, right after the switch:
+ * the first certificate, through the DNS challenge, may take longer than the
+ * ten seconds the connector waits for Caddy, and the first answers be the
+ * connector's 502 whatever the token can do.
  */
 async function showDomain(
   project: Project,
   config: Config,
   executor: Executor,
+  patienceMs = 0,
 ): Promise<void> {
   const { manifest } = project;
   const domain = requireDomain(manifest);
   const active = domain.active === true;
+  const tunnel = config.tunnel !== undefined;
 
   say(`-> domain of ${manifest.slug}`);
   say(`   declared   ${domain.name}${domain.aliases?.length ? ` (aliases: ${domain.aliases.join(", ")})` : ""}`);
@@ -2949,24 +3122,31 @@ async function showDomain(
 
   const table = await executor.read(
     config,
-    `grep -c "^\\s*${domain.name} " /etc/caddy/domaines.map || true`,
+    `grep -c ${shellQuote(`^\\s*${domain.name} `)} /etc/caddy/domaines.map || true`,
   );
   say(`   table      ${table.trim() === "0" ? "absent, run bin/generate-domains.sh" : "present"}`);
 
   const pointsHere = await domainPointsHere(domain.name, config);
-  say(`   dns        ${pointsHere ? `points to ${serverHost(config)}` : "does not point here yet"}`);
+  const edge = tunnel && !pointsHere && (await servedByEdge(domain.name));
+  if (!tunnel) {
+    say(`   dns        ${pointsHere ? `points to ${serverHost(config)}` : "does not point here yet"}`);
+  } else if (pointsHere) {
+    say(`   dns        points to ${serverHost(config)}, not to the tunnel: a record from before it`);
+  } else {
+    say(`   dns        ${edge ? "served by Cloudflare's edge" : "not served by Cloudflare's edge yet"}`);
+  }
 
-  let code: string;
-  try {
-    const response = await fetch(`https://${domain.name}/`, {
-      redirect: "manual",
-      signal: AbortSignal.timeout(15000),
-    });
-    code = String(response.status);
-  } catch (err) {
-    code = `unreachable: ${(err as Error).message}`;
+  let code = await httpsCode(domain.name);
+  if (tunnel && active && patienceMs > 0 && edgeOrigin(code) === "tunnel") {
+    say(`   ${code}: Caddy is obtaining the domain's first certificate through the DNS challenge; asking again for up to ${patienceMs / 1000} s`);
+    const deadline = Date.now() + patienceMs;
+    while (edgeOrigin(code) === "tunnel" && Date.now() + VERIFY_RETRY_MS < deadline) {
+      await Bun.sleep(VERIFY_RETRY_MS);
+      code = await httpsCode(domain.name);
+    }
   }
   say(`   https      ${code}`);
+  const cause = tunnel && active ? await tunnelCause(domain.name, code, config, executor, config.tunnel!) : null;
   note({
     slug: manifest.slug,
     domain: {
@@ -2974,8 +3154,10 @@ async function showDomain(
       aliases: domain.aliases ?? [],
       active,
       table: table.trim() !== "0",
-      dns: pointsHere,
+      dns: tunnel ? edge : pointsHere,
+      ...(tunnel ? { tunnel: true } : {}),
       https: /^[0-9]+$/.test(code) ? Number(code) : code,
+      ...(cause ?? {}),
     },
   });
 }
@@ -3007,16 +3189,7 @@ async function switchDomain(
     say(`-> ${domain.name} is already inactive, nothing was touched`);
     return;
   }
-  // Behind a tunnel nothing reaches the machine but the zone's own names:
-  // Cloudflare routes no other into it, and Let's Encrypt could not reach the
-  // machine to certify one. --force skips the DNS, never this.
-  if (active && config.tunnel !== undefined) {
-    die(`${domain.name} cannot be served by a machine behind a Cloudflare Tunnel`, [
-      "Cloudflare routes into the tunnel the zone's own names alone, and Let's Encrypt cannot reach the machine to certify another",
-      `the site stays at https://${project.manifest.slug}.${config.zone}; see docs/tunnel.md`,
-      "nothing was touched",
-    ]);
-  }
+  if (active && config.tunnel !== undefined) await requireTunnelCarriers(config, executor, config.tunnel);
 
   // The local manifest leaves for the VM as it is: on a site whose door the
   // dashboard has changed, it would erase it. The guard comes before the DNS,
@@ -3031,7 +3204,11 @@ async function switchDomain(
   // A domain activated before its DNS makes a certificate be asked for that the
   // authority will refuse, and those refusals are counted: a few attempts are
   // enough to block the name for a week. The check costs nothing, the wait does.
-  if (active && !(await domainPointsHere(domain.name, config))) {
+  // Behind a tunnel the DNS that counts is Cloudflare's, and its own check
+  // stands in for this one: see checkTunnelRoute.
+  if (active && config.tunnel !== undefined) {
+    await checkTunnelRoute(domain, config, config.tunnel, force);
+  } else if (active && !(await domainPointsHere(domain.name, config))) {
     if (!force) {
       die(`${domain.name} does not resolve to ${serverHost(config)}`, [
         "Caddy asks for a certificate on the first request, and a request that never arrives never gets one",
@@ -3061,7 +3238,16 @@ async function switchDomain(
   });
   releaseCaddyLock();
 
-  if (!executor.simulated) await showDomain(reread, config, executor);
+  if (!executor.simulated) await showDomain(reread, config, executor, active && config.tunnel !== undefined ? FIRST_CERTIFICATE_MS : 0);
+  // The token's permissions on the domain's zone were the owner's to add at
+  // activation, and are the owner's to take back: nothing else would. A
+  // machine served directly needs none, its customer domains certified over
+  // HTTP-01 or TLS-ALPN-01.
+  if (!active && config.tunnel !== undefined) {
+    say("");
+    say("   once no active domain uses its zone, Zone / Zone / Read and Zone / DNS / Edit on it can be taken off the machine's");
+    say("   Cloudflare token at dash.cloudflare.com/profile/api-tokens: the token keeps its value, and nothing changes on the machine");
+  }
   say("");
   say(`   commit ${MANIFEST_NAME}: a deployment would otherwise put back the state in git.`);
 }

@@ -2,16 +2,28 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describePlan, planTunnelRecords, tunnelManualRecords, type DnsRecord } from "../cli/cloudflare";
+import { describePlan, planTunnelRecords, tunnelManualRecords, tunnelRecordLines, type DnsRecord } from "../cli/cloudflare";
+import { generateFragment } from "../cli/fragment";
 import { firewallCheck, firewallPorts, firewallRun, webPortsCheck, webPortsRun } from "../cli/harden";
+import { domainHosts, type Manifest } from "../cli/manifest";
+import { CLOUDFLARE_POLICY, tlsZoneContent } from "../cli/tls";
 import {
   CADDY_TUNNEL_FILE,
+  caddyHandshakeCommand,
+  caddyReasonCommand,
+  domainCarriers,
+  EDGE_TRACE_PATH,
+  edgeOrigin,
   isTunnelId,
   NO_CREDENTIALS_EXIT,
   PACKAGE_UNIT,
+  readCaddyHandshake,
+  readCaddyReason,
+  readEdgeTrace,
   readTunnelCredentials,
   tunnelConditions,
   tunnelConfig,
+  tunnelRouteProblem,
   tunnelRun,
   tunnelTarget,
   TUNNEL_CONFIG,
@@ -25,6 +37,7 @@ import {
   TUNNEL_AFTER_UPGRADE_CONTENT,
   TUNNEL_UPGRADES,
   TUNNEL_UPGRADES_CONTENT,
+  type EdgeReading,
   type TunnelFiles,
 } from "../cli/tunnel";
 import { TUNNEL_ORIGIN } from "../cli/loopback";
@@ -32,9 +45,11 @@ import { TUNNEL_ORIGIN } from "../cli/loopback";
 /**
  * A machine served through a Cloudflare Tunnel, bin/cli/tunnel.ts: the
  * credentials read without ever being shown, the connector's configuration,
- * the run's order, the zone's records, the firewall, and the kit's two files
- * as the machine gets them. setup's whole sequence under --tunnel is
- * cli-setup-tunnel.test.ts's.
+ * the run's order, the zone's records, the firewall, the kit's two files as
+ * the machine gets them, and what `domain --activate` reads of a site's own
+ * domain there. setup's whole sequence under --tunnel is
+ * cli-setup-tunnel.test.ts's, and the activation's, run for real in a dry
+ * run, e2e/deployment.test.ts's.
  */
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -45,7 +60,7 @@ const SECRET = "c2VjcmV0LW9mLXRoZS10dW5uZWwtZm9yLXRlc3RzLW9ubHktMTIzNA==";
 
 function files(): TunnelFiles {
   const read = (path: string) => readFileSync(join(REPO_ROOT, path), "utf8");
-  return { zone: ZONE, id: ID, unit: read(TUNNEL_KIT_FILES.unit), caddy: read(TUNNEL_KIT_FILES.caddy) };
+  return { id: ID, unit: read(TUNNEL_KIT_FILES.unit), caddy: read(TUNNEL_KIT_FILES.caddy) };
 }
 
 describe("the tunnel's credentials", () => {
@@ -81,20 +96,24 @@ describe("the tunnel's credentials", () => {
 });
 
 describe("the connector's configuration", () => {
-  test("the zone and its wildcard go to Caddy on ::1, with their own name as SNI; anything else 404", () => {
-    const config = tunnelConfig(ZONE, ID);
+  test("every name goes to Caddy on ::1, with its own name as SNI, in one rule that names none", () => {
+    const config = tunnelConfig(ID);
     expect(config).toContain(`tunnel: ${ID}\n`);
     expect(config).toContain(`metrics: ${TUNNEL_METRICS}\n`);
     // ::1, the one address Caddy believes Cf-Connecting-Ip from, and the
     // loopback rule keeps to the connector: never 127.0.0.1, which everyone uses.
     expect(TUNNEL_ORIGIN).toBe("::1");
-    expect(config).toContain(`  - hostname: ${ZONE}\n    service: https://[::1]:443\n    originRequest:\n      matchSNItoHost: true\n      noTLSVerify: true\n`);
-    expect(config).toContain(`  - hostname: "*.${ZONE}"\n    service: https://[::1]:443\n`);
+    // The whole ingress: Cloudflare routes into the tunnel the names whose
+    // records point at it, a site's own domain among them, and Caddy decides
+    // by host what it serves. No name to keep in step, no 404 of the
+    // connector's own.
+    expect(config.slice(config.indexOf("ingress:\n"))).toBe("ingress:\n  - service: https://[::1]:443\n    originRequest:\n      matchSNItoHost: true\n      noTLSVerify: true\n");
+    expect(config).not.toContain("hostname:");
+    expect(config).not.toContain("http_status");
     expect(config).not.toContain("127.0.0.1:443");
-    expect(config.trimEnd().endsWith("  - service: http_status:404")).toBe(true);
     // The credentials are the unit's to hand over, from systemd's copy.
     expect(config).not.toContain("credentials-file");
-    expect(() => tunnelConfig(ZONE, "x\ningress: []")).toThrow();
+    expect(() => tunnelConfig("x\ningress: []")).toThrow();
   });
 
   test("its metrics sit outside the ports cloudflared takes by default, where a second connector would answer for it", () => {
@@ -271,6 +290,138 @@ describe("the zone's records behind a tunnel", () => {
   });
 });
 
+describe("a site's own domain behind a tunnel", () => {
+  const target = tunnelTarget(ID);
+  const DOMAIN = "shop.example";
+
+  /** The trace Cloudflare's edge answers at /cdn-cgi/trace, as it writes it. */
+  const trace = (name: string) =>
+    [`fl=29f512`, `h=${name}`, "ip=203.0.113.7", "ts=1792946441.066", "visit_scheme=https", "uag=Bun/1.3.11", "colo=CDG", "sliver=none", "http=http/1.1", "loc=FR", "tls=TLSv1.3", "sni=plaintext", "warp=off", "gateway=off", "rbi=off", "kex=X25519", ""].join("\n");
+
+  test("the edge's trace is read at the path every proxied name answers", () => {
+    expect(EDGE_TRACE_PATH).toBe("/cdn-cgi/trace");
+    expect(readEdgeTrace(trace(DOMAIN), DOMAIN)).toBe(true);
+    expect(readEdgeTrace(trace(DOMAIN), "SHOP.example")).toBe(true);
+  });
+
+  test("anything else is no trace of the edge: another name's, a page, a trace with no location", () => {
+    expect(readEdgeTrace(trace(`www.${DOMAIN}`), DOMAIN)).toBe(false);
+    expect(readEdgeTrace("<!doctype html><title>shop</title>h=shop.example", DOMAIN)).toBe(false);
+    expect(readEdgeTrace(trace(DOMAIN).replace("colo=CDG", "colo="), DOMAIN)).toBe(false);
+    expect(readEdgeTrace("", DOMAIN)).toBe(false);
+  });
+
+  test("its records are one proxied CNAME to the tunnel per name the table adds, in the zone's own format", () => {
+    const names = domainHosts({ name: DOMAIN, aliases: ["old-shop.example"] });
+    expect(names).toEqual([DOMAIN, `www.${DOMAIN}`, "old-shop.example", "www.old-shop.example"]);
+    expect(tunnelRecordLines(names, target)).toEqual([
+      `${DOMAIN}          CNAME ${target}   proxied, TTL auto`,
+      `www.${DOMAIN}      CNAME ${target}   proxied, TTL auto`,
+      `old-shop.example      CNAME ${target}   proxied, TTL auto`,
+      `www.old-shop.example  CNAME ${target}   proxied, TTL auto`,
+    ]);
+    // The zone's two, under --skip-dns, are the same lines for its two names.
+    expect(tunnelRecordLines([ZONE, `*.${ZONE}`], target)).toEqual(tunnelManualRecords(ZONE, target));
+  });
+
+  test("what an origin's failure says: the connector's 502, the edge's own 520 to 526 for an address", () => {
+    expect(edgeOrigin("502")).toBe("tunnel");
+    for (const code of ["520", "521", "522", "523", "524", "525", "526"]) expect(edgeOrigin(code)).toBe("address");
+    for (const code of ["200", "404", "500", "503", "527", "530", "unreachable: ENOTFOUND"]) expect(edgeOrigin(code)).toBeNull();
+  });
+
+  test("a name reaches the tunnel when the edge serves it and its root answers the connector's 502, before activation", () => {
+    const server = "203.0.113.10";
+    const reading = (fields: Partial<EdgeReading>): EdgeReading => ({ name: DOMAIN, here: false, edge: true, root: "502", ...fields });
+    expect(tunnelRouteProblem(reading({}), server)).toBeNull();
+    // A record from before the tunnel, DNS only, still pointing at the machine.
+    expect(tunnelRouteProblem(reading({ here: true, edge: false, root: null }), server)).toContain(`${DOMAIN} points at ${server}, a record from before the tunnel`);
+    // Not proxied by Cloudflare, or no edge certificate yet.
+    expect(tunnelRouteProblem(reading({ edge: false, root: null }), server)).toContain(`https://${DOMAIN}/cdn-cgi/trace answers no trace of Cloudflare's`);
+    // Proxied, but at an address: the edge's own 52x, never the tunnel's.
+    for (const root of ["521", "522", "523"]) {
+      expect(tunnelRouteProblem(reading({ root }), server)).toContain(`answers ${root}, Cloudflare's own answer for an origin it reaches by its address`);
+    }
+    // Anything else is not taken for an address: a host that answers is not caught.
+    for (const root of ["200", "403", "unreachable: timed out"]) expect(tunnelRouteProblem(reading({ root }), server)).toBeNull();
+  });
+
+  test("the files that carry a site's own domain are the connector's configuration and Caddy's options, as this release lays them", () => {
+    const caddy = readFileSync(join(REPO_ROOT, TUNNEL_KIT_FILES.caddy), "utf8");
+    expect(domainCarriers(ID, caddy)).toEqual([
+      { path: TUNNEL_CONFIG, content: tunnelConfig(ID) },
+      { path: CADDY_TUNNEL_FILE, content: caddy },
+    ]);
+    // The very files the tunnel's step lays and checks, upgrade's too.
+    const checked = tunnelConditions(files()).filter((condition) => condition.label === "tunnel-config" || condition.label === "tunnel-caddy");
+    expect(checked.map((condition) => condition.test.includes(TUNNEL_CONFIG) || condition.test.includes(CADDY_TUNNEL_FILE))).toEqual([true, true]);
+  });
+
+  /** A folder holding `name`, a stand-in for a command of the machine, first on the PATH. */
+  function standInCommand(name: string, script: string): { path: string; remove: () => void } {
+    const folder = mkdtempSync(join(tmpdir(), `stand-in-${name}-`));
+    writeFileSync(join(folder, name), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+    return { path: `${folder}:${process.env.PATH ?? ""}`, remove: () => rmSync(folder, { recursive: true, force: true }) };
+  }
+
+  test("the handshake is read on the loopback, verified, the name quoted, and tells Caddy's answer from a refusal", () => {
+    const command = caddyHandshakeCommand(DOMAIN);
+    expect(command).toContain(`--resolve '${DOMAIN}:443:127.0.0.1' 'https://${DOMAIN}/'`);
+    expect(command).not.toMatch(/ -k | --insecure/);
+    expect(caddyHandshakeCommand("a'b")).toContain(`'a'\\''b:443:127.0.0.1'`);
+    // Run for real against a curl that answers as Caddy would: a status, or
+    // curl's exit 35 and 000 for a handshake Caddy refuses.
+    for (const [script, expected] of [
+      ["printf 200", { kind: "answered", status: 200 }],
+      ["printf 502", { kind: "answered", status: 502 }],
+      ["printf 000; exit 35", { kind: "refused", exit: 35 }],
+      ["printf 000; exit 60", { kind: "refused", exit: 60 }],
+    ] as const) {
+      const curl = standInCommand("curl", script);
+      const run = Bun.spawnSync(["sh", "-c", command], { stdout: "pipe", env: { PATH: curl.path } });
+      curl.remove();
+      expect(readCaddyHandshake(run.stdout.toString())).toEqual(expected);
+    }
+    expect(readCaddyHandshake("")).toBeNull();
+    expect(readCaddyHandshake("Permission denied")).toBeNull();
+  });
+
+  test("Caddy's reason is the last error its TLS logged about the name, never an entry that says it went well", () => {
+    const entry = (fields: Record<string, unknown>) => JSON.stringify({ ts: 1792946441.06, identifier: DOMAIN, ...fields });
+    const failed = entry({
+      level: "error",
+      logger: "tls.obtain",
+      msg: "could not get certificate from issuer",
+      issuer: "acme-v02.api.letsencrypt.org-directory",
+      error: `[${DOMAIN}] solving challenges: presenting for challenge: could not find zone for domain "${DOMAIN}"`,
+    });
+    expect(readCaddyReason(failed)).toBe(`could not get certificate from issuer: [${DOMAIN}] solving challenges: presenting for challenge: could not find zone for domain "${DOMAIN}"`);
+    expect(readCaddyReason(entry({ level: "info", logger: "tls.obtain", msg: "certificate obtained successfully" }))).toBeNull();
+    expect(readCaddyReason(entry({ level: "error", logger: "tls.obtain" }))).toBeNull();
+    const long = readCaddyReason(entry({ level: "error", msg: "could not get certificate from issuer", error: "x".repeat(400) }))!;
+    expect(long.length).toBe(300);
+    expect(long.endsWith("...")).toBe(true);
+    expect(readCaddyReason("")).toBeNull();
+    expect(readCaddyReason("Oct 25 12:00:00 machine caddy[812]: not JSON")).toBeNull();
+
+    // The command, run against a journal that holds the name's success after
+    // its failure, another name's error, and an error of another logger:
+    // the failure alone comes back.
+    const command = caddyReasonCommand(DOMAIN);
+    expect(command).toContain(`grep -F -- '${DOMAIN}'`);
+    const journal = [
+      failed,
+      entry({ level: "info", logger: "tls.obtain", msg: "certificate obtained successfully" }),
+      entry({ level: "error", logger: "tls.obtain", msg: "could not get certificate from issuer", identifier: "other.example", error: "another name's" }).replaceAll(DOMAIN, "other.example"),
+      entry({ level: "error", logger: "http.log.error", msg: "dial tcp: connection refused" }),
+    ].join("\n");
+    const sudo = standInCommand("sudo", `cat <<'JOURNAL'\n${journal}\nJOURNAL`);
+    const run = Bun.spawnSync(["sh", "-c", command], { stdout: "pipe", env: { PATH: sudo.path } });
+    sudo.remove();
+    expect(readCaddyReason(run.stdout.toString().trim())).toBe(readCaddyReason(failed));
+  });
+});
+
 describe("the firewall behind a tunnel", () => {
   test("ssh alone is opened; the web's ports an earlier run opened close later, once the tunnel carries the visitors", () => {
     expect(firewallPorts(22, true)).toEqual([22]);
@@ -286,6 +437,50 @@ describe("the firewall behind a tunnel", () => {
     expect(webPortsRun(443)).toContain(`for port in 80; do ufw delete allow`);
   });
 });
+
+const CADDY = Bun.which("caddy");
+
+/** Whether the local Caddy reads `dns cloudflare`: a stock build does not, the machine's does. */
+const WITH_MODULE =
+  CADDY !== null &&
+  Bun.spawnSync([CADDY, "list-modules"], { stdout: "pipe", stderr: "pipe" })
+    .stdout.toString()
+    .split("\n")
+    .some((line) => line.trim() === "dns.providers.cloudflare");
+
+/** The DNS challenge, the same directive in the zone's policy and in the tunnel's issuer. */
+const DIRECTIVE = "dns cloudflare {env.CLOUDFLARE_API_TOKEN}";
+
+/**
+ * What stands for it in a Caddy without the Cloudflare module, as
+ * cli-tls-caddy.test.ts stands in for the zone's, and it has to keep the real
+ * directive's shape. Caddy builds the issuer a tls block's shortcuts imply,
+ * the zone's `dns` among them, on top of the global `cert_issuer acme`
+ * (implicitACMEIssuers in caddyconfig/httpcaddyfile/tlsapp.go, measured with
+ * 2.11.4): every field the block leaves empty comes from the global issuer.
+ * The real directive is the same in both places and overwrites itself, so
+ * the zone's issuer comes out as its own. The stand-in is the same in both
+ * places too, and merges into itself to nothing new: a file of trusted roots,
+ * `ca_root` in a tls block and `trusted_roots` in an issuer, which Caddy
+ * appends without duplicates. No `ca` nor `dir`, which a global issuer's
+ * would fill in the zone's, and no mark of the tunnel's own, which would
+ * reach the zone's issuer the same way: either would hide what the
+ * comparison of the zone's policy is there to see, anything the global
+ * issuer carries beyond the zone's directive.
+ */
+function standIn(text: string, which: "zone" | "tunnel", roots: string): string {
+  if (WITH_MODULE) return text;
+  expect(text.split(DIRECTIVE).length).toBe(2);
+  return text.replace(DIRECTIVE, which === "zone" ? `ca_root ${roots}` : `trusted_roots ${roots}`);
+}
+
+type Issuer = { module?: string; ca?: string; email?: string; trusted_roots_pem_files?: string[]; challenges?: { dns?: { provider?: { name?: string } } } };
+
+/** The DNS challenge through Cloudflare, or its stand-in, and nothing of another issuer's. */
+function isDnsIssuer(issuer: Issuer, roots: string): boolean {
+  if (issuer.module !== "acme" || issuer.ca !== undefined) return false;
+  return WITH_MODULE ? issuer.challenges?.dns?.provider?.name === "cloudflare" : JSON.stringify(issuer.trusted_roots_pem_files) === JSON.stringify([roots]);
+}
 
 describe("the kit's files", () => {
   const unit = readFileSync(join(REPO_ROOT, TUNNEL_KIT_FILES.unit), "utf8");
@@ -306,9 +501,20 @@ describe("the kit's files", () => {
     expect(unit).toContain(`${TUNNEL_METRICS}, which the monitor reads`);
   });
 
-  test("Caddy trusts ::1 alone, and that one header from it", () => {
+  test("Caddy trusts ::1 alone and that one header from it, and certifies what names no issuer through the DNS challenge", () => {
     const directives = caddy.split("\n").filter((line) => line.trim() !== "" && !line.trim().startsWith("#"));
-    expect(directives).toEqual(["servers {", `\ttrusted_proxies static ${TUNNEL_ORIGIN}/128`, "\tclient_ip_headers Cf-Connecting-Ip", "}"]);
+    expect(directives).toEqual([
+      "servers {",
+      `\ttrusted_proxies static ${TUNNEL_ORIGIN}/128`,
+      "\tclient_ip_headers Cf-Connecting-Ip",
+      "}",
+      "cert_issuer acme {",
+      `\t${DIRECTIVE}`,
+      "}",
+    ]);
+    // The zone's own directive, with the token setup laid for Caddy: no
+    // second secret on the machine.
+    expect(CLOUDFLARE_POLICY.directive).toEqual([DIRECTIVE]);
   });
 
   test("the Caddyfile imports the folder by glob in its global options, which a machine served directly leaves empty", () => {
@@ -318,12 +524,13 @@ describe("the kit's files", () => {
   });
 });
 
-const CADDY = Bun.which("caddy");
+const STOOD_IN = WITH_MODULE ? "" : " (without the Cloudflare module: the directive stood in for)";
 
-describe.skipIf(CADDY === null)("the tunnel's options, in Caddy", () => {
+describe.skipIf(CADDY === null)(`the tunnel's options, in Caddy${STOOD_IN}`, () => {
   let folder = "";
   beforeAll(() => {
     folder = mkdtempSync(join(tmpdir(), "tunnel-caddy-"));
+    writeFileSync(join(folder, "roots.pem"), "");
   });
   afterAll(() => rmSync(folder, { recursive: true, force: true }));
 
@@ -333,7 +540,7 @@ describe.skipIf(CADDY === null)("the tunnel's options, in Caddy", () => {
     const global = caddyfile.slice(caddyfile.indexOf("\n{\n") + 1, caddyfile.indexOf("\n}\n") + 3).replaceAll("/etc/caddy/", `${folder}/`);
     rmSync(join(folder, "global.d"), { recursive: true, force: true });
     mkdirSync(join(folder, "global.d"));
-    if (withTunnel) writeFileSync(join(folder, "global.d", "tunnel.caddy"), readFileSync(join(REPO_ROOT, TUNNEL_KIT_FILES.caddy), "utf8"));
+    if (withTunnel) writeFileSync(join(folder, "global.d", "tunnel.caddy"), standIn(readFileSync(join(REPO_ROOT, TUNNEL_KIT_FILES.caddy), "utf8"), "tunnel", join(folder, "roots.pem")));
     writeFileSync(join(folder, "Caddyfile"), `${global.replace("{$SITESOLIDE_ACME_EMAIL}", "ops@test-zone.invalid")}\nhttp://site.test-zone.invalid {\n\trespond ok\n}\n`);
     const run = Bun.spawnSync([CADDY!, "adapt", "--config", join(folder, "Caddyfile")], { stdout: "pipe", stderr: "pipe" });
     expect({ code: run.exitCode, said: run.exitCode === 0 ? "" : run.stderr.toString() }).toEqual({ code: 0, said: "" });
@@ -351,6 +558,114 @@ describe.skipIf(CADDY === null)("the tunnel's options, in Caddy", () => {
     for (const server of servers(adapt(false))) {
       expect(server.trusted_proxies).toBeUndefined();
       expect(server.client_ip_headers).toBeUndefined();
+    }
+  });
+});
+
+/**
+ * The tunnel's issuer in the machine's whole Caddyfile: the zone's policy
+ * laid as setup lays Cloudflare's, an app's block with its own domain, the
+ * customer domains' table. `caddy adapt` only, on the workstation: no server
+ * starts. Never `caddy stop` nor `caddy start`, see CLAUDE.md.
+ */
+describe.skipIf(CADDY === null)(`the tunnel's certificate issuer, in Caddy${STOOD_IN}`, () => {
+  type Policy = { subjects?: string[]; on_demand?: boolean; issuers?: Issuer[] };
+
+  const APP: Manifest = { slug: "kanban", port: 3040, publicDir: "public", start: "bun run server.ts", domain: { name: "kanban.example", active: true } };
+
+  let folder = "";
+  let etc = "";
+  let roots = "";
+  const localize = (text: string): string => text.replaceAll("/etc/caddy/", `${etc}/`);
+
+  beforeAll(() => {
+    folder = mkdtempSync(join(tmpdir(), "tunnel-issuer-"));
+    etc = join(folder, "etc");
+    roots = join(folder, "roots.pem");
+    writeFileSync(roots, "");
+    mkdirSync(join(etc, "sites"), { recursive: true });
+    mkdirSync(join(etc, "locks"));
+    mkdirSync(join(etc, "global.d"));
+    writeFileSync(join(etc, "sites", `${APP.slug}.caddy`), localize(generateFragment(APP)!));
+    writeFileSync(join(etc, "domaines.map"), "\tsample-agency.example agency\n");
+    writeFileSync(join(etc, "tls-zone.caddy"), standIn(tlsZoneContent(CLOUDFLARE_POLICY), "zone", roots));
+    writeFileSync(join(folder, "Caddyfile"), localize(readFileSync(join(REPO_ROOT, "infra", "caddy", "Caddyfile"), "utf8")));
+  });
+  afterAll(() => rmSync(folder, { recursive: true, force: true }));
+
+  /**
+   * Every TLS policy Caddy adapts the Caddyfile to, with the tunnel's file in
+   * global.d or without it; `extra`, a line added to its issuer after the
+   * directive.
+   */
+  function policies(withTunnel: boolean, extra?: string): Policy[] {
+    const file = join(etc, "global.d", "tunnel.caddy");
+    rmSync(file, { force: true });
+    if (withTunnel) {
+      const caddy = standIn(readFileSync(join(REPO_ROOT, TUNNEL_KIT_FILES.caddy), "utf8"), "tunnel", roots);
+      writeFileSync(file, extra === undefined ? caddy : caddy.replace("cert_issuer acme {\n", `cert_issuer acme {\n\t${extra}\n`));
+    }
+    const run = Bun.spawnSync([CADDY!, "adapt", "--config", join(folder, "Caddyfile"), "--adapter", "caddyfile"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: folder,
+        XDG_DATA_HOME: join(folder, "data"),
+        XDG_CONFIG_HOME: join(folder, "config"),
+        SITESOLIDE_ZONE: ZONE,
+        SITESOLIDE_ACME_EMAIL: `ops@${ZONE}`,
+        SITESOLIDE_SLUG: "{labels.2}",
+      },
+    });
+    expect({ code: run.exitCode, said: run.exitCode === 0 ? "" : run.stderr.toString() }).toEqual({ code: 0, said: "" });
+    const json = JSON.parse(run.stdout.toString()) as { apps?: { tls?: { automation?: { policies?: Policy[] } } } };
+    return json.apps?.tls?.automation?.policies ?? [];
+  }
+
+  const zoneOf = (all: Policy[]) => all.find((one) => one.subjects?.includes(`*.${ZONE}`));
+  const onDemandOf = (all: Policy[]) => all.filter((one) => one.on_demand === true);
+
+  test("without the file, the customer domains keep Caddy's defaults, none of them the DNS challenge", () => {
+    const onDemand = onDemandOf(policies(false));
+    expect(onDemand).toHaveLength(1);
+    expect(onDemand[0]!.subjects).toBeUndefined();
+    expect((onDemand[0]!.issuers ?? []).some((issuer) => isDnsIssuer(issuer, roots))).toBe(false);
+  });
+
+  test("with it, the on-demand policy, every customer domain's, takes the tunnel's issuer alone; the zone's comes out as it was", () => {
+    const without = policies(false);
+    const all = policies(true);
+    expect(all).toHaveLength(without.length);
+
+    // The one policy the nameless block of customer domains and the app's own
+    // domain share: the global issuer and no other, with the contact address
+    // the global `email` gives every ACME issuer.
+    const onDemand = onDemandOf(all);
+    expect(onDemand).toHaveLength(1);
+    expect(onDemand[0]!.subjects).toBeUndefined();
+    expect(onDemand[0]!.issuers).toHaveLength(1);
+    expect(isDnsIssuer(onDemand[0]!.issuers![0]!, roots)).toBe(true);
+    expect(onDemand[0]!.issuers![0]!.email).toBe(`ops@${ZONE}`);
+
+    // The zone's, the app's preview among its names, exactly as without the
+    // file. Caddy builds its issuer on top of the global one, and the global
+    // one holds nothing the zone's directive does not: see the next test for
+    // what the comparison sees otherwise.
+    const zone = zoneOf(all);
+    expect(zone?.subjects).toEqual(expect.arrayContaining([ZONE, `www.${ZONE}`, `*.${ZONE}`, `${APP.slug}.${ZONE}`]));
+    expect(zone).toEqual(zoneOf(without));
+    expect(zone?.on_demand).toBeUndefined();
+    expect(zone?.issuers).toHaveLength(1);
+    expect(isDnsIssuer(zone!.issuers![0]!, roots)).toBe(true);
+  });
+
+  test("anything the global issuer carries beyond the zone's directive reaches the zone's policy, which the comparison sees", () => {
+    const without = zoneOf(policies(false));
+    // A timeout, a directory, a challenge turned off: each would reach the
+    // wildcard and every preview, and each fails the comparison above.
+    for (const extra of ["timeout 10s", "dir https://leak.stand-in.invalid/directory", "disable_tlsalpn_challenge"]) {
+      expect(zoneOf(policies(true, extra))).not.toEqual(without);
     }
   });
 });

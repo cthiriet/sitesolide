@@ -328,7 +328,17 @@ export async function deleteRecord(api: Api, zoneId: string, id: string): Promis
 
 /** The records to create by hand for a zone behind a tunnel, `--skip-dns`'s list then. */
 export function tunnelManualRecords(zone: string, target: string): string[] {
-  return [zone, `*.${zone}`].map((name) => `${name.padEnd(zone.length + 3)} CNAME ${target}   proxied, TTL auto`);
+  return tunnelRecordLines([zone, `*.${zone}`], target);
+}
+
+/**
+ * Proxied CNAMEs to the tunnel, one line each, their names in a column: the
+ * zone's under `--skip-dns`, and the ones a site's own domain needs, which
+ * `sitesolide domain --activate` names behind a tunnel.
+ */
+export function tunnelRecordLines(names: readonly string[], target: string): string[] {
+  const width = Math.max(...names.map((name) => name.length)) + 1;
+  return names.map((name) => `${name.padEnd(width)} CNAME ${target}   proxied, TTL auto`);
 }
 
 /** The records to create by hand, `--skip-dns`'s list. */

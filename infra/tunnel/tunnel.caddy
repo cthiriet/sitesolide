@@ -20,3 +20,29 @@ servers {
 	trusted_proxies static ::1/128
 	client_ip_headers Cf-Connecting-Ip
 }
+
+# A site's own domain, whose zone is at Cloudflare in the tunnel's account,
+# reaches Caddy through the tunnel too, and Let's Encrypt cannot reach the
+# machine to validate it the way a machine served directly does, over HTTP-01
+# or TLS-ALPN-01. The DNS-01 challenge needs no port, and the machine's own
+# Cloudflare token, the zone's, can answer it for that domain once its owner
+# allows the token on the domain's zone as well. A global issuer is the
+# issuer of every policy that names none of its own: the on-demand ones, the
+# Caddyfile's block of customer domains and every app's block for its domain.
+# The ask endpoint still decides which names get a certificate.
+#
+# NOTHING BUT THE ZONE'S OWN DIRECTIVE GOES IN IT. Caddy builds the issuer the
+# zone's policy implies, (tls-zone)'s `dns cloudflare`, on top of this one,
+# every field the zone's block leaves empty taken from here: the same
+# directive overwrites itself and the zone's issuer comes out as its own, but
+# a `dir`, a `ca`, `resolvers` or a timeout added here would reach the
+# wildcard and every preview too.
+#
+# Let's Encrypt rather than Caddy's internal authority, which the edge would
+# accept as well, since the connector verifies nothing: the monitor and the
+# gatekeeper verify the certificate on the loopback and warn fourteen days
+# before it expires, and an internal one lasting twelve hours would keep them
+# warning. A real certificate leaves every observer as it is.
+cert_issuer acme {
+	dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+}

@@ -316,7 +316,11 @@ silently get its own certificate instead, so they all import the same snippet.
 Caddy's default challenges, HTTP-01 or TLS-ALPN-01, one picked at random and
 the other tried when it fails: ports 80 and 443 both have to reach the
 machine. The token on the machine cannot edit someone else's zone, and the
-customer usually keeps their DNS elsewhere. An app's block claims every name
+customer usually keeps their DNS elsewhere. A machine behind a Cloudflare
+Tunnel has neither port open: there the domain's zone is at Cloudflare in the
+tunnel's account, and its certificate comes over DNS-01 with the machine's
+own token, which its owner allows on that zone too
+([tunnel.md](tunnel.md#a-sites-own-domain)). An app's block claims every name
 the table carries for its domain, the `www` of a second level domain and the
 aliases, and sends them to the domain itself: a name no block claimed fell
 into the nameless block of static files, which serves `public/` and never

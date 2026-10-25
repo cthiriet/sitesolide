@@ -15,7 +15,9 @@ visitor --HTTPS--> Cloudflare's edge ==tunnel, opened from the machine==> cloudf
 
 `sitesolide setup --tunnel` installs a machine that way. Everything else is
 the same as on a machine with a public address: Caddy, its wildcard
-certificate, the dashboard, the portal, every deploy.
+certificate, the dashboard, the portal, every deploy, and a site's own
+domain, when its zone is at Cloudflare in the tunnel's account: see
+[A site's own domain](#a-sites-own-domain).
 
 ## What you need
 
@@ -47,8 +49,9 @@ no DNS, no other tunnel, no account.
 
 setup does not create the tunnel through Cloudflare's API: that takes a token
 allowed to make tunnels for the whole account, and the zone's token goes on
-the machine, where Caddy renews the wildcard with it, so it must stay the
-zone's alone.
+the machine, where Caddy renews the wildcard with it, so it must reach the
+zones the machine serves and nothing else: the zone's, and those of the
+sites' own domains, see [A site's own domain](#a-sites-own-domain).
 
 ## Installing the machine
 
@@ -100,9 +103,15 @@ with no capability, the system read-only, the projects' secrets, Caddy's
 files and the steward's state out of its sight. systemd hands it a copy of the
 credentials. It may not reach the private ranges, `192.168.0.0/16` among
 them: compromised, it reaches no other machine of the network it sits on. Its
-configuration sends the zone and its wildcard to Caddy on `[::1]:443`, the
+configuration sends every name to Caddy on `[::1]:443`, in one rule, the
 name asked as SNI so that Caddy picks the site and its certificate as for any
-visitor, and answers 404 to any other name.
+visitor. The names are chosen before they reach it: Cloudflare routes into
+the tunnel only those whose records, in the tunnel's own account, point at
+it. Caddy then decides by host what it serves, as on a machine served
+directly, where any name a client sends reaches 443: a name it neither
+covers with the zone nor finds in the domain table gets no certificate, and
+the edge answers 502. No list of names lives in the connector's
+configuration, so activating a site's own domain restarts nothing.
 
 **The visitor's address.** Every request reaches Caddy from the connector,
 over the loopback, and Cloudflare's edge sets the visitor's address in
@@ -140,10 +149,24 @@ the tunnel until it is turned back on, measured on the test machine.
 
 **The certificates.** Caddy obtains the wildcard through the DNS-01
 challenge, which needs no port open, exactly as on a machine with a public
-address. The connector does not verify Caddy's certificate on the loopback,
-where only Caddy listens on 443: verifying would add nothing a visitor sees,
-and would turn a renewal that failed into every site down at the
-certificate's expiry, which the monitor warns of fourteen days ahead.
+address. A site's own domain, which a machine served directly certifies over
+HTTP-01 or TLS-ALPN-01, goes through the DNS-01 challenge too:
+`tunnel.caddy` sets a global issuer, Let's Encrypt with Cloudflare's DNS
+module and the machine's own token, which becomes the issuer of every policy
+that names none, the on-demand one of the customer domains and of each app's
+domain. The `ask` endpoint still decides which names get one. Caddy builds
+the zone's issuer on top of that global one, every field the zone's policy
+leaves empty taken from it: the global issuer holds the zone's own
+directive and nothing else, so that the zone's comes out as it was, and a
+directory, resolvers or a timeout added there would reach the wildcard and
+every preview too. Let's Encrypt rather than Caddy's internal
+authority, which the edge would accept as well: the monitor and the
+gatekeeper verify the certificate on the loopback and warn fourteen days
+before it expires, and an internal certificate lasts twelve hours. The
+connector does not verify Caddy's certificate on the loopback, where only
+Caddy listens on 443: verifying would add nothing a visitor sees, and would
+turn a renewal that failed into every site down at the certificate's expiry,
+which the monitor warns of fourteen days ahead.
 
 **The monitor** checks the connector besides everything else: its unit, and
 cloudflared's `/ready` on `127.0.0.1:20240`, which answers 200 once a
@@ -163,15 +186,88 @@ state. On a new machine, lay the copy's `tunnel.json` at
 `/etc/cloudflared/<id>.json`, root's in `0600`, then run setup with `--tunnel
 <id>`.
 
+## A site's own domain
+
+A site's own domain reaches a machine behind a tunnel when its zone is at
+Cloudflare **in the tunnel's own account**: Cloudflare routes into a tunnel
+the names whose records point at it in that account alone, and answers its
+error 1014 to a name of another account pointed there. The domain's owner
+does two things in Cloudflare's dashboard, then activates the domain as on any
+machine:
+
+1. **The records.** A proxied CNAME to `<id>.cfargotunnel.com` for the domain,
+   and one for each name the domain table adds, its `www` when it is a second
+   level domain and its aliases. `sitesolide domain --activate` lists them,
+   the tunnel's id written in.
+2. **The token.** Caddy obtains the domain's certificate through the DNS-01
+   challenge with the machine's own Cloudflare token, the one setup laid in
+   `/etc/caddy/cloudflare.env`: it needs `Zone / Zone / Read` and
+   `Zone / DNS / Edit` on the domain's zone too, added to the token at
+   [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens).
+   Editing a token's permissions keeps its value: nothing changes on the
+   machine.
+
+```bash
+sitesolide domain --activate
+```
+
+Behind a tunnel it first reads the machine's tunnel files, the connector's
+configuration and Caddy's options: those of 0.10.0 would let the switch
+succeed and answer the domain 404, so it refuses until `sitesolide upgrade`
+has laid this release's, `--force` or not. Then it checks every name on
+Cloudflare's edge rather than in the DNS:
+
+- `https://<name>/cdn-cgi/trace` must answer Cloudflare's trace, which the
+  edge serves for any proxied name before the domain is activated;
+- no name may still point at the machine's own address, a record from before
+  the tunnel left DNS only;
+- the name's root must not answer 520 to 526, the edge's own answers when it
+  fails to reach an origin by its address: a record left proxied at an
+  address resolves to Cloudflare and answers its trace like the others, but
+  a name routed into the tunnel gets the connector's 502 before its
+  activation, Caddy refusing its handshake. A proxied record pointing at a
+  host that answers is not caught: its root answers that host's status.
+
+A name that fails is refused with the records to create; `--force` goes
+ahead anyway, as it does past the DNS check of a machine served directly.
+Then it says what the token needs and the records, and switches the domain
+the usual way: manifest, machine, table, no restart of the connector.
+
+The visitor sees Cloudflare's own certificate for the zone, from its edge,
+which Cloudflare issues for a zone's name and its first level below it; a
+deeper alias needs a certificate of Cloudflare's own first. Behind the edge,
+Caddy holds a certificate from Let's Encrypt, obtained on the first request
+through the tunnel: the connector waits ten seconds for Caddy, the challenge
+may take longer, and the first answers may be 502 until it is done, which
+`domain --activate` waits for, ninety seconds at most. `sitesolide domain`
+then says whether Cloudflare's edge serves the name, and why an origin's
+failure answers what it answers:
+
+- **520 to 526**: the edge reached for an address, never the tunnel's; the
+  name's record most likely points at an address, proxied, and the CNAME it
+  should be is printed;
+- **502, and Caddy completes a verified handshake for the name** on the
+  machine's loopback: Caddy holds the certificate, and the 502 comes from
+  behind it, the app or its service, `sitesolide logs`;
+- **502, and no handshake**: most likely no certificate, the token lacking
+  the zone's permissions, with the last error Caddy's TLS logged about the
+  name in its journal.
+
+Deactivating the domain says what the token may lose: once no active domain
+uses a zone, `Zone / Zone / Read` and `Zone / DNS / Edit` on it can be taken
+off the machine's token, which keeps its value.
+
 ## What a tunnel does not carry
 
-- **A customer's own domain.** Cloudflare routes into a tunnel the names of
-  the account's own zones alone, and Let's Encrypt cannot reach the machine
-  to certify another: `sitesolide domain --activate` refuses there. A site
-  stays at `https://<slug>.<zone>`.
-- **`--dns manual`, or a zone at another provider**: refused, for the same
-  reason.
-- **The wizard** offers no tunnel yet: the command above does it.
+- **A domain whose zone is elsewhere**, at another DNS provider or in another
+  Cloudflare account: Cloudflare routes nothing of it into the tunnel, and
+  Let's Encrypt cannot reach the machine to certify it any other way. Its
+  trace answers all the same when another account proxies it, so
+  `domain --activate` cannot tell that case from the right one: the visitor
+  gets Cloudflare's error 1014. A site stays at `https://<slug>.<zone>` then.
+- **`--dns manual`, or a zone at another provider**, for the machine's own
+  zone: refused, for the same reason.
+- **The wizard** offers no tunnel yet: `sitesolide setup --tunnel` does it.
 
 Visitors' requests go through Cloudflare, which decrypts them at its edge.
 That is what a tunnel is; a machine with a public address serves them without
@@ -293,6 +389,16 @@ sudo userdel sitesolide-tunnel
 
 Then, from the workstation, `bin/deploy-loopback.sh close` lays the rule
 again without the connector's lines.
+
+A site's own domain served through the tunnel moves the same way, before the
+connector goes: its records pointed at the machine, DNS only, as a machine
+served directly needs them. Its certificate stays valid, and Caddy renews it
+over HTTP-01 or TLS-ALPN-01 once `tunnel.caddy` is gone. The machine's token
+then needs no rights on the domains' zones, a machine served directly
+certifying customer domains without their DNS: take `Zone / Zone / Read` and
+`Zone / DNS / Edit` on each of them off it at
+[dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens),
+which keeps its value, leaving the zone's own.
 
 Until the unit file is gone, `sitesolide upgrade` takes the machine for one
 behind a tunnel, and refuses it once the configuration names none.

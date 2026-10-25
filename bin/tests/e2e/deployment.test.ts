@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateFragment, HEADLESS_ANSWER } from "../../cli/fragment";
+import { CADDY_TUNNEL_FILE, TUNNEL_CONFIG, TUNNEL_KIT_FILES, tunnelConfig as connectorConfig } from "../../cli/tunnel";
 import { readManifest } from "../../cli/manifest";
 import { generateUnits, unitFileName } from "../../cli/unit";
 import { SWITCHES } from "./fake-ssh";
@@ -299,6 +300,152 @@ describe("the site's own domain", () => {
     expect(r.code).toBe(0);
     expect(r.output).toContain("already inactive");
     expect(r.all).not.toContain("generate-domains.sh");
+  });
+});
+
+describe("the site's own domain behind a Cloudflare Tunnel", () => {
+  /**
+   * A machine served through a tunnel takes a site's own domain whose zone is
+   * at Cloudflare in the tunnel's account: the check is then Cloudflare's
+   * edge, which `sample-domain.test` is never served by, a reserved name that
+   * resolves nowhere, as the DNS check is tried above with it. The
+   * configuration names the tunnel, as setup --tunnel writes it, and the
+   * simulated machine carries the tunnel's two files of this release unless
+   * the test lays others.
+   */
+  const TUNNEL = "6f1c2b8e-1d3a-4c5b-9e7f-0a1b2c3d4e5f";
+  const TARGET = `${TUNNEL}.cfargotunnel.com`;
+  const NAMES = ["sample-domain.test", "www.sample-domain.test"];
+  const CURRENT_CADDY = readFileSync(join(REPO, TUNNEL_KIT_FILES.caddy), "utf8");
+
+  function tunnelConfig(): Record<string, string> {
+    const folder = mkdtempSync(join(tmpdir(), "own-domain-tunnel-"));
+    writeFileSync(join(folder, "config.json"), JSON.stringify({ zone: "test-zone.invalid", email: "sample@test-zone.invalid", tunnel: TUNNEL }));
+    return { SITESOLIDE_CONFIG_DIR: folder };
+  }
+
+  /** A machine behind the tunnel, its connector's configuration and Caddy's options as given. */
+  function tunnelVm(files: { config?: string; caddy?: string } = {}) {
+    const vm = createFakeVm();
+    vm.writeFile(TUNNEL_CONFIG, files.config ?? connectorConfig(TUNNEL));
+    vm.writeFile(CADDY_TUNNEL_FILE, files.caddy ?? CURRENT_CADDY);
+    return vm;
+  }
+
+  test("a machine whose tunnel files are 0.10.0's is refused before anything, --force or not", async () => {
+    // 0.10.0's connector, as it laid it: the zone's two rules, 404 for any
+    // other name; and Caddy's options without the issuer that certifies a
+    // site's own domain.
+    const origin = ["    service: https://[::1]:443", "    originRequest:", "      matchSNItoHost: true", "      noTLSVerify: true"];
+    const old = [
+      "# Laid by sitesolide setup (bin/cli/tunnel.ts): every name of the zone goes to",
+      "# Caddy on the loopback, any other answers 404. See docs/tunnel.md.",
+      `tunnel: ${TUNNEL}`,
+      "metrics: 127.0.0.1:20240",
+      "no-autoupdate: true",
+      "ingress:",
+      "  - hostname: test-zone.invalid",
+      ...origin,
+      '  - hostname: "*.test-zone.invalid"',
+      ...origin,
+      "  - service: http_status:404",
+      "",
+    ].join("\n");
+    const withoutIssuer = CURRENT_CADDY.slice(0, CURRENT_CADDY.indexOf("cert_issuer"));
+    for (const [files, stale] of [
+      [{ config: old }, [TUNNEL_CONFIG]],
+      [{ caddy: withoutIssuer }, [CADDY_TUNNEL_FILE]],
+    ] as const) {
+      const vm = tunnelVm(files);
+      const r = await run("projects/own-domain", ["domain", "--activate", "--force", "--dry-run"], { vm, env: tunnelConfig() });
+      expect(r.code).toBe(1);
+      expect(r.error).toContain("the machine's tunnel files are not this release's");
+      for (const path of stale) expect(r.error).toContain(`${path} is not the one this release lays`);
+      expect(r.error).toContain("sitesolide upgrade");
+      // Read in the dry run, before the lock, the edge or any write.
+      expect(r.all).not.toContain("take the Caddy lock");
+      expect(r.all).not.toContain("Cloudflare's edge");
+      expect(r.all).not.toContain("domain.active = true");
+      expect(r.all).not.toContain("generate-domains.sh");
+      rmSync(vm.root, { recursive: true, force: true });
+    }
+  });
+
+  test("activating refuses while Cloudflare's edge does not serve every name the table adds, and names the records", async () => {
+    const vm = tunnelVm();
+    const r = await run("projects/own-domain", ["domain", "--activate", "--dry-run"], { vm, env: tunnelConfig() });
+    expect(r.code).toBe(1);
+    expect(r.error).toContain(`not served by Cloudflare's edge through the tunnel: ${NAMES.join(", ")}`);
+    // The records to create, proxied CNAMEs to the tunnel, one per name, in
+    // the format setup prints the zone's under --skip-dns.
+    for (const name of NAMES) expect(r.error).toMatch(new RegExp(`\\n {5}${name.replaceAll(".", "\\.")} +CNAME ${TARGET}   proxied, TTL auto\\n`));
+    expect(r.error).toContain("in a zone of the tunnel's own account");
+    // Neither the DNS check of a machine served directly, nor the refusal of 0.10.0.
+    expect(r.all).not.toContain("does not resolve");
+    expect(r.all).not.toContain("cannot be served");
+    expect(r.all).not.toContain("domain.active = true");
+    expect(r.all).not.toContain("generate-domains.sh");
+    rmSync(vm.root, { recursive: true, force: true });
+  });
+
+  test("--force goes ahead, saying what the token needs and the records, in the order manifest, VM, table", async () => {
+    const vm = tunnelVm();
+    const before = readFileSync(join(TESTS_ROOT, "projects/own-domain/sitesolide.json"), "utf8");
+    const r = await run("projects/own-domain", ["domain", "--activate", "--force", "--dry-run"], { vm, env: tunnelConfig() });
+    expect(r.code).toBe(0);
+    expect(r.output).toContain(`--force: ${NAMES.join(", ")} not served by Cloudflare's edge through the tunnel, switching anyway`);
+
+    const token = r.output.indexOf("Zone / Zone / Read and Zone / DNS / Edit on the domain's zone");
+    const records = r.output.indexOf(`CNAME ${TARGET}   proxied, TTL auto`);
+    const local = r.output.indexOf("domain.active = true");
+    const machine = r.output.indexOf("write /srv/sites/sample-domain/sitesolide.json");
+    const table = r.output.indexOf("generate-domains.sh");
+    expect(token).toBeGreaterThan(-1);
+    expect(records).toBeGreaterThan(token);
+    expect(local).toBeGreaterThan(records);
+    expect(machine).toBeGreaterThan(local);
+    expect(table).toBeGreaterThan(machine);
+    expect(readFileSync(join(TESTS_ROOT, "projects/own-domain/sitesolide.json"), "utf8")).toBe(before);
+    rmSync(vm.root, { recursive: true, force: true });
+  });
+
+  test("under --json, the records come with the result", async () => {
+    const vm = tunnelVm();
+    const r = await run("projects/own-domain", ["domain", "--activate", "--force", "--dry-run", "--json"], { vm, env: tunnelConfig() });
+    expect(r.code).toBe(0);
+    const result = r.output
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+      .map((line) => JSON.parse(line) as { type: string; tunnelRecords?: unknown })
+      .find((event) => event.type === "result");
+    expect(result?.tunnelRecords).toEqual(NAMES.map((name) => ({ name, type: "CNAME", content: TARGET, proxied: true })));
+    rmSync(vm.root, { recursive: true, force: true });
+  });
+
+  test("deactivating works as on a machine served directly, and says the token's permissions on the zone may go", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "own-domain-active-"));
+    cpSync(join(TESTS_ROOT, "projects/own-domain"), folder, { recursive: true });
+    const path = join(folder, "sitesolide.json");
+    writeFileSync(path, readFileSync(path, "utf8").replace('"active": false', '"active": true'));
+    const r = await run(folder, ["domain", "--deactivate", "--dry-run"], { env: tunnelConfig() });
+    expect(r.code).toBe(0);
+    expect(r.output.indexOf("generate-domains.sh")).toBeGreaterThan(r.output.indexOf("domain.active = false"));
+    expect(r.all).not.toContain("Cloudflare's edge");
+    expect(r.all).not.toContain("tunnel files");
+    expect(r.output).toContain("Zone / Zone / Read and Zone / DNS / Edit on it can be taken off the machine's");
+    expect(r.output.indexOf("can be taken off")).toBeGreaterThan(r.output.indexOf("generate-domains.sh"));
+    rmSync(folder, { recursive: true, force: true });
+  });
+
+  test("on a machine served directly, deactivating says nothing of a token", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "own-domain-active-"));
+    cpSync(join(TESTS_ROOT, "projects/own-domain"), folder, { recursive: true });
+    const path = join(folder, "sitesolide.json");
+    writeFileSync(path, readFileSync(path, "utf8").replace('"active": false', '"active": true'));
+    const r = await run(folder, ["domain", "--deactivate", "--dry-run"]);
+    expect(r.code).toBe(0);
+    expect(r.all).not.toContain("token");
+    rmSync(folder, { recursive: true, force: true });
   });
 });
 

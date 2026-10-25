@@ -1,7 +1,7 @@
 # The zone's Cloudflare Tunnel: Cloudflare's edge hands every request for the
-# zone and its wildcard to this connector, which hands it to Caddy on the
-# loopback. A machine with no public address, behind a NAT at home, serves
-# through it. See docs/tunnel.md.
+# zone, its wildcard and the sites' own domains routed into the tunnel to this
+# connector, which hands it to Caddy on the loopback. A machine with no public
+# address, behind a NAT at home, serves through it. See docs/tunnel.md.
 #
 # Its configuration, /etc/cloudflared/config.yml, is laid by `sitesolide setup
 # --tunnel` (bin/cli/tunnel.ts). Its credentials, /etc/cloudflared/tunnel.json,

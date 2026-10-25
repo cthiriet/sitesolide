@@ -138,7 +138,8 @@ The repository's `examples/static-site`, `examples/bun-app` and
 `https://<slug>.example.com`.
 
 To put it on its own domain, add it to the manifest, point its DNS at the
-machine, and:
+machine (behind a Cloudflare Tunnel, a proxied CNAME to the tunnel instead,
+see [tunnel.md](tunnel.md#a-sites-own-domain)), and:
 
 ```bash
 sitesolide domain --activate

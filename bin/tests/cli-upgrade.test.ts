@@ -497,7 +497,7 @@ describe("--dry-run", () => {
 
 describe("a machine served through a Cloudflare Tunnel", () => {
   const TUNNEL = "6f1c2b8e-1d3a-4c5b-9e7f-0a1b2c3d4e5f";
-  const labels = tunnelConditions({ zone: ZONE, id: TUNNEL, unit: "", caddy: "" }).map((condition) => condition.label);
+  const labels = tunnelConditions({ id: TUNNEL, unit: "", caddy: "" }).map((condition) => condition.label);
   const tunnelWorld = (options: { stale?: string[]; config?: Record<string, string> } = {}) => {
     const w = world({ config: options.config ?? { server: SERVER, zone: ZONE, email: EMAIL, tunnel: TUNNEL } });
     w.machine.install(["tunnel", ...labels]);

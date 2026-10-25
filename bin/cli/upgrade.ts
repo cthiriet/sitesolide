@@ -317,7 +317,7 @@ function tunnelFiles(context: UpgradeContext): TunnelFiles {
   const id = context.config.tunnel;
   if (id === undefined) throw new Error("no tunnel in the configuration");
   const read = (path: string) => readFileSync(join(context.deps.kitRoot, path), "utf8");
-  return { zone: context.config.zone, id, unit: read(TUNNEL_KIT_FILES.unit), caddy: read(TUNNEL_KIT_FILES.caddy) };
+  return { id, unit: read(TUNNEL_KIT_FILES.unit), caddy: read(TUNNEL_KIT_FILES.caddy) };
 }
 
 /** A script of the kit's bin/, run with upgrade's environment; what it printed quoted when it fails. */

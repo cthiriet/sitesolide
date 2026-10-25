@@ -120,6 +120,55 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## A site's own domain behind a Cloudflare Tunnel
+
+**What the release brings.** A machine served through a Cloudflare Tunnel
+serves a site's own domain whose zone is at Cloudflare in the tunnel's own
+account. `sitesolide domain --activate` no longer refuses there: it checks
+that Cloudflare's edge serves every name the domain table adds, and lists the
+proxied CNAMEs to the tunnel when one is missing. Caddy certifies the domain
+through the DNS-01 challenge with the machine's own Cloudflare token, Let's
+Encrypt behind Cloudflare's own certificate at the edge. The whole of it is in
+[tunnel.md](tunnel.md#a-sites-own-domain).
+
+**What `sitesolide upgrade` brings to a machine behind a tunnel**: the
+tunnel's component, out of date, laid again by setup's own run.
+
+- **The connector's configuration**, `/etc/cloudflared/config.yml`: one rule
+  that hands every name Cloudflare routes into the tunnel to Caddy, in place
+  of the zone's two and the 404 for any other name, and its unit, whose
+  comment says so. The connector is restarted once: the sites answer 502 for
+  the few seconds the edge takes to see it connected again.
+- **Caddy's options for the tunnel**, `/etc/caddy/global.d/tunnel.caddy`,
+  which gain a global issuer: Let's Encrypt through Cloudflare's DNS module,
+  with the token already in `/etc/caddy/cloudflare.env`. Caddy is reloaded
+  once. It is the issuer of the policies that name none, those of the
+  customer domains, of which such a machine had none; the zone's issuer,
+  which Caddy builds on top of it, comes out as it was, the global one
+  holding the zone's own directive and nothing else, and its wildcard is
+  not obtained again.
+
+Nothing of this on a machine served directly: the tunnel's component is left
+out of its report, and its Caddyfile is not touched.
+
+**What the owner does for a domain**, in Cloudflare's dashboard: the proxied
+CNAMEs `sitesolide domain --activate` lists, in the domain's zone of the
+tunnel's account, and `Zone / Zone / Read` and `Zone / DNS / Edit` on that
+zone added to the machine's token, which keeps its value; then
+`sitesolide domain --activate`, from the site's folder, once `sitesolide
+upgrade` has run: on a machine still holding 0.10.0's tunnel files it
+refuses, since the domain would get the connector's 404.
+
+**Going back.** A domain activated behind the tunnel is deactivated first,
+`sitesolide domain --deactivate` with this release: the previous one's
+connector answers 404 for it, and its Caddy would renew its certificate over
+challenges that cannot reach the machine. The machine's token then needs
+nothing on the domain's zone: take `Zone / Zone / Read` and `Zone / DNS /
+Edit` on it off the token at dash.cloudflare.com/profile/api-tokens, which
+keeps its value. Then `sitesolide upgrade` with the previous binary lays
+back its connector's configuration and Caddy's options, restarting the one
+and reloading the other once.
+
 ## A machine behind a Cloudflare Tunnel
 
 **What the release brings.** `sitesolide setup --tunnel <credentials>`
@@ -161,9 +210,10 @@ project replaces its block without `--force`.
 **Moving a machine in service behind a tunnel** is a run of setup with
 `--tunnel`, once upgraded: the connector first, then the records, and 80
 and 443 closed once resolvers see Cloudflare, so the sites answer all
-along. See [tunnel.md](tunnel.md#installing-the-machine). A customer's own
-domain cannot reach a machine behind a tunnel, and `domain --activate` is
-refused there.
+along. See [tunnel.md](tunnel.md#installing-the-machine). In this release,
+a customer's own domain cannot reach a machine behind a tunnel, and `domain
+--activate` is refused there: [A site's own domain behind a Cloudflare
+Tunnel](#a-sites-own-domain-behind-a-cloudflare-tunnel) brings it.
 
 **Going back.** `sitesolide upgrade` with the previous binary, on a machine
 served directly. A machine behind a tunnel leaves it first, as

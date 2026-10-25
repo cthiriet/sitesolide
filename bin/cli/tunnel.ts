@@ -24,10 +24,11 @@
  * tunnel's credentials, ~/.cloudflared/<id>.json, which `--tunnel` names.
  * setup could create it through Cloudflare's API, with a token allowed to make
  * tunnels for the whole account; the zone's token, which goes on the machine
- * for Caddy, must stay the zone's alone, and a second token kept for a single
- * creation is one more secret lying around. A tunnel whose credentials are
- * already on the machine, in /etc/cloudflared/<id>.json where Cloudflare's own
- * guide puts them, is taken as it is: `--tunnel <id>`.
+ * for Caddy, must reach the zones the machine serves and nothing else, and a
+ * second token kept for a single creation is one more secret lying around. A
+ * tunnel whose credentials are already on the machine, in
+ * /etc/cloudflared/<id>.json where Cloudflare's own guide puts them, is taken
+ * as it is: `--tunnel <id>`.
  *
  * THE CREDENTIALS. Read on the workstation, checked, never printed, they reach
  * the machine inside a script on ssh's standard input, as the DNS credentials
@@ -37,14 +38,22 @@
  * no account. The backups copy /etc/cloudflared with the rest of the machine's
  * own state.
  *
- * WHAT A TUNNEL DOES NOT CARRY: a customer's own domain. Cloudflare routes into
- * a tunnel the names of the account's own zones alone, and an on-demand
- * certificate needs Let's Encrypt to reach the machine: the ingress below
- * answers 404 to any name outside the zone.
+ * A SITE'S OWN DOMAIN, when its zone is at Cloudflare in the tunnel's own
+ * account. Cloudflare routes into a tunnel the names whose records point at
+ * it, in that account alone: another account's name gets Cloudflare's error
+ * 1014. The domain's owner makes them, proxied CNAMEs to <id>.cfargotunnel.com,
+ * and `sitesolide domain --activate` checks that Cloudflare's edge serves them
+ * before it switches. The ingress below lets every name through to Caddy,
+ * which decides by host what it serves; the visitor sees the edge's own
+ * certificate for that zone, and behind it Caddy holds one from Let's Encrypt,
+ * obtained through the DNS-01 challenge with the machine's own token, which
+ * the owner allows on that zone too (infra/tunnel/tunnel.caddy). A zone at
+ * another DNS provider, or in another Cloudflare account, cannot reach the
+ * machine.
  *
  * Pure: returns text, touches nothing. setup sends it (bin/cli/setup.ts).
  */
-import { APT, machineCheck, runScript } from "./harden";
+import { APT, machineCheck, runScript, shellQuote } from "./harden";
 import { CADDY_HTTPS_PORT, LOOPBACK_TABLE, TUNNEL_ORIGIN } from "./loopback";
 import type { Condition } from "./steps";
 
@@ -152,9 +161,20 @@ export function tunnelTarget(id: string): string {
 }
 
 /**
- * /etc/cloudflared/config.yml: the zone and its wildcard to Caddy, any other
- * name 404. The credentials are not named here: the unit hands them over on
- * the command line, from systemd's copy.
+ * /etc/cloudflared/config.yml: every name to Caddy, in one rule. The
+ * credentials are not named here: the unit hands them over on the command
+ * line, from systemd's copy.
+ *
+ * One rule, and no name in it. In 0.10.0 the zone and its wildcard had a rule
+ * each and any other name answered 404; but the names that reach the
+ * connector are already chosen upstream, Cloudflare routing into the tunnel
+ * only those whose records in its owner's account point at it, and Caddy
+ * already decides by host what it serves, as on a machine served directly,
+ * where any name a client sends as SNI reaches 443: a name the zone does not
+ * cover and the domain table does not carry gets no certificate, the ask
+ * endpoint refusing it, and the edge answers 502. A list of names here would
+ * be a third list to keep in step, and the connector restarted at each
+ * activation of a site's own domain.
  *
  * `matchSNItoHost` sends the name asked as SNI, which Caddy picks the site and
  * its certificate by. `noTLSVerify`, because the hop never leaves the machine:
@@ -163,23 +183,169 @@ export function tunnelTarget(id: string): string {
  * site down at the certificate's expiry, which the monitor already warns of
  * fourteen days ahead, reading the certificate on that same loopback.
  */
-export function tunnelConfig(zone: string, id: string): string {
+export function tunnelConfig(id: string): string {
   if (!TUNNEL_ID.test(id)) throw new Error(`not a tunnel's id: ${JSON.stringify(id)}`);
-  const origin = [`    service: https://[${TUNNEL_ORIGIN}]:${CADDY_HTTPS_PORT}`, "    originRequest:", "      matchSNItoHost: true", "      noTLSVerify: true"];
   return [
-    "# Laid by sitesolide setup (bin/cli/tunnel.ts): every name of the zone goes to",
-    "# Caddy on the loopback, any other answers 404. See docs/tunnel.md.",
+    "# Laid by sitesolide setup (bin/cli/tunnel.ts): every name Cloudflare routes",
+    "# into the tunnel goes to Caddy on the loopback, which decides by host what",
+    "# it serves. See docs/tunnel.md.",
     `tunnel: ${id}`,
     `metrics: ${TUNNEL_METRICS}`,
     "no-autoupdate: true",
     "ingress:",
-    `  - hostname: ${zone}`,
-    ...origin,
-    `  - hostname: "*.${zone}"`,
-    ...origin,
-    "  - service: http_status:404",
+    `  - service: https://[${TUNNEL_ORIGIN}]:${CADDY_HTTPS_PORT}`,
+    "    originRequest:",
+    "      matchSNItoHost: true",
+    "      noTLSVerify: true",
     "",
   ].join("\n");
+}
+
+/**
+ * Where Cloudflare's edge answers for any name it serves, proxied: the trace,
+ * `key=value` lines, before the request goes anywhere near the origin. The
+ * name as asked comes back as `h`, and the edge's location as `colo`.
+ */
+export const EDGE_TRACE_PATH = "/cdn-cgi/trace";
+
+/**
+ * Whether `text` is the edge's trace for `name`: what tells, from the
+ * workstation, a name Cloudflare serves from one that resolves elsewhere or
+ * nowhere. It answers before a site's own domain is activated too, which is
+ * when `domain --activate` asks. It does not tell the account the name's zone
+ * belongs to: a zone of another account answers its trace as well, and
+ * Cloudflare's error 1014 to every other request.
+ */
+export function readEdgeTrace(text: string, name: string): boolean {
+  const fields = new Map<string, string>();
+  for (const line of text.split("\n")) {
+    const equals = line.indexOf("=");
+    if (equals > 0) fields.set(line.slice(0, equals).trim(), line.slice(equals + 1).trim());
+  }
+  return fields.get("h")?.toLowerCase() === name.toLowerCase() && (fields.get("colo") ?? "") !== "";
+}
+
+/**
+ * The two files that carry a site's own domain through the tunnel, each with
+ * the text this release lays: the connector's configuration, whose one rule
+ * lets every name through to Caddy, and Caddy's options, whose global issuer
+ * certifies it. A machine from 0.10.0 holds others, which still serve the
+ * zone: its connector answers 404 for any other name, and its Caddy has no
+ * way to certify one. `domain --activate` compares them before it switches,
+ * since a switch over them would succeed and serve the domain nothing.
+ */
+export function domainCarriers(id: string, caddy: string): Array<{ path: string; content: string }> {
+  return [
+    { path: TUNNEL_CONFIG, content: tunnelConfig(id) },
+    { path: CADDY_TUNNEL_FILE, content: caddy },
+  ];
+}
+
+/**
+ * What a status from Cloudflare's edge says of the way a name reaches its
+ * origin. `tunnel`, 502: what cloudflared answers for a request it could not
+ * hand to its origin (WriteErrorResponse, in its connection/http2.go and
+ * connection/quic_connection.go), Caddy refusing the handshake for a name it
+ * holds no certificate for among them, and what Caddy itself answers for an
+ * app that does not. `address`, 520 to 526: the edge's own answers when it
+ * failed to reach an origin by its address, which a name routed into a tunnel
+ * has none of; the name's record points at an address, proxied, rather than
+ * at the tunnel. Null for any other answer.
+ */
+export function edgeOrigin(code: string): "tunnel" | "address" | null {
+  if (code === "502") return "tunnel";
+  return /^52[0-6]$/.test(code) ? "address" : null;
+}
+
+/** What the workstation measured of one name of a site's own domain, before it is activated behind a tunnel. */
+export type EdgeReading = {
+  name: string;
+  /** It resolves to the machine's own address. */
+  here: boolean;
+  /** Cloudflare's edge answers its trace. */
+  edge: boolean;
+  /** The status at its root, or why nothing answered; null when it was not asked. */
+  root: string | null;
+};
+
+/**
+ * Why a name would not reach the machine through its tunnel, or null when it
+ * would. A record left from before the tunnel, DNS only, resolves to the
+ * machine, where the firewall now answers nothing; a name the edge does not
+ * serve never reaches the tunnel. A record left proxied resolves to
+ * Cloudflare, and its trace answers like any other: what gives it away is its
+ * root, where the edge answers 520 to 526 for the address it cannot reach,
+ * while a name routed into the tunnel gets the connector's 502 before its
+ * activation, Caddy refusing its handshake. A proxied record pointing at a
+ * host that answers is not caught: its root answers that host's status.
+ */
+export function tunnelRouteProblem(reading: EdgeReading, server: string): string | null {
+  const { name, here, edge, root } = reading;
+  if (here) return `${name} points at ${server}, a record from before the tunnel, which nothing answers there now`;
+  if (!edge) return `https://${name}${EDGE_TRACE_PATH} answers no trace of Cloudflare's: the name is not proxied there, or its edge certificate is not issued yet`;
+  if (root !== null && edgeOrigin(root) === "address") {
+    return `https://${name}/ answers ${root}, Cloudflare's own answer for an origin it reaches by its address: its record points at an address, proxied, rather than at the tunnel`;
+  }
+  return null;
+}
+
+/**
+ * A command for the machine, read only: whether Caddy completes a verified
+ * handshake for `name` on the loopback, and what it answers, as the monitor
+ * probes it there on 127.0.0.1, which the loopback rule leaves open to every
+ * account. What tells a 502 through the tunnel that comes from the name's
+ * certificate from one that comes from behind Caddy, an app that does not
+ * answer. One line: `handshake <curl's exit> <status>`.
+ */
+export function caddyHandshakeCommand(name: string): string {
+  const resolve = shellQuote(`${name}:${CADDY_HTTPS_PORT}:127.0.0.1`);
+  const url = shellQuote(`https://${name}/`);
+  return `code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 --resolve ${resolve} ${url} 2>/dev/null); echo "handshake $? $code"`;
+}
+
+/**
+ * caddyHandshakeCommand's line: `answered` with Caddy's status once the
+ * handshake verified, `refused` with curl's exit when it did not, the
+ * certificate missing or not trusted, Caddy not listening; null for an
+ * answer that is not that line, a read that failed.
+ */
+export function readCaddyHandshake(output: string): { kind: "answered"; status: number } | { kind: "refused"; exit: number } | null {
+  const line = /^handshake (\d+) (\d{3})$/m.exec(output.trim());
+  if (line === null) return null;
+  const exit = Number(line[1]);
+  const status = Number(line[2]);
+  return exit === 0 && status !== 0 ? { kind: "answered", status } : { kind: "refused", exit };
+}
+
+/**
+ * A command for the machine, read only: the last error Caddy's TLS logged in
+ * the past hour about `name`, the issuance's own failures among them, from
+ * its journal as `logs` reads a project's, through sudo. Caddy writes its
+ * entries as JSON under systemd.
+ */
+export function caddyReasonCommand(name: string): string {
+  return `sudo -n journalctl -u caddy --since -1h --no-pager -o cat | grep -F -- ${shellQuote(name)} | grep -F '"level":"error"' | grep -F '"logger":"tls' | tail -n 1`;
+}
+
+/**
+ * What Caddy last said of a name's certificate, from one line of its
+ * journal: the message and its error, an error's alone, never an entry that
+ * says it went well. Null for a line that is not one of Caddy's errors.
+ * Caddy's own words, cut short: they quote the DNS provider's answer, which
+ * names the zone and never the token.
+ */
+export function readCaddyReason(line: string): string | null {
+  let entry: unknown;
+  try {
+    entry = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (entry === null || typeof entry !== "object") return null;
+  const { level, msg, error } = entry as { level?: unknown; msg?: unknown; error?: unknown };
+  if (level !== "error" || typeof msg !== "string" || msg === "") return null;
+  const said = typeof error === "string" && error !== "" ? `${msg}: ${error}` : msg;
+  return said.length > 300 ? `${said.slice(0, 297)}...` : said;
 }
 
 function fingerprint(content: string): string {
@@ -211,7 +377,7 @@ const LOOPBACK_IPV6 = "grep -Eq '^0{31}1 .* lo$' /proc/net/if_inet6";
 /** The connector runs as its account: the uid the loopback rule lets through. */
 const RUNS_AS_ACCOUNT = `pid=$(systemctl show -p MainPID --value ${TUNNEL_UNIT}) && [ "$pid" != 0 ] && [ "$(stat -c %u /proc/$pid)" = "$(${TUNNEL_ACCOUNT_UID})" ]`;
 
-export type TunnelFiles = { zone: string; id: string; unit: string; caddy: string };
+export type TunnelFiles = { id: string; unit: string; caddy: string };
 
 /** Everything the tunnel step leaves on the machine, condition by condition. */
 export function tunnelConditions(files: TunnelFiles): Condition[] {
@@ -220,7 +386,7 @@ export function tunnelConditions(files: TunnelFiles): Condition[] {
     { label: "cloudflared-package", test: "dpkg-query -W -f='${Status}' cloudflared | grep -q 'ok installed'" },
     { label: "tunnel-credentials", test: namesTunnel(TUNNEL_CREDENTIALS, files.id) },
     { label: "tunnel-credentials-permissions", test: `[ "$(stat -c '%U:%G %a' ${TUNNEL_CREDENTIALS})" = 'root:root 600' ]` },
-    ...sameFile("tunnel-config", TUNNEL_CONFIG, tunnelConfig(files.zone, files.id), "644"),
+    ...sameFile("tunnel-config", TUNNEL_CONFIG, tunnelConfig(files.id), "644"),
     { label: "tunnel-account", test: `${TUNNEL_ACCOUNT_UID} >/dev/null 2>&1` },
     ...sameFile("tunnel-unit", TUNNEL_UNIT_FILE, files.unit, "644"),
     ...sameFile("tunnel-caddy", CADDY_TUNNEL_FILE, files.caddy, "644"),
@@ -323,7 +489,7 @@ fi
 install -d -m 0755 -o root -g root ${TUNNEL_FOLDER}
 changed=""
 ${credentialsPart}
-${layFile(TUNNEL_CONFIG, "644", tunnelConfig(files.zone, id), "CONFIG", "config")}
+${layFile(TUNNEL_CONFIG, "644", tunnelConfig(id), "CONFIG", "config")}
 # The account before the unit that names it: its own group, no home, no shell.
 if ! ${TUNNEL_ACCOUNT_UID} >/dev/null 2>&1; then
   SYSTEMD_NSS_DYNAMIC_BYPASS=1 useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ${TUNNEL_ACCOUNT}

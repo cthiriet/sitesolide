@@ -1176,10 +1176,10 @@ async function waitForResolution(context: SetupContext): Promise<string> {
   }
 }
 
-/** What the tunnel step lays: the zone, the tunnel, and the kit's two files as they are. */
+/** What the tunnel step lays: the tunnel, and the kit's two files as they are. */
 function tunnelFiles(context: SetupContext): TunnelFiles {
   const read = (path: string) => readFileSync(join(kitRoot(), path), "utf8");
-  return { zone: context.options.zone, id: context.tunnel!.id, unit: read(TUNNEL_KIT_FILES.unit), caddy: read(TUNNEL_KIT_FILES.caddy) };
+  return { id: context.tunnel!.id, unit: read(TUNNEL_KIT_FILES.unit), caddy: read(TUNNEL_KIT_FILES.caddy) };
 }
 
 /**

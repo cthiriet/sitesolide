@@ -279,12 +279,13 @@ const READ_BLOCK = new RegExp(
 );
 /**
  * A deposited manifest or a unit, read the same way by `deploy --dry-run
- * --compare`, which measures what a deployment would change; and the
- * Caddyfile and the preview locks, which `sitesolide domain --activate` reads
- * of a closed site.
+ * --compare`, which measures what a deployment would change; the Caddyfile
+ * and the preview locks, which `sitesolide domain --activate` reads of a
+ * closed site; and the tunnel's two files that carry a site's own domain,
+ * which it reads behind a tunnel.
  */
 const READ_FILE = new RegExp(
-  `^if sudo test -f (/srv/sites/[a-z0-9-]+/sitesolide\\.json|/etc/systemd/system/[a-z0-9.-]+\\.(?:service|timer)|/etc/caddy/Caddyfile|/etc/caddy/locks/verrous\\.caddy); then echo ${MARKER_PRESENT}; sudo cat \\1; else echo ${MARKER_ABSENT}; fi$`,
+  `^if sudo test -f (/srv/sites/[a-z0-9-]+/sitesolide\\.json|/etc/systemd/system/[a-z0-9.-]+\\.(?:service|timer)|/etc/caddy/Caddyfile|/etc/caddy/locks/verrous\\.caddy|/etc/cloudflared/config\\.yml|/etc/caddy/global\\.d/tunnel\\.caddy); then echo ${MARKER_PRESENT}; sudo cat \\1; else echo ${MARKER_ABSENT}; fi$`,
 );
 /** The schedules a deployment asks systemd to read, each between double quotes, see scheduleCheckCommand. */
 const SCHEDULE = /systemd-analyze calendar "([^"]*)"/g;
