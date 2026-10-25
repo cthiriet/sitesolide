@@ -137,6 +137,69 @@ Visitors' requests go through Cloudflare, which decrypts them at its edge.
 That is what a tunnel is; a machine with a public address serves them without
 anyone in between.
 
+## A VM on a machine you already run
+
+A box at home that already serves something, a node of some kind whose
+keys and data must not be at stake, can hold sitesolide's machine as a VM.
+The VM is what sitesolide installs and hardens; around it, the host keeps
+what is its own. [infra/vm/install.sh](../infra/vm/install.sh) lays the VM
+on a Debian or Ubuntu host, arm64 or amd64, with KVM:
+
+```bash
+scp -r infra/vm host:sitesolide-vm             # this folder, from a checkout or a release's source
+scp ~/.ssh/id_ed25519.pub host:sitesolide-vm/key.pub
+ssh host sudo sitesolide-vm/install.sh --ssh-key sitesolide-vm/key.pub \
+  --cpus 2 --memory 4096 --disk 20 --hide /srv/bitcoin --hide /srv/monero
+```
+
+| What | How the host keeps its own |
+|---|---|
+| the account | QEMU runs as `sitesolide-vm`, which owns `/var/lib/sitesolide-vm` alone, with no capability, the system read-only, the home folders and every `--hide` folder out of its sight, `/dev/kvm` its only device |
+| the network | QEMU's user mode, and a wall of its own, the nftables table `sitesolide_vm`, on QEMU's account alone: no connection to the host's loopback, where its other services listen, nor to any private range, the home network and its box included. The Internet is open, and a connection that reaches the VM is answered |
+| ssh | the guest's port 22 forwarded to the host's loopback alone, `127.0.0.1:2222`: reached through the host's own ssh, nothing else of the network sees it |
+| memory | bounded at the guest's plus 768 MiB, swap excluded: a guest that outgrows it costs QEMU, which restarts, never the host's services |
+| CPU and disk | `CPUWeight=20`, `IOWeight=20`: the host's own services come first when both want the machine; the disk is a raw file allocated whole at install, which never grows over the host's |
+| a stop | the guest's power button, through QEMU's QMP socket, pressed until it shuts down: a host that reboots takes the VM down cleanly, and brings it back after the wall |
+
+The guest asks public resolvers, `1.1.1.1` and `1.0.0.1`: the wall refuses
+the host's loopback, where QEMU would otherwise send its DNS. They answer the
+SOA queries the DNS-01 challenge needs.
+
+From the workstation, the guest is reached through the host:
+
+```
+# ~/.ssh/config
+Host sitesolide-vm
+  HostName 127.0.0.1
+  Port 2222
+  User root
+  ProxyJump host                                # the host, as this file names it
+```
+
+```bash
+ssh sitesolide-vm true
+export CLOUDFLARE_API_TOKEN=...
+sitesolide setup root@sitesolide-vm --zone example.com --email you@example.com \
+  --tunnel ~/.cloudflared/<id>.json
+```
+
+Every ssh connection reaches the guest from QEMU's gateway, `10.0.2.2`, so
+fail2ban there would ban every client at once: setup spares the
+workstation's address while it runs, and nothing but the host's own ssh
+users can knock at all.
+
+**Measured** on an Ubuntu 24.04 arm64 host with nested KVM, standing in for
+a Raspberry Pi 5, with a service on its loopback and another on its network
+address standing in for a node's RPC: without the wall the guest reached
+both, with it neither, nor the network's gateway; the guest reached the
+Internet and public DNS, booted in ten seconds, came back on its own after
+the host rebooted, and shut down cleanly with it; a second run of
+`install.sh` changed nothing and left the VM running; and `sitesolide setup`
+through the host hardened the guest, closed root, opened ssh alone and
+installed Caddy with its DNS module and Bun before the step that needs the
+zone's token. Not measured on a Raspberry Pi itself: check `ls -l /dev/kvm`
+there first.
+
 ## Upgrading
 
 `sitesolide upgrade` keeps the connector's unit, its configuration and

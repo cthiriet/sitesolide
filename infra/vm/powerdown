@@ -1,0 +1,30 @@
+#!/bin/sh
+#
+# The stop of sitesolide-vm.service: asks the guest to shut down, as its power
+# button would, through QEMU's QMP socket, then waits for QEMU to exit, which
+# it does once the guest has shut down. systemd sends SIGTERM only after this
+# returns, and kills at TimeoutStopSec: a guest that does not answer is cut
+# off then, never before.
+#
+# The button is pressed again every ten seconds: a guest still in its
+# firmware, or early in its boot, does not hear it yet, and one already
+# shutting down ignores another press.
+#
+# Laid by infra/vm/install.sh at /usr/local/lib/sitesolide-vm/powerdown. nc is
+# netcat-openbsd's, which speaks to a Unix socket (-U).
+set -u
+
+press() {
+  printf '%s\n' '{"execute":"qmp_capabilities"}' '{"execute":"system_powerdown"}' | nc -U -q 2 /run/sitesolide-vm/qmp.sock >/dev/null 2>&1
+}
+
+if ! press; then
+  echo "powerdown: QMP did not answer: systemd stops QEMU itself"
+  exit 0
+fi
+waited=0
+while [ -n "${MAINPID:-}" ] && kill -0 "$MAINPID" 2>/dev/null && [ "$waited" -lt 140 ]; do
+  sleep 1
+  waited=$((waited + 1))
+  if [ $((waited % 10)) -eq 0 ]; then press || true; fi
+done

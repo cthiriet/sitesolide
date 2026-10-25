@@ -1,0 +1,21 @@
+# The wall around sitesolide's VM, wall.nft, loaded at every boot before the
+# network and before the VM, which requires it: the VM never runs without it.
+# Laid by infra/vm/install.sh. See docs/tunnel.md.
+
+[Unit]
+Description=The wall around sitesolide's VM: its account reaches neither this machine nor its network
+DefaultDependencies=no
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/sitesolide-vm/wall.nft
+# A reload lays the file again in one transaction, the VM running on: a
+# restart would restart the VM too, which requires this unit.
+ExecReload=/usr/sbin/nft -f /etc/sitesolide-vm/wall.nft
+ExecStop=/usr/sbin/nft delete table inet sitesolide_vm
+
+[Install]
+WantedBy=multi-user.target

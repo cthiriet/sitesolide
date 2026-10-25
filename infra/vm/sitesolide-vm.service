@@ -1,0 +1,87 @@
+# sitesolide's machine, as a VM on a machine that already does something
+# else, a box at home whose own services must not be at stake. See
+# docs/tunnel.md, "A VM on a machine you already run".
+#
+# Laid by infra/vm/install.sh, which fills the @...@ fields from its options.
+#
+# What the host keeps: QEMU runs as sitesolide-vm, an account that owns
+# nothing but /var/lib/sitesolide-vm, with no capability, the system
+# read-only, the home folders hidden, and /dev/kvm its only device. Its
+# memory is bounded, swap included, and its CPU and disk weights low: the
+# host's own services come first when both want the machine. Its network is
+# QEMU's user mode, behind sitesolide-vm-wall.service, which it requires: no
+# connection to this machine nor to its network. The guest's ssh is
+# forwarded to this machine's loopback alone, reached through this
+# machine's own ssh.
+#
+# The network card carries no boot ROM, `romfile=`: the firmware drives it
+# itself, and the ROM is a package of its own, ipxe-qemu, never needed.
+#
+# A stop asks the guest to shut down, as its power button would, and waits
+# for it: QEMU killed outright is the power cut, and the apps' databases in
+# the guest would come back as a crash left them.
+
+[Unit]
+Description=sitesolide's VM, walled off from this machine and its network
+Requires=sitesolide-vm-wall.service
+After=sitesolide-vm-wall.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sitesolide-vm
+Group=sitesolide-vm
+SupplementaryGroups=kvm
+RuntimeDirectory=sitesolide-vm
+RuntimeDirectoryMode=0700
+ExecStart=@QEMU@ -name sitesolide -nodefaults -no-user-config \
+  -machine @MACHINE@ -cpu host -smp @CPUS@ -m @MEMORY@M @FIRMWARE@\
+  -drive if=virtio,format=raw,file=/var/lib/sitesolide-vm/disk.raw,cache=none,aio=threads \
+  -drive if=virtio,format=raw,file=/var/lib/sitesolide-vm/seed.img,readonly=on \
+  -netdev user,id=net0,hostfwd=tcp:127.0.0.1:@PORT@-:22 \
+  -device virtio-net-pci,netdev=net0,romfile= \
+  -device virtio-rng-pci \
+  -display none -chardev stdio,id=console,signal=off -serial chardev:console \
+  -qmp unix:/run/sitesolide-vm/qmp.sock,server=on,wait=off
+ExecStop=/usr/local/lib/sitesolide-vm/powerdown
+TimeoutStopSec=150
+Restart=on-failure
+RestartSec=10
+StandardInput=null
+
+# The guest's memory and QEMU's own, never swapped; a guest that outgrows it
+# is QEMU killed, which the restart brings back, never the host's services.
+MemoryMax=@MEMORY_MAX@M
+MemorySwapMax=0
+CPUWeight=20
+IOWeight=20
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+# What else of the host QEMU never sees, the data of its other services,
+# from install.sh's --hide; nothing when none was given.
+@HIDDEN@
+ReadWritePaths=/var/lib/sitesolide-vm
+PrivateTmp=true
+PrivateIPC=true
+DevicePolicy=closed
+DeviceAllow=/dev/kvm rw
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
