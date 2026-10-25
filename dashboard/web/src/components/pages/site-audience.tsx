@@ -161,6 +161,9 @@ function Figure({ heading, value, detail }: { heading: string; value: string; de
   )
 }
 
+/** The rankings whose values are machine strings, a path or a host, set in monospace like every other. */
+const MACHINE_RANKINGS: ReadonlySet<string> = new Set(["chemin", "entree", "hote"])
+
 /**
  * A ranking: the label, its value, and the bar underneath.
  *
@@ -176,7 +179,7 @@ function Ranking({ ranking, title, unit, lines }: { ranking: string; title: stri
         {lines.map((line) => (
           <li key={line.value} className="px-4 py-2">
             <div className="flex items-baseline justify-between gap-4 text-sm">
-              <span className="truncate" title={line.value}>
+              <span className={cn("truncate", MACHINE_RANKINGS.has(ranking) && "font-mono text-[0.8125rem]")} title={line.value}>
                 {rankingLabel(ranking, line.value)}
               </span>
               <span className="shrink-0 tabular-nums text-muted-foreground">{formatNumber(line.total)}</span>

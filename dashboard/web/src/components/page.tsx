@@ -169,7 +169,7 @@ export function Segment({ selected, className, ...props }: ComponentProps<"butto
         "inline-flex h-9 items-center justify-center rounded-md px-2.5 text-[0.8125rem] whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-[1.875rem]",
         selected
           ? "bg-popover font-medium text-strong shadow-raised ring-1 ring-border"
-          : "text-secondary-foreground hover:text-strong",
+          : "text-secondary-foreground hover:bg-muted hover:text-strong",
         className,
       )}
       {...props}

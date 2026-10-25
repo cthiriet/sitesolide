@@ -469,7 +469,8 @@ when the page stays readable, in an `ErrorState` when there is nothing to show.
 **Search and filters.** In a toolbar under the header, on the left: the search
 field, with a `/` key hint, then the filters as a segmented control, a well
 sunk below the paper whose chosen segment rises out of it, raised with its
-hairline, in `strong` text. `/` focuses the
+hairline, in `strong` text; one not chosen takes `muted` under the pointer,
+a step past the well that shows in both themes. `/` focuses the
 site search, Escape clears it then returns focus. The count and the order on
 the right: "3 of 13 sites, issues first". The count is of what All lists
 before the search, and the page header's agrees with it.

@@ -387,7 +387,8 @@ export function CreateTokenDialog({
                   ? "Off unless you tick them. One a chosen project needs is ticked for you."
                   : `Public sites, outbound network and a domain only when ${person !== null ? "you are" : "they are"} an Admin of every project chosen.`}
               </p>
-              <div className="divide-y divide-input rounded-lg border border-input p-1">
+              {/* No rule between them: each choice is a rounded row, and a rule under one bent up at its corners. */}
+              <div className="grid gap-0.5 rounded-lg border border-input p-1">
                 <Choice
                   checked={effective.public}
                   disabled={!options}

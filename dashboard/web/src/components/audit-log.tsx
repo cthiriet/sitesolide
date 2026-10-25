@@ -175,9 +175,9 @@ function Target({ row, known, compact = false }: { row: AuditRow; known: Readonl
   if (compact) return <span className="wrap-anywhere">{site}</span>
   return (
     <span className="grid min-w-0 gap-0.5">
-      {/* A slug keeps its letters together: the column never narrows below it. */}
+      {/* A slug, and the host under it, keep their letters together: the column never narrows below them. */}
       <span className="wrap-break-word">{site}</span>
-      {row.site !== null && row.target.toLowerCase() !== row.site && <span className="font-mono text-[0.6875rem] text-muted-foreground wrap-anywhere">{row.target}</span>}
+      {row.site !== null && row.target.toLowerCase() !== row.site && <span className="font-mono text-[0.6875rem] text-muted-foreground wrap-break-word">{row.target}</span>}
     </span>
   )
 }
