@@ -5,7 +5,7 @@
 # on that host, as root, from a copy of this folder:
 #
 #   sudo infra/vm/install.sh --ssh-key <public key file> [--cpus 2] [--memory 4096]
-#        [--disk 20] [--port 2222] [--hide <path>]...
+#        [--disk 20] [--port 2222] [--state <dir>] [--hide <path>]...
 #
 #   --ssh-key   the public key that logs in to the guest as root, the one
 #               sitesolide setup connects with
@@ -13,6 +13,8 @@
 #   --memory    the guest's memory in MiB, 4096 by default; QEMU's own comes on top
 #   --disk      the guest's disk in GiB, 20 by default, laid whole at once
 #   --port      the host's loopback port forwarded to the guest's ssh, 2222
+#   --state     where the guest's disk lives, /var/lib/sitesolide-vm by default;
+#               on a disk unlocked by hand, the VM starts once it is there
 #   --hide      a folder of the host QEMU must never see, the data of another
 #               service; as many times as there are
 #
@@ -20,7 +22,7 @@
 #
 #   packages     QEMU for this machine's architecture, its firmware, qemu-img,
 #                cloud-localds, nftables, nc
-#   account      sitesolide-vm, a system account, its home /var/lib/sitesolide-vm
+#   account      sitesolide-vm, a system account, its home the --state folder
 #   disk         Debian 13's cloud image, its SHA-512 checked against Debian's
 #                list, copied into a raw disk allocated whole: the disk never
 #                grows over the host's own, and is never laid again once there
@@ -55,7 +57,7 @@ PORT=2222
 HIDDEN=()
 
 usage() {
-  sed -n '7,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '7,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -66,6 +68,7 @@ while [ $# -gt 0 ]; do
     --memory) MEMORY="${2:-}"; shift 2 ;;
     --disk) DISK="${2:-}"; shift 2 ;;
     --port) PORT="${2:-}"; shift 2 ;;
+    --state) STATE="${2:-}"; shift 2 ;;
     --hide) HIDDEN+=("${2:-}"); shift 2 ;;
     *) usage ;;
   esac
@@ -88,9 +91,11 @@ for value in "$CPUS" "$MEMORY" "$DISK" "$PORT"; do
 done
 [ "$MEMORY" -ge 2048 ] || die "--memory $MEMORY: sitesolide needs 2048 MiB at least"
 [ "$DISK" -ge 10 ] || die "--disk $DISK: sitesolide needs 10 GiB at least"
-for path in ${HIDDEN[@]+"${HIDDEN[@]}"}; do
-  [[ "$path" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "--hide $path: an absolute path of letters, digits, dots, dashes and slashes"
+for path in "$STATE" ${HIDDEN[@]+"${HIDDEN[@]}"}; do
+  [[ "$path" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "$path: an absolute path of letters, digits, dots, dashes and slashes"
 done
+STATE="${STATE%/}"
+[ -d "$(dirname "$STATE")" ] || die "--state $STATE: $(dirname "$STATE") does not exist" "a disk unlocked by hand is unlocked and mounted before the install"
 
 # --- the architecture, and what QEMU needs for it ---------------------------------
 case "$(dpkg --print-architecture)" in
@@ -120,8 +125,11 @@ for package in "${PACKAGES[@]}" qemu-utils cloud-image-utils nftables netcat-ope
   dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'ok installed' || missing+=("$package")
 done
 if [ ${#missing[@]} -gt 0 ]; then
-  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update -q </dev/null
-  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -q --no-install-recommends "${missing[@]}" </dev/null
+  # needrestart, which Ubuntu runs after apt, restarts on its own the services
+  # whose libraries changed: the host's own, a node among them, are not this
+  # script's to restart. Suspended for these two commands alone.
+  NEEDRESTART_SUSPEND=1 DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update -q </dev/null
+  NEEDRESTART_SUSPEND=1 DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -q --no-install-recommends "${missing[@]}" </dev/null
   echo "   installed: ${missing[*]}"
 else
   echo "   all there"
@@ -134,6 +142,14 @@ if ! id -u "$ACCOUNT" >/dev/null 2>&1; then
 fi
 install -d -m 0750 -o "$ACCOUNT" -g "$ACCOUNT" "$STATE"
 install -d -m 0755 -o root -g root "$CONFIG" "$LIB"
+# Every folder above the state has to let QEMU's account through, a disk
+# mounted 0700 for its owner does not: named, never opened here.
+if ! runuser -u "$ACCOUNT" -- test -w "$STATE"; then
+  closed="$(dirname "$STATE")"
+  while [ "$closed" != / ] && runuser -u "$ACCOUNT" -- test -x "$closed"; do closed="$(dirname "$closed")"; done
+  die "QEMU's account cannot reach $STATE: $closed is closed to other accounts" \
+    "sudo chmod o+x $closed lets it through without listing what $closed holds, then run this again"
+fi
 
 echo "-> disk"
 if [ -e "$STATE/disk.raw" ]; then
@@ -199,7 +215,7 @@ if [ ${#HIDDEN[@]} -gt 0 ]; then
 fi
 unit=$(mktemp)
 sed -e "s|@QEMU@|$QEMU|" -e "s|@MACHINE@|$MACHINE|" -e "s|@CPUS@|$CPUS|" -e "s|@MEMORY@|$MEMORY|" \
-  -e "s|@FIRMWARE@|$FIRMWARE|" -e "s|@PORT@|$PORT|" -e "s|@MEMORY_MAX@|$((MEMORY + 768))|" \
+  -e "s|@FIRMWARE@|$FIRMWARE|" -e "s|@PORT@|$PORT|" -e "s|@MEMORY_MAX@|$((MEMORY + 768))|" -e "s|@STATE@|$STATE|g" \
   -e "s|^@HIDDEN@\$|${hidden% }|" "$HERE/sitesolide-vm.service" >"$unit"
 if grep -q '@[A-Z_]*@' "$unit"; then die "a field of the template was left unfilled: nothing was laid"; fi
 install -m 0644 -o root -g root "$unit" /etc/systemd/system/sitesolide-vm.service

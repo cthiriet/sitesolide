@@ -18,7 +18,7 @@ describe("the VM's unit", () => {
 
   test("every field of the template is one install.sh fills", () => {
     const fields = [...new Set([...unit.matchAll(/@([A-Z_]+)@/g)].map((match) => match[1]!))].sort();
-    expect(fields).toEqual(["CPUS", "FIRMWARE", "HIDDEN", "MACHINE", "MEMORY", "MEMORY_MAX", "PORT", "QEMU"]);
+    expect(fields).toEqual(["CPUS", "FIRMWARE", "HIDDEN", "MACHINE", "MEMORY", "MEMORY_MAX", "PORT", "QEMU", "STATE"]);
     for (const field of fields) expect(install).toContain(`@${field}@`);
   });
 
@@ -34,7 +34,9 @@ describe("the VM's unit", () => {
       "NoNewPrivileges=true",
       "ProtectSystem=strict",
       "ProtectHome=true",
-      "ReadWritePaths=/var/lib/sitesolide-vm",
+      "ReadWritePaths=-@STATE@",
+      "ExecStartPre=/usr/bin/test -f @STATE@/disk.raw",
+      "StartLimitIntervalSec=0",
       "DevicePolicy=closed",
       "DeviceAllow=/dev/kvm rw",
       "MemoryMax=@MEMORY_MAX@M",

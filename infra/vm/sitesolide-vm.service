@@ -5,7 +5,7 @@
 # Laid by infra/vm/install.sh, which fills the @...@ fields from its options.
 #
 # What the host keeps: QEMU runs as sitesolide-vm, an account that owns
-# nothing but /var/lib/sitesolide-vm, with no capability, the system
+# nothing but its state folder, @STATE@, with no capability, the system
 # read-only, the home folders and /run hidden, and /dev/kvm its only device. Its
 # memory is bounded, swap included, and its CPU and disk weights low: the
 # host's own services come first when both want the machine. Its network is
@@ -26,6 +26,9 @@ Description=sitesolide's VM, walled off from this machine and its network
 BindsTo=sitesolide-vm-wall.service
 After=sitesolide-vm-wall.service network-online.target
 Wants=network-online.target
+# Tried again for as long as it takes: on a disk unlocked by hand, the guest's
+# disk is missing until it is, and the VM starts within half a minute of it.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -34,19 +37,22 @@ Group=sitesolide-vm
 SupplementaryGroups=kvm
 # Not without the wall in the kernel, whatever its unit says: run as root, `+`.
 ExecStartPre=+/usr/sbin/nft list table inet sitesolide_vm
+# Not before the guest's disk is there, a disk unlocked by hand being.
+ExecStartPre=/usr/bin/test -f @STATE@/disk.raw
 ExecStart=@QEMU@ -name sitesolide -nodefaults -no-user-config \
   -machine @MACHINE@ -cpu host -smp @CPUS@ -m @MEMORY@M @FIRMWARE@\
-  -drive if=virtio,format=raw,file=/var/lib/sitesolide-vm/disk.raw,cache=none,aio=threads \
-  -drive if=virtio,format=raw,file=/var/lib/sitesolide-vm/seed.img,readonly=on \
+  -drive if=virtio,format=raw,file=@STATE@/disk.raw,cache=none,aio=threads \
+  -drive if=virtio,format=raw,file=@STATE@/seed.img,readonly=on \
   -netdev user,id=net0,ipv6=off,hostfwd=tcp:127.0.0.1:@PORT@-:22 \
   -device virtio-net-pci,netdev=net0,romfile= \
   -device virtio-rng-pci \
   -display none -chardev stdio,id=console,signal=off -serial chardev:console \
-  -qmp unix:/var/lib/sitesolide-vm/qmp.sock,server=on,wait=off
+  -qmp unix:@STATE@/qmp.sock,server=on,wait=off
 ExecStop=/usr/local/lib/sitesolide-vm/powerdown
+Environment=QMP_SOCKET=@STATE@/qmp.sock
 TimeoutStopSec=150
 Restart=on-failure
-RestartSec=10
+RestartSec=30
 StandardInput=null
 
 # The guest's memory and QEMU's own, never swapped; a guest that outgrows it
@@ -69,7 +75,7 @@ TemporaryFileSystem=/run:ro
 # What else of the host QEMU never sees, the data of its other services,
 # from install.sh's --hide; nothing when none was given.
 @HIDDEN@
-ReadWritePaths=/var/lib/sitesolide-vm
+ReadWritePaths=-@STATE@
 PrivateTmp=true
 PrivateIPC=true
 DevicePolicy=closed

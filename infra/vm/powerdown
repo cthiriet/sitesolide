@@ -15,7 +15,7 @@
 set -u
 
 press() {
-  printf '%s\n' '{"execute":"qmp_capabilities"}' '{"execute":"system_powerdown"}' | nc -U -q 2 /var/lib/sitesolide-vm/qmp.sock >/dev/null 2>&1
+  printf '%s\n' '{"execute":"qmp_capabilities"}' '{"execute":"system_powerdown"}' | nc -U -q 2 "${QMP_SOCKET:-/var/lib/sitesolide-vm/qmp.sock}" >/dev/null 2>&1
 }
 
 if ! press; then

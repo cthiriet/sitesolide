@@ -189,8 +189,19 @@ on a Debian or Ubuntu host, arm64 or amd64, with KVM:
 scp -r infra/vm host:sitesolide-vm             # this folder, from a checkout or a release's source
 scp ~/.ssh/id_ed25519.pub host:sitesolide-vm/key.pub
 ssh host sudo sitesolide-vm/install.sh --ssh-key sitesolide-vm/key.pub \
-  --cpus 2 --memory 4096 --disk 20 --hide /srv/bitcoin --hide /srv/monero
+  --cpus 2 --memory 3072 --disk 20 --state /mnt/ssd/sitesolide-vm \
+  --hide /mnt/ssd/bitcoin --hide /mnt/ssd/monero --hide /etc/bitcoin --hide /etc/monero
 ```
+
+`--state` puts the guest's disk on a disk of your choosing, an SSD rather
+than a Raspberry Pi's SD card, which constant writes wear out. On a disk
+encrypted and unlocked by hand, the VM tries again every thirty seconds
+until the guest's disk is there, and starts within half a minute of the
+unlock. Every folder above it has to let QEMU's account through: a disk
+mounted `0700` for its owner is refused, with the `chmod o+x` that lets it
+through without listing what it holds. The packages are installed with
+Ubuntu's `needrestart` suspended, which would otherwise restart on its own
+the host's services whose libraries changed.
 
 | What | How the host keeps its own |
 |---|---|
