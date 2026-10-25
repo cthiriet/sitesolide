@@ -987,7 +987,8 @@ function storeOf(p: FakeProject) {
   if (manifest === null || manifest.slug !== p.slug || !hasStore(manifest)) return null;
   const { runtime, files } = secretsOf(manifest);
   const values = new Map([...runtime.slice(0, -1), "OLD_WEBHOOK_SECRET"].map((name) => [name, "bench"]));
-  const changed = start - 3 * DAY;
+  // Healed, the stores changed before any service last started: no restart pending.
+  const changed = start - (SHOWCASE ? 60 : 3) * DAY;
   return storeView({
     slug: p.slug,
     manifest,
