@@ -1073,7 +1073,7 @@ restricted site; *Secrets*, from Developer up, what the store keeps counted,
 "3 variables, 1 file", then the Secrets section's first problem in its tone
 and "+N" for the others (`secretsHeadline`, the same problems as the
 sidebar's badge); *Backups*, for the owner and an Admin, the last snapshot's
-age in the Backups section's words, red when the last run failed;
+age in the Backups section's words, in attention when the last run failed;
 *Audience*, the visits over analytics' window, "1,148 visits in 30 days".
 Around them, the facts that are no section: *Address*, the address that
 answers, a domain not answering as asked in its state's word ("Pending:
@@ -1315,13 +1315,17 @@ opens it when restricted; no one can be given a role on it."
 restores are in Activity, behind *History* (`type=backups`), the intro behind
 the (i). The **status row**, 64 px, the backups' tile at its left: *Last
 snapshot 45m ago*, then *Hourly · Offsite copy · Verified 9h ago*, muted. It
-turns red, the error icon in the tile's place, when the last run failed (its
-reason under it, and the age of the snapshot before it among the facts),
-when the offsite copy is misconfigured or a check failed; attention past two
-hours without a snapshot, with what starts the timer again. *Details* opens
-what is kept (*24 hourly, 7 daily, 4 weekly, and the last 3 before a
-restore*), where the offsite copy goes, what the last check measured and the
-last restore. Then the **snapshots**, a dense `DataTable` of 40 px rows, the
+turns to attention, the warning icon in the tile's place, when the last run
+failed (its reason under it, and the age of the snapshot before it among the
+facts), when the offsite copy is misconfigured or a check failed, and past
+two hours without a snapshot, with what starts the timer again. A warning,
+never red: the monitor rates its backup check so, and the home page's banner
+says the same failed run in the same tone (`BACKUP_SEVERITY` in
+bin/cli/backups.ts, which the monitor rates it by); the sites still serve,
+and the snapshot before is there. *Details* opens what is kept (*24
+hourly, 7 daily, 4 weekly, and the last 3 before a restore*), where the
+offsite copy goes, what the last check measured and the last restore. Then
+the **snapshots**, a dense `DataTable` of 40 px rows, the
 newest twelve: *Taken*, "Today 19:02" with "45m ago" muted, and a *Before
 restore* tag on such a snapshot alone; *Size*, what it added in its tooltip;
 *Where*, a server and a cloud, each with its words in its tooltip; *Restore*

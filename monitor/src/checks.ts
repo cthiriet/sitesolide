@@ -13,6 +13,7 @@
  * not turn into "every service recovered", nor a Caddy that is down into
  * "every site failed" on top of the one alert that matters.
  */
+import { BACKUP_SEVERITY } from "../../bin/cli/backups";
 import { CREDENTIALS_EXIT_STATUS, credentialsFailure, slugHasStore } from "../../bin/cli/store";
 
 export type Severity = "critical" | "warning";
@@ -599,7 +600,7 @@ const MAX_NAMED = 5;
  */
 export function judgeBackup(reading: BackupReading, now: number): Result | null {
   if ("missing" in reading) return null;
-  const base = { id: "backup", kind: "backup", label: "backups", severity: "warning", slug: null } as const;
+  const base = { id: "backup", kind: "backup", label: "backups", severity: BACKUP_SEVERITY, slug: null } as const;
   if ("error" in reading) {
     return { ...base, verdict: "fail", summary: `The backup status could not be read: ${reading.error}` };
   }

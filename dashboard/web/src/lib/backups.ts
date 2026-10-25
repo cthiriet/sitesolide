@@ -7,8 +7,9 @@
  * not in `reason`, and the page shows it as it stands. A rule copied into the
  * browser would protect nothing.
  */
+import { BACKUP_SEVERITY } from "../../../borrowed/backups"
 import { ago, capitalise, duration, size } from "./format"
-import type { Tone } from "./tones"
+import { severityTone, type Tone } from "./tones"
 import type { BackupsView, CheckView, RestoreView, RetentionPolicy, SnapshotKind, SnapshotView } from "./types"
 
 /** The page reads the backups again this often, and every two seconds while a restore runs. */
@@ -46,13 +47,21 @@ export function retentionText(policy: RetentionPolicy | null): string {
 export type Reading = { tone: Tone; label: string; detail: string | null }
 
 /**
+ * The tone of a backup in trouble, a failed run, a failed check, a bucket
+ * misconfigured: the one severity the monitor rates it by and the home
+ * page's banner says it in (`BACKUP_SEVERITY` in bin/cli/backups.ts), a
+ * warning.
+ */
+export const BACKUP_TROUBLE: Tone = severityTone(BACKUP_SEVERITY)
+
+/**
  * The state of the schedule for this site, in one line: the last run failed
- * for it (error), no snapshot for over two hours (attention), or how old the
+ * for it, no snapshot for over two hours, both worth a look, or how old the
  * newest one is.
  */
 export function freshness(view: Pick<BackupsView, "lastRun" | "snapshots" | "excluded">, serverNow: number): Reading {
   if (view.lastRun !== null && !view.lastRun.ok) {
-    return { tone: "error", label: "Last run failed", detail: view.lastRun.error }
+    return { tone: BACKUP_TROUBLE, label: "Last run failed", detail: view.lastRun.error }
   }
   // The schedule's health is its own snapshots': a before-restore one says nothing of the timer.
   const scheduled = view.snapshots.filter((snapshot) => snapshot.kind === "scheduled")
@@ -70,7 +79,7 @@ export function freshness(view: Pick<BackupsView, "lastRun" | "snapshots" | "exc
 }
 
 export function offsiteReading(offsite: BackupsView["offsite"]): Reading {
-  if (offsite.error !== null) return { tone: "error", label: "Offsite copy misconfigured", detail: offsite.error }
+  if (offsite.error !== null) return { tone: BACKUP_TROUBLE, label: "Offsite copy misconfigured", detail: offsite.error }
   if (offsite.target === null) return { tone: "neutral", label: "Off", detail: "Snapshots stay on this server only." }
   return { tone: "ok", label: "Encrypted, every run", detail: offsite.target }
 }
@@ -85,7 +94,7 @@ export function checkReading(checks: BackupsView["checks"], repository: BackupsV
   const offsite: CheckView | null = checks?.offsite ?? null
   const failed = [local, offsite].find((check) => check !== null && !check.ok)
   if (failed !== undefined && failed !== null) {
-    return { tone: "error", label: failed === local ? "Server's copy failed its check" : "Offsite copy failed its check", detail: failed.error }
+    return { tone: BACKUP_TROUBLE, label: failed === local ? "Server's copy failed its check" : "Offsite copy failed its check", detail: failed.error }
   }
   if (local === null) return { tone: "neutral", label: "Not checked yet", detail: "A part of every copy is read back once a day, starting a day after the first snapshot." }
   const stored = repository === null || repository === undefined ? null : `All sites' snapshots take ${size(repository.bytes)} on this server.`
@@ -111,8 +120,8 @@ export type StatusFact = { text: string; tone: Tone }
  * in its tone, the detail of a failure or a stale timer under it, then the
  * schedule, the offsite copy and the last check as short facts, each in its
  * tone when it is wrong. `tone` is the worst of the three: a failed run, a
- * misconfigured bucket or a failed check is an error, a stale timer
- * attention. A fine row says it in muted words, with no dot.
+ * misconfigured bucket, a failed check or a stale timer, each worth a look
+ * (`BACKUP_TROUBLE`). A fine row says it in muted words, with no dot.
  */
 export type BackupStatus = { tone: Tone; label: string; detail: string | null; facts: StatusFact[] }
 
@@ -128,16 +137,17 @@ export function backupStatus(
   const facts: StatusFact[] = []
   // A failed run leaves the snapshot before it, which is what a restore would bring back.
   const newest = view.snapshots.find((snapshot) => snapshot.kind === "scheduled")
-  if (fresh.tone === "error" && newest !== undefined) facts.push({ text: `Last snapshot ${ago(serverNow - newest.takenAt)}`, tone: "neutral" })
+  const failed = view.lastRun !== null && !view.lastRun.ok
+  if (failed && newest !== undefined) facts.push({ text: `Last snapshot ${ago(serverNow - newest.takenAt)}`, tone: "neutral" })
   // A site left out is owed no snapshot: it says why rather than a schedule it does not follow.
   if (view.excluded === null) facts.push({ text: "Hourly", tone: "neutral" })
   else if (fresh.tone === "ok") facts.push({ text: `No longer backed up: ${view.excluded}`, tone: "neutral" })
   facts.push(
-    offsite.tone === "error"
-      ? { text: offsite.label, tone: "error" }
+    offsite.tone === BACKUP_TROUBLE
+      ? { text: offsite.label, tone: BACKUP_TROUBLE }
       : { text: offsite.tone === "neutral" ? "No offsite copy" : "Offsite copy", tone: "neutral" },
   )
-  facts.push(check.tone === "error" ? { text: check.label, tone: "error" } : { text: check.label, tone: "neutral" })
+  facts.push(check.tone === BACKUP_TROUBLE ? { text: check.label, tone: BACKUP_TROUBLE } : { text: check.label, tone: "neutral" })
   const tone = [fresh.tone, offsite.tone, check.tone].reduce((worst, one) => (WORST[one] > WORST[worst] ? one : worst), "ok" as Tone)
   return { tone, label: fresh.label, detail: fresh.tone === "ok" ? null : fresh.detail, facts }
 }

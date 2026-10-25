@@ -178,7 +178,7 @@ function StatusPanel({ view, serverNow }: { view: BackupsView; serverNow: number
               <span key={fact.text}>
                 {index > 0 && <span aria-hidden="true" className="px-1.5 text-faint">·</span>}
                 {/* A fact breaks at its separator, never inside: "Offsite copy" stays on one line. */}
-                <span className={cn("whitespace-nowrap", fact.tone === "error" && "font-medium text-destructive")}>{fact.text}</span>
+                <span className={cn("whitespace-nowrap", (fact.tone === "error" || fact.tone === "attention") && cn("font-medium", TONE_TEXT[fact.tone]))}>{fact.text}</span>
                 {index < status.facts.length - 1 && <span className="sr-only">, </span>}
               </span>
             ))}

@@ -27,6 +27,7 @@
  *
  * Pure: no clock, the age is measured against the collector's own reading.
  */
+import { BACKUP_SEVERITY } from "../borrowed/backups";
 import type { Discrepancy } from "./state";
 
 /**
@@ -44,6 +45,7 @@ export const MONITOR_STALE_MS = 5 * 60 * 1000;
 const ALREADY_SHOWN = new Set(["unit", "disk", "memory"]);
 
 type Problem = { kind: string; severity: string; slug: string | null; summary: string; since: number | null };
+
 
 /** How long, in the largest unit that fits, as the monitor writes it. */
 export function duration(ms: number): string {
@@ -241,7 +243,9 @@ export function monitorDiscrepancies(content: string | null | undefined, generat
     const lasting = problem.since === null ? "" : `, for ${duration(Math.max(0, generated - problem.since))}`;
     discrepancies.push({
       slug: problem.slug,
-      severity: problem.severity === "critical" ? "error" : "warning",
+      // A backup's, the one severity the monitor rates it by and a site's Backups section says it in (bin/cli/backups.ts),
+      // whatever an older or newer monitor sends.
+      severity: problem.kind === "backup" ? BACKUP_SEVERITY : problem.severity === "critical" ? "error" : "warning",
       label: problemLabel(problem),
       message: `${problem.summary} (monitor${lasting})`,
     });

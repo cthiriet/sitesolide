@@ -77,7 +77,7 @@ describe("the repositories' checks", () => {
 
   test("a failed check first, the server's or the bucket's, in its own words", () => {
     expect(checkReading({ local: { at, ok: true, error: null }, offsite: { at, ok: false, error: "the check of the bucket's repository found errors" } }, null, NOW)).toEqual({
-      tone: "error",
+      tone: "attention",
       label: "Offsite copy failed its check",
       detail: "the check of the bucket's repository found errors",
     })
@@ -108,7 +108,7 @@ describe("the schedule", () => {
     })
     expect(
       freshness(view({ lastRun: { startedAt: NOW, finishedAt: NOW, ok: false, snapshot: null, error: "not enough disk space" } }), NOW),
-    ).toEqual({ tone: "error", label: "Last run failed", detail: "not enough disk space" })
+    ).toEqual({ tone: "attention", label: "Last run failed", detail: "not enough disk space" })
     expect(freshness(view({ snapshots: [] }), NOW)).toMatchObject({ tone: "neutral", label: "No snapshot yet" })
     expect(freshness(view({ snapshots: [], excluded: "opted out by its sitesolide.json" }), NOW)).toEqual({
       tone: "neutral",
@@ -131,7 +131,7 @@ describe("the schedule", () => {
   test("the offsite copy: off, on with where, or misconfigured", () => {
     expect(offsiteReading({ target: null, error: null })).toMatchObject({ tone: "neutral", label: "Off" })
     expect(offsiteReading({ target: "backups at fsn1.example.invalid", error: null })).toEqual({ tone: "ok", label: "Encrypted, every run", detail: "backups at fsn1.example.invalid" })
-    expect(offsiteReading({ target: null, error: "BACKUP_S3_BUCKET missing" })).toMatchObject({ tone: "error" })
+    expect(offsiteReading({ target: null, error: "BACKUP_S3_BUCKET missing" })).toMatchObject({ tone: "attention" })
   })
 })
 
@@ -186,9 +186,9 @@ describe("the status row", () => {
     })
   })
 
-  test("red on a failed run, which keeps the age of the snapshot before it", () => {
+  test("a warning on a failed run, as the home page's banner says it, keeping the age of the snapshot before it", () => {
     const failed = status({ lastRun: { startedAt: NOW, finishedAt: NOW, ok: false, snapshot: null, error: "not enough disk space" } })
-    expect(failed).toMatchObject({ tone: "error", label: "Last run failed", detail: "not enough disk space" })
+    expect(failed).toMatchObject({ tone: "attention", label: "Last run failed", detail: "not enough disk space" })
     expect(failed.facts[0]).toEqual({ text: "Last snapshot 1h ago", tone: "neutral" })
   })
 
@@ -198,13 +198,13 @@ describe("the status row", () => {
     expect(stale.detail).toContain("sitesolide setup")
   })
 
-  test("a misconfigured bucket or a failed check is an error, said in its fact", () => {
+  test("a misconfigured bucket or a failed check is the same warning, said in its fact", () => {
     const bucket = status({ offsite: { target: null, error: "BACKUP_S3_BUCKET missing" } })
-    expect(bucket.tone).toBe("error")
-    expect(bucket.facts).toContainEqual({ text: "Offsite copy misconfigured", tone: "error" })
+    expect(bucket.tone).toBe("attention")
+    expect(bucket.facts).toContainEqual({ text: "Offsite copy misconfigured", tone: "attention" })
     const check = status({ checks: { local: { at: NOW, ok: false, error: "x" }, offsite: null } })
-    expect(check).toMatchObject({ tone: "error", label: "Last snapshot 1h ago" })
-    expect(check.facts).toContainEqual({ text: "Server's copy failed its check", tone: "error" })
+    expect(check).toMatchObject({ tone: "attention", label: "Last snapshot 1h ago" })
+    expect(check.facts).toContainEqual({ text: "Server's copy failed its check", tone: "attention" })
   })
 
   test("no offsite copy, or nothing checked yet, is information and no alarm", () => {

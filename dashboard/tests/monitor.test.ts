@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildStatus } from "../../monitor/src/status";
 import type { Tracked } from "../../monitor/src/alerts";
+import { BACKUP_SEVERITY } from "../borrowed/backups";
 import {
   MONITOR_STALE_MS,
   copyMonitorStatus,
@@ -51,6 +52,18 @@ describe("the monitor among the Issues", () => {
         label: "Certificate expiring",
         message: "The certificate for *.test-zone.invalid expires in 9 days, on 2026-09-07 (monitor, for 12 min)",
       },
+    ]);
+  });
+
+  test("a backup in trouble is the dashboard's one backup severity, a warning, whatever word the monitor sends", () => {
+    expect(BACKUP_SEVERITY).toBe("warning");
+    const content = status({
+      backup: tracked("down", "backup", "warning", "The last backup run failed for builder, 3 min ago"),
+      "backup:other": tracked("down", "backup", "critical", "Backups: the server's repository check failed 2 h ago"),
+    });
+    expect(monitorDiscrepancies(content, NOW).map(({ severity, label }) => [severity, label]).sort()).toEqual([
+      ["warning", "Backup check failed"],
+      ["warning", "Backup failed"],
     ]);
   });
 

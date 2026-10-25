@@ -311,3 +311,16 @@ export function listingLines(listing: Listing, dashboardUrl: string): string[] {
   lines.push("", `restore from the Backups section of ${dashboardUrl}`);
   return lines;
 }
+
+/**
+ * How serious a backup in trouble is, wherever it is said: a run that failed
+ * or is overdue, a repository's check that failed, a bucket half configured,
+ * which fails every project's run. A warning: the sites still serve, the
+ * snapshot before is still there to restore, and the next hourly run may go
+ * well, as a scheduled service's failed run is a warning. The monitor alerts
+ * with it (monitor/src/checks.ts), the dashboard's home page and a site's
+ * Backups section say it (dashboard/src/monitor.ts,
+ * dashboard/web/src/lib/backups.ts), so that none says it in another tone.
+ * The monitor's word and the dashboard's are the same for a warning.
+ */
+export const BACKUP_SEVERITY = "warning";
