@@ -95,9 +95,10 @@ function accessDisagrees(project: ProjectView | null, site: Pick<Site, "portal" 
 
 /**
  * A site's sections, each with what makes you open it: its discrepancies for
- * Overview, what its files ask for in Secrets (a missing file as an error,
- * unmanaged or restart pending as attention), general access in disagreement
- * for Access. Zero is not shown.
+ * Overview, what its files ask for in Secrets (a declared name or file not
+ * set in the tone the verdict counts it by, a platform file missing as an
+ * error, unmanaged or restart pending as attention), general access in
+ * disagreement for Access. Zero is not shown.
  */
 export function siteIndicators(sources: SiteSources): Record<Section, Indicator | null> {
   const { discrepancies, project, site, serverNow } = sources

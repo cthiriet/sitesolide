@@ -25,6 +25,8 @@ import {
   changeSummary,
   credentialPath,
   isEmptyFile,
+  MISSING_SECRET_SEVERITY,
+  MISSING_TONE,
   storeFileOffer,
   storeFileState,
   storeVariableOffer,
@@ -37,8 +39,9 @@ import type { Severity } from "@/lib/verdict"
 
 /*
  * A project's store, on its Secrets page: one panel of variables, the names
- * sitesolide.json declares and the server lacks first, in red, with *Set*
- * and *Generate* in their row; then every name the store holds, one line
+ * sitesolide.json declares and the server lacks first, in the tone of the
+ * warning the verdict counts them by, with *Set* and *Generate* in their
+ * row; then every name the store holds, one line
  * each, whose *Reveal*, *Copy* and *Set* come under the pointer and whose
  * other writes are in the row menu. One *Add* in the panel's header. The
  * files, when there are any, in a panel of their own; the build's names and
@@ -210,7 +213,7 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
     ...store.missing.map((name) => ({ name, missing: true, declared: true })),
     ...store.variables.filter((variable) => variable.source !== "none").map((variable) => ({ name: variable.name, missing: false, declared: variable.declared })),
   ]
-  // A declared file the server lacks first, in red, then the others.
+  // A declared file the server lacks first, in its warning's tone, then the others.
   const files = [...store.files].sort((a, b) => Number(b.state === "missing" && b.declared) - Number(a.state === "missing" && a.declared))
   const unmanagedFiles = store.files.filter((one) => one.state === "unmanaged" && one.reason !== null)
 
@@ -322,7 +325,7 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
           rowKey={line.name}
           idle={
             line.missing ? (
-              <StateLabel tone="error" title={`${slug} starts without it`}>
+              <StateLabel tone={MISSING_TONE} title={`${slug} starts without it`}>
                 Not set
               </StateLabel>
             ) : !line.declared ? (
@@ -621,7 +624,7 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
             rows={lines}
             rowKey={(line) => line.name}
             columns={variableColumns}
-            severity={gutterFor(lines, (line) => (line.missing ? "error" : null))}
+            severity={gutterFor(lines, (line) => (line.missing ? MISSING_SECRET_SEVERITY : null))}
             menu={variableMenu}
           />
         )}

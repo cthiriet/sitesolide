@@ -8,6 +8,7 @@
  * protects the machine is the steward, which judges every write.
  */
 import type { Reading } from "../read";
+import { may, roleOn } from "./powers";
 import type { Roles } from "./protocol";
 
 /**
@@ -18,6 +19,10 @@ import type { Roles } from "./protocol";
  * A site's preview code opens it to whoever holds it: an Admin of the site
  * reads it, to send it; a Viewer or a Developer reads that the site opens
  * with one, `withheld`, and asks an Admin.
+ *
+ * A discrepancy of a section the role does not reach, a declared secret not
+ * set for a Viewer, is left out: the Secrets section is not theirs, and a
+ * count their pages cannot show would disagree with them.
  */
 export function memberReading(reading: Reading, roles: Roles): Reading {
   if (!reading.present) return reading;
@@ -32,7 +37,12 @@ export function memberReading(reading: Reading, roles: Roles): Reading {
       sites: snapshot.sites
         .filter((site) => slugs.has(site.slug))
         .map((site) => (roles[site.slug] === "admin" || (site.lock?.code ?? null) === null ? site : { ...site, lock: { ...site.lock, code: null, url: null, withheld: true } })),
-      discrepancies: snapshot.discrepancies.filter((discrepancy) => discrepancy.slug !== null && slugs.has(discrepancy.slug)),
+      discrepancies: snapshot.discrepancies.filter(
+        (discrepancy) =>
+          discrepancy.slug !== null &&
+          slugs.has(discrepancy.slug) &&
+          (discrepancy.section !== "secrets" || may(roleOn(roles, discrepancy.slug), "secrets.list")),
+      ),
       machine: null,
     },
     audience: { ...audience, sites },

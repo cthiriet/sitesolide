@@ -37,6 +37,7 @@ import { isValidCode, previewHost } from "../borrowed/locks";
 import { PLATFORM_PORTS } from "../borrowed/services";
 import { timerUnit } from "../borrowed/unit";
 import { duration, monitorDiscrepancies } from "./monitor";
+import { MISSING_SECRET_SEVERITY, type StoreMissing } from "../borrowed/store-protocol";
 
 /**
  * The landing is not served from `/srv/sites/landing` but from the bare
@@ -378,6 +379,13 @@ export type Discrepancy = {
    */
   label: string;
   message: string;
+  /**
+   * The site's section that says more and mends it, when it is not the
+   * Overview: Secrets for a declared name the store lacks. A person whose
+   * role does not reach that section is not shown the discrepancy
+   * (src/people/view.ts).
+   */
+  section?: "secrets";
 };
 
 /**
@@ -765,10 +773,55 @@ export function buildSnapshot(raw: Raw): Snapshot {
 
   discrepancies.push(...findDiscrepancies(sites, raw));
   discrepancies.push(...monitorDiscrepancies(raw.monitor, raw.generated));
-  const rank = { error: 0, warning: 1 };
-  discrepancies.sort((a, b) => rank[a.severity] - rank[b.severity] || (a.slug ?? "").localeCompare(b.slug ?? ""));
 
-  return { generated: raw.generated, zone: raw.zone, sites, discrepancies, machine: raw.machine };
+  return { generated: raw.generated, zone: raw.zone, sites, discrepancies: sortDiscrepancies(discrepancies), machine: raw.machine };
+}
+
+/** Errors first, then warnings, each by slug, the machine's own first: a stable order for the page. */
+function sortDiscrepancies(discrepancies: Discrepancy[]): Discrepancy[] {
+  const rank = { error: 0, warning: 1 };
+  return discrepancies.sort((a, b) => rank[a.severity] - rank[b.severity] || (a.slug ?? "").localeCompare(b.slug ?? ""));
+}
+
+/** "DATABASE_KEY", "DATABASE_KEY and gcp.json", "A, B and C". */
+function listNames(names: readonly string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * A declared name each project's store lacks, as one discrepancy per site,
+ * in the severity bin/cli/store-protocol.ts gives it: the names come from the
+ * steward's listing, which the server reads beside the collector's reading
+ * (src/routes.ts), the collector never reading the store. Only for a site
+ * the snapshot holds: a store whose folder is gone has no row to carry it.
+ */
+export function secretDiscrepancies(sites: readonly Pick<Site, "slug">[], missing: ReadonlyMap<string, StoreMissing>): Discrepancy[] {
+  const found: Discrepancy[] = [];
+  for (const { slug } of sites) {
+    const names = missing.get(slug);
+    if (names === undefined) continue;
+    const all = [...names.runtime, ...names.files];
+    if (all.length === 0) continue;
+    const one = all.length === 1;
+    found.push({
+      slug,
+      severity: MISSING_SECRET_SEVERITY,
+      label: one ? "Secret not set" : `${all.length} secrets not set`,
+      message:
+        `${listNames(all)} ${one ? "is" : "are"} declared in sitesolide.json but not set on the server: ` +
+        `the service starts without ${one ? "it" : "them"}. Set ${one ? "it" : "them"} in its Secrets section`,
+      section: "secrets",
+    });
+  }
+  return found;
+}
+
+/** The snapshot with the declared names the stores lack among its discrepancies, in their order. */
+export function withMissingSecrets(snapshot: Snapshot, missing: ReadonlyMap<string, StoreMissing>): Snapshot {
+  const found = secretDiscrepancies(snapshot.sites, missing);
+  if (found.length === 0) return snapshot;
+  return { ...snapshot, discrepancies: sortDiscrepancies([...snapshot.discrepancies, ...found]) };
 }
 
 /**

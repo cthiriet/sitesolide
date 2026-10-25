@@ -3,6 +3,8 @@ import { DATA_DIR } from "../src/config";
 import { TOLERATED_FAILURES, INITIAL_BACKOFF_MS } from "../src/auth";
 import { createRoutes, type Store, type Options } from "../src/routes";
 import { tokenHash, type Session } from "../src/sessions";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 // The redirection from tests/setup.ts, checked here rather than assumed:
 // without it the tests would open the production service's database.
@@ -241,6 +243,34 @@ describe("state", () => {
     clock = NOW + 8 * 24 * 3600 * 1000;
     expect((await routes.state(request(cookie))).status).toBe(401);
     expect(store.sessions.size).toBe(0);
+  });
+
+  test("a declared secret the store lacks joins the snapshot's discrepancies, and a mute steward leaves it as it was", async () => {
+    const stateFile = join(DATA_DIR, "routes-state.json");
+    const manifest = { slug: "cms", port: 3040, start: "bun run server.ts", secrets: ["DATABASE_KEY"] };
+    const unit = { LoadState: "loaded", ActiveState: "active", SubState: "running" };
+    writeFileSync(
+      stateFile,
+      JSON.stringify({
+        generated: NOW,
+        zone: "test-zone.invalid",
+        folders: [{ slug: "cms", manifest: JSON.stringify(manifest), unit, bytes: 1, deployed: NOW }],
+        codes: "{}",
+        domains: null,
+        ports: [3040],
+        blocks: {},
+        machine: null,
+        previous: null,
+      }),
+    );
+    const read = async (missing: Options["missingSecrets"]) => {
+      routes = createRoutes(store, options({ stateFile, missingSecrets: missing }), () => clock);
+      const body = (await (await routes.state(request(await withSession()))).json()) as { snapshot: { discrepancies: { slug: string; label: string }[] } };
+      return body.snapshot.discrepancies.map((discrepancy) => [discrepancy.slug, discrepancy.label]);
+    };
+    expect(await read(async () => new Map([["cms", { runtime: ["DATABASE_KEY"], files: [] }]]))).toEqual([["cms", "Secret not set"]]);
+    expect(await read(async () => null)).toEqual([]);
+    expect(await read(undefined)).toEqual([]);
   });
 });
 

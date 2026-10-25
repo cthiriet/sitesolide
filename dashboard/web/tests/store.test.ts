@@ -128,7 +128,7 @@ describe("what is missing", () => {
       missing: ["STRIPE_WEBHOOK_SECRET", "ADMIN_TOKEN"],
       files: [storeFile({ name: "tls.key", state: "missing" }), storeFile({ name: "gcp.json" })],
     })
-    expect(storeMissing(store)).toEqual({ variables: ["STRIPE_WEBHOOK_SECRET", "ADMIN_TOKEN"], files: ["tls.key"] })
+    expect(storeMissing(store)).toEqual({ runtime: ["STRIPE_WEBHOOK_SECRET", "ADMIN_TOKEN"], files: ["tls.key"] })
     expect(missingLabel(store)).toBe("3 not set")
     expect(missingLabel(storeView())).toBeNull()
   })
@@ -154,10 +154,10 @@ describe("a file of the store", () => {
     expect(storeFileOffer(storeView({ may: READER }), storeFile())).toEqual({ upload: false, remove: false })
   })
 
-  test("its state in a word and a tone, none when set; an empty file says so, and is no error when nothing declares it", () => {
+  test("its state in a word and a tone, none when set; declared and missing or empty, the warning the verdict counts", () => {
     expect(storeFileState({ state: "set", reason: null, declared: true })).toBeNull()
-    expect(storeFileState({ state: "missing", reason: null, declared: true })).toEqual({ text: "Missing", tone: "error" })
-    expect(storeFileState({ state: "missing", reason: "empty", declared: true })).toEqual({ text: "Empty", tone: "error" })
+    expect(storeFileState({ state: "missing", reason: null, declared: true })).toEqual({ text: "Missing", tone: "attention" })
+    expect(storeFileState({ state: "missing", reason: "empty", declared: true })).toEqual({ text: "Empty", tone: "attention" })
     expect(storeFileState({ state: "missing", reason: "empty", declared: false })).toEqual({ text: "Empty", tone: "attention" })
     expect(storeFileState({ state: "unmanaged", reason: "a link", declared: true })).toEqual({ text: "Unmanaged", tone: "attention" })
     expect(isEmptyFile({ state: "missing", reason: "empty" })).toBe(true)
@@ -217,7 +217,7 @@ describe("the restart a change waits for", () => {
 })
 
 describe("what is wrong in a project with a store", () => {
-  test("declared and not set is an error", () => {
+  test("declared and not set is the warning the server counts it as, not an error", () => {
     const project = secretProject({
       slug: "cms",
       service: secretService({ startedAt: NOW - HOUR }),
@@ -225,7 +225,7 @@ describe("what is wrong in a project with a store", () => {
       store: storeView({ missing: ["ADMIN_TOKEN"], files: [storeFile({ name: "tls.key", state: "missing" })] }),
     })
     expect(projectProblems(project, NOW)).toEqual([
-      { key: "missing", tone: "error", label: "2 not set", names: ["ADMIN_TOKEN"], files: ["tls.key"] },
+      { key: "missing", tone: "attention", label: "2 not set", names: ["ADMIN_TOKEN"], files: ["tls.key"] },
     ])
   })
 

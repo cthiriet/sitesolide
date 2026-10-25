@@ -13,6 +13,7 @@ import {
   readTable,
   unitLabel,
   unitOf,
+  withMissingSecrets,
   type Raw,
   type RawFolder,
   type RawUnit,
@@ -835,5 +836,51 @@ describe("each discrepancy's label", () => {
     expect(unitLabel("deactivating", "stop-sigterm")).toBe("Stopping");
     expect(unitLabel("failed", "failed")).toBe("Down");
     expect(unitLabel("inactive", "dead")).toBe("Down");
+  });
+});
+
+describe("a declared secret the store lacks", () => {
+  const app = (slug: string, port: number) => ({ slug, port, start: "bun run server.ts", secrets: ["DATABASE_KEY", "CMS_TOKEN"] });
+  const snapshot = () =>
+    buildSnapshot(
+      raw(
+        [
+          folder("cms", app("cms", 3040), { unit: unit() }),
+          folder("shop", app("shop", 3041), { unit: unit({ ActiveState: "failed", SubState: "failed" }) }),
+        ],
+        { ports: [3040] },
+      ),
+    );
+
+  test("is one warning per site, named by its count, the names in its message, never a value", () => {
+    const missing = new Map([
+      ["cms", { runtime: ["DATABASE_KEY"], files: [] }],
+      ["shop", { runtime: ["DATABASE_KEY", "CMS_TOKEN"], files: ["gcp.json"] }],
+    ]);
+    const found = withMissingSecrets(snapshot(), missing).discrepancies.filter((discrepancy) => discrepancy.section === "secrets");
+    expect(found.map(({ slug, severity, label }) => [slug, severity, label])).toEqual([
+      ["cms", "warning", "Secret not set"],
+      ["shop", "warning", "3 secrets not set"],
+    ]);
+    expect(found[0]!.message).toBe(
+      "DATABASE_KEY is declared in sitesolide.json but not set on the server: the service starts without it. Set it in its Secrets section",
+    );
+    expect(found[1]!.message).toContain("DATABASE_KEY, CMS_TOKEN and gcp.json are declared");
+  });
+
+  test("takes its place in the order, errors first, and leaves the snapshot alone with nothing missing", () => {
+    const before = snapshot();
+    const after = withMissingSecrets(before, new Map([["shop", { runtime: ["CMS_TOKEN"], files: [] }]]));
+    expect(after.discrepancies.map((discrepancy) => [discrepancy.slug, discrepancy.severity, discrepancy.label])).toEqual([
+      ["shop", "error", "Down"],
+      ["shop", "error", "Port not listening"],
+      ["shop", "warning", "Secret not set"],
+    ]);
+    expect(withMissingSecrets(before, new Map())).toBe(before);
+  });
+
+  test("is said only of a site the snapshot holds", () => {
+    const after = withMissingSecrets(snapshot(), new Map([["gone", { runtime: ["A"], files: [] }]]));
+    expect(after.discrepancies.some((discrepancy) => discrepancy.slug === "gone")).toBe(false);
   });
 });

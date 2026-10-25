@@ -349,9 +349,10 @@ empty state rather than an error, and a section their role does not open,
 Indicators (`lib/sidebar.ts`). Machine: *Sites* the number of discrepancies (error
 if there is one, otherwise attention); Activity, People, Tokens and
 Connectors report nothing. Site: *Overview* its discrepancies; *Secrets* what
-its store and its files ask for, a declared name or file not set and a missing
-file as an error, unmanaged, a unit that does not read its store yet or a
-restart pending as attention; *Access* its general access disagreeing with `sitesolide.json`
+its store and its files ask for, a declared name or file not set in the tone
+of the warning the verdict counts it by, a platform file missing as an
+error, unmanaged, a unit that does not read its store yet or a restart
+pending as attention; *Access* its general access disagreeing with `sitesolide.json`
 (error), and nothing else: who has access is a choice, not a problem.
 *Audience* and *Backups* report nothing. Zero is not shown.
 
@@ -1133,9 +1134,15 @@ refuses every change to the store.
 A project with a store, every app but the dashboard and the portal
 (`components/secrets-store.tsx`), shows **Variables**, its count the number
 of rows: one `DataTable` of 44 px rows, *Name* and *Value*. The names
-`sitesolide.json` declares and the server lacks come first, the error icon in
-the gutter, *Not set* in red, *Set* and *Generate* in the row (on a phone
-*Set* alone, *Generate* in the menu). Then every name the store holds, quiet:
+`sitesolide.json` declares and the server lacks come first, the warning icon
+in the gutter, *Not set* in attention, *Set* and *Generate* in the row (on a
+phone *Set* alone, *Generate* in the menu). They are the server's warning
+too: the dashboard reads them from the steward's listing beside every
+snapshot and counts them among its discrepancies, "Secret not set" beside the
+site's name, in the verdict and the badges (`storeMissing` and its severity in
+bin/cli/store-protocol.ts, which `sitesolide deploy` warns by too). A
+warning, as `sitesolide deploy` gives it: the service starts without the
+value, and a service that cannot is down, which is its own error. Then every name the store holds, quiet:
 *Not declared*, muted, its tooltip "Not in sitesolide.json", beside a name
 the manifest no longer declares, nothing beside the others. *Reveal* and
 *Copy*, the owner's alone, and *Set* come under the pointer and on focus; the
@@ -1158,7 +1165,8 @@ the public values from `env` in `sitesolide.json`, for reference, with no
 action.
 
 **Files**, only when the store declares or holds one: each file's name,
-*Missing* or *Empty* in red, *Unmanaged* in attention (its reason and command
+*Missing* or *Empty* in attention, a declared one counted with the names
+not set, *Unmanaged* in attention (its reason and command
 in a banner above), *Not declared*; the path every service reads it at,
 `$CREDENTIALS_DIRECTORY/files_<name>`, its copy under the pointer; its size,
 to the owner alone. *Upload* sits in the row while it is missing, *Replace*

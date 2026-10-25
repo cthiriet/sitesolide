@@ -35,7 +35,7 @@ import { askSteward, ownerReadCommand, ownerWriteCommand, type RunOnMachine } fr
 import { isApp, isValidFileName, isValidSlug, STORELESS_SLUGS, type Manifest, type SecretsDeclaration } from "./manifest";
 import { call, predatesRoute, report, type Answer as ApiAnswer, type Failure, type Fetch, type Output, type Remote, type Typed } from "./remote";
 import { credentialName, GENERATE_DEFAULT_BYTES, GENERATE_FORMATS, GENERATE_MAX_BYTES, GENERATE_MIN_BYTES, MAX_STORE_FILE_BYTES, type GenerateFormat } from "./store";
-import type { RestartVerdict, StoreChangeResponse, StoreFileView, StoreGenerateRequest, StoreMissing, StoreView } from "./store-protocol";
+import { storeMissing, type RestartVerdict, type StoreChangeResponse, type StoreFileView, type StoreGenerateRequest, type StoreMissing, type StoreView } from "./store-protocol";
 import { checkValue, isVariableName, VALUE_LIKE_PREFIXES } from "./variables";
 
 // --- what was asked ----------------------------------------------------------------
@@ -542,10 +542,8 @@ export function withDeclared(view: StoreView, declaration: SecretsDeclaration): 
   return { ...view, missing, files: files.filter((file) => file.declared || file.state !== "missing") };
 }
 
-/** The names a listing says are missing: declared runtime names with no value, declared files not present. */
-export function missingOf(view: StoreView): StoreMissing {
-  return { runtime: [...view.missing], files: view.files.filter((file) => file.declared && file.state === "missing").map((file) => file.name) };
-}
+/** The names a listing says are missing: declared runtime names with no value, declared files not present, by the rule the dashboard counts by too. */
+export const missingOf: (view: StoreView) => StoreMissing = storeMissing;
 
 /** The warning of names missing, for whoever deploys without a terminal: the commands that set each, never a value. */
 export function missingWarning(missing: StoreMissing): { message: string; details: string[] } {

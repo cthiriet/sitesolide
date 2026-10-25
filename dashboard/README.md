@@ -150,6 +150,23 @@ site. A project's units, the disk and the memory are left out, the page judging
 them already, a worker, a scheduled service and its timer included; a status
 older than five minutes shows as "Monitor silent", never as the present. No monitor installed, no field, nothing shown.
 
+## A store's missing names, from the steward
+
+The collector never reads a store: `/etc/sitesolide` is the steward's. What a
+project's manifest declares and its store lacks, a runtime name with no value
+or a declared file absent or empty, comes instead from the steward's own
+listing, `GET /projects`, which the dashboard already reads with the session
+alone for the Secrets section and which carries names, never a value. The
+state route reads it beside the collector's reading, two seconds at most, and
+adds one discrepancy per site, "Secret not set" or "2 secrets not set"
+(`withMissingSecrets` in [src/state.ts](src/state.ts), from
+[src/secrets/missing.ts](src/secrets/missing.ts)), by the rule and the
+severity of `bin/cli/store-protocol.ts`, which the page's Secrets and
+`sitesolide deploy` go by too. A warning, as `sitesolide deploy` words it: the service
+starts without the value, and one that cannot is down, which the snapshot
+already says as an error. A steward that does not answer leaves the snapshot
+as the collector wrote it, and the Secrets section says it is unreachable.
+
 ## A project's services
 
 A project may run several processes, `services` in its manifest: servers on
@@ -870,6 +887,7 @@ private key being out of its reach.
 
 **What a person sees, the dashboard filters**, from data it already holds:
 `/api/state` keeps their projects alone and drops the machine's own figures,
+and a secret not set where their role does not open Secrets,
 `/api/audit` keeps the rows of their projects and their own
 (src/people/view.ts, src/audit/merge.ts), the backups keep those of the
 projects where their role shows them (src/people/relay.ts). A site's

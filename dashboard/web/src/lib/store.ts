@@ -11,8 +11,9 @@
  * the listing carries names and states only, and a revealed value lives in the
  * row that shows it.
  */
+import { MISSING_SECRET_SEVERITY, storeMissing } from "../../../borrowed/store-protocol"
 import { ago, size } from "./format"
-import type { Tone } from "./tones"
+import { severityTone, type Tone } from "./tones"
 import type { GenerateFormat, ProjectView, StoreChangeResponse, StoreFileView, StoreRestoreResponse, StoreVariableView, StoreView } from "./types"
 
 // --- The project as it arrives ----------------------------------------------------
@@ -100,20 +101,22 @@ export function storeVariableOffer(store: Pick<StoreView, "may" | "state">, vari
 // --- What is missing --------------------------------------------------------------
 
 /**
- * The declared names with no value in the store, and the declared files the
- * server lacks, absent or empty, in the steward's order.
+ * The declared names with no value in the store, `runtime`, and the declared
+ * files the server lacks, absent or empty, in the steward's order: the rule
+ * the server counts them by among the snapshot's discrepancies and the CLI
+ * warns by (bin/cli/store-protocol.ts), so that this section, the verdict
+ * and the Sites row agree.
  */
-export function storeMissing(store: Pick<StoreView, "missing" | "files">): { variables: string[]; files: string[] } {
-  return {
-    variables: [...store.missing],
-    files: store.files.filter((file) => file.state === "missing" && file.declared).map((file) => file.name),
-  }
-}
+export { storeMissing }
+
+/** What a declared name the store lacks is, in a row's gutter and its word: the warning the verdict counts. */
+export { MISSING_SECRET_SEVERITY }
+export const MISSING_TONE: Tone = severityTone(MISSING_SECRET_SEVERITY)
 
 /** "2 not set", for the sidebar and the Overview; null when nothing is missing. */
 export function missingLabel(store: Pick<StoreView, "missing" | "files">): string | null {
-  const { variables, files } = storeMissing(store)
-  const count = variables.length + files.length
+  const { runtime, files } = storeMissing(store)
+  const count = runtime.length + files.length
   return count === 0 ? null : `${count} not set`
 }
 
@@ -142,8 +145,8 @@ export function storeFileState(file: Pick<StoreFileView, "state" | "reason" | "d
     case "set":
       return null
     case "missing":
-      // An undeclared file nobody reads is no error, even empty.
-      return { text: isEmptyFile(file) ? "Empty" : "Missing", tone: file.declared ? "error" : "attention" }
+      // Declared, the verdict counts it as a warning; undeclared, nobody reads it, even empty.
+      return { text: isEmptyFile(file) ? "Empty" : "Missing", tone: file.declared ? MISSING_TONE : "attention" }
     case "unmanaged":
       return { text: "Unmanaged", tone: "attention" }
   }

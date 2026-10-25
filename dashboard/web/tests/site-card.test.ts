@@ -570,7 +570,7 @@ describe("the Overview as a hub", () => {
     const store = storeView({ variables: [storeVariable(), storeVariable({ name: "SMTP_URL", source: "none" })], missing: ["SMTP_URL"], files: [storeFile()] })
     const headline = secretsHeadline(secretProject({ slug: "cms", files: [], store }), NOW)
     expect(headline.text).toBe("2 variables, 1 file")
-    expect(headline.problem).toMatchObject({ text: "1 not set", tone: "error", more: 0 })
+    expect(headline.problem).toMatchObject({ text: "1 not set", tone: "attention", more: 0 })
     expect(secretsHeadline(secretProject({ slug: "cms", files: [], store: storeView() }), NOW)).toEqual({ text: "None", problem: null })
     const portal = secretsHeadline(secretProject({ files: [secretFile({ state: "absent" }), secretFile({ name: "users.env", state: "unmanaged" })] }), NOW)
     expect(portal.text).toBe("2 files")

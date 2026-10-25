@@ -4,7 +4,9 @@
  * port or a database. The server, for its part, creates only one.
  */
 import { remainingWait, isPasswordValid, isAcceptableSubmission } from "./auth";
-import { read } from "./read";
+import { read, type Reading } from "./read";
+import type { StoreMissing } from "../borrowed/store-protocol";
+import { withMissingSecrets } from "./state";
 import { memberReading } from "./people/view";
 import type { Roles } from "./people/protocol";
 import {
@@ -42,6 +44,13 @@ export type Options = {
    * before members. See src/people/view.ts.
    */
   roles?: (req: Request, now: number) => Promise<Roles | null | "no-session" | "unreachable">;
+  /**
+   * The declared names each project's store lacks, read from the steward's
+   * listing (src/secrets/missing.ts), or null when it does not answer: they
+   * join the snapshot's discrepancies, which the collector cannot see, never
+   * reading the store. Absent, the snapshot goes out as the collector left it.
+   */
+  missingSecrets?: () => Promise<ReadonlyMap<string, StoreMissing> | null>;
   /**
    * Called on signing out a member with their session's token: the steward
    * closes its side and journals it. Never rejects.
@@ -191,6 +200,13 @@ export function createRoutes(store: Store, options: Options, clock: () => number
     return next;
   }
 
+  /** The reading with the names the stores lack among its discrepancies, when the steward says them. */
+  async function withSecrets(reading: Reading): Promise<Reading> {
+    if (!reading.present || options.missingSecrets === undefined) return reading;
+    const missing = await options.missingSecrets();
+    return missing === null ? reading : { ...reading, snapshot: withMissingSecrets(reading.snapshot, missing) };
+  }
+
   return {
     /**
      * Enough to know whether to display the form or the dashboard, with no
@@ -300,7 +316,7 @@ export function createRoutes(store: Store, options: Options, clock: () => number
         return Response.json({ error: "failure", message: "Can't reach the server to say what this person may see." }, { status: 502 });
       }
 
-      const reading = await read(options.stateFile, now);
+      const reading = await withSecrets(await read(options.stateFile, now));
       // Nothing in this dashboard is to be kept: it describes an instant.
       return Response.json(roles === null ? reading : memberReading(reading, roles), { headers: NO_CACHE });
     },

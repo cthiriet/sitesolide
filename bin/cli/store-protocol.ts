@@ -2,11 +2,14 @@
  * The shapes a project's store is listed and changed in: the steward's
  * answers and the bodies it takes, on the dashboard's socket, the owner's and
  * through the control API, which the CLI and the dashboard's page read too.
+ * And the one reading of a listing every side shares: what the store lacks
+ * of what the manifest declares, and how serious that is.
  *
- * Types only. The dashboard imports `../../borrowed/store-protocol`, its web
- * page `import type` from the same; the CLI imports this file. None of these
- * shapes carries a value but StoreRevealResponse, which only the owner's
- * unlocked dashboard ever receives.
+ * Shapes and that pure reading, no import but types. The dashboard imports
+ * `../../borrowed/store-protocol`, its web page from the same; the CLI
+ * imports this file. None of these shapes carries a value but
+ * StoreRevealResponse, which only the owner's unlocked dashboard ever
+ * receives.
  */
 import type { GenerateFormat } from "./store";
 
@@ -59,6 +62,27 @@ export type StoreView = {
 };
 
 export type StoreMissing = { runtime: string[]; files: string[] };
+
+/**
+ * What a listing says the store lacks: the declared runtime names with no
+ * value, and the declared files absent or empty, in the steward's order.
+ * `sitesolide deploy` warns by it, the dashboard counts it among its
+ * discrepancies and its Secrets section draws it: one rule, so that none of
+ * them names what another does not.
+ */
+export function storeMissing(view: Pick<StoreView, "missing" | "files">): StoreMissing {
+  return { runtime: [...view.missing], files: view.files.filter((file) => file.declared && file.state === "missing").map((file) => file.name) };
+}
+
+/**
+ * How serious a declared name the store lacks is: a warning, not an error.
+ * `sitesolide deploy` warns and goes on (docs/secrets.md, "Deploy never waits
+ * on a runtime secret"), and the service starts without it: an app that
+ * cannot live without the value stops at start, and that stop is an error of
+ * its own, the service's, which the dashboard already says. The missing name
+ * is what to set, worth a look; red stays for what has failed.
+ */
+export const MISSING_SECRET_SEVERITY = "warning";
 
 export type StoreTarget = { slug: string };
 export type StoreSetRequest = StoreTarget & { name: string; value: string };

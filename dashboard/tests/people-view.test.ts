@@ -85,6 +85,15 @@ describe("what a person sees of the snapshot", () => {
     expect(JSON.stringify(seen)).not.toContain("secret-project");
   });
 
+  test("a secret not set, to whoever opens Secrets: a Developer and an Admin, never a Viewer", () => {
+    const present = reading as Extract<Reading, { present: true }>;
+    const unset = (slug: string) => ({ slug, severity: "warning", label: "Secret not set", message: `${slug} lacks one`, section: "secrets" }) as const;
+    const withUnset = { ...reading, snapshot: { ...present.snapshot, sites: [site("blog"), site("shop"), site("cms")], discrepancies: [unset("blog"), unset("shop"), unset("cms")] } } as Reading;
+    const seen = memberReading(withUnset, { blog: "viewer", shop: "developer", cms: "admin" });
+    if (!seen.present) throw new Error("absent");
+    expect(seen.snapshot.discrepancies.map((one) => one.slug)).toEqual(["shop", "cms"]);
+  });
+
   test("a site's preview code: an Admin of it reads it, a Viewer or a Developer reads that there is one", () => {
     const locked = (slug: string) => ({ slug, lock: { closed: true, code: "K7M2PQ", url: `https://${slug}.test-zone.invalid/?key=K7M2PQ` } }) as never;
     const withCode = { ...reading, snapshot: { ...(reading as Extract<Reading, { present: true }>).snapshot, sites: [locked("blog"), locked("shop"), locked("cms")] } } as Reading;

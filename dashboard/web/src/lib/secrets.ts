@@ -12,7 +12,7 @@
  */
 import { capitalise, duration, plural } from "./format"
 import { serviceWord } from "./sites"
-import { missingLabel, storeMissing, storePending, withStore } from "./store"
+import { MISSING_TONE, missingLabel, storeMissing, storePending, withStore } from "./store"
 import type { Tone } from "./tones"
 import type {
   ErrorCode,
@@ -283,8 +283,8 @@ export function projectProblems(project: ProjectView, serverNow: number): Proble
   const store = project.store
   const missing = store === null ? null : missingLabel(store)
   if (store !== null && missing !== null) {
-    const { variables, files } = storeMissing(store)
-    problems.push({ key: "missing", tone: "error", label: missing, names: variables, files })
+    const { runtime, files } = storeMissing(store)
+    problems.push({ key: "missing", tone: MISSING_TONE, label: missing, names: runtime, files })
   }
   for (const file of project.files) {
     if (file.state === "absent") problems.push({ key: "absent", tone: "error", label: "Missing", file: file.name })

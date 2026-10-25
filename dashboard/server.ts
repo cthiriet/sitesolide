@@ -36,7 +36,8 @@ import { createMemberRelay } from "./src/people/relay";
 import { createPortalAuditRoute, localPortalAudit } from "./src/portal-audit";
 import { localAccessSteward } from "./src/access/client";
 import { createAccessRoutes } from "./src/access/routes";
-import { localSteward } from "./src/secrets/client";
+import { DEFAULT_TIMEOUTS, localSteward } from "./src/secrets/client";
+import { readMissingSecrets } from "./src/secrets/missing";
 import { createTokens } from "./src/secrets/tokens";
 import { createSecretsRoutes } from "./src/secrets/routes";
 import { localConnectorsSteward, localEgress } from "./src/connectors/client";
@@ -181,6 +182,12 @@ const memberRelay = createMemberRelay({
   control: controlStore,
 });
 
+// The names the stores lack, read from the steward's listing beside every
+// snapshot: the collector never reads the store, and the verdict, the Sites
+// rows and the badges must count them as the Secrets section does. A steward
+// slow to list holds the snapshot back two seconds at most.
+const listing = localSteward(STEWARD_SOCKET, { ...DEFAULT_TIMEOUTS, shortMs: 2_000 });
+
 const routes = createRoutes(store, {
   hash: PASSWORD_HASH,
   publicUrl: PUBLIC_URL,
@@ -188,6 +195,7 @@ const routes = createRoutes(store, {
   sessionDurationMs: SESSION_DURATION_MS,
   memberSessionDurationMs: MEMBER_SESSION_DURATION_MS,
   stateFile: STATE_FILE,
+  missingSecrets: () => readMissingSecrets(listing),
   forgetUnlock: secrets.forgetUnlock,
   roles: members.roles,
   memberSignOut: async (token) => {
