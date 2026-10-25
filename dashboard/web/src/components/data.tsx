@@ -313,6 +313,7 @@ function OpenSession({
           overlay
           configured={currentConfigured}
           sso={currentSso}
+          zone={value.snapshot?.zone ?? null}
           message="Your session expired. Sign in again to pick up where you left off."
           onOpened={open}
         />
@@ -326,7 +327,7 @@ const NO_SSO: SsoOffer = { offered: false, providerName: null }
 type Session =
   | { state: "verification" }
   | { state: "unreachable" }
-  | { state: "closed"; configured: boolean; sso: SsoOffer }
+  | { state: "closed"; configured: boolean; sso: SsoOffer; zone: string | null }
   | { state: "open"; configured: boolean; sso: SsoOffer; identity: IdentityView | null }
 
 /**
@@ -342,10 +343,12 @@ export function DataProvider({ wait, children }: { wait: ReactNode; children: Re
     const { status, body } = await readSession()
     if (status !== 200 || body === null) return setSession({ state: "unreachable" })
     const sso = body.sso ?? NO_SSO
+    // A service from before the zone was named says none: the sign-in then reads "Server dashboard".
+    const zone = typeof body.zone === "string" && body.zone !== "" ? body.zone : null
     setSession(
       body.open
         ? { state: "open", configured: body.configured, sso, identity: body.identity ?? null }
-        : { state: "closed", configured: body.configured, sso },
+        : { state: "closed", configured: body.configured, sso, zone },
     )
   }, [])
 
@@ -373,7 +376,7 @@ export function DataProvider({ wait, children }: { wait: ReactNode; children: Re
     case "unreachable":
       return <UnreachableScreen onRetry={() => void check()} />
     case "closed":
-      return <SignIn configured={session.configured} sso={session.sso} onOpened={() => void check(true)} />
+      return <SignIn configured={session.configured} sso={session.sso} zone={session.zone} onOpened={() => void check(true)} />
     case "open":
       return (
         <OpenSession configured={session.configured} identity={session.identity} sso={session.sso} onClosed={closed}>

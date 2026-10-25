@@ -156,6 +156,7 @@ const members = createMembersRoutes({
   publicUrl: PUBLIC_URL,
   online: ONLINE,
   passwordConfigured: PASSWORD_HASH !== "",
+  zone: ZONE,
   steward: membersSteward,
   portal: localDashboardPortal(PORTAL_URL),
   store: { recordSession, purgeSessions, closeSession },

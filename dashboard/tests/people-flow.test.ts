@@ -350,9 +350,9 @@ afterAll(() => {
 });
 
 describe("a person, end to end", () => {
-  test("the sign-in page offers the portal's provider", async () => {
+  test("the sign-in page offers the portal's provider, and names the zone the password goes to", async () => {
     const body = (await (await fetch(`${DASHBOARD}/api/session`)).json()) as Record<string, unknown>;
-    expect(body).toMatchObject({ open: false, configured: true, identity: null, sso: { offered: true, providerName: "Acme" } });
+    expect(body).toMatchObject({ open: false, configured: true, identity: null, sso: { offered: true, providerName: "Acme" }, zone: ZONE });
   });
 
   test("signs in through the portal, lands where they asked, and is told who they are and on what", async () => {

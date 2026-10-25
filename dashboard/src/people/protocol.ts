@@ -121,4 +121,9 @@ export type IdentityView = { kind: "owner" } | { kind: "person"; email: string; 
 /** Whether the sign-in page offers the portal's provider, and under which name. */
 export type SsoOffer = { offered: boolean; providerName: string | null };
 
-export type SessionResponse = { open: boolean; configured: boolean; identity: IdentityView | null; sso: SsoOffer };
+/**
+ * `zone`: the zone the server serves, which the sign-in names above the
+ * password, so that whoever runs a test install beside production sees
+ * which server it goes to. The dashboard's own address already carries it.
+ */
+export type SessionResponse = { open: boolean; configured: boolean; identity: IdentityView | null; sso: SsoOffer; zone: string | null };

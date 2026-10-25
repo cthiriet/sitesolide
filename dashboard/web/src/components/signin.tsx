@@ -46,12 +46,15 @@ function currentReturn(): string {
 export function SignIn({
   configured,
   sso = { offered: false, providerName: null },
+  zone = null,
   message = "",
   overlay = false,
   onOpened,
 }: {
   configured: boolean
   sso?: SsoOffer
+  /** The zone the server serves, under the title: which server the password goes to, before it is typed. */
+  zone?: string | null
   message?: string
   overlay?: boolean
   onOpened: () => void
@@ -142,7 +145,12 @@ export function SignIn({
           <CardTitle id={titleId} className="text-[1.0625rem] leading-6 font-semibold tracking-[-0.01em]">
             Sign in
           </CardTitle>
-          <CardDescription>{message !== "" ? message : "Server dashboard"}</CardDescription>
+          {zone !== null ? (
+            <CardDescription className="font-mono text-[0.8125rem] wrap-anywhere">{zone}</CardDescription>
+          ) : (
+            <CardDescription>Server dashboard</CardDescription>
+          )}
+          {message !== "" && <p className="pt-1 text-sm text-pretty">{message}</p>}
         </CardHeader>
         <CardContent className="grid gap-4">
           {ssoFailure !== null && (

@@ -42,6 +42,8 @@ export type MembersRoutesDependencies = {
   online: boolean;
   /** Is a password hash in place? The sign-in page says so when it is not. */
   passwordConfigured: boolean;
+  /** The zone the server serves, named on the sign-in page; empty when the service was started without one. */
+  zone?: string;
   steward: MembersSteward;
   portal: DashboardPortal;
   store: {
@@ -251,6 +253,7 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
         configured: dependencies.passwordConfigured,
         identity: resolved === null ? null : identityView(resolved.identity),
         sso: await ssoOffer(now),
+        zone: dependencies.zone === undefined || dependencies.zone === "" ? null : dependencies.zone,
       });
     },
 
