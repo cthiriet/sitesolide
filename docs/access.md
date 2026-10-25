@@ -220,7 +220,8 @@ and `token.revoke` under their email, and `project.create` for a project
 their token created; the dashboard's deployments, under `token:<id>`, name the
 person in their detail, and so do the secrets their token set or removed and
 the restarts it made, which the steward journals under `token:<id>` with the
-person beside it. The *Tokens* page's *Token activity* lists both.
+person beside it. A token's sheet on the *Tokens* page lists both, its last
+ten lines, and *All activity* opens the rest in *Activity*.
 
 ## What you get from the owner
 
@@ -548,7 +549,8 @@ yet may be set too; every service loads every file of the project's store.
 - **No unlock.** A person's change in the dashboard asks for their unlock; a
   token's does not. Minting it took the unlock, and *Manage secrets* is what its
   maker opted into: whoever holds the token sets values until it expires or is
-  revoked, within the bounds above, every change in sight on *Token activity*.
+  revoked, within the bounds above, every change in sight in the token's sheet
+  and in *Activity*.
 - **An owner's token without the public permission** changes the secrets of a
   project only when it could deploy that project as the machine carries it,
   no path exempted from the portal, no domain or outbound network it could
@@ -567,12 +569,11 @@ yet may be set too; every service loads every file of the project's store.
 Every change is journaled by the steward, one line per name, never its value,
 under `token:<id>` and, for a person's own token, their email: the project's
 *Activity* reads "Set API_KEY" by "alice@example.com (token)", and the
-*Tokens* page's *Token activity* lists it beside the token's deployments. So is every refusal the steward decides, within the
+token's sheet on the *Tokens* page lists it beside its deployments. So is every refusal the steward decides, within the
 bound above: a person lowered, a token without *Manage secrets*, a reserved
 name. The dashboard refuses a malformed body alone before asking it.
-*Token activity* reads the journal's latest 250 lines: on a busy machine they
-cover a short while, and an older change is on the project's *Activity*
-until the journal drops it.
+The sheet shows the token's last ten lines; *Activity*, narrowed to the
+token, reads further back, until the journal drops the line.
 
 **For an agent**: `sitesolide secrets generate NAME` draws a random key on the
 server, which nobody sees, and the MCP tool `secrets_generate` does the same;

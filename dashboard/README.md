@@ -637,7 +637,8 @@ server.ts  --  GET 127.0.0.1:3129/audit, /status  -->  egress proxy
   such route`, which the page turns into *run bin/deploy-steward.sh*. Without
   the proxy's folder the page says the proxy is not installed and writes
   nothing. A file in another form than the steward's is listed as unmanaged and
-  never rewritten. An unreachable proxy empties the activity panel alone.
+  never rewritten. An unreachable proxy leaves a connector's *Recent* and
+  Activity's egress source empty, and nothing else.
 
 The steward's unit gains `ReadWritePaths=-/etc/sitesolide-egress`, with the
 dash: the folder exists only once `bin/deploy-egress.sh` has run.
@@ -2026,12 +2027,11 @@ other. A person's restart and the owner's keep their place under the lock.
 included: no value, no size, no previous version. The dashboard withholds a steward's message that
 would quote a value sent, records nothing in `dashboard.db`, and never logs
 the body. **No unlock**: minting the token took it, and *Manage secrets* is
-the opt-in. *Token activity*, on *Tokens*, reads the steward's journal for
-the rows of `token:<id>`, a person their own tokens' alone, beside the
-deployments of `dashboard.db`; the project's *Activity* shows the same rows,
-"Set API_KEY" by "alice@example.com (token)". It reads the journal's latest
-250 lines: on a busy machine they cover a short while, and the project's
-*Activity* reads further back, until the journal drops the line.
+the opt-in. A token's sheet, on *Tokens*, shows its last ten lines of
+*Activity*, the steward's journal for the rows of `token:<id>` beside the
+deployments of `dashboard.db`, a person their own tokens' alone; *Activity*
+shows the same rows, "Set API_KEY" by "alice@example.com (token)", and reads
+further back, until the journal drops the line.
 
 A restart with the change is a second call to the steward once the write
 succeeded: refused, `busy` or past its bound, it leaves the write and its
@@ -2049,7 +2049,7 @@ run `sitesolide upgrade`; its queue of writes full, or a restart's turn, a
 | Threat | What stops it |
 |---|---|
 | A stolen token | Its scope: the projects granted and its own, private sites unless allowed. Every deployment is in the audit with the token's id and email. A domain it declares, never switched on: the machine's `active` stands. Of access, Can open alone, to the company's people and domains, never password access for someone outside them, and the removal of Can open entries, every change in the steward's journal under `token:<id>`, its refused ones within its 60 refusals an hour, what it lets in stopping at half the access log. It restarts the projects it deploys, 30 times an hour at most, one at a time, never holding the secrets' lock. Revoking takes one click and no password; an expiry ends it anyway. |
-| A stolen token with *Manage secrets* | An accepted risk, the permission being the opt-in, and bounded: it writes without an unlock, but never reads a value, a size or a previous version back; any name of its projects' stores and their files, never `PASSWORD_HASH`, a variable the unit sets, a reserved one (`LD_PRELOAD`, `HTTPS_PROXY`), another project's store or a platform project's; an owner's token without `public` only on a project restricted on the machine that it could deploy as it stands; 120 changes an hour. Every change is a line of the steward's journal under `token:<id>`, on *Token activity*, and the store keeps its previous version, which the owner or an Admin restores. Its refusals are journaled too, 60 an hour, then refused `too-many-attempts` unjournaled: one token writes 210 lines an hour at most, and the journal keeps its latest 500 at least, so a stolen token cannot push its last hour out by itself. *Token activity* reads the latest 250 lines, a short while on a busy machine; the project's *Activity* goes further back. The 256 KiB cap and the files' bounds tell it roughly how much the store holds, nothing of its values. The default expiry stays 90 days. |
+| A stolen token with *Manage secrets* | An accepted risk, the permission being the opt-in, and bounded: it writes without an unlock, but never reads a value, a size or a previous version back; any name of its projects' stores and their files, never `PASSWORD_HASH`, a variable the unit sets, a reserved one (`LD_PRELOAD`, `HTTPS_PROXY`), another project's store or a platform project's; an owner's token without `public` only on a project restricted on the machine that it could deploy as it stands; 120 changes an hour. Every change is a line of the steward's journal under `token:<id>`, in the token's sheet and in *Activity*, and the store keeps its previous version, which the owner or an Admin restores. Its refusals are journaled too, 60 an hour, then refused `too-many-attempts` unjournaled: one token writes 210 lines an hour at most, and the journal keeps its latest 500 at least, so a stolen token cannot push its last hour out by itself. The token's sheet shows its last ten lines; *Activity*, narrowed to it, goes further back. The 256 KiB cap and the files' bounds tell it roughly how much the store holds, nothing of its values. The default expiry stays 90 days. |
 | A malicious archive | Read by the project's account in a confined unit, never by root; links, devices, `..`, absolute paths and duplicates refused, data and entries capped while reading; nothing served changes until the whole archive extracted. |
 | A malicious manifest | Re-validated on the machine with the CLI's `validate()`, then the scope; the unit and block are generated from it by the same generators as over SSH. Every string that lands in a block or a unit is judged for it: header values with no `"`, `\`, `{`, `}`, `$` or backtick, since Caddy fills `{$NAME}` and `{env.NAME}` from its own environment, the Cloudflare token included; routes and exemptions that are plain paths; a `start` with no `+`, `!` or other prefix systemd reads, `+` and `!` meaning root; environment values with no space or quote, which would set a second variable; secret names that are variable names; a `%` escaped. The generators refuse the same again rather than write it, the slug, a service's name and its memory included, which name or bound the unit and the block themselves: a newline there would add a directive PID 1 obeys as root, `User=root` the worst of them. Unknown keys refused, secrets limited to its own store, memory capped. |
 | Path traversal | The tar reader's refusals, the extraction's `O_EXCL` and `O_NOFOLLOW`, the unit that sees only the staging directory; on root's side, slugs and deployment ids checked against their shape before they enter a path. |
@@ -2259,7 +2259,7 @@ sitesolide upgrade                  # 1. the steward, the dashboard, the install
    restart costs nothing, from a workstation
    with no server: `sitesolide secrets` lists its names; `openssl rand -hex
    16 | sitesolide secrets set UPGRADE_CHECK --stdin` sets one, which the
-   project's *Activity* and *Token activity* show under the token; then
+   project's *Activity* and the token's sheet show under the token; then
    `sitesolide secrets remove UPGRADE_CHECK --restart` takes it out and
    restarts the service. A token without the permission is refused
    `out-of-scope`, and still restarts.

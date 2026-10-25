@@ -1552,8 +1552,10 @@ and `reports`, whose every service is scheduled. The platform's own three,
 `BENCH_NO_EGRESS=1`, `BENCH_NO_BACKUPS=1`, `BENCH_OLD_STEWARD=1`,
 `BENCH_EMPTY=1`, `BENCH_FRESH=1` (the platform's own projects alone, all
 well), `BENCH_PLATFORM_DOWN=1` (the portal's unit failed, alone or with
-`BENCH_FRESH=1`), `BENCH_SHOWCASE=1`. After `bun run web:build`, a reload is
-enough.
+`BENCH_FRESH=1`), `BENCH_SHOWCASE=1` (the fleet healed, the README's
+screenshot: every service runs, every name is set, no run or deployment
+failed, so that no page says red under *All clear*). After `bun run
+web:build`, a reload is enough.
 
 **The pattern gallery**, for whoever builds a screen: every shared pattern
 drawn by the real components with fictitious rows, inside the real shell
