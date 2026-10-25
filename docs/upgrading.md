@@ -120,6 +120,46 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## A calmer dashboard, in the site's look
+
+**What the release brings.** The dashboard, the portal's sign-in page and the
+door page of locked previews take the look of sitesolide.fr: its mineral
+paper, its teal accent, and in the dashboard Hanken Grotesk and IBM Plex Mono.
+The dashboard also shows less at a time: one line per site, token, person,
+connector or snapshot; the details of a token, a person, a connector or an
+event in a side sheet; and each page's history in Activity, which a History
+link in the page's header opens filtered. Sites are filtered by access and by
+kind. What is fine says nothing: a site in trouble says so in its row, in a
+word.
+
+**What `sitesolide upgrade` brings**: the dashboard, with its steward and
+gatekeeper, the portal, and the monitor. Caddy is not reloaded for them.
+
+**What changes for you.**
+
+- **The password is asked when you press a change.** The "Unlock changes"
+  buttons are gone: a button that changes something carries a small lock while
+  the dashboard is locked, and pressing it asks for the dashboard password,
+  then does what it says. While unlocked, the header says so, with the minutes
+  left and a way to lock again.
+- **Each page's history moved to Activity.** Tokens no longer lists recent
+  deployments and token activity, and Secrets, Backups and Connectors no
+  longer carry an activity panel: their History link opens Activity filtered
+  on them, and a token's last actions are in its sheet.
+- **A site's resource figures moved to its Overview.** The Sites list no
+  longer shows CPU, memory or size in every row; sorting by Memory or Disk
+  brings that figure back as a column.
+- **A secret the manifest names and the store lacks is now an issue**: a
+  warning on the site's row, counted by the sidebar and the verdict, as it
+  already was on the site's Secrets page. The dashboard learns the names from
+  the steward's listing of the stores, never a value.
+- **A failed backup run reads as a warning everywhere**, on the home and on
+  the site's Backups page, as the monitor already rated it.
+- The door page of a site already locked keeps its old look until the
+  gatekeeper next acts on that site, a new code or a change of access.
+
+**Going back.** `sitesolide upgrade` with the previous binary.
+
 ## A site's own domain behind a Cloudflare Tunnel
 
 **What the release brings.** A machine served through a Cloudflare Tunnel
