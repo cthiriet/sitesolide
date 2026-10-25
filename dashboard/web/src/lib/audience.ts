@@ -17,7 +17,10 @@ import type { DayCount, Row, Measure } from "./types"
  * because that is what gets decided; the hardware last, because you only look
  * at it once, the day you redo the layout.
  *
- * The key is the snapshot's, the unit says what the column counts in.
+ * The key is the snapshot's, the unit says what the column counts in. The
+ * snapshot names each ranking after its column in analytics' database, a
+ * deployed one whose names stay French (see CLAUDE.md): `hote` and not
+ * `host`, or the Hostnames panel would never find its rows.
  */
 export const RANKINGS: readonly { key: string; title: string; unit: string }[] = [
   { key: "chemin", title: "Pages", unit: "views" },
@@ -28,7 +31,7 @@ export const RANKINGS: readonly { key: string; title: string; unit: string }[] =
   { key: "navigateur", title: "Browsers", unit: "visits" },
   { key: "systeme", title: "Systems", unit: "visits" },
   { key: "langue", title: "Languages", unit: "visits" },
-  { key: "host", title: "Hostnames", unit: "views" },
+  { key: "hote", title: "Hostnames", unit: "views" },
 ]
 
 /** The device families, as the database names them, in English here. */

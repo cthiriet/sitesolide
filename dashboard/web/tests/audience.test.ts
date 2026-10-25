@@ -133,7 +133,7 @@ describe("RANKINGS", () => {
       "navigateur",
       "systeme",
       "langue",
-      "host",
+      "hote",
     ])
   })
 })

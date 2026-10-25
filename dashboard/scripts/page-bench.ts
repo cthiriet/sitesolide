@@ -590,6 +590,10 @@ function audience(generatedAt: number): string {
 
   const lines = (values: [string, number][]) => values.map(([value, total]) => ({ value, total }));
 
+  // Each ranking under the name analytics/src/snapshot.ts gives it, the column
+  // of its database, French on the machine: a key the real snapshot does not
+  // carry would show here a panel production never draws.
+
   return JSON.stringify({
     generatedAt: generatedAt - 20_000,
     timeZone: "Europe/London",
@@ -601,29 +605,29 @@ function audience(generatedAt: number): string {
         totals: { views: 2417, visits: 1148, bounces: 402, timedViews: 1502, seconds: 128671 },
         days: curve({ visits: 1148, views: 2417 }, { seed: 7, growth: 0.45, spike: { daysBack: 9, boost: 1.65 } }),
         rankings: {
-          path: lines([["/", 902], ["/projects", 641], ["/contact", 388], ["/repairs", 311], ["/pricing", 175]]),
-          entry: lines([["/", 714], ["/projects", 249], ["/contact", 185]]),
+          chemin: lines([["/", 902], ["/projects", 641], ["/contact", 388], ["/repairs", 311], ["/pricing", 175]]),
+          entree: lines([["/", 714], ["/projects", 249], ["/contact", 185]]),
           source: lines([["Google", 508], ["direct", 344], ["Yellow Pages", 141], ["trades-directory.example", 92], ["LinkedIn", 63]]),
-          campaign: lines([["autumn-flyer", 84]]),
-          device: lines([["mobile", 701], ["bureau", 338], ["tablette", 109]]),
-          browser: lines([["Chrome", 502], ["Safari", 431], ["Firefox", 128], ["Edge", 87]]),
-          system: lines([["iOS", 388], ["Android", 327], ["Windows", 271], ["macOS", 162]]),
-          language: lines([["en", 1021], ["fr", 87], ["de", 40]]),
-          host: lines([["riverside-cycles.example", 1908], ["wheels.example.com", 509]]),
+          campagne: lines([["autumn-flyer", 84]]),
+          appareil: lines([["mobile", 701], ["bureau", 338], ["tablette", 109]]),
+          navigateur: lines([["Chrome", 502], ["Safari", 431], ["Firefox", 128], ["Edge", 87]]),
+          systeme: lines([["iOS", 388], ["Android", 327], ["Windows", 271], ["macOS", 162]]),
+          langue: lines([["en", 1021], ["fr", 87], ["de", 40]]),
+          hote: lines([["riverside-cycles.example", 1908], ["wheels.example.com", 509]]),
         },
       },
       "yoga-studio": {
         totals: { views: 63, visits: 41, bounces: 29, timedViews: 38, seconds: 1824 },
         days: curve({ visits: 41, views: 63 }, { seed: 11, growth: 0.6, since: 12 }),
         rankings: {
-          path: lines([["/", 44], ["/classes", 19]]),
-          entry: lines([["/", 41]]),
+          chemin: lines([["/", 44], ["/classes", 19]]),
+          entree: lines([["/", 41]]),
           source: lines([["direct", 27], ["Google", 14]]),
-          device: lines([["mobile", 33], ["bureau", 8]]),
-          browser: lines([["Safari", 24], ["Chrome", 17]]),
-          system: lines([["iOS", 24], ["Android", 11], ["Windows", 6]]),
-          language: lines([["en", 41]]),
-          host: lines([["yoga-studio.example", 63]]),
+          appareil: lines([["mobile", 33], ["bureau", 8]]),
+          navigateur: lines([["Safari", 24], ["Chrome", 17]]),
+          systeme: lines([["iOS", 24], ["Android", 11], ["Windows", 6]]),
+          langue: lines([["en", 41]]),
+          hote: lines([["yoga-studio.example", 63]]),
         },
       },
       "bakery-martin": {
