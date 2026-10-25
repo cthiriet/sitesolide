@@ -1135,8 +1135,9 @@ A project with a store, every app but the dashboard and the portal
 (`components/secrets-store.tsx`), shows **Variables**, its count the number
 of rows: one `DataTable` of 44 px rows, *Name* and *Value*. The names
 `sitesolide.json` declares and the server lacks come first, the warning icon
-in the gutter, *Not set* in attention, *Set* and *Generate* in the row (on a
-phone *Set* alone, *Generate* in the menu). They are the server's warning
+in the gutter, *Not set* in attention, *Set* and *Generate* in the row and
+no row menu repeating them (in a narrow list *Set* alone, and a menu holding
+*Generate* alone). They are the server's warning
 too: the dashboard reads them from the steward's listing beside every
 snapshot and counts them among its discrepancies, "Secret not set" beside the
 site's name, in the verdict and the badges (`storeMissing` and its severity in

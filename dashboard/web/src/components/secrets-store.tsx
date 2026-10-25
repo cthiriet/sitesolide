@@ -64,6 +64,9 @@ type VariableLine = { name: string; missing: boolean; declared: boolean }
 /** Hidden in a narrow list, where the row menu holds the same action. */
 const WIDE_ONLY = "@max-xl/table:hidden"
 
+/** Shown in a narrow list alone: a row menu holding only what `WIDE_ONLY` hid from its row. */
+const NARROW_ONLY = "@xl/table:hidden"
+
 /** A row menu's write: the lock glyph at its end while changes are locked; the action asks for the unlock itself. */
 function WriteItem({
   onClick,
@@ -388,6 +391,20 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
 
   const variableMenu = (line: VariableLine) => {
     const offer = storeVariableOffer(store, { source: line.missing ? "none" : "store" })
+    // A name not set carries *Set* and *Generate* in its row: its menu holds
+    // only *Generate*, for a narrow list whose row hides it, and is not drawn
+    // where the row shows both.
+    if (line.missing) {
+      if (!offer.generate) return null
+      return (
+        <RowMenu label={`Actions for ${line.name}`} className={NARROW_ONLY}>
+          <WriteItem onClick={() => openValue(line.name, "generate")} locked={locked}>
+            <Dices />
+            Generate a value
+          </WriteItem>
+        </RowMenu>
+      )
+    }
     if (!offer.reveal && !offer.set && !offer.remove) return null
     return (
       <RowMenu label={`Actions for ${line.name}`}>
@@ -400,13 +417,13 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
         {offer.set && (
           <WriteItem onClick={() => openValue(line.name, "type")} locked={locked}>
             <Pencil />
-            {line.missing ? "Type a value" : "Type a new value"}
+            Type a new value
           </WriteItem>
         )}
         {offer.generate && (
           <WriteItem onClick={() => openValue(line.name, "generate")} locked={locked}>
             <Dices />
-            {offer.replaces ? "Generate a new value" : "Generate a value"}
+            Generate a new value
           </WriteItem>
         )}
         {offer.remove && (
