@@ -3734,6 +3734,7 @@ function usage(zone: string | null): string {
     "     --user <name>                the account that deploys, deploy by default as root",
     "     --dns <provider|manual>      who serves the zone's DNS: cloudflare by default, see docs/dns/",
     "     --acme staging               a test installation: Let's Encrypt's staging, untrusted certificates",
+    "     --tunnel <file|id>           served through a Cloudflare Tunnel, no public address needed: docs/tunnel.md",
     "     --skip-dns                   create the DNS records by hand: setup lists them and waits",
     "     --dns-replace                replace records that point elsewhere, on your decision alone",
     "     --dns-credentials-stdin      read the DNS provider's credentials from standard input",

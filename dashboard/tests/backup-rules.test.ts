@@ -281,6 +281,7 @@ describe("a child, run as the project", () => {
       "BindReadOnlyPaths=-/etc/sitesolide:/srv/machine/etc/sitesolide",
       "BindReadOnlyPaths=-/var/lib/sitesolide-steward:/srv/machine/var/lib/sitesolide-steward",
       "BindReadOnlyPaths=-/etc/caddy:/srv/machine/etc/caddy",
+      "BindReadOnlyPaths=-/etc/cloudflared:/srv/machine/etc/cloudflared",
     ]);
     // Bound, not hidden: an inaccessible source would leave the binds empty.
     expect(properties.filter((line) => line.startsWith("InaccessiblePaths="))).toEqual(["InaccessiblePaths=-/var/backups"]);

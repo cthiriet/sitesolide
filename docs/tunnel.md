@@ -204,7 +204,9 @@ there first.
 
 `sitesolide upgrade` keeps the connector's unit, its configuration and
 Caddy's options current on a machine that has a tunnel, and says nothing of a
-tunnel on one served directly. It never touches the credentials.
+tunnel on one served directly. It never touches the credentials. A change to
+the connector restarts it: the sites answer 502 for the few seconds the edge
+takes to see it connected again, measured at under ten.
 
 ## Leaving a tunnel
 
