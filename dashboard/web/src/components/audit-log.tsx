@@ -1,50 +1,53 @@
-import { Fragment, useId, useState, type ReactNode } from "react"
+import { useId, useState, type ReactNode } from "react"
 import { ChevronDown } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { CellText, DataTable, RowButton, type Column } from "@/components/data-table"
+import { DetailSheet, SheetFacts, SheetSection } from "@/components/detail-sheet"
 import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
-import { Banner, SEGMENTED, Segment, Status, When } from "@/components/page"
-import { ACCESS_ACTION, SOURCES, accessOnly, actorLabel, auditWords, detailLines, sourceLabel, sourceWords, type AuditFilters } from "@/lib/audit"
-import { ABSENT, dateTime } from "@/lib/format"
+import { Banner, Count, FormError, INPUT_DIALOG, SeverityIcon, When } from "@/components/page"
+import {
+  actorLabel,
+  auditWords,
+  clockTime,
+  dayKey,
+  detailLines,
+  isDay,
+  sourceLabel,
+  type ActivityDay,
+  type ActivityItem,
+  type AuditWords,
+} from "@/lib/audit"
+import { dateTime } from "@/lib/format"
+import { historyUrl } from "@/lib/history"
 import { siteUrl } from "@/lib/pages"
-import type { AuditRow, AuditSource, SourceStatus } from "@/lib/types"
+import { TONE_TEXT } from "@/lib/tones"
+import type { AuditRow, SourceStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import type { Severity } from "@/lib/verdict"
 
 /**
- * The pieces of the Activity page: the sources' states, the filters, and the
- * log itself, a table when its panel has room for the columns and a list
- * otherwise. Everything a row shows is text: an actor, a target or a detail
- * comes from a component, sometimes from a stranger, and is never read as
- * markup.
+ * The pieces of the Activity page: the sources that could not be read, the
+ * log cut into days, the sheet of one event, and the custom range.
+ * Everything a row shows is text: an actor, a target or a detail comes from
+ * a component, sometimes from a stranger, and is never read as markup.
  */
 
 // --- The sources -----------------------------------------------------------------
 
 /**
- * Every source once, with its state; then, for those that could not be read
- * or need updating, what happened and what to do. One that is not installed
- * says so in the strip and nothing more: it is not a fault.
+ * A source that could not be read, or needs updating, as a banner saying
+ * what happened and what to do. A source read is not news, and says
+ * nothing; one not installed is no fault either.
  */
-export function SourceStates({ statuses }: { statuses: readonly SourceStatus[] }) {
-  if (statuses.length === 0) return null
+export function SourceProblems({ statuses }: { statuses: readonly SourceStatus[] }) {
   const problems = statuses.filter((status) => status.state === "unavailable" || status.state === "outdated")
+  if (problems.length === 0) return null
   return (
     <div className="grid gap-2">
-      <ul aria-label="Sources" className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm">
-        {statuses.map((status) => {
-          const words = sourceWords(status)
-          return (
-            <li key={status.name} className="flex items-center gap-2" title={status.message ?? undefined}>
-              <span className="font-medium">{sourceLabel(status.name)}</span>
-              <Status tone={words.tone} className="text-xs">
-                {words.word}
-              </Status>
-            </li>
-          )
-        })}
-      </ul>
       {problems.map((status) => (
         <Banner key={status.name} tone={status.state === "unavailable" ? "error" : "attention"}>
           <span className="font-medium">{sourceLabel(status.name)}:</span> {status.message}
@@ -54,301 +57,443 @@ export function SourceStates({ statuses }: { statuses: readonly SourceStatus[] }
   )
 }
 
-// --- The filters -----------------------------------------------------------------
+// --- The log ---------------------------------------------------------------------
 
-/** One source or every one, the chosen one on the grey of the current page, like the home page's filters. */
-function SourceChips({ value, onValue }: { value: AuditSource | null; onValue: (source: AuditSource | null) => void }) {
-  const choices: { key: AuditSource | null; label: string; description: string }[] = [{ key: null, label: "All", description: "Every source" }, ...SOURCES]
+/** One line of a day's table: an event, a run's head, or one event of a run opened. */
+type Line = {
+  key: string
+  row: AuditRow
+  words: AuditWords
+  /** A run's head: how many events it folds, and whether they show. */
+  run: { count: number; open: boolean } | null
+  /** One event of a run opened, under its head. */
+  child: boolean
+}
+
+const failed = (words: AuditWords) => words.tone === "error" || words.tone === "attention"
+
+function severityOf(words: AuditWords): Severity | null {
+  if (words.tone === "error") return "error"
+  if (words.tone === "attention") return "warning"
+  return null
+}
+
+/** The site, linked while the server still has it; the host or name recorded, as it is, otherwise. */
+function Target({ row, known }: { row: AuditRow; known: ReadonlySet<string> }) {
+  if (row.target === null) return null
+  if (row.site !== null && known.has(row.site)) {
+    return (
+      <InternalLink href={siteUrl(row.site)} title={row.target} className={cn(TEXT_LINK, "min-w-0 truncate")}>
+        {row.site}
+      </InternalLink>
+    )
+  }
+  const text = row.site ?? row.target
+  return <CellText title={row.target}>{text}</CellText>
+}
+
+/**
+ * When it happened: an age today, the time of day under an older day's
+ * heading, which already says the day. The whole date in the tooltip.
+ */
+function Time({ row, today, serverNow }: { row: AuditRow; today: boolean; serverNow: number }) {
+  const ms = Date.parse(row.at)
+  if (today) return <When at={ms} serverNow={serverNow} />
+  if (!Number.isFinite(ms)) return <span className="text-muted-foreground">-</span>
   return (
-    <div role="group" aria-label="Filter by source" className={cn(SEGMENTED, "grid w-full grid-cols-3 gap-0.5 sm:inline-flex sm:w-auto")}>
-      {choices.map((choice) => (
-        <Segment
-          key={choice.key ?? "all"}
-          selected={choice.key === value}
-          title={choice.description}
-          onClick={() => onValue(choice.key)}
-          className="min-w-0 px-1.5 sm:px-2.5"
+    <time dateTime={new Date(ms).toISOString()} title={dateTime(ms)} className="whitespace-nowrap text-muted-foreground tabular-nums">
+      {clockTime(ms)}
+    </time>
+  )
+}
+
+/**
+ * The log, newest first: a table per day under its sticky heading, 40 px
+ * rows, one line each when the panel has room and two below it. A row is
+ * its actor, the sentence in its tone when it went wrong, the site linked,
+ * the source and the time; a click opens every field in the sheet. The same
+ * event repeated within a day folds into one row with its count, which
+ * opens the run.
+ */
+export function ActivityLog({
+  days,
+  known,
+  serverNow,
+  selected,
+  onOpen,
+}: {
+  days: readonly ActivityDay[]
+  known: ReadonlySet<string>
+  serverNow: number
+  selected: string | null
+  onOpen: (row: AuditRow) => void
+}) {
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set())
+  const today = dayKey(serverNow)
+
+  function toggle(item: ActivityItem) {
+    setOpen((before) => {
+      const next = new Set(before)
+      if (next.has(item.key)) next.delete(item.key)
+      else next.add(item.key)
+      return next
+    })
+  }
+
+  const linesOf = (items: readonly ActivityItem[]): Line[] =>
+    items.flatMap((item): Line[] => {
+      const head = item.rows[0]!
+      if (item.rows.length === 1) return [{ key: item.key, row: head, words: item.words, run: null, child: false }]
+      const opened = open.has(item.key)
+      const runLine: Line = { key: item.key, row: head, words: item.words, run: { count: item.rows.length, open: opened }, child: false }
+      if (!opened) return [runLine]
+      return [runLine, ...item.rows.map((row): Line => ({ key: row.id, row, words: auditWords(row), run: null, child: true }))]
+    })
+
+  const byKey = new Map(days.flatMap((day) => day.items.map((item) => [item.key, item] as const)))
+
+  function press(line: Line) {
+    const item = line.run === null ? undefined : byKey.get(line.key)
+    if (item !== undefined) toggle(item)
+    else onOpen(line.row)
+  }
+
+  return (
+    <>
+      {days.map((day) => {
+        const isToday = day.day === today
+        const columns: Column<Line>[] = [
+          {
+            key: "actor",
+            head: "Actor",
+            width: "minmax(9rem,1fr)",
+            slot: "meta",
+            cell: (line) => (
+              <CellText title={line.row.actor} className={cn(line.child && "text-muted-foreground")}>
+                {actorLabel(line.row)}
+              </CellText>
+            ),
+          },
+          {
+            key: "action",
+            head: "Action",
+            width: "minmax(14rem,2fr)",
+            slot: "primary",
+            cell: (line) => <Sentence line={line} onPress={() => press(line)} />,
+          },
+          {
+            key: "target",
+            head: "Target",
+            width: "minmax(6rem,0.8fr)",
+            slot: "meta",
+            // On two lines, a row with no target leaves no empty place between two dots; in the columns its track stays.
+            className: "@max-3xl/table:empty:hidden",
+            cell: (line) => <Target row={line.row} known={known} />,
+          },
+          {
+            key: "source",
+            head: "Source",
+            width: "6rem",
+            slot: "meta",
+            cell: (line) => <span className="truncate text-muted-foreground">{sourceLabel(line.row.source)}</span>,
+          },
+          {
+            key: "when",
+            head: "When",
+            width: "5.5rem",
+            align: "end",
+            slot: "state",
+            cell: (line) => <Time row={line.row} today={isToday} serverNow={serverNow} />,
+          },
+        ]
+        return (
+          <DataTable
+            key={day.day}
+            label={`Activity, ${day.label}`}
+            heading={day.label}
+            dense
+            narrowBelow="48rem"
+            rows={linesOf(day.items)}
+            rowKey={(line) => line.key}
+            columns={columns}
+            severity={(line) => severityOf(line.words)}
+            onRowClick={press}
+            selected={selected}
+          />
+        )
+      })}
+    </>
+  )
+}
+
+/**
+ * The row's sentence, the button that opens its sheet, or a run's, which
+ * opens the run: the sentence, then the count and a chevron. In its tone
+ * when it went wrong, followed then by its note, muted, which says why
+ * ("Refused: no secrets permission"): a failure is the one row that says
+ * more than its sentence. An event of an opened run says what sets it
+ * apart, its note, or the sentence again, muted, set in under its head.
+ */
+function Sentence({ line, onPress }: { line: Line; onPress: () => void }) {
+  const { words } = line
+  const wrong = failed(words)
+  if (line.child) {
+    return (
+      <RowButton onClick={onPress} className="pl-5 font-normal text-muted-foreground">
+        {words.note ?? words.summary}
+      </RowButton>
+    )
+  }
+  if (line.run !== null) {
+    return (
+      <span className="flex min-w-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={onPress}
+          aria-expanded={line.run.open}
+          className={cn(
+            "flex min-w-0 items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            wrong && cn("font-medium", TONE_TEXT[words.tone]),
+          )}
         >
-          {choice.label}
-        </Segment>
-      ))}
-    </div>
+          <span className="min-w-0 truncate">{words.summary}</span>
+          {wrong && words.note !== null && <Why note={words.note} />}
+          <Count className="h-[1.125rem] px-1 text-[0.6875rem]">
+            {line.run.count}
+            <span className="sr-only"> times</span>
+          </Count>
+          <ChevronDown
+            aria-hidden="true"
+            className={cn(
+              "size-4 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none",
+              line.run.open && "rotate-180",
+            )}
+          />
+        </button>
+      </span>
+    )
+  }
+  return (
+    <RowButton
+      onClick={onPress}
+      className={cn("flex items-baseline gap-2 font-normal text-foreground", wrong && cn("font-medium", TONE_TEXT[words.tone]))}
+    >
+      <span className="max-w-full shrink-0 truncate">{words.summary}</span>
+      {wrong && words.note !== null && <Why note={words.note} />}
+    </RowButton>
   )
 }
 
-/** One more segment, beside the sources: the access changes alone, from every source that keeps them. */
-function AccessChip({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
+/**
+ * Why a row went wrong, after its sentence: muted, and the first to give
+ * way when the line is short. On two lines it leaves the room to the
+ * sentence, and waits in the sheet, rather than end cut to a letter.
+ */
+function Why({ note }: { note: string }) {
+  return <span className="min-w-0 truncate text-[0.8125rem] font-normal text-muted-foreground @max-3xl/table:hidden">{note}</span>
+}
+
+// --- One event -------------------------------------------------------------------
+
+/**
+ * Every field of one event, the sheet `?event=` opens: the sentence as the
+ * title, in its tone when it went wrong, the note under it; then when,
+ * who, what, on what, from which source, and the component's own detail,
+ * key by key, as text. Two links narrow the log to the same actor or the
+ * same site.
+ */
+export function EventSheet({ row, known, onClose }: { row: AuditRow | null; known: ReadonlySet<string>; onClose: () => void }) {
+  const words = row === null ? null : auditWords(row)
+  const ms = row === null ? Number.NaN : Date.parse(row.at)
+  const label = row === null ? "" : actorLabel(row)
+  const target = row === null ? null : (row.site ?? row.target)
+  const pivot = cn(buttonVariants({ variant: "outline", size: "sm" }), "max-w-full max-md:h-9")
   return (
-    <div className={cn(SEGMENTED, "inline-flex")}>
-      <Segment selected={on} title="Who was given access, changed or removed, and general access" onClick={() => onChange(!on)}>
-        Access changes
-      </Segment>
-    </div>
+    <DetailSheet
+      open={row !== null}
+      onClose={onClose}
+      title={words?.summary ?? ""}
+      state={words === null || severityOf(words) === null ? undefined : <SeverityIcon severity={severityOf(words)!} label />}
+      description={words?.note ?? undefined}
+      actions={
+        row === null ? undefined : (
+          <>
+            <InternalLink href={historyUrl({ actor: row.actor })} title={`Everything by ${label}`} className={pivot}>
+              Same actor
+            </InternalLink>
+            {target !== null && (
+              <InternalLink href={historyUrl({ target })} title={`Everything on ${target}`} className={pivot}>
+                {row.site !== null ? "Same site" : "Same target"}
+              </InternalLink>
+            )}
+          </>
+        )
+      }
+    >
+      {row !== null && words !== null && (
+        <>
+          <SheetFacts
+            facts={[
+              { label: "When", value: Number.isFinite(ms) ? dateTime(ms) : row.at },
+              {
+                label: "Actor",
+                value: (
+                  <span className="grid gap-0.5">
+                    <span>{label}</span>
+                    {label !== row.actor && <code className="font-mono text-xs text-muted-foreground">{row.actor}</code>}
+                  </span>
+                ),
+              },
+              { label: "Action", value: <code className="font-mono text-xs">{row.action}</code> },
+              {
+                label: "Target",
+                value:
+                  row.target === null ? (
+                    <span className="text-muted-foreground">None</span>
+                  ) : (
+                    <span className="grid gap-0.5">
+                      {row.site !== null && known.has(row.site) ? (
+                        <InternalLink href={siteUrl(row.site)} className={cn(TEXT_LINK, "w-fit")}>
+                          {row.site}
+                        </InternalLink>
+                      ) : (
+                        <span>{row.site ?? row.target}</span>
+                      )}
+                      {row.site !== row.target && <code className="font-mono text-xs text-muted-foreground">{row.target}</code>}
+                    </span>
+                  ),
+              },
+              { label: "Source", value: sourceLabel(row.source) },
+            ]}
+          />
+          <RawDetail row={row} />
+        </>
+      )}
+    </DetailSheet>
   )
 }
 
-function FilterField({ label, children, id, className }: { label: string; id: string; className?: string; children: ReactNode }) {
+/** The component's detail, key and value in mono, as the component wrote it: the time as recorded, then each field. */
+function RawDetail({ row }: { row: AuditRow }) {
+  const lines = [{ key: "at", value: row.at }, ...detailLines(row.detail)]
   return (
-    <div className={cn("grid min-w-0 content-start gap-1.5", className)}>
+    <SheetSection title="Recorded">
+      <dl className="grid grid-cols-[minmax(6.5rem,auto)_minmax(0,1fr)] gap-x-4 gap-y-1.5 font-mono text-xs">
+        {lines.map((line, index) => (
+          <div key={`${line.key}-${index}`} className="col-span-2 grid grid-cols-subgrid">
+            <dt className="text-muted-foreground">{line.key}</dt>
+            <dd className="min-w-0 wrap-anywhere">{line.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </SheetSection>
+  )
+}
+
+// --- The custom range ------------------------------------------------------------
+
+/**
+ * The Date facet's *Custom range...*: whole days where the person is, the
+ * first one asked, the last one optional, both kept in the address as
+ * `since` and `until`.
+ */
+export function RangeDialog({
+  open,
+  onOpenChange,
+  since,
+  until,
+  today,
+  onApply,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  since: string
+  until: string
+  today: string
+  onApply: (since: string, until: string | null) => void
+}) {
+  const id = useId()
+  const [from, setFrom] = useState(since)
+  const [to, setTo] = useState(until)
+  const [error, setError] = useState("")
+
+  function apply() {
+    if (!isDay(from)) return setError("Choose the first day.")
+    if (to !== "" && !isDay(to)) return setError("The last day doesn't read as a date.")
+    if (to !== "" && to < from) return setError("The last day comes before the first.")
+    setError("")
+    onApply(from, to === "" ? null : to)
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (next) {
+          setFrom(since)
+          setTo(until)
+          setError("")
+        }
+        onOpenChange(next)
+      }}
+    >
+      <DialogContent className={cn("sm:max-w-sm", INPUT_DIALOG)}>
+        <DialogHeader>
+          <DialogTitle>Custom range</DialogTitle>
+          <DialogDescription>Whole days, where you are. Leave the last day empty to read up to today.</DialogDescription>
+        </DialogHeader>
+        <form
+          className="grid gap-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            apply()
+          }}
+        >
+          <div className="grid grid-cols-2 gap-3">
+            <Field id={`${id}-from`} label="From">
+              <Input
+                id={`${id}-from`}
+                type="date"
+                value={from}
+                max={to || today}
+                onChange={(event) => setFrom(event.target.value)}
+                className="h-10 md:h-9"
+              />
+            </Field>
+            <Field id={`${id}-to`} label="To">
+              <Input
+                id={`${id}-to`}
+                type="date"
+                value={to}
+                min={from || undefined}
+                max={today}
+                onChange={(event) => setTo(event.target.value)}
+                className="h-10 md:h-9"
+              />
+            </Field>
+          </div>
+          <FormError>{error}</FormError>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} className="max-md:h-10">
+              Cancel
+            </Button>
+            <Button type="submit" className="max-md:h-10">
+              Apply
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function Field({ id, label, children }: { id: string; label: string; children: ReactNode }) {
+  return (
+    <div className="grid min-w-0 gap-1.5">
       <Label htmlFor={id} className="text-xs font-normal text-muted-foreground">
         {label}
       </Label>
       {children}
-    </div>
-  )
-}
-
-const FIELD = "h-10 bg-card md:h-9 dark:bg-card"
-
-/**
- * The source, then the fields: an actor by any part of it, an action by its
- * beginning, a site or a host, and whole days. `count` says what is shown, on
- * the right.
- */
-export function AuditFilterBar({
-  filters,
-  onFilters,
-  onClear,
-  narrowed,
-  count,
-}: {
-  filters: AuditFilters
-  onFilters: (filters: AuditFilters) => void
-  onClear: () => void
-  narrowed: boolean
-  count: ReactNode
-}) {
-  const id = useId()
-  const set = (key: keyof AuditFilters) => (event: { target: { value: string } }) => onFilters({ ...filters, [key]: event.target.value })
-  return (
-    <section aria-label="Filters" className="grid gap-3">
-      <div className="flex flex-wrap items-center gap-3">
-        <SourceChips value={filters.source} onValue={(source) => onFilters({ ...filters, source })} />
-        <AccessChip on={accessOnly(filters)} onChange={(on) => onFilters({ ...filters, action: on ? ACCESS_ACTION : "" })} />
-        {narrowed && (
-          <Button variant="ghost" size="sm" onClick={onClear} className="text-muted-foreground hover:text-foreground max-md:h-9">
-            Clear filters
-          </Button>
-        )}
-        <p aria-live="polite" className="text-xs text-muted-foreground tabular-nums sm:ml-auto">
-          {count}
-        </p>
-      </div>
-      <div className="grid grid-cols-2 gap-2 @4xl/body:grid-cols-[repeat(3,minmax(0,1fr))_minmax(0,9.5rem)_minmax(0,9.5rem)]">
-        <FilterField label="Actor" id={`${id}-actor`}>
-          <Input id={`${id}-actor`} value={filters.actor} onChange={set("actor")} placeholder="email, owner, token:…" autoComplete="off" spellCheck={false} className={FIELD} />
-        </FilterField>
-        <FilterField label="Action" id={`${id}-action`}>
-          <Input id={`${id}-action`} value={filters.action} onChange={set("action")} placeholder="portal., deploy.failure" autoComplete="off" spellCheck={false} className={FIELD} />
-        </FilterField>
-        <FilterField label="Site or host" id={`${id}-target`} className="col-span-2 @4xl/body:col-span-1">
-          <Input id={`${id}-target`} value={filters.target} onChange={set("target")} placeholder="a slug, or one of its hosts" autoComplete="off" spellCheck={false} className={FIELD} />
-        </FilterField>
-        <FilterField label="From" id={`${id}-from`}>
-          <Input id={`${id}-from`} type="date" value={filters.from} max={filters.to || undefined} onChange={set("from")} className={FIELD} />
-        </FilterField>
-        <FilterField label="To" id={`${id}-to`}>
-          <Input id={`${id}-to`} type="date" value={filters.to} min={filters.from || undefined} onChange={set("to")} className={FIELD} />
-        </FilterField>
-      </div>
-    </section>
-  )
-}
-
-// --- A row -----------------------------------------------------------------------
-
-/**
- * The site, linked when the server still has it; the host or name recorded,
- * when it says more. `compact`, on one line among others: the site alone, the
- * host stays in the details.
- */
-function Target({ row, known, compact = false }: { row: AuditRow; known: ReadonlySet<string>; compact?: boolean }) {
-  if (row.target === null) return <span className="text-muted-foreground">{ABSENT}</span>
-  const site =
-    row.site !== null && known.has(row.site) ? (
-      <InternalLink href={siteUrl(row.site)} className={TEXT_LINK}>
-        {row.site}
-      </InternalLink>
-    ) : (
-      <span>{row.site ?? row.target}</span>
-    )
-  if (compact) return <span className="wrap-anywhere">{site}</span>
-  return (
-    <span className="grid min-w-0 gap-0.5">
-      {/* A slug, and the host under it, keep their letters together: the column never narrows below them. */}
-      <span className="wrap-break-word">{site}</span>
-      {row.site !== null && row.target.toLowerCase() !== row.site && <span className="font-mono text-[0.6875rem] text-muted-foreground wrap-break-word">{row.target}</span>}
-    </span>
-  )
-}
-
-function Summary({ row }: { row: AuditRow }) {
-  const words = auditWords(row)
-  return (
-    <span className="grid min-w-0 gap-0.5">
-      {words.tone === "attention" || words.tone === "error" ? (
-        <Status tone={words.tone} className="whitespace-normal">
-          {words.summary}
-        </Status>
-      ) : (
-        <span className="wrap-anywhere">{words.summary}</span>
-      )}
-      <span className="text-xs text-muted-foreground wrap-anywhere">
-        <code className="font-mono text-[0.6875rem] max-md:text-xs">{row.action}</code>
-        {words.note !== null && ` · ${words.note}`}
-      </span>
-    </span>
-  )
-}
-
-/** Everything the row holds, as key and value: the fields first, then the component's detail. */
-function Details({ row, id }: { row: AuditRow; id: string }) {
-  const ms = Date.parse(row.at)
-  const lines = [
-    { key: "time", value: Number.isFinite(ms) ? `${dateTime(ms)} (${row.at})` : row.at },
-    { key: "source", value: sourceLabel(row.source) },
-    { key: "actor", value: row.actor },
-    { key: "action", value: row.action },
-    { key: "target", value: row.target ?? "none" },
-    ...detailLines(row.detail),
-  ]
-  return (
-    <dl id={id} className="grid gap-x-6 gap-y-1 font-mono text-xs @xl:grid-cols-[minmax(7rem,max-content)_minmax(0,1fr)]">
-      {lines.map((line, index) => (
-        <Fragment key={`${line.key}-${index}`}>
-          <dt className="text-muted-foreground">{line.key}</dt>
-          <dd className="min-w-0 wrap-anywhere @max-xl:mb-1.5">{line.value}</dd>
-        </Fragment>
-      ))}
-    </dl>
-  )
-}
-
-function Toggle({ open, controls, onToggle, labelled = false }: { open: boolean; controls: string; onToggle: () => void; labelled?: boolean }) {
-  return (
-    <Button
-      variant="ghost"
-      size={labelled ? "sm" : "icon-sm"}
-      aria-expanded={open}
-      aria-controls={controls}
-      aria-label={labelled ? undefined : open ? "Hide details" : "Show details"}
-      title={open ? "Hide details" : "Show details"}
-      onClick={onToggle}
-      className={cn("text-muted-foreground hover:text-foreground", labelled ? "max-md:h-9" : "max-md:size-10")}
-    >
-      {labelled && "Details"}
-      <ChevronDown className={cn("transition-transform motion-reduce:transition-none", open && "rotate-180")} />
-    </Button>
-  )
-}
-
-// --- The log ---------------------------------------------------------------------
-
-/** Newest first: a table from 48 rem of panel, five columns needing a wide panel, a list below, each row with its details on demand. */
-export function AuditLog({ rows, known, serverNow, caption }: { rows: readonly AuditRow[]; known: ReadonlySet<string>; serverNow: number; caption: string }) {
-  const [open, setOpen] = useState<ReadonlySet<string>>(new Set())
-  const base = useId()
-  const toggle = (id: string) =>
-    setOpen((before) => {
-      const next = new Set(before)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  const detailId = (row: AuditRow, where: string) => `${base}-${where}-${row.id.replace(/[^A-Za-z0-9_-]/g, "_")}`
-
-  return (
-    <div className="@container">
-      <table className="hidden w-full text-sm @3xl:table">
-        <caption className="sr-only">{caption}</caption>
-        <thead>
-          <tr className="h-10 border-b bg-cell text-left mono-label">
-            <th scope="col" className="px-3 pl-4 font-medium">
-              Actor
-            </th>
-            <th scope="col" className="px-3 font-medium">
-              Action
-            </th>
-            <th scope="col" className="px-3 font-medium">
-              Target
-            </th>
-            <th scope="col" className="px-3 font-medium">
-              Source
-            </th>
-            <th scope="col" className="px-3 text-right font-medium">
-              When
-            </th>
-            <th scope="col" className="w-12 px-3 pr-4">
-              <span className="sr-only">Details</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-divider">
-          {rows.map((row) => {
-            const expanded = open.has(row.id)
-            const id = detailId(row, "table")
-            return (
-              <Fragment key={row.id}>
-                <tr className="align-top">
-                  <td className="max-w-[16rem] px-3 py-3 pl-4 wrap-anywhere">{actorLabel(row)}</td>
-                  <td className="px-3 py-3">
-                    <Summary row={row} />
-                  </td>
-                  <td className="px-3 py-3">
-                    <Target row={row} known={known} />
-                  </td>
-                  <td className="px-3 py-3 text-muted-foreground">{sourceLabel(row.source)}</td>
-                  <td className="px-3 py-3 text-right">
-                    <When at={Date.parse(row.at)} serverNow={serverNow} />
-                  </td>
-                  <td className="px-3 py-1.5 pr-4 text-right">
-                    <Toggle open={expanded} controls={id} onToggle={() => toggle(row.id)} />
-                  </td>
-                </tr>
-                {expanded && (
-                  <tr className="bg-cell">
-                    <td colSpan={6} className="px-4 py-3">
-                      <Details row={row} id={id} />
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            )
-          })}
-        </tbody>
-      </table>
-
-      <ol aria-label={caption} className="divide-y divide-divider @3xl:hidden">
-        {rows.map((row) => {
-          const expanded = open.has(row.id)
-          const id = detailId(row, "list")
-          return (
-            <li key={row.id} className="grid gap-y-1.5 px-4 py-3">
-              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3">
-                <span className="text-sm">
-                  <Summary row={row} />
-                </span>
-                <span className="text-xs">
-                  <When at={Date.parse(row.at)} serverNow={serverNow} />
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                <span className="wrap-anywhere text-foreground">{actorLabel(row)}</span>
-                {row.target !== null && <Target row={row} known={known} compact />}
-                <span>{sourceLabel(row.source)}</span>
-                <span className="ml-auto">
-                  <Toggle open={expanded} controls={id} onToggle={() => toggle(row.id)} labelled />
-                </span>
-              </div>
-              {expanded && (
-                <div className="rounded-lg bg-sunk px-3 py-2.5 shadow-well">
-                  <Details row={row} id={id} />
-                </div>
-              )}
-            </li>
-          )
-        })}
-      </ol>
     </div>
   )
 }

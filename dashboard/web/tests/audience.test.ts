@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import {
   RANKINGS,
+  RANKING_GROUPS,
+  TOP_ROWS,
+  dayValue,
+  formatMetric,
+  groupTabs,
+  longDay,
+  rankingById,
   figures,
   emptyCurve,
   shortDay,
@@ -80,12 +87,50 @@ describe("figures", () => {
     expect(rendered[0]?.value).toBe("405")
     expect(rendered[3]?.value).toBe("1m 24s")
   })
+
+  test("three of them are the chart's tabs; time on page, kept for the period alone, is none", () => {
+    expect(figures(measure).map((figure) => figure.metric)).toEqual(["visits", "views", "pages", null])
+  })
+})
+
+describe("the chart's series", () => {
+  const day = { day: "2026-10-14", views: 96, visits: 40 }
+
+  test("a day's visits, views, and pages per visit to one decimal", () => {
+    expect(dayValue(day, "visits")).toBe(40)
+    expect(dayValue(day, "views")).toBe(96)
+    expect(dayValue(day, "pages")).toBe(2.4)
+  })
+
+  test("a day nobody came has no pages per visit, rather than a fall to zero", () => {
+    expect(dayValue({ day: "2026-10-14", views: 0, visits: 0 }, "pages")).toBeNull()
+    expect(dayValue({ day: "2026-10-14", views: 0, visits: 0 }, "visits")).toBe(0)
+  })
+
+  test("each in its own format, and the day the tooltip names", () => {
+    expect(formatMetric(1148, "visits")).toBe("1,148")
+    expect(formatMetric(1.5, "pages")).toBe("1.5")
+    expect(formatMetric(2, "pages")).toBe("2")
+    expect(longDay("2026-10-14")).toBe("Wed, Oct 14")
+  })
 })
 
 describe("ceiling", () => {
   test("rounds to a step that reads well", () => {
     expect(axisCeiling(37)).toBe(50)
     expect(axisCeiling(120)).toBe(200)
+  })
+
+  test("pages per visit, about 2, ends at 3 rather than 5", () => {
+    expect(axisCeiling(2.4)).toBe(3)
+  })
+
+  test("a count under ten ends where its half is a count too", () => {
+    expect(axisCeiling(4, true)).toBe(4)
+    expect(axisCeiling(5, true)).toBe(6)
+    expect(axisCeiling(7, true)).toBe(10)
+    expect(axisCeiling(66, true)).toBe(100)
+    expect(axisCeiling(0, true)).toBe(2)
   })
 
   test("holds up for a site with no visit at all", () => {
@@ -124,16 +169,32 @@ describe("RANKINGS", () => {
     expect(new Set(keys).size).toBe(keys.length)
     // The same keys as `RANKINGS` in analytics/src/db.ts: a key that
     // diverged would show a panel that is always empty.
-    expect(keys).toEqual([
-      "chemin",
-      "entree",
-      "source",
-      "campagne",
-      "appareil",
-      "navigateur",
-      "systeme",
-      "langue",
-      "hote",
+    expect([...keys].sort()).toEqual(["appareil", "campagne", "chemin", "entree", "hote", "langue", "navigateur", "source", "systeme"])
+  })
+
+  test("three panels: what is read, where they come from, who they are", () => {
+    expect(RANKING_GROUPS.map((group) => [group.title, group.rankings.map((ranking) => ranking.title)])).toEqual([
+      ["Pages", ["Pages", "Entry pages", "Hostnames"]],
+      ["Sources", ["Sources", "Campaigns"]],
+      ["Visitors", ["Devices", "Browsers", "Systems", "Languages"]],
     ])
+  })
+
+  test("the address names a ranking in English, never by the snapshot's column", () => {
+    const ids = RANKINGS.map((ranking) => ranking.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(rankingById("hostnames")?.key).toBe("hote")
+    expect(rankingById("hote")).toBeUndefined()
+    expect(rankingById(null)).toBeUndefined()
+  })
+
+  test("a tab with no row is not drawn", () => {
+    const pages = RANKING_GROUPS[0]!
+    expect(groupTabs(pages, { chemin: [{ value: "/", total: 3 }], entree: [] }).map((ranking) => ranking.id)).toEqual(["pages"])
+    expect(groupTabs(pages, {})).toEqual([])
+  })
+
+  test("a panel shows six rows before Show all", () => {
+    expect(TOP_ROWS).toBe(6)
   })
 })

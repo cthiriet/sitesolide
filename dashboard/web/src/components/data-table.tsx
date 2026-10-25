@@ -155,6 +155,7 @@ export function DataTable<Row>({
   selected = null,
   empty,
   foot,
+  heading,
   className,
 }: {
   /** The table's name, for screen readers: "Tokens". */
@@ -184,6 +185,12 @@ export function DataTable<Row>({
   empty?: ReactNode
   /** A last line under the rows: "Show 1 revoked or expired", "Load older". */
   foot?: ReactNode
+  /**
+   * A sticky line in place of the column heads, at every width, for a list
+   * cut into groups: one table per group, its heading pushed up by the
+   * next one's (Activity's days). The heads stay, for screen readers.
+   */
+  heading?: ReactNode
   className?: string
 }) {
   const { navigate } = useNavigation()
@@ -244,7 +251,12 @@ export function DataTable<Row>({
         empty
       ) : (
         <>
-          <div role="rowgroup" className={cn("sticky top-[var(--page-header,0px)] z-10 hidden", wide.head)}>
+          {heading !== undefined && (
+            <div aria-hidden="true" className="sticky top-[var(--page-header,0px)] z-10 flex h-9 items-center border-b bg-cell px-4 mono-label">
+              {heading}
+            </div>
+          )}
+          <div role="rowgroup" className={cn(heading !== undefined ? "sr-only" : cn("sticky top-[var(--page-header,0px)] z-10 hidden", wide.head))}>
             <div role="row" className="grid h-10 grid-cols-(--table-columns) items-center border-b bg-cell pr-2 pl-4">
               {/* The cell takes its track; only its word is hidden. */}
               {gutter && (

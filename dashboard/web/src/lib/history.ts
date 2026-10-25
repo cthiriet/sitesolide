@@ -136,6 +136,20 @@ export const RECENT_LINES = 10
 const TYPE_WINDOW = 100
 
 /**
+ * How a filter's action and type reach `/api/audit`, which knows actions
+ * and not types: the action as it is; else a type of one prefix as that
+ * prefix; a type of several is narrowed by the page itself, `keep`.
+ */
+export function serverAction(filter: HistoryFilter): { action: string | null; keep: ((action: string) => boolean) | null } {
+  const type = filter.type === undefined ? null : (HISTORY_TYPES.find((entry) => entry.key === filter.type) ?? null)
+  const action = filter.action?.trim() ?? ""
+  if (type === null) return { action: action === "" ? null : action, keep: null }
+  if (type.prefixes.length === 1 && action === "") return { action: type.prefixes[0]!, keep: null }
+  // A type of several prefixes, or a type beside an action: the server takes the action, the page the type.
+  return { action: action === "" ? null : action, keep: (rowAction) => matchesType(rowAction, type.key) }
+}
+
+/**
  * The `/api/audit` query for a filter's latest rows, and what the page keeps
  * of them: the server takes `actor`, `action`, `target`, `source` and `from`
  * as they are; a type of one prefix goes as its `action`, a type of several
@@ -147,17 +161,10 @@ export function historyRequest(filter: HistoryFilter, now: number, limit = RECEN
     const value = filter[key]?.trim() ?? ""
     if (value !== "") query.set(key, value)
   }
-  const type = filter.type === undefined ? null : (HISTORY_TYPES.find((entry) => entry.key === filter.type) ?? null)
-  const action = filter.action?.trim() ?? ""
-  const single = type !== null && type.prefixes.length === 1 && action === ""
-  if (action !== "") query.set("action", action)
-  else if (single) query.set("action", type.prefixes[0]!)
+  const { action, keep } = serverAction(filter)
+  if (action !== null) query.set("action", action)
   const start = filter.since === undefined ? null : sinceStart(filter.since, now)
   if (start !== null) query.set("from", new Date(start).toISOString())
-  const narrowsHere = type !== null && !single
-  query.set("limit", String(narrowsHere ? Math.max(limit, TYPE_WINDOW) : limit))
-  return {
-    query: `?${query}`,
-    keep: narrowsHere ? (rowAction) => matchesType(rowAction, type.key) : () => true,
-  }
+  query.set("limit", String(keep !== null ? Math.max(limit, TYPE_WINDOW) : limit))
+  return { query: `?${query}`, keep: keep ?? (() => true) }
 }
