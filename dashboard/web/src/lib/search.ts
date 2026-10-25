@@ -7,8 +7,9 @@
  * functions as the row: a word read on screen always finds its site again, even
  * the day a label changes.
  */
+import { ACCESS_WORDS, KIND_WORDS, siteKind } from "./legend"
 import { PENDING_LABEL, type SiteSecretsPanel } from "./secrets"
-import { PLATFORM_TAG, TYPE_LABELS, scheduleWords, siteAccess, siteAddress, serviceState, type SiteFilter } from "./sites"
+import { PLATFORM_TAG, TYPE_LABELS, scheduleWords, siteAccess, siteAddress, serviceState } from "./sites"
 import type { Site } from "./types"
 
 /**
@@ -62,13 +63,19 @@ function accessTexts(site: Pick<Site, "portal" | "lock">): string[] {
     case "open":
       return ["Public"]
     case "mismatch":
-      return [access.label]
+      return [ACCESS_WORDS.mismatch.label, access.label]
   }
 }
 
+/** The kind's words, as its icon's tooltip and the Kind facet say them: "Background", "Static site", "Static". */
+function kindTexts(site: SearchableSite): string[] {
+  const words = KIND_WORDS[siteKind({ ...site, services: site.services ?? [] })]
+  return [words.label, words.facet]
+}
+
 /**
- * The texts of a site the search covers: slug, description, type (the filters'
- * word), the Platform tag of the platform's own projects, port, addresses and
+ * The texts of a site the search covers: slug, description, type and kind
+ * (the facets' words), the Platform tag of the platform's own projects, port, addresses and
  * their note, domain aliases, access, service state, the names of its secret
  * variables and the restart pending pill. The aliases
  * are not displayed, but a client gives them as readily as their domain; the
@@ -83,6 +90,7 @@ function siteTexts(site: SearchableSite): string[] {
     site.slug,
     site.description ?? "",
     TYPE_LABELS[site.type],
+    ...kindTexts(site),
     site.platform ? PLATFORM_TAG : "",
     site.port === null ? "" : `:${site.port}`,
     ...(site.services ?? []).filter((entry) => !entry.main).flatMap((entry) => [
@@ -123,43 +131,11 @@ export function filterSites<T extends SearchableSite>(sites: T[], query: string)
   return sites.filter((site) => correspond(site, words))
 }
 
-/** What the toolbar counts, in the singular and the plural. */
-export type Noun = { one: string; many: string }
-
-export const SITES_NOUN: Noun = { one: "site", many: "sites" }
-export const PLATFORM_NOUN: Noun = { one: "platform project", many: "platform projects" }
-
-/** Sites, or the platform's own projects under Platform, which counts them apart. */
-export function countNoun(filter: SiteFilter): Noun {
-  return filter === "platform" ? PLATFORM_NOUN : SITES_NOUN
-}
-
 /**
- * The toolbar's count: "13 sites", or "3 of 13 sites" under a filter or a
- * search. With nothing to count, a fresh machine, "0 sites" alone.
- */
-export function countLabel(visible: number, total: number, narrowed: boolean, noun: Noun = SITES_NOUN): string {
-  const word = total === 1 ? noun.one : noun.many
-  return narrowed && total > 0 ? `${visible} of ${total} ${word}` : `${total} ${word}`
-}
-
-/**
- * The title of the inventory's empty state when no site is listed outside
+ * The title of the list's empty state when it holds no site outside
  * Platform: a fresh machine, the platform's own projects alone and well.
  */
 export const FRESH_TITLE = "No sites deployed yet"
-
-/**
- * What the `aria-live` region says once typing settles, or the filter
- * changes. With no site to count outside Platform, whatever the filter or the
- * search, it says what the screen says, the empty state's title.
- */
-export function searchAnnouncement(visible: number, total: number, narrowed: boolean, noun: Noun = SITES_NOUN): string {
-  if (total === 0 && noun === SITES_NOUN) return FRESH_TITLE
-  if (!narrowed) return `Showing all ${total} ${noun.many}`
-  if (visible === 0) return `No ${noun.many} match`
-  return visible === 1 ? `1 ${noun.one} matches` : `${visible} ${noun.many} match`
-}
 
 export type KeyPress = {
   key: string

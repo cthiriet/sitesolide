@@ -68,6 +68,34 @@ function readProblem(value: unknown): Problem | null {
   };
 }
 
+/** A monitor problem's words in a site's row, by its kind (monitor/src/checks.ts). */
+const KIND_LABELS: Readonly<Record<string, string>> = {
+  caddy: "Caddy down",
+  restarts: "Caddy restarted",
+  platform: "Unit failed",
+  tunnel: "Tunnel down",
+  monitor: "Monitor incomplete",
+};
+
+/**
+ * A monitor problem in one to three words. Its kind says most of it; a
+ * site's probe, a certificate and the backups each fail in more than one
+ * way, which only the monitor's summary tells apart, and an unknown kind,
+ * from a monitor newer than this page, is still named as the monitor's.
+ */
+export function problemLabel(problem: Pick<Problem, "kind" | "summary">): string {
+  const { kind, summary } = problem;
+  if (kind === "site") return /cert/i.test(summary) ? "Certificate error" : "Not answering";
+  if (kind === "certificate") return /expired/i.test(summary) ? "Certificate expired" : "Certificate expiring";
+  if (kind === "backup") {
+    if (/last backup run failed/i.test(summary)) return "Backup failed";
+    if (/last backup run finished/i.test(summary)) return "Backup overdue";
+    if (/repository/i.test(summary)) return "Backup check failed";
+    return "Backup unreadable";
+  }
+  return KIND_LABELS[kind] ?? "Monitor alert";
+}
+
 /** The longest string kept from the monitor's status: a summary, a label. */
 const MAX_FIELD = 1000;
 
@@ -185,20 +213,21 @@ export function monitorDiscrepancies(content: string | null | undefined, generat
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("an object was expected");
     status = parsed as Record<string, unknown>;
   } catch (err) {
-    return [{ slug: null, severity: "warning", message: `Monitor status unreadable: ${(err as Error).message}` }];
+    return [{ slug: null, severity: "warning", label: "Monitor unreadable", message: `Monitor status unreadable: ${(err as Error).message}` }];
   }
 
   if (typeof status.refused === "string") {
-    return [{ slug: null, severity: "warning", message: `Monitor status refused by the collector: ${status.refused}` }];
+    return [{ slug: null, severity: "warning", label: "Monitor refused", message: `Monitor status refused by the collector: ${status.refused}` }];
   }
 
   const at = typeof status.generatedAt === "number" ? status.generatedAt : null;
-  if (at === null) return [{ slug: null, severity: "warning", message: "Monitor status unreadable: no date" }];
+  if (at === null) return [{ slug: null, severity: "warning", label: "Monitor unreadable", message: "Monitor status unreadable: no date" }];
   if (generated - at > MONITOR_STALE_MS) {
     return [
       {
         slug: null,
         severity: "warning",
+        label: "Monitor silent",
         message:
           `Monitor silent for ${duration(generated - at)}: sitesolide-monitor.timer no longer runs, ` +
           'or its runs fail, see "journalctl -u sitesolide-monitor"',
@@ -213,6 +242,7 @@ export function monitorDiscrepancies(content: string | null | undefined, generat
     discrepancies.push({
       slug: problem.slug,
       severity: problem.severity === "critical" ? "error" : "warning",
+      label: problemLabel(problem),
       message: `${problem.summary} (monitor${lasting})`,
     });
   }
@@ -221,6 +251,7 @@ export function monitorDiscrepancies(content: string | null | undefined, generat
     discrepancies.push({
       slug: null,
       severity: "warning",
+      label: "Heartbeat failed",
       message: "The monitor's heartbeat did not go through: its outside service will report the machine as down",
     });
   }
@@ -231,6 +262,7 @@ export function monitorDiscrepancies(content: string | null | undefined, generat
     discrepancies.push({
       slug: null,
       severity: "warning",
+      label: "Checks skipped",
       message:
         `${unchecked} check${unchecked === 1 ? "" : "s"} skipped by the monitor's last pass, out of time: ` +
         "they keep their last state, the next pass starts with them",
@@ -241,6 +273,7 @@ export function monitorDiscrepancies(content: string | null | undefined, generat
     discrepancies.push({
       slug: null,
       severity: "warning",
+      label: "Alerts undelivered",
       message: `${undelivered} monitor alert${undelivered === 1 ? "" : "s"} not delivered to the webhook, kept for its next run`,
     });
   }

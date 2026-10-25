@@ -1,7 +1,5 @@
-import { useId } from "react"
 import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
-import { ABSENT, size } from "@/lib/format"
 import {
   BAR_CLASSES,
   THRESHOLD_POSITIONS,
@@ -84,74 +82,84 @@ export function MemoryBar({ percent, level, className }: { percent: number | nul
   )
 }
 
-function Gauge({ tile }: { tile: Tile }) {
-  return (
-    <div className="grid content-start gap-2.5 px-5 py-4 @2xl:py-5">
-      <div className="flex items-baseline justify-between gap-3">
-        <p className="mono-label">{tile.heading}</p>
-        <p className={cn("text-figure tabular-nums", LEVEL_TEXT[tile.level])}>
-          {tile.value}
-        </p>
-      </div>
+/**
+ * One gauge of the strip: its label, its caption beside it once the cell has
+ * room, its figure on the right in its level's colour, and the track under
+ * them with its ticks at 70 and 90 %. `onPress` makes the whole cell the
+ * button of a sort, Memory or Disk: the question the figure raises, which
+ * site holds it, answered by the list below.
+ */
+function StripGauge({ tile, pressed, onPress }: { tile: Tile; pressed?: boolean; onPress?: () => void }) {
+  const body = (
+    <>
+      <span className="flex min-w-0 items-baseline gap-2">
+        <span className="mono-label">{tile.heading}</span>
+        <span className="hidden min-w-0 truncate text-xs text-muted-foreground tabular-nums @lg/strip:inline">{tile.detail}</span>
+        <span className={cn("ml-auto text-[0.9375rem] leading-5 font-medium tabular-nums", LEVEL_TEXT[tile.level])}>{tile.value}</span>
+      </span>
       <Track tile={tile} />
-      <p className="text-xs text-muted-foreground tabular-nums">{tile.detail}</p>
-    </div>
+    </>
+  )
+  const cell = "grid h-16 min-w-0 content-center gap-1.5 px-3 text-left @lg/strip:px-4"
+  if (onPress === undefined) return <div className={cell}>{body}</div>
+  return (
+    <button
+      type="button"
+      aria-pressed={pressed}
+      title={pressed ? `Sites sorted by ${tile.heading.toLowerCase()}` : `Sort sites by ${tile.heading.toLowerCase()}`}
+      onClick={onPress}
+      className={cn(
+        cell,
+        "outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+        pressed ? "bg-highlight" : "hover:bg-muted/45",
+      )}
+    >
+      {body}
+    </button>
   )
 }
 
-function spec(value: number | null, unit: string): string {
-  return value === null ? `${ABSENT} ${unit}` : `${size(value)} ${unit}`
-}
-
-/** The plate's columns: the server's identity, then its three gauges. */
-const PLATE_GRID =
-  "grid divide-y @2xl:grid-cols-[minmax(0,13rem)_repeat(3,minmax(0,1fr))] @2xl:divide-x @2xl:divide-y-0"
-
 /**
- * The machine plate: a single VM serves every site, and what it runs short of
+ * The machine strip: a single VM serves every site, and what it runs short of
  * runs short for everyone, hence its place at the top of the home page. One
- * bordered panel in four cells: the server, its zone and its size, then the
- * load, the memory and the disk. Its columns follow its own width, like
- * everything laid out inside the content.
+ * panel, 64 px, three gauges: load, memory and disk, the thresholds ticked on
+ * each. The machine's size is in the captions ("1.3 on 6 cores", "5.7 of
+ * 12 GB used"), its zone in the sidebar. Memory and Disk sort the list by
+ * what each site holds, `sort` saying which is in force.
  */
-export function MachinePlate({ snapshot }: { snapshot: Snapshot }) {
-  const titleId = useId()
+export function MachineStrip({
+  snapshot,
+  sort,
+  onSort,
+}: {
+  snapshot: Snapshot
+  sort: string | null
+  onSort: (sort: "memory" | "disk") => void
+}) {
   const { machine } = snapshot
-  const cores = machine?.cores ?? null
   return (
-    <section aria-labelledby={titleId} className="@container overflow-hidden rounded-xl border bg-card text-card-foreground shadow-panel">
-      <div className={PLATE_GRID}>
-        <div className="grid content-start gap-1 px-5 py-4 @2xl:py-5">
-          <h2 id={titleId} className="mono-label">
-            Server
-          </h2>
-          {snapshot.zone !== "" && <p className="font-mono text-[0.9375rem] leading-6 font-medium text-strong wrap-anywhere">{snapshot.zone}</p>}
-          <ul className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground tabular-nums">
-            <li>{cores === null ? `${ABSENT} cores` : `${cores} ${cores === 1 ? "core" : "cores"}`}</li>
-            <li>{spec(machine?.memoryTotal ?? null, "memory")}</li>
-            <li>{spec(machine?.diskTotal ?? null, "disk")}</li>
-          </ul>
-        </div>
-        <Gauge tile={loadTile(machine)} />
-        <Gauge tile={memoryTile(machine)} />
-        <Gauge tile={diskTile(machine)} />
+    <section aria-label="Server" className="@container/strip overflow-clip rounded-xl border bg-card text-card-foreground shadow-panel">
+      <div className="grid grid-cols-3 divide-x">
+        <StripGauge tile={loadTile(machine)} />
+        <StripGauge tile={memoryTile(machine)} pressed={sort === "memory"} onPress={() => onSort("memory")} />
+        <StripGauge tile={diskTile(machine)} pressed={sort === "disk"} onPress={() => onSort("disk")} />
       </div>
     </section>
   )
 }
 
-export function PlateSkeleton() {
+export function StripSkeleton() {
   return (
-    <div aria-hidden="true" className="@container">
-      <div className={cn(PLATE_GRID, "rounded-xl border bg-card shadow-panel @2xl:h-[7.75rem]")}>
-        {Array.from({ length: 4 }, (_, index) => (
-          <div key={index} className="grid content-start gap-3 px-5 py-4 @2xl:py-5">
-            <Skeleton className="h-3 w-16" />
-            <Skeleton className="h-6 w-14" />
-            {index > 0 && <Skeleton className="h-1.5 w-full" />}
+    <div aria-hidden="true" className="grid h-[4.125rem] grid-cols-3 divide-x rounded-xl border bg-card shadow-panel">
+      {Array.from({ length: 3 }, (_, index) => (
+        <div key={index} className="grid content-center gap-2.5 px-4">
+          <div className="flex justify-between">
+            <Skeleton className="h-3 w-14" />
+            <Skeleton className="h-3.5 w-8" />
           </div>
-        ))}
-      </div>
+          <Skeleton className="h-1.5 w-full" />
+        </div>
+      ))}
     </div>
   )
 }

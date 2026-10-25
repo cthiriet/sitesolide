@@ -370,8 +370,27 @@ export type Run = {
 export type Discrepancy = {
   slug: string | null;
   severity: "error" | "warning";
+  /**
+   * The discrepancy in one to three English words, "Not routed", "Memory
+   * 86%", "Last run failed": what a site's row says beside its name, the
+   * whole message in its tooltip. Chosen here, where the discrepancy is
+   * judged, so that the page never reads a message to name it.
+   */
+  label: string;
   message: string;
 };
+
+/**
+ * A unit's state in one word, as a site's row says it: the page's own words
+ * for a service that is not running (`serviceWord` in the page's
+ * lib/sites.ts), so that the row and the Overview agree.
+ */
+export function unitLabel(active: string, subState: string): string {
+  if (subState === "auto-restart") return "Restarting";
+  if (active === "activating") return "Starting";
+  if (active === "deactivating") return "Stopping";
+  return "Down";
+}
 
 export type Snapshot = {
   generated: number;
@@ -665,7 +684,7 @@ export function buildSnapshot(raw: Raw): Snapshot {
   const sites: Site[] = [];
 
   if (codesError !== null) {
-    discrepancies.push({ slug: null, severity: "error", message: codesError });
+    discrepancies.push({ slug: null, severity: "error", label: "Codes unreadable", message: codesError });
   }
 
   const folders = [...raw.folders].sort((a, b) => a.slug.localeCompare(b.slug));
@@ -682,7 +701,7 @@ export function buildSnapshot(raw: Raw): Snapshot {
     if (error !== null) {
       // This manifest is the one the domain table and the lock generator read:
       // unreadable, it stops both.
-      discrepancies.push({ slug, severity: "error", message: error });
+      discrepancies.push({ slug, severity: "error", label: "Manifest unreadable", message: error });
     }
 
     const app = manifest !== null && isApp(manifest);
@@ -765,19 +784,20 @@ export function buildSnapshot(raw: Raw): Snapshot {
 function scheduleDiscrepancies(slug: string, name: string | null, schedule: Schedule, generated: number): Discrepancy[] {
   const { timerState, lastRun } = schedule;
   if (timerState !== null && !timerState.loaded) {
-    return [{ slug, severity: "error", message: `Service ${name}: no loaded timer (${schedule.timer}), it never runs` }];
+    return [{ slug, severity: "error", label: "No timer", message: `Service ${name}: no loaded timer (${schedule.timer}), it never runs` }];
   }
   const found: Discrepancy[] = [];
   if (timerState !== null && timerState.active !== "active") {
     found.push({
       slug,
       severity: "error",
+      label: "Schedule stopped",
       message: `Service ${name}: its schedule is stopped, ${schedule.timer} is ${timerState.active} (${timerState.subState})`,
     });
   }
   if (lastRun !== null && !lastRun.ok) {
     const when = lastRun.at === null ? "" : ` ${duration(Math.max(0, generated - lastRun.at))} ago`;
-    found.push({ slug, severity: "warning", message: `Service ${name}: last run failed${when} (${lastRun.failure})` });
+    found.push({ slug, severity: "warning", label: "Last run failed", message: `Service ${name}: last run failed${when} (${lastRun.failure})` });
   }
   return found;
 }
@@ -803,6 +823,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
       discrepancies.push({
         slug,
         severity: "error",
+        label: "Access mismatch",
         message:
           "Preview code requested but none is valid: every change of a preview code will be refused until it is mended. " +
           "Choose one in its Access section"
@@ -816,6 +837,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
       discrepancies.push({
         slug,
         severity: "error",
+        label: "Access mismatch",
         message: "Restricted in sitesolide.json, public on the server: anyone can open the site. Choose one in its Access section",
       });
     }
@@ -824,6 +846,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
       discrepancies.push({
         slug,
         severity: "error",
+        label: "Access mismatch",
         message: "Restricted on the server, public in sitesolide.json. Choose one in its Access section",
       });
     }
@@ -832,6 +855,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
       discrepancies.push({
         slug,
         severity: "error",
+        label: "Access mismatch",
         message:
           "Preview code in effect although sitesolide.json no longer asks for one. " +
           "Choose one in its Access section"
@@ -843,6 +867,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
         discrepancies.push({
           slug,
           severity: "error",
+          label: "Not routed",
           message:
             `${site.domain.name} is active in the manifest but missing from the table: ` +
             "no routing and no certificate until bin/generate-domains.sh has run",
@@ -852,6 +877,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
         discrepancies.push({
           slug,
           severity: "warning",
+          label: "Routed, not active",
           message: `${site.domain.name} is routed although the manifest no longer activates it`,
         });
       }
@@ -865,6 +891,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
         discrepancies.push({
           slug,
           severity: "error",
+          label: "Down",
           message: site.headless
             ? "App project without a loaded unit: none of its services runs"
             : "App project without a loaded unit: nothing answers behind Caddy",
@@ -873,6 +900,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
         discrepancies.push({
           slug,
           severity: "error",
+          label: unitLabel(site.service.active, site.service.subState),
           message: `Service ${site.service.active} (${site.service.subState})`,
         });
       }
@@ -881,6 +909,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
         discrepancies.push({
           slug,
           severity: "error",
+          label: "Port not listening",
           message: `Port ${site.port} declared, but nothing listens on it on the loopback interface`,
         });
       }
@@ -893,6 +922,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
         discrepancies.push({
           slug,
           severity: "error",
+          label: "Service not loaded",
           message: `Service ${other.name}: no loaded unit (${other.unit}.service)`,
         });
       } else if (other.schedule !== null) {
@@ -902,6 +932,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
         discrepancies.push({
           slug,
           severity: "error",
+          label: `Service ${unitLabel(other.service.active, other.service.subState).toLowerCase()}`,
           message: `Service ${other.name} ${other.service.active} (${other.service.subState})`,
         });
       }
@@ -909,6 +940,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
         discrepancies.push({
           slug,
           severity: "error",
+          label: "Port not listening",
           message: `Service ${other.name}: port ${other.port} declared, but nothing listens on it on the loopback interface`,
         });
       }
@@ -922,10 +954,12 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
         // Unnamed for the one service of a project; named as soon as there is
         // another, or when it is not the main one, beside an anchor.
         const unnamed = name === null || (main && site.services.length === 1);
+        const share = Math.round((peak / limit) * 100);
         discrepancies.push({
           slug,
           severity: "warning",
-          message: `${unnamed ? "Memory" : `Service ${name}: memory`} peak at ${Math.round((peak / limit) * 100)}% of the limit`,
+          label: `Memory ${share}%`,
+          message: `${unnamed ? "Memory" : `Service ${name}: memory`} peak at ${share}% of the limit`,
         });
       }
     }
@@ -934,6 +968,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
       discrepancies.push({
         slug,
         severity: "warning",
+        label: "No manifest",
         message:
           "Folder served without sitesolide.json: no lock or domain possible " +
           "until a sitesolide deploy puts one there",
@@ -949,6 +984,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
     discrepancies.push({
       slug: PORTAL_SLUG,
       severity: "error",
+      label: "Sign-in down",
       message:
         `${protectedSites.length} restricted site(s), and the portal that signs people in is not running: ` +
         "they answer 502 and nobody gets in",
@@ -967,6 +1003,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
     discrepancies.push({
       slug: null,
       severity: "warning",
+      label: "High load",
       message:
         `Load average of ${machine.load5} over five minutes for ${machine.cores} cores: ` +
         "work is waiting its turn",
@@ -981,6 +1018,7 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
       discrepancies.push({
         slug: block,
         severity: "warning",
+        label: "No folder",
         message: "Live Caddy fragment with no matching folder in /srv/sites",
       });
     }

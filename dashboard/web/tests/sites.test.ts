@@ -1,27 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import {
-  FILTERS,
   siteAccess,
   siteAddress,
-  countFilters,
-  effectiveFilter,
-  hiddenPlatform,
-  inFilter,
-  inventoryTotal,
-  offeredFilters,
   serviceState,
-  filterByKind,
   rowClickOutcome,
-  sitesCaption,
   computeCpuShare,
   serviceSummaryOf,
-  sortSites,
+  siteWeight,
 } from "../src/lib/sites"
 import type { Click } from "../src/lib/pages"
-import { filterSites } from "../src/lib/search"
-import type { Site } from "../src/lib/types"
-import { worstSeverities } from "../src/lib/verdict"
-import { discrepancy, scheduledService, service, site, siteService } from "./factory"
+import { scheduledService, service, site, siteService } from "./factory"
 
 const MO = 1024 ** 2
 const DAY = 24 * 3600_000
@@ -252,198 +240,6 @@ describe("a service's summary", () => {
   })
 })
 
-describe("filters", () => {
-  const calendar = site({ slug: "calendar", portal: { wanted: true, installed: true, exemptions: [] } })
-  const cms = site({ slug: "cms" })
-  const showcase = site({ slug: "showcase", type: "static", service: null, port: null })
-  const forgotten = site({ slug: "forgotten", type: "no-manifest", service: null, port: null })
-  const expose = site({
-    slug: "expose",
-    type: "static",
-    service: null,
-    portal: { wanted: true, installed: false, exemptions: [] },
-  })
-  const SITES = [calendar, cms, showcase, forgotten, expose]
-  const worst = worstSeverities([discrepancy("warning", "cms"), discrepancy("error", "expose"), discrepancy("error", null)])
-  const slugs = (sites: Site[]) => sites.map((s) => s.slug)
-
-  test("All keeps everything, in the order received", () => {
-    expect(filterByKind(SITES, "all", worst)).toEqual(SITES)
-  })
-
-  test("Issues keeps the sites that have them, of any severity, and never the machine", () => {
-    expect(slugs(filterByKind(SITES, "issues", worst))).toEqual(["cms", "expose"])
-  })
-
-  test("Apps and Static, without the folders that have no manifest", () => {
-    expect(slugs(filterByKind(SITES, "apps", worst))).toEqual(["calendar", "cms"])
-    expect(slugs(filterByKind(SITES, "static", worst))).toEqual(["showcase", "expose"])
-    expect(inFilter(forgotten, "apps", worst) || inFilter(forgotten, "static", worst)).toBe(false)
-  })
-
-  /** A portal requested but missing is precisely what you come looking for under this filter. */
-  test("Restricted also keeps the disagreements, both ways round", () => {
-    const extra = site({ slug: "extra", portal: { wanted: false, installed: true, exemptions: [] } })
-    expect(slugs(filterByKind([...SITES, extra], "restricted", worst))).toEqual(["calendar", "expose", "extra"])
-  })
-
-  test("every filter counts what it would keep", () => {
-    expect(countFilters(SITES, worst)).toEqual({ all: 5, issues: 2, apps: 2, static: 2, restricted: 2, platform: 0 })
-    expect(countFilters([], worst)).toEqual({ all: 0, issues: 0, apps: 0, static: 0, restricted: 0, platform: 0 })
-  })
-
-  /** Every chip's count comes from the same table as the chips: a filter added has its place there. */
-  test("All comes first, and every filter has its count", () => {
-    expect(FILTERS[0]?.key).toBe("all")
-    expect(Object.keys(countFilters(SITES, worst)).sort()).toEqual(FILTERS.map((filter) => filter.key).sort())
-  })
-})
-
-describe("the platform's own projects", () => {
-  const shop = site({ slug: "shop" })
-  const dashboard = site({ slug: "dashboard", platform: true, port: 3022 })
-  const portal = site({ slug: "portal", platform: true, port: 3026, portal: { wanted: true, installed: true, exemptions: [] } })
-  const analytics = site({ slug: "analytics", platform: true, type: "static", service: null, port: null })
-  const SITES = [shop, dashboard, portal, analytics]
-  const healthy = worstSeverities([])
-  const slugs = (sites: Site[]) => sites.map((s) => s.slug)
-
-  test("All leaves out the healthy ones", () => {
-    expect(slugs(filterByKind(SITES, "all", healthy))).toEqual(["shop"])
-  })
-
-  /** A broken portal is exactly what the owner must see. */
-  test("one with an error or a warning shows under All and under Issues", () => {
-    for (const severity of ["error", "warning"] as const) {
-      const worst = worstSeverities([discrepancy(severity, "portal")])
-      expect(slugs(filterByKind(SITES, "all", worst))).toEqual(["shop", "portal"])
-      expect(slugs(filterByKind(SITES, "issues", worst))).toEqual(["portal"])
-    }
-  })
-
-  test("Apps, Static and Restricted keep one only while it has an issue", () => {
-    expect(slugs(filterByKind(SITES, "apps", healthy))).toEqual(["shop"])
-    expect(slugs(filterByKind(SITES, "static", healthy))).toEqual([])
-    expect(slugs(filterByKind(SITES, "restricted", healthy))).toEqual([])
-    const worst = worstSeverities([discrepancy("error", "portal"), discrepancy("warning", "analytics"), discrepancy("error", "dashboard")])
-    expect(slugs(filterByKind(SITES, "apps", worst))).toEqual(["shop", "dashboard", "portal"])
-    expect(slugs(filterByKind(SITES, "static", worst))).toEqual(["analytics"])
-    expect(slugs(filterByKind(SITES, "restricted", worst))).toEqual(["portal"])
-  })
-
-  test("Platform keeps every one of them, healthy or not, and nothing else", () => {
-    expect(slugs(filterByKind(SITES, "platform", healthy))).toEqual(["dashboard", "portal", "analytics"])
-    const worst = worstSeverities([discrepancy("error", "portal"), discrepancy("error", "shop")])
-    expect(slugs(filterByKind(SITES, "platform", worst))).toEqual(["dashboard", "portal", "analytics"])
-  })
-
-  test("every filter but Platform keeps a part of what All lists", () => {
-    for (const worst of [healthy, worstSeverities([discrepancy("warning", "portal"), discrepancy("error", "shop")])]) {
-      const all = filterByKind(SITES, "all", worst)
-      for (const { key } of FILTERS) {
-        if (key === "platform") continue
-        for (const kept of filterByKind(SITES, key, worst)) expect(all).toContain(kept)
-      }
-    }
-  })
-
-  test("a machine with one site and three of them counts one under All, three under Platform", () => {
-    expect(countFilters(SITES, healthy)).toEqual({ all: 1, issues: 0, apps: 1, static: 0, restricted: 0, platform: 3 })
-  })
-
-  /** The toolbar and the page header agree with the chip of the population they count. */
-  test("the toolbar's total follows the filter", () => {
-    expect(inventoryTotal(SITES, "all", healthy)).toBe(1)
-    expect(inventoryTotal(SITES, "apps", healthy)).toBe(1)
-    expect(inventoryTotal(SITES, "issues", healthy)).toBe(1)
-    expect(inventoryTotal(SITES, "platform", healthy)).toBe(3)
-    expect(inventoryTotal(SITES, "all", worstSeverities([discrepancy("error", "portal")]))).toBe(2)
-  })
-
-  test("a fresh machine lists nothing under All, and everything under Platform", () => {
-    const fresh = [dashboard, portal, analytics]
-    expect(filterByKind(fresh, "all", healthy)).toEqual([])
-    expect(inventoryTotal(fresh, "all", healthy)).toBe(0)
-    expect(hiddenPlatform(fresh, healthy)).toBe(3)
-    expect(slugs(filterByKind(fresh, "platform", healthy))).toEqual(["dashboard", "portal", "analytics"])
-  })
-
-  /**
-   * The secrets say it, no discrepancy does: a file replaced in the portal's
-   * Secrets, the portal still running with the old one, waits for the owner.
-   */
-  test("a restart pending lists one under All and Apps, not under Issues", () => {
-    const pending = { ...portal, restartPending: true }
-    const sites = [shop, dashboard, pending, analytics]
-    expect(slugs(filterByKind(sites, "all", healthy))).toEqual(["shop", "portal"])
-    expect(slugs(filterByKind(sites, "apps", healthy))).toEqual(["shop", "portal"])
-    expect(slugs(filterByKind(sites, "restricted", healthy))).toEqual(["portal"])
-    expect(filterByKind(sites, "issues", healthy)).toEqual([])
-    expect(inventoryTotal(sites, "all", healthy)).toBe(2)
-    expect(hiddenPlatform(sites, healthy)).toBe(2)
-    expect(slugs(filterByKind([shop, { ...portal, restartPending: false }], "all", healthy))).toEqual(["shop"])
-  })
-
-  test("the chip is offered only when there is one of them", () => {
-    const keys = (filters: typeof FILTERS) => filters.map((filter) => filter.key)
-    expect(keys(offeredFilters(SITES))).toEqual(["all", "issues", "apps", "static", "restricted", "platform"])
-    expect(keys(offeredFilters([shop]))).toEqual(["all", "issues", "apps", "static", "restricted"])
-    expect(keys(offeredFilters([]))).not.toContain("platform")
-    expect(FILTERS.at(-1)?.key).toBe("platform")
-  })
-
-  /** The owner's Platform, remembered, means nothing to a person signed in in their place without a reload. */
-  test("a Platform chosen falls back to All once the list carries none of them", () => {
-    expect(effectiveFilter("platform", SITES)).toBe("platform")
-    expect(effectiveFilter("platform", [shop])).toBe("all")
-    expect(effectiveFilter("platform", [])).toBe("all")
-    expect(effectiveFilter("apps", [shop])).toBe("apps")
-  })
-
-  test("the caption says how many are left out, except under Platform", () => {
-    const hidden = hiddenPlatform(SITES, healthy)
-    expect(sitesCaption("all", null, hidden)).toBe(
-      "Sites served by the server, issues first, then by name, 3 platform projects left out, under Platform",
-    )
-    expect(sitesCaption("apps", "shop", 1)).toBe(
-      'Sites served by the server, issues first, then by name, filtered by Apps, matching "shop", 1 platform project left out, under Platform',
-    )
-    expect(sitesCaption("platform", null, hidden)).toBe("Sites served by the server, issues first, then by name, filtered by Platform")
-    expect(sitesCaption("all", null, 0)).toBe("Sites served by the server, issues first, then by name")
-  })
-
-  /** The caption agrees with the Platform chip, which counts under the search. */
-  test("under a search, the caption counts the ones left out among its matches", () => {
-    const left = (query: string) => hiddenPlatform(filterSites(SITES, query), healthy)
-    expect(left("")).toBe(3)
-    expect(left("shop")).toBe(0)
-    expect(left("portal")).toBe(1)
-    expect(sitesCaption("all", "shop", left("shop"))).toBe(
-      'Sites served by the server, issues first, then by name, matching "shop"',
-    )
-  })
-})
-
-describe("order of the inventory", () => {
-  test("errors, then warnings, then the rest, each group by name", () => {
-    const sites = ["zoo", "beta", "alpha", "cms", "mid", "calendar"].map((slug) => site({ slug }))
-    const worst = worstSeverities([
-      discrepancy("warning", "mid"),
-      discrepancy("error", "zoo"),
-      discrepancy("warning", "calendar"),
-      discrepancy("error", "cms"),
-      discrepancy("warning", "cms"),
-    ])
-    expect(sortSites(sites, worst).map((s) => s.slug)).toEqual(["cms", "zoo", "calendar", "mid", "alpha", "beta"])
-  })
-
-  test("with no discrepancy, alphabetical order, without touching the list received", () => {
-    const sites = [site({ slug: "b" }), site({ slug: "a" })]
-    expect(sortSites(sites, new Map()).map((s) => s.slug)).toEqual(["a", "b"])
-    expect(sites.map((s) => s.slug)).toEqual(["b", "a"])
-  })
-})
-
 describe("click on a row", () => {
   const click = (partial: Partial<Click> = {}): Click => ({
     button: 0,
@@ -480,14 +276,6 @@ describe("click on a row", () => {
     expect(rowClickOutcome(click({ button: 2 }), false, "")).toBeNull()
     expect(rowClickOutcome(click({ shiftKey: true }), false, "")).toBeNull()
     expect(rowClickOutcome(click({ altKey: true }), false, "")).toBeNull()
-  })
-})
-
-describe("the table's caption", () => {
-  test("it states the order, then the filter and the search when there are any", () => {
-    expect(sitesCaption("all", null)).toBe("Sites served by the server, issues first, then by name")
-    expect(sitesCaption("restricted", null)).toBe("Sites served by the server, issues first, then by name, filtered by Restricted")
-    expect(sitesCaption("all", "cms")).toBe('Sites served by the server, issues first, then by name, matching "cms"')
   })
 })
 
@@ -552,6 +340,15 @@ describe("a project of several services in the inventory", () => {
       next: "next run in 5h",
     })
     expect(serviceState(reports)).toEqual({ tone: "ok", label: "Scheduled" })
+  })
+
+  /** What the Memory sort orders by: the sum the summary writes, in bytes. */
+  test("its weight is the same sum, and nothing while its main unit is not running", () => {
+    const web = siteService({ name: "web", unit: "shop", main: true, service: running(47, 256, 1) })
+    const queue = siteService({ name: "queue", unit: "shop.queue", kind: "worker", internal: true, service: running(30, 256, 1) })
+    expect(siteWeight(site({ service: running(47, 256, 1), services: [web, queue] }))).toMatchObject({ counted: 2, memory: 77 * MB, limit: 512 * MB })
+    expect(siteWeight(site({ service: service({ active: "failed" }) }))).toMatchObject({ counted: 0, memory: null })
+    expect(siteWeight(site({ type: "static", service: null }))).toMatchObject({ counted: 0, memory: null })
   })
 
   test("a single service keeps its own figures, with no count", () => {

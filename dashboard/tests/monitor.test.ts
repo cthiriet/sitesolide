@@ -6,6 +6,7 @@ import {
   copyMonitorStatus,
   duration,
   monitorDiscrepancies,
+  problemLabel,
   monitorRefusal,
   statusFileRefusal,
 } from "../src/monitor";
@@ -43,10 +44,11 @@ describe("the monitor among the Issues", () => {
       "site:cms.test-zone.invalid": tracked("failing", "site", "critical", "https://cms.test-zone.invalid/ answered 502", "cms"),
     });
     expect(monitorDiscrepancies(content, NOW)).toEqual([
-      { slug: "shop", severity: "error", message: "https://shop.test-zone.invalid/ answered 502 (monitor, for 12 min)" },
+      { slug: "shop", severity: "error", label: "Not answering", message: "https://shop.test-zone.invalid/ answered 502 (monitor, for 12 min)" },
       {
         slug: null,
         severity: "warning",
+        label: "Certificate expiring",
         message: "The certificate for *.test-zone.invalid expires in 9 days, on 2026-09-07 (monitor, for 12 min)",
       },
     ]);
@@ -75,6 +77,7 @@ describe("the monitor among the Issues", () => {
       {
         slug: null,
         severity: "warning",
+        label: "Monitor silent",
         message:
           'Monitor silent for 6 min: sitesolide-monitor.timer no longer runs, or its runs fail, see "journalctl -u sitesolide-monitor"',
       },
@@ -94,6 +97,7 @@ describe("the monitor among the Issues", () => {
       {
         slug: null,
         severity: "warning",
+        label: "Checks skipped",
         message: "3 checks skipped by the monitor's last pass, out of time: they keep their last state, the next pass starts with them",
       },
     ]);
@@ -106,7 +110,22 @@ describe("the monitor among the Issues", () => {
     expect(monitorDiscrepancies("[]", NOW)[0]!.message).toBe("Monitor status unreadable: an object was expected");
     expect(monitorDiscrepancies("{}", NOW)[0]!.message).toBe("Monitor status unreadable: no date");
     const future = JSON.stringify({ generatedAt: NOW, down: [{ kind: "site", summary: "x answered 502", severity: "critical", extra: 1 }, "junk"], newField: true });
-    expect(monitorDiscrepancies(future, NOW)).toEqual([{ slug: null, severity: "error", message: "x answered 502 (monitor)" }]);
+    expect(monitorDiscrepancies(future, NOW)).toEqual([{ slug: null, severity: "error", label: "Not answering", message: "x answered 502 (monitor)" }]);
+  });
+
+  test("each problem is named in one to three words, by its kind", () => {
+    const label = (kind: string, summary: string) => problemLabel({ kind, summary });
+    expect(label("site", "https://shop.test-zone.invalid/ answered 502")).toBe("Not answering");
+    expect(label("site", "https://shop.test-zone.invalid/ did not answer: ERR_TLS_CERT_ALTNAME_INVALID")).toBe("Certificate error");
+    expect(label("certificate", "The certificate for shop.example expires in 9 days, on 2026-11-04")).toBe("Certificate expiring");
+    expect(label("certificate", "The certificate for shop.example expired on 2026-11-04")).toBe("Certificate expired");
+    expect(label("backup", "The last backup run failed for photos, 5 h ago")).toBe("Backup failed");
+    expect(label("backup", "The last backup run finished 30 h ago, more than 26 h")).toBe("Backup overdue");
+    expect(label("backup", "Backups: the bucket's repository check failed 2 h ago")).toBe("Backup check failed");
+    expect(label("backup", "The backup status is not valid JSON")).toBe("Backup unreadable");
+    expect(label("caddy", "Caddy is inactive (dead)")).toBe("Caddy down");
+    expect(label("tunnel", "sitesolide-tunnel.service is failed (failed)")).toBe("Tunnel down");
+    expect(label("from-a-newer-monitor", "something")).toBe("Monitor alert");
   });
 
   test("durations read the way the monitor writes them", () => {
@@ -130,7 +149,7 @@ describe("the monitor among the Issues", () => {
       monitor: status({ caddy: tracked("down", "caddy", "critical", "Caddy is inactive (dead), result success") }),
     };
     expect(buildSnapshot(raw).discrepancies).toEqual([
-      { slug: null, severity: "error", message: "Caddy is inactive (dead), result success (monitor, for 12 min)" },
+      { slug: null, severity: "error", label: "Caddy down", message: "Caddy is inactive (dead), result success (monitor, for 12 min)" },
     ]);
   });
 });
@@ -192,7 +211,7 @@ describe("the monitor's status as the collector copies it", () => {
 
   test("a refusal shows among the Issues, as a warning", () => {
     expect(monitorDiscrepancies(monitorRefusal("status.json is a symbolic link"), NOW)).toEqual([
-      { slug: null, severity: "warning", message: "Monitor status refused by the collector: status.json is a symbolic link" },
+      { slug: null, severity: "warning", label: "Monitor refused", message: "Monitor status refused by the collector: status.json is a symbolic link" },
     ]);
   });
 });

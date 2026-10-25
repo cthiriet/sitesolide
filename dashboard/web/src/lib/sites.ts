@@ -1,18 +1,16 @@
 /**
- * What the site inventory decides, rather than the component: which address is
- * the main one, how the site opens, what its service says, which sites
- * a filter keeps and in what order they are read. Pure, and therefore testable
- * without a browser.
+ * What a site is, rather than how a component draws it: which address is the
+ * main one, how the site opens, what its service says and what its services
+ * weigh. Pure, and therefore testable without a browser. What the Sites list
+ * keeps and in what order is lib/site-list.ts.
  *
  * Nothing is judged anew here: the discrepancies come from `src/state.ts`, and
  * the memory thresholds from lib/gauges.ts.
  */
 import { ago, duration, fromNow, size, sizeOutOf } from "./format"
 import { serviceLevel, type Level } from "./gauges"
-import type { SiteSecretsPanel } from "./secrets"
 import type { Tone } from "./tones"
 import type { Site, SiteService } from "./types"
-import type { Severity } from "./verdict"
 
 export const TYPE_LABELS: Record<Site["type"], string> = {
   app: "App",
@@ -250,6 +248,49 @@ export function memoryShare(memory: number | null, limit: number | null): number
  * the CPU share of the last minute, the restarts. The site card shows more, see
  * lib/site-card.ts.
  */
+/** What a project's running services weigh together, each figure null when one of them lacks it. */
+export type Weight = { counted: number; memory: number | null; peak: number | null; limit: number | null; cpuShare: number | null }
+
+/**
+ * A project of several services weighs what all of its running ones weigh:
+ * the main one's figures alone would show a fraction of it. A figure one of
+ * them lacks makes the sum unknown rather than wrong. A scheduled service
+ * between two runs weighs nothing and holds no memory to measure, and the
+ * anchor of a project whose every service is scheduled runs nothing:
+ * neither is counted, rather than blank the sum for want of their figures.
+ * Nothing is counted while the main unit is not active.
+ */
+export function siteWeight(site: Pick<Site, "service"> & Partial<Pick<Site, "services">>): Weight {
+  const service = site.service
+  const none: Weight = { counted: 0, memory: null, peak: null, limit: null, cpuShare: null }
+  if (service === null || service.active !== "active") return none
+  const entries = site.services ?? []
+  const anchored = isAnchoredSite({ services: entries })
+  const counted = [
+    ...(anchored ? [] : [service]),
+    ...entries
+      .filter((entry) => !entry.main && (entry.kind !== "scheduled" || entry.service?.active === "active"))
+      .map((entry) => entry.service),
+  ]
+  if (counted.length === 0) return none
+  const sum = (pick: (entry: NonNullable<Site["service"]>) => number | null): number | null => {
+    let total = 0
+    for (const entry of counted) {
+      const value = entry === null ? null : pick(entry)
+      if (value === null) return null
+      total += value
+    }
+    return total
+  }
+  return {
+    counted: counted.length,
+    memory: sum((entry) => entry.memory),
+    peak: sum((entry) => entry.peak),
+    limit: sum((entry) => entry.limit),
+    cpuShare: sum((entry) => entry.cpuShare),
+  }
+}
+
 export function serviceSummaryOf(site: Pick<Site, "type" | "service"> & Partial<Pick<Site, "services">>, now: number): ServiceSummary {
   const service = site.service
   if (service === null) {
@@ -260,34 +301,9 @@ export function serviceSummaryOf(site: Pick<Site, "type" | "service"> & Partial<
   const restarts = restartsLabel(service.restarts)
   if (service.active !== "active") return { kind: "stopped", state: service.active, restarts }
 
-  // A project of several services weighs what all of its running ones weigh:
-  // the main one's figures alone would show a fraction of it. A figure one of
-  // them lacks makes the sum unknown rather than wrong. A scheduled service
-  // between two runs weighs nothing and holds no memory to measure, and the
-  // anchor of a project whose every service is scheduled runs nothing:
-  // neither is counted, rather than blank the sum for want of their figures.
   const entries = site.services ?? []
   const anchored = isAnchoredSite({ services: entries })
-  const counted = [
-    ...(anchored ? [] : [service]),
-    ...entries
-      .filter((entry) => !entry.main && (entry.kind !== "scheduled" || entry.service?.active === "active"))
-      .map((entry) => entry.service),
-  ]
-  const sum = (pick: (entry: NonNullable<Site["service"]>) => number | null): number | null => {
-    if (counted.length === 0) return null
-    let total = 0
-    for (const entry of counted) {
-      const value = entry === null ? null : pick(entry)
-      if (value === null) return null
-      total += value
-    }
-    return total
-  }
-  const memory = sum((entry) => entry.memory)
-  const peak = sum((entry) => entry.peak)
-  const limit = sum((entry) => entry.limit)
-  const cpuShare = sum((entry) => entry.cpuShare)
+  const { counted, memory, peak, limit, cpuShare } = siteWeight(site)
   const soonest = anchored
     ? entries.reduce<number | null>((first, entry) => {
         const next = entry.schedule?.next ?? null
@@ -296,7 +312,7 @@ export function serviceSummaryOf(site: Pick<Site, "type" | "service"> & Partial<
     : null
   return {
     kind: "active",
-    memory: counted.length === 0 ? null : limit === null ? size(memory) : sizeOutOf(memory, limit),
+    memory: counted === 0 ? null : limit === null ? size(memory) : sizeOutOf(memory, limit),
     percent: memoryShare(memory, limit),
     level: serviceLevel(memory, peak, limit),
     cpu: cpuShare === null ? null : `${computeCpuShare(cpuShare)} CPU`,
@@ -307,158 +323,7 @@ export function serviceSummaryOf(site: Pick<Site, "type" | "service"> & Partial<
   }
 }
 
-// --- Filters and order -----------------------------------------------------------
-
-export type SiteFilter = "all" | "issues" | "apps" | "static" | "restricted" | "platform"
-
-/** The inventory's filters, in the order they are displayed. */
-export const FILTERS: readonly { key: SiteFilter; label: string; description: string }[] = [
-  { key: "all", label: "All", description: "Every site, and the platform's own projects while they need you" },
-  { key: "issues", label: "Issues", description: "Sites with an issue" },
-  { key: "apps", label: "Apps", description: "Apps, which run a service" },
-  { key: "static", label: "Static", description: "Static sites, served as files" },
-  { key: "restricted", label: "Restricted", description: "Sites only the people with access can open" },
-  { key: "platform", label: PLATFORM_TAG, description: "Part of the platform: the dashboard, the portal and analytics" },
-]
-
-/** What a filter reads of a site: the snapshot's, and the restart pending the secrets say once read. */
-type Filterable = Pick<Site, "slug" | "type" | "portal" | "platform"> & Partial<Pick<SiteSecretsPanel, "restartPending">>
-
-/**
- * Listed outside Platform: every site of the owner's, and a project of the
- * platform's own only while it needs the owner: an issue, of either severity,
- * or a restart pending, which the secrets say and no discrepancy does. A
- * healthy portal is nothing the owner looks after; a broken one is exactly
- * what they must see, under All, where errors come first, and under Issues,
- * and one still running with a file it has not read yet waits for their
- * restart.
- */
-export function listed(
-  site: Pick<Site, "slug" | "platform"> & Partial<Pick<SiteSecretsPanel, "restartPending">>,
-  worst: ReadonlyMap<string, Severity>,
-): boolean {
-  return !site.platform || worst.has(site.slug) || site.restartPending === true
-}
-
-/**
- * Every filter but Platform keeps a part of what All lists, so that its count
- * never exceeds All's. Platform keeps every project of the platform's own,
- * healthy or not, and nothing else.
- *
- * A site behind the portal is so on both sides, requested or applied: a
- * disagreement between the two is precisely what you come looking for under
- * Restricted.
- */
-export function inFilter(site: Filterable, filter: SiteFilter, worst: ReadonlyMap<string, Severity>): boolean {
-  if (filter === "platform") return site.platform
-  if (!listed(site, worst)) return false
-  switch (filter) {
-    case "all":
-      return true
-    case "issues":
-      return worst.has(site.slug)
-    case "apps":
-      return site.type === "app"
-    case "static":
-      return site.type === "static"
-    case "restricted":
-      return site.portal.wanted || site.portal.installed
-  }
-}
-
-export function filterByKind<T extends Filterable>(
-  sites: readonly T[],
-  filter: SiteFilter,
-  worst: ReadonlyMap<string, Severity>,
-): T[] {
-  return sites.filter((site) => inFilter(site, filter, worst))
-}
-
-/** The number of sites under each filter, for the chip that carries it. */
-export function countFilters(
-  sites: readonly Filterable[],
-  worst: ReadonlyMap<string, Severity>,
-): Record<SiteFilter, number> {
-  const counts = { all: 0, issues: 0, apps: 0, static: 0, restricted: 0, platform: 0 }
-  for (const site of sites) {
-    for (const { key } of FILTERS) if (inFilter(site, key, worst)) counts[key] += 1
-  }
-  return counts
-}
-
-/**
- * The filters offered as chips: Platform only while the server carries one of
- * the platform's own projects, which a person's view never does. Decided
- * before the search: a chip does not come and go as a query is typed.
- */
-export function offeredFilters(sites: readonly Pick<Site, "platform">[]): typeof FILTERS {
-  const platform = sites.some((site) => site.platform)
-  return FILTERS.filter((filter) => filter.key !== "platform" || platform)
-}
-
-/**
- * The filter in force: Platform falls back to All once the list carries none
- * of the platform's own projects, the chip being gone. The choice is
- * remembered for the page's session, and a person signed in in the owner's
- * place, without a reload, would otherwise inherit a Platform that names
- * nothing of theirs.
- */
-export function effectiveFilter(chosen: SiteFilter, sites: readonly Pick<Site, "platform">[]): SiteFilter {
-  return chosen === "platform" && !sites.some((site) => site.platform) ? "all" : chosen
-}
-
-/**
- * What the toolbar and the page header count, before the search: what All
- * lists under every filter but Platform, which counts its own. The figure
- * then agrees with the All chip, or with the Platform chip under Platform.
- */
-export function inventoryTotal(
-  sites: readonly Filterable[],
-  filter: SiteFilter,
-  worst: ReadonlyMap<string, Severity>,
-): number {
-  return filterByKind(sites, filter === "platform" ? "platform" : "all", worst).length
-}
-
-/** The projects of the platform's own that All leaves out: those that need nothing of the owner. */
-export function hiddenPlatform(sites: readonly Filterable[], worst: ReadonlyMap<string, Severity>): number {
-  return sites.filter((site) => site.platform && !listed(site, worst)).length
-}
-
-/**
- * Errors first, then warnings, then the rest; by name inside each group. The
- * site to look at is at the top, and a name is always found in the same place
- * within its group.
- */
-export function sortSites<T extends Pick<Site, "slug">>(sites: readonly T[], worst: ReadonlyMap<string, Severity>): T[] {
-  const index = (site: T) => {
-    const severity = worst.get(site.slug)
-    return severity === "error" ? 0 : severity === "warning" ? 1 : 2
-  }
-  return [...sites].sort((a, b) => index(a) - index(b) || a.slug.localeCompare(b.slug))
-}
-
 // --- The click on a row ----------------------------------------------------------
 
 /** Every list's row click, which the sites list was the first to need: see lib/rows.ts. */
 export { rowClickOutcome, INTERACTIVE } from "./rows"
-
-// --- The caption -----------------------------------------------------------------
-
-/**
- * The table's caption, for screen readers: the order, the filter, the search,
- * and outside Platform how many of the platform's own projects are left out,
- * which the eye reads on the Platform chip.
- */
-export function sitesCaption(filter: SiteFilter, query: string | null, hidden = 0): string {
-  const parts = ["Sites served by the server, issues first, then by name"]
-  if (filter !== "all") {
-    const label = FILTERS.find((candidate) => candidate.key === filter)?.label ?? filter
-    parts.push(`filtered by ${label}`)
-  }
-  if (query !== null) parts.push(`matching "${query}"`)
-  if (filter !== "platform" && hidden > 0) {
-    parts.push(`${hidden} platform ${hidden === 1 ? "project" : "projects"} left out, under Platform`)
-  }
-  return parts.join(", ")
-}

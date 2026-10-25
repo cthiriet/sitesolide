@@ -66,9 +66,9 @@ describe("what a person sees of the snapshot", () => {
       zone: "test-zone.invalid",
       sites: [site("blog"), site("shop"), site("secret-project")],
       discrepancies: [
-        { slug: "blog", severity: "error", message: "blog is down" },
-        { slug: "secret-project", severity: "error", message: "secret-project is down" },
-        { slug: null, severity: "warning", message: "disk at 91%" },
+        { slug: "blog", severity: "error", label: "Down", message: "blog is down" },
+        { slug: "secret-project", severity: "error", label: "Down", message: "secret-project is down" },
+        { slug: null, severity: "warning", label: "Disk full", message: "disk at 91%" },
       ],
       machine: { memoryTotal: 1, memoryAvailable: 1, diskTotal: 1, diskFree: 1, load1: 1, load5: 1, load15: 1, cores: 1 },
     },
