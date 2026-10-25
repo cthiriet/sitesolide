@@ -166,7 +166,7 @@ function Figure({ heading, value, detail }: { heading: string; value: string; de
  * otherwise go from readable to unreadable in the middle of a word, depending
  * on whether it runs past the colour.
  */
-function Ranking({ key, title, unit, lines }: { key: string; title: string; unit: string; lines: readonly { value: string; total: number }[] }) {
+function Ranking({ ranking, title, unit, lines }: { ranking: string; title: string; unit: string; lines: readonly { value: string; total: number }[] }) {
   const first = lines[0]?.total ?? 0
   return (
     <Panel title={title} actions={<span className="mono-label">{unit}</span>} full>
@@ -175,7 +175,7 @@ function Ranking({ key, title, unit, lines }: { key: string; title: string; unit
           <li key={line.value} className="px-4 py-2">
             <div className="flex items-baseline justify-between gap-4 text-sm">
               <span className="truncate" title={line.value}>
-                {rankingLabel(key, line.value)}
+                {rankingLabel(ranking, line.value)}
               </span>
               <span className="shrink-0 tabular-nums text-muted-foreground">{formatNumber(line.total)}</span>
             </div>
@@ -271,7 +271,9 @@ function Content({ site, audience, zone }: { site: Site; audience: Audience; zon
           {RANKINGS.map(({ key, title, unit }) => {
             const lines = measure.rankings[key] ?? []
             if (lines.length === 0) return null
-            return <Ranking key={key} title={title} unit={unit} lines={lines} />
+            // `key` is React's alone and never reaches the component: the
+            // ranking's name, which picks its labels, goes as `ranking`.
+            return <Ranking key={key} ranking={key} title={title} unit={unit} lines={lines} />
           })}
         </div>
       )}
