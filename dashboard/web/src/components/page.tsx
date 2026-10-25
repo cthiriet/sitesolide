@@ -770,7 +770,8 @@ export function PageHeader({
     <>
       <header ref={header} className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur-md">
         <div className={cn(CONTAINER, "flex flex-wrap items-center gap-x-4 gap-y-2 py-3 md:min-h-[4.25rem]")}>
-          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+          {/* From md, its natural width decides the line break: the controls go under the title before it is cut. */}
+          <div className="flex min-w-0 flex-1 items-center gap-2.5 md:basis-auto">
             <InternalLink
               href="/"
               aria-label="All sites"
@@ -795,13 +796,15 @@ export function PageHeader({
             </div>
           </div>
 
-          {pageActions !== null && <div className="hidden items-center gap-1.5 md:flex">{pageActions}</div>}
-
-          <div className="hidden items-center gap-3 md:flex">
-            <UnlockedPill />
-            <Verdict />
-            <Age />
-            <RefreshButton className="-mr-2" />
+          {/* One group, so that on a narrow content it goes under the title whole, on the right. */}
+          <div className="ml-auto hidden flex-wrap items-center justify-end gap-x-4 gap-y-2 md:flex">
+            {pageActions !== null && <div className="flex items-center gap-1.5">{pageActions}</div>}
+            <div className="flex items-center gap-3">
+              <UnlockedPill />
+              <Verdict />
+              <Age />
+              <RefreshButton className="-mr-2" />
+            </div>
           </div>
           <div className="-mr-2 flex items-center md:hidden">
             <RefreshButton className="size-10" />

@@ -139,9 +139,8 @@ function columns(now: number, open: (entry: PeopleEntry) => void): Column<People
       cell: (entry) => (
         <>
           <KindMark kind={entry.kind} />
-          <RowButton onClick={() => open(entry)}>
-            <Who value={entry.who} />
-          </RowButton>
+          {/* The whole email on one line, cut at its end: Who's break after the @ wraps a button even under nowrap. */}
+          <RowButton onClick={() => open(entry)}>{entry.who}</RowButton>
           {entry.kind !== "domain" && entry.person.create && (
             <span title="May create projects, with a token of their own" className={cn(CHIP, "font-normal text-secondary-foreground")}>
               Creates projects
