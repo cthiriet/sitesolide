@@ -120,6 +120,57 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## A machine behind a Cloudflare Tunnel
+
+**What the release brings.** `sitesolide setup --tunnel <credentials>`
+installs a machine the Internet cannot reach, a box at home behind its
+router's NAT or a VM on a machine that already serves something else,
+through a Cloudflare Tunnel its owner created with `cloudflared`: the zone's
+records point at the tunnel, a hardened connector hands every request to
+Caddy over the loopback, and the firewall closes everything but ssh.
+`infra/vm/install.sh` lays the machine as a walled VM on such a host. The
+whole of it is in [tunnel.md](tunnel.md).
+
+The dashboard's Sites page lists the platform's own projects, the
+dashboard, the portal and analytics, under a *Platform* filter of their own,
+and elsewhere only while they have an issue or a restart pending. A project
+is one of them when its slug is deployed on that project's own port: an
+owner's project named `analytics` on another port stays with the sites.
+
+**What `sitesolide upgrade` brings to a machine served directly**, in its
+usual order:
+
+- **the backups**, whose copy of the machine's own state takes
+  `/etc/cloudflared` on a machine that has it;
+- **the dashboard**, which names the new release and keeps the platform's
+  own projects under *Platform*;
+- **the gatekeeper and the installer**, which write the new blocks below;
+- **the Caddyfile**, laid again and Caddy reloaded once. It imports
+  `/etc/caddy/global.d/*.caddy`, the tunnel's options on a machine behind
+  one, nothing on a machine served directly, and hands the landing's form
+  `X-Forwarded-For` as `{client_ip}`, the value Caddy wrote before;
+- **the monitor**, which reads the connector on a machine that has one.
+
+The tunnel's own component is left out of the report on a machine that has
+none. No project is refreshed or restarted. A project's block now hands its
+services `X-Forwarded-For` as `{client_ip}`: on a machine served directly
+that is the peer's address, the very value Caddy wrote before, so the
+blocks in service keep serving as they are, and the next deploy of each
+project replaces its block without `--force`.
+
+**Moving a machine in service behind a tunnel** is a run of setup with
+`--tunnel`, once upgraded: the connector first, then the records, and 80
+and 443 closed once resolvers see Cloudflare, so the sites answer all
+along. See [tunnel.md](tunnel.md#installing-the-machine). A customer's own
+domain cannot reach a machine behind a tunnel, and `domain --activate` is
+refused there.
+
+**Going back.** `sitesolide upgrade` with the previous binary, on a machine
+served directly. A machine behind a tunnel leaves it first, as
+[tunnel.md](tunnel.md#leaving-a-tunnel) says: the previous release neither
+watches nor upgrades its connector, and its Caddyfile drops the options
+that keep the visitor's address.
+
 ## Secrets: a project's store alone
 
 **What the release brings.** A project's secrets live in its store alone,
