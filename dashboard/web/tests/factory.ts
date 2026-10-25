@@ -99,8 +99,8 @@ export function scheduledService(now: number, partial: Partial<SiteService> = {}
   })
 }
 
-export function discrepancy(severity: Discrepancy["severity"], slug: string | null = "calendar", message = "m"): Discrepancy {
-  return { slug, severity, message }
+export function discrepancy(severity: Discrepancy["severity"], slug: string | null = "calendar", message = "m", label = "Issue"): Discrepancy {
+  return { slug, severity, label, message }
 }
 
 /** One of the platform's own files, the portal's by default: the only flat files the steward lists. */

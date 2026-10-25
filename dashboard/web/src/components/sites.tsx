@@ -1,63 +1,39 @@
-import { useMemo, type MouseEvent } from "react"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { MemoryBar } from "@/components/gauge"
-import { ExternalLink } from "@/components/link"
-import { InternalLink, useNavigation } from "@/components/navigation"
-import { SeverityIcon, Panel, Status } from "@/components/page"
-import { AccessWord, CHIP, RoleBars } from "@/components/access-word"
+import type { ReactNode } from "react"
+import { ArrowUpRight, Copy, Link2 } from "lucide-react"
+import { DropdownMenuGroup, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { CHIP, RoleBars } from "@/components/access-word"
+import { useCopy } from "@/components/copy"
 import { useData } from "@/components/data"
+import { CellText, DataTable, RowLink, RowMenu, RowMenuLink, type Column } from "@/components/data-table"
+import { AccessIcon, KindIcon } from "@/components/legend"
+import { StateLabel, When } from "@/components/page"
 import { roleLabel } from "@/lib/access"
+import { ABSENT, size, sizeOutOf } from "@/lib/format"
 import { roleOn } from "@/lib/identity"
-import { ago, size } from "@/lib/format"
-import { siteUrl } from "@/lib/pages"
-import { PENDING_LABEL, type SiteSecretsPanel } from "@/lib/secrets"
-import {
-  INTERACTIVE,
-  PLATFORM_TAG,
-  siteAccess,
-  siteAddress,
-  serviceState,
-  rowClickOutcome,
-  serviceSummaryOf,
-  type Address,
-} from "@/lib/sites"
-import type { Site } from "@/lib/types"
+import { siteKind } from "@/lib/legend"
+import { sectionsFor, siteUrl } from "@/lib/pages"
+import { siteFolder } from "@/lib/site-card"
+import { PLATFORM_FACET, figure, kindDetail, type ListedSite, type RowState } from "@/lib/site-list"
+import { HEADLESS_NOTE, memoryShare, siteAccess, siteAddress, siteWeight } from "@/lib/sites"
 import { cn } from "@/lib/utils"
-import type { Severity } from "@/lib/verdict"
-
-/** A site, with what the secrets say of it once read: the names of its variables, a restart pending. */
-export type SiteWithSecrets = Site & Partial<SiteSecretsPanel>
 
 /**
- * The click on a row, outside its links and buttons: the site's Overview, in
- * the page or in a new tab. See `rowClickOutcome` for what decides.
+ * The Sites list: one line per site, 44 px, quiet when fine.
+ *
+ *   | gutter | [kind] slug  tags  State +N | address | access | deployed | ... |
+ *
+ * A healthy row says its kind, its name, its address, how it opens and when
+ * it was deployed, nothing more; a row in trouble carries the severity icon
+ * in the gutter and its first issue's word beside the name, every message in
+ * the word's tooltip. Memory and disk come back as a column when the list is
+ * sorted by them. Below 42 rem of its own width, two lines: the name and the
+ * access, then the state or the address and the age.
  */
-function useRowClick(href: string) {
-  const { navigate } = useNavigation()
-  return useMemo(() => {
-    function follow(event: MouseEvent<HTMLElement>) {
-      const target = event.target instanceof Element ? event.target : null
-      const interactive = target !== null && target.closest(INTERACTIVE) !== null
-      const selection = window.getSelection()?.toString() ?? ""
-      const outcome = rowClickOutcome(event, interactive, selection)
-      if (outcome === "page") navigate(href)
-      else if (outcome === "tab") window.open(href, "_blank", "noopener")
-    }
-    return { onClick: follow, onAuxClick: follow }
-  }, [href, navigate])
-}
 
-/** A site's name: the real link to it, the one for the keyboard and for screen readers. */
-function SiteName({ slug }: { slug: string }) {
-  return (
-    <InternalLink
-      href={siteUrl(slug)}
-      className="rounded-sm font-medium text-strong wrap-anywhere underline decoration-foreground/20 underline-offset-4 outline-none group-hover/row:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      {slug}
-    </InternalLink>
-  )
-}
+/** The narrow layout's threshold, the table's own width: `@2xl/table` is 42 rem. */
+const WIDE_ONLY = "hidden @2xl/table:inline-flex"
+const NARROW_ONLY = "@2xl/table:hidden"
 
 /** A person's role on the site, beside its name: what they may do there, read at a glance. The owner sees none. */
 function RoleTag({ slug }: { slug: string }) {
@@ -75,261 +51,240 @@ function RoleTag({ slug }: { slug: string }) {
 
 /**
  * One of the platform's own projects, which the list shows outside Platform
- * only while it has an issue or a restart pending. Quieter than a role: it
- * says what the project is, not what to do with it.
+ * only while it needs the owner. Quieter than a role: it says what the
+ * project is, not what to do with it.
  */
-function PlatformTag({ site }: { site: Pick<Site, "platform"> }) {
+function PlatformTag({ site }: { site: Pick<ListedSite, "platform"> }) {
   if (!site.platform) return null
   return (
     <span title="Part of the platform" className={cn(CHIP, "font-normal text-muted-foreground")}>
-      {PLATFORM_TAG}
+      {PLATFORM_FACET}
     </span>
   )
 }
 
-/** A secret changed since the last startup: the service is still running with the old value. */
-function PendingPill() {
+/** The row's word when it has one: its tone, "+2", and every message in the tooltip, the first in strong. */
+function RowStateLabel({ state, className }: { state: RowState; className?: string }) {
   return (
-    <Status tone="attention" shape="pill" title="A secret changed after the service last started" className="h-5 px-1.5">
-      {PENDING_LABEL}
-    </Status>
-  )
-}
-
-/** The severity icon has its own reserved place, so the names stay aligned from one row to the next. */
-function Gutter({ severity }: { severity: Severity | null }) {
-  return (
-    <span className="flex h-5 w-4 shrink-0 items-center">
-      {severity !== null && <SeverityIcon severity={severity} label />}
-    </span>
-  )
-}
-
-function AddressCell({ address }: { address: Address }) {
-  return (
-    <div className="grid justify-items-start gap-0.5">
-      <ExternalLink href={address.href} className="font-mono text-[0.8125rem]">
-        {address.text}
-      </ExternalLink>
-      {address.note !== null && (
-        <span
-          className={cn("text-xs wrap-anywhere", address.note.warn ? "text-attention-text" : "text-muted-foreground")}
-        >
-          {address.note.text}
-        </span>
-      )}
-    </div>
-  )
-}
-
-/** The service's word; neutral, it fades back, a static site having nothing to watch. */
-function ServiceWord({ site, className }: { site: Site; className?: string }) {
-  const state = serviceState(site)
-  return (
-    <Status tone={state.tone} className={cn(state.tone === "neutral" && "text-muted-foreground", className)}>
-      {state.label}
-    </Status>
-  )
-}
-
-function ServiceCell({ site, now }: { site: Site; now: number }) {
-  const summary = serviceSummaryOf(site, now)
-  return (
-    <div className="grid justify-items-start gap-0.5">
-      {/* The word and the CPU share on the first, short line; the memory and its bar below. */}
-      <span className="flex flex-wrap items-baseline gap-x-2">
-        <ServiceWord site={site} />
-        {summary.kind === "active" && summary.cpu !== null && (
-          <span className="text-xs whitespace-nowrap text-muted-foreground tabular-nums">{summary.cpu}</span>
-        )}
-      </span>
-      {summary.kind === "active" && summary.memory !== null && (
-        <span className="flex items-center gap-2 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
-          <MemoryBar percent={summary.percent} level={summary.level} />
-          {summary.memory}
-        </span>
-      )}
-      {summary.kind === "active" && summary.services !== null && (
-        <span className="text-xs whitespace-nowrap text-muted-foreground">{summary.services}</span>
-      )}
-      {summary.kind === "active" && summary.next !== null && (
-        <span className="text-xs whitespace-nowrap text-muted-foreground tabular-nums">{summary.next}</span>
-      )}
-      {summary.kind === "stopped" && summary.restarts !== null && (
-        <span className="text-xs text-attention-text tabular-nums">{summary.restarts}</span>
-      )}
-    </div>
-  )
-}
-
-const HEAD = "h-10 px-3 mono-label"
-const CELL = "px-3 py-3 align-top whitespace-normal"
-
-type RowProps = { site: SiteWithSecrets; severity: Severity | null; now: number }
-
-function SiteRow({ site, severity, now }: RowProps) {
-  const click = useRowClick(siteUrl(site.slug))
-  const access = siteAccess(site)
-  return (
-    <TableRow {...click} className="group/row cursor-pointer border-divider hover:bg-muted/40">
-      <TableCell className={cn(CELL, "pl-4")}>
-        <div className="flex gap-2.5">
-          <Gutter severity={severity} />
-          <div className="grid min-w-0 gap-0.5">
-            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <SiteName slug={site.slug} />
-              <PlatformTag site={site} />
-              <RoleTag slug={site.slug} />
-              {site.restartPending === true && <PendingPill />}
-            </span>
-            {site.description !== null && (
-              <span lang="fr" className="text-xs text-muted-foreground">
-                {site.description}
-              </span>
-            )}
-          </div>
-        </div>
-      </TableCell>
-      <TableCell className={CELL}>
-        <AddressCell address={siteAddress(site)} />
-      </TableCell>
-      <TableCell className={CELL}>
-        <div className="grid justify-items-start gap-0.5">
-          <AccessWord site={site} />
-          {access.kind === "portal" && access.exemptions.length > 0 && (
-            <span className="text-xs text-muted-foreground">
-              Open to anyone, guarded by the app alone: <span className="font-mono">{access.exemptions.join(" ")}</span>
-            </span>
-          )}
-        </div>
-      </TableCell>
-      <TableCell className={CELL}>
-        <ServiceCell site={site} now={now} />
-      </TableCell>
-      <TableCell className={cn(CELL, "pr-4 text-right tabular-nums")}>
-        <div className="grid gap-0.5 whitespace-nowrap">
-          <span>{size(site.bytes)}</span>
-          {site.deployed !== null && (
-            <span className="text-xs text-muted-foreground" title="Last deployed">
-              <span className="sr-only">Deployed </span>
-              {ago(now - site.deployed)}
-            </span>
-          )}
-        </div>
-      </TableCell>
-    </TableRow>
+    <Tooltip>
+      <TooltipTrigger render={<span className={cn("inline-flex min-w-0", className)} />}>
+        <StateLabel tone={state.tone} more={state.more}>
+          {state.label}
+        </StateLabel>
+      </TooltipTrigger>
+      <TooltipContent className="grid max-w-80 justify-items-start gap-1 text-left">
+        {state.lines.map((line, index) => (
+          <span key={`${index}-${line}`} className={index === 0 ? "font-semibold" : "font-normal opacity-85"}>
+            {line}
+          </span>
+        ))}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
 /**
- * An entry in the mobile list: the name and the service's state on the first
- * line, the description, the address, then general access and the sizes. The whole
- * entry leads to the site, like a table row.
+ * The address visitors use, in muted mono, cut with an ellipsis; its arrow
+ * shows on hover and focus, in the cell's padding, so that it costs the
+ * address no character. A link on a computer only: on two lines the
+ * whole row leads to the site's Overview, and a second target inside it
+ * would be one a thumb hits by mistake. A project that serves no page says
+ * so, in words.
  */
-function SiteEntry({ site, severity, now }: RowProps) {
-  const click = useRowClick(siteUrl(site.slug))
-  const summary = serviceSummaryOf(site, now)
+function AddressText({ site }: { site: ListedSite }) {
   const address = siteAddress(site)
+  if (site.headless && site.domain === null) {
+    return (
+      <CellText title={HEADLESS_NOTE} className="text-muted-foreground">
+        No page
+      </CellText>
+    )
+  }
+  const title = address.note === null ? address.text : `${address.text}\n${address.note.text}`
   return (
-    <li {...click} className="group/row flex cursor-pointer gap-2.5 px-4 py-3 active:bg-muted/40">
-      <Gutter severity={severity} />
-      <div className="grid min-w-0 flex-1 gap-1">
-        <div className="flex items-start justify-between gap-3">
-          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <SiteName slug={site.slug} />
-            <PlatformTag site={site} />
-            <RoleTag slug={site.slug} />
-            {site.restartPending === true && <PendingPill />}
-          </span>
-          <ServiceWord site={site} className="shrink-0" />
-        </div>
-        {site.description !== null && (
-          <p lang="fr" className="-mt-0.5 truncate text-xs text-muted-foreground">
-            {site.description}
-          </p>
-        )}
-        <AddressCell address={address} />
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground tabular-nums">
-          <span className="text-foreground">
-            <AccessWord site={site} large />
-          </span>
-          {summary.kind === "active" && summary.memory !== null && (
-            <span className="flex items-center gap-1.5 whitespace-nowrap">
-              <MemoryBar percent={summary.percent} level={summary.level} className="w-8" />
-              {summary.memory}
-            </span>
-          )}
-          {summary.kind === "active" && summary.services !== null && (
-            <span className="whitespace-nowrap">{summary.services}</span>
-          )}
-          {summary.kind === "active" && summary.next !== null && <span className="whitespace-nowrap">{summary.next}</span>}
-          {summary.kind === "stopped" && summary.restarts !== null && (
-            <span className="text-attention-text">{summary.restarts}</span>
-          )}
-          {site.bytes !== null && <span className="whitespace-nowrap">{size(site.bytes)} on disk</span>}
-        </div>
-      </div>
-    </li>
+    <a
+      href={address.href}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={title}
+      className="group/address relative inline-flex min-w-0 items-center rounded-sm font-mono text-[0.8125rem] text-muted-foreground underline decoration-transparent underline-offset-4 outline-none hover:text-foreground hover:decoration-foreground/40 focus-visible:ring-2 focus-visible:ring-ring @max-2xl/table:pointer-events-none @max-2xl/table:text-xs"
+    >
+      <span className="min-w-0 truncate">{address.text}</span>
+      <ArrowUpRight
+        aria-hidden="true"
+        className="absolute top-1/2 -right-4 size-3 -translate-y-1/2 opacity-0 group-hover/row:opacity-100 group-focus-visible/address:opacity-100 @max-2xl/table:hidden"
+      />
+      <span className="sr-only"> (opens in a new tab)</span>
+    </a>
   )
 }
 
+/** What the Memory or the Disk sort brings back: the figure, and the rest of it in its tooltip. */
+function FigureCell({ site, which }: { site: ListedSite; which: "memory" | "disk" }) {
+  const value = figure(site, which)
+  if (value === null) return <span className="text-muted-foreground">{ABSENT}</span>
+  if (which === "disk") return <span title={`On disk, in ${siteFolder(site.slug)}`}>{size(value)}</span>
+  const { limit } = siteWeight(site)
+  const share = memoryShare(value, limit)
+  return <span title={limit === null ? "No memory limit" : `${sizeOutOf(value, limit)}, ${share}% of its limit`}>{size(value)}</span>
+}
+
+/** The row menu: where to go first, then what to copy, then the site's sections. */
+function SiteMenu({ site }: { site: ListedSite }) {
+  const { identity } = useData()
+  const { copy } = useCopy("Copied")
+  const address = siteAddress(site)
+  const access = siteAccess(site)
+  const headless = site.headless && site.domain === null
+  const sections = sectionsFor(identity, site.slug).filter((entry) => entry.section !== "overview")
+  return (
+    <RowMenu label={`Actions for ${site.slug}`}>
+      <DropdownMenuGroup>
+        {!headless && (
+          <RowMenuLink href={address.href} external>
+            <ArrowUpRight />
+            Open site
+          </RowMenuLink>
+        )}
+        <DropdownMenuItem className="h-9" onClick={() => void copy(address.href)}>
+          <Copy />
+          Copy address
+        </DropdownMenuItem>
+        {access.kind === "code" && access.code !== null && (
+          <DropdownMenuItem className="h-9" onClick={() => void copy(access.code ?? "")}>
+            <Copy />
+            Copy code
+          </DropdownMenuItem>
+        )}
+        {access.kind === "code" && access.url !== null && (
+          <DropdownMenuItem className="h-9" onClick={() => void copy(access.url ?? "")}>
+            <Link2 />
+            Copy link with code
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuGroup>
+      {sections.length > 0 && (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuGroup>
+            {sections.map((entry) => (
+              <RowMenuLink key={entry.section} href={siteUrl(site.slug, entry.section)}>
+                {entry.title}
+              </RowMenuLink>
+            ))}
+          </DropdownMenuGroup>
+        </>
+      )}
+    </RowMenu>
+  )
+}
+
+const FIGURE_HEAD = { memory: "Memory", disk: "Disk" } as const
+
+function siteColumns(states: ReadonlyMap<string, RowState>, which: "memory" | "disk" | null, now: number, serverNow: number): Column<ListedSite>[] {
+  const site: Column<ListedSite> = {
+    key: "site",
+    head: "Site",
+    width: "minmax(15rem,1.1fr)",
+    slot: "primary",
+    cell: (row) => {
+      const state = states.get(row.slug) ?? null
+      return (
+        <>
+          <KindIcon kind={siteKind(row)} detail={kindDetail(row, now)} />
+          {/* The name gives way last: the state's word is cut first, its whole text in its tooltip. */}
+          <RowLink href={siteUrl(row.slug)} className="max-w-[calc(100%-1.5rem)] shrink-0">
+            <span title={row.description ?? undefined}>{row.slug}</span>
+          </RowLink>
+          <PlatformTag site={row} />
+          <RoleTag slug={row.slug} />
+          {state !== null && <RowStateLabel state={state} className={WIDE_ONLY} />}
+        </>
+      )
+    },
+  }
+  const address: Column<ListedSite> = {
+    key: "address",
+    head: "Address",
+    width: "minmax(11rem,1fr)",
+    slot: "meta",
+    cell: (row) => {
+      const state = states.get(row.slug) ?? null
+      // On two lines, a row in trouble says its word where the address goes: the address is one tap away.
+      if (state === null) return <AddressText site={row} />
+      return (
+        <>
+          <RowStateLabel state={state} className={NARROW_ONLY} />
+          <span className={cn("min-w-0", WIDE_ONLY)}>
+            <AddressText site={row} />
+          </span>
+        </>
+      )
+    },
+  }
+  const access: Column<ListedSite> = {
+    key: "access",
+    head: "Access",
+    width: "76px",
+    align: "center",
+    slot: "state",
+    cell: (row) => <AccessIcon access={siteAccess(row)} slug={row.slug} />,
+  }
+  const deployed: Column<ListedSite> = {
+    key: "deployed",
+    head: "Deployed",
+    width: "96px",
+    align: "end",
+    // A figure the sort asked for takes the age's place on two lines.
+    slot: which === null ? "time" : "hide",
+    cell: (row) => <When at={row.deployed} serverNow={serverNow} />,
+  }
+  if (which === null) return [site, address, access, deployed]
+  const extra: Column<ListedSite> = {
+    key: which,
+    head: FIGURE_HEAD[which],
+    width: "96px",
+    align: "end",
+    slot: "time",
+    cell: (row) => <FigureCell site={row} which={which} />,
+  }
+  return [site, address, access, extra, deployed]
+}
+
 /**
- * The inventory: a table when the panel has room for its five columns, a list
- * otherwise. The measurement is the panel's and not the screen's: at 1024 px
- * the expanded sidebar takes 232 of them, and the table would overflow. The
- * order and the filter are already applied; the caption states them to screen
- * readers.
+ * The list itself, in its panel. `rows` are already narrowed and ordered;
+ * `states` holds what each row in trouble says; `which` the figure a Memory
+ * or Disk sort brings back; `empty` what replaces the rows when none is left.
  */
 export function SiteList({
-  sites,
-  worst,
-  now,
+  rows,
+  states,
+  which,
   caption,
+  empty,
 }: {
-  sites: readonly SiteWithSecrets[]
-  worst: ReadonlyMap<string, Severity>
-  now: number
+  rows: readonly ListedSite[]
+  states: ReadonlyMap<string, RowState>
+  which: "memory" | "disk" | null
   caption: string
+  empty: ReactNode
 }) {
+  const { now, offset } = useData()
+  // The gutter is the line the eye scans for trouble: with none in the list, it is not drawn at all.
+  const trouble = rows.some((row) => (states.get(row.slug)?.severity ?? null) !== null)
   return (
-    <Panel full>
-      <div className="@container">
-        <Table className="hidden table-fixed @4xl:table">
-          <caption className="sr-only">{caption}</caption>
-          <TableHeader className="bg-cell">
-            <TableRow className="hover:bg-transparent">
-              <TableHead className={cn(HEAD, "w-[24%] pl-4")}>
-                <span className="pl-6.5">Site</span>
-              </TableHead>
-              <TableHead className={cn(HEAD, "w-[27%]")}>Address</TableHead>
-              <TableHead className={cn(HEAD, "w-[18%]")}>Access</TableHead>
-              <TableHead className={cn(HEAD, "w-[21%]")}>Service</TableHead>
-              <TableHead className={cn(HEAD, "w-[10%] pr-4 text-right")}>Size</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {sites.map((site) => (
-              <SiteRow
-                key={site.slug}
-                site={site}
-                severity={worst.get(site.slug) ?? null}
-                now={now}
-              />
-            ))}
-          </TableBody>
-        </Table>
-
-        <ul aria-label={caption} className="divide-y divide-divider @4xl:hidden">
-          {sites.map((site) => (
-            <SiteEntry
-              key={site.slug}
-              site={site}
-              severity={worst.get(site.slug) ?? null}
-              now={now}
-            />
-          ))}
-        </ul>
-      </div>
-    </Panel>
+    <DataTable
+      label="Sites"
+      caption={caption}
+      rows={rows}
+      rowKey={(row) => row.slug}
+      columns={siteColumns(states, which, now, now + offset)}
+      severity={trouble ? (row) => states.get(row.slug)?.severity ?? null : undefined}
+      rowHref={(row) => siteUrl(row.slug)}
+      menu={(row) => <SiteMenu site={row} />}
+      narrowBelow="42rem"
+      narrowMenu={false}
+      empty={empty}
+    />
   )
 }

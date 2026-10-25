@@ -149,6 +149,7 @@ export function DataTable<Row>({
   rowHref,
   onRowClick,
   menu,
+  narrowMenu = true,
   dense = false,
   narrowBelow = "42rem",
   selected = null,
@@ -171,6 +172,8 @@ export function DataTable<Row>({
   onRowClick?: (row: Row) => void
   /** The row's `RowMenu`, in a last 44 px column. */
   menu?: (row: Row) => ReactNode
+  /** False when the row's page holds every action, the menu then shown on one line only: on two, the row is one target. */
+  narrowMenu?: boolean
   /** 40 px rows, for Activity and Backups. */
   dense?: boolean
   /** The container width under which rows take two lines. */
@@ -279,7 +282,7 @@ export function DataTable<Row>({
                   className={cn(
                     "group/row relative flex min-h-14 flex-wrap items-center gap-x-3 gap-y-0.5 px-4 py-2",
                     gutter && "pl-11",
-                    menu !== undefined && "pr-12",
+                    menu !== undefined && narrowMenu && "pr-12",
                     wide.row,
                     dense && wide.dense,
                     clickable && "cursor-pointer hover:bg-muted/45",
@@ -300,7 +303,10 @@ export function DataTable<Row>({
                   <span aria-hidden="true" className={cn("order-3 h-0 basis-full", wide.split)} />
                   {/* On two lines, the menu sits across both at the right, so that its 40 px do not make the second line taller. */}
                   {menu !== undefined && (
-                    <span role="cell" className={cn("absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center justify-end", wide.menu)}>
+                    <span
+                      role="cell"
+                      className={cn("absolute top-1/2 right-1.5 -translate-y-1/2 items-center justify-end", narrowMenu ? "flex" : cn("hidden", wide.hidden), wide.menu)}
+                    >
                       {menu(row)}
                     </span>
                   )}

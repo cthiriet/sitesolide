@@ -25,7 +25,7 @@ machine's, and one accent, a deep teal, which is the brand's: the logo is a
 teal gradient, and the accent marks what is current or in focus and the one
 primary action, pressable like a key. Red is the error colour, not the
 brand's, and it only says error. The only remarkable piece is **the machine
-plate** at the top of the home page, where the 70 and 90 % thresholds are
+strip** at the top of the home page, where the 70 and 90 % thresholds are
 ticked on each gauge. Everything else is calm, dense and aligned.
 
 The owner's attention is the scarce thing. A page that shows everything at
@@ -283,7 +283,7 @@ Computer (>= 768 px), machine level
 | Sites      6 | [Banner: Can't reach the dashboard / collector stale]     |
 | Activity     |                                                           |
 | People       |                                                           |
-| Tokens       |   plate, Issues, search and filters, list of sites        |
+| Tokens       |   machine strip, server banners, filters, list of sites   |
 | Connectors   |                                                           |
 | Dark mode    |                                                           |
 | Sign out     |                                                           |
@@ -366,13 +366,11 @@ gutters, bottom margin, touch target size.
 | `@container/table`, every `DataTable` | `narrowBelow`, 42 rem unless the page says 36, 48 or 56 | one line per row in columns under a sticky head, otherwise two lines and no head |
 | `@container/filters`, every `FilterBar` | `@xl/filters:` (36 rem) | the search, a button per facet, the count and the sort; otherwise the search and one *Filter* button that opens a bottom sheet |
 | `@container/body` | `@4xl/body:` (56 rem) | two columns: a site's Overview and Audience; Tokens' deployments and activity |
-| list of sites on the home page | `@4xl:` | table, otherwise list |
 | a site's Activity panel (Secrets, Backups), the Connectors lists | `@2xl:` (42 rem) | table, otherwise list |
 | the People list | `@2xl:` | three columns under a header, *May create projects* said once there; otherwise the right under the roles, with its label |
 | the machine's Activity log, five columns | `@3xl:` (48 rem) | table, otherwise list |
 | Activity filters | `@4xl/body:` (56 rem) | five fields on one row, otherwise two columns |
-| machine plate | `@2xl:` | four columns, otherwise four rows |
-| Issues panel | `@lg:` (32 rem) | messages aligned behind the slugs |
+| `@container/strip`, the machine strip | `@lg/strip:` (32 rem) | each gauge's caption beside its label, otherwise the label and the figure alone |
 | `@container/file` | `@xl/file:` (36 rem) | Name, Value and action columns |
 
 Useful content widths: 1088 px at 1440 with the sidebar expanded, 984 at 1280,
@@ -483,7 +481,7 @@ on screen.
 | `CHIP`, `AccessWord` | a 20 or 24 px chip; a site's general access as the landing page's badges, *Restricted* with a lock, *Public* with a globe and quieter, *Anyone with the code* with a key over the code in its well |
 | `RoleBars` | a role as four rising bars, as many lit in `share-ink` as the role has rungs, before its word: beside a site's name, in a role's menu, in what each role can do |
 | `ExternalLink` | a site address, underlined at rest, in a new tab; the address in mono |
-| `MachinePlate`, `Track` | the plate, reserved for the home page: one panel, the server (its zone, cores, memory and disk) then load, memory and disk, each under its mono label; `Track` is a 6 px groove with a 1 px tick across it at each threshold, reused for a service's memory |
+| `MachineStrip`, `Track` | the strip, reserved for the home page: one 64 px panel, load, memory and disk, each a mono label, its caption ("1.3 on 6 cores") and its figure over its track; Memory and Disk are the buttons of those two sorts; `Track` is a 6 px groove with a 1 px tick across it at each threshold, reused for a service's memory |
 | `Track` (dialogs) | waiting for a long answer: the time actually elapsed on its scale, the usual duration ticked when known, never an invented progress bar |
 | `Command` | a command to type in a terminal, copyable |
 | `serviceWord` | the word and tone of a systemd unit, the same on the home page, the Overview and Secrets; *Scheduled* for the anchor of a project whose every service is scheduled, `active (exited)` |
@@ -657,14 +655,13 @@ when the page stays readable, in an `ErrorState` when there is nothing to show.
 - Shown from ten items (`FILTER_BAR_FROM`); always on Sites and Activity.
 
 **The platform's own projects**, the dashboard, the portal and analytics,
-known by their slug on their own port (`Site.platform`), have their chip,
-*Platform*, last and only while the list carries one; a Platform chosen
-then gone falls back to All. Every other filter lists them only while they
-need the owner, an issue of either severity or a restart pending: a healthy
-portal is nothing to look after, a broken one goes to the top of All and
-under Issues, and each filter keeps a part of what All lists. Under Platform
-the count is of its own set, "3 platform projects". On a phone five chips
-share one row, six take two rows of three.
+known by their slug on their own port (`Site.platform`), have their item,
+*Platform*, last in the Kind menu and only while the server carries one.
+The list and every other value hold them only while they need the owner,
+an issue of either severity or a restart pending: a healthy portal is
+nothing to look after, a broken one goes to the top of the list, and no
+value counts more than the header does. Under *Kind: Platform* the header
+counts its own set, and "3 of 3" is not said.
 
 **Secrets and passwords.** A field that receives a secret is `type="password"`,
 `autoComplete="off"`, `data-1p-ignore`; a textarea, which cannot be, is masked
@@ -704,15 +701,15 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | People | People, May create projects, Let someone create projects, Allow, Remove from every project, Remove expired, Domains; Every site, as admin: set on the server in OIDC_ADMIN_EMAILS | Members, Invite |
 | Tokens | Tokens, New token, Create token, Name, Whose token, Mine, For someone in People, Projects it may deploy, New projects, Permissions, Manage secrets, Needed by cms, Expires; Made by you, Made by you for alice@example.com, Made by alice@example.com, Made by the owner for you; Can create projects, Can deploy public sites, Can declare a domain, Can use outbound network, Can manage secrets, Can create projects (paused: no longer allowed), Can manage secrets (paused: no project to deploy now); calendar (Admin), cms (paused: Viewer now); Revoke, Revoke token, Active, Expired, Revoked, Copy message, Recent deployments, Token activity, All activity | Team, API key, Yours, Their own, Public sites allowed, Restricted sites only, Write secrets, Secrets access |
 | The lock | Unlocked, 9 min, and its x, Lock changes now; in its dialog, Unlock changes, Unlock to create a token (the write that waits), Unlock, Sign in again; under a field, Giving Developer asks to unlock changes first.; after a person's re-sign-in, Unlocked. Press Add to finish.; in Activity, Unlocked changes, Locked changes | Unlock the secrets, Locked, Unlock to add, Unlock to create, Unlock to allow, an Unlock changes button |
-| Kind | Static site, App, Background, Scheduled, No manifest; as facets, Static, Apps, Background, Scheduled; Runs in the background, serves no page | Worker, Service, Job, Cron, Daemon |
-| Lists | Search sites, Filter, Clear filters, Sort, Issues first, Name, Last deployed, 3 of 14, All, Show all, Show 1 revoked or expired; an access facet's Public, Restricted, Anyone with the code, Mismatch; Access mismatch beside a name | Reset, Filter by, Results, No results |
+| Kind | Static site, App, Background, Scheduled, No manifest; as facets, Static, Apps, Background, Scheduled, Platform; Runs in the background, serves no page | Worker, Service, Job, Cron, Daemon |
+| Lists | Search sites, Filter, Clear filters, Sort, Issues first, Name, Last deployed, Memory, Disk, 3 of 14, All, Show all, Show 1 revoked or expired; an access facet's Public, Restricted, Anyone with the code, Mismatch; Access mismatch beside a name | Reset, Filter by, Results, No results |
 | Secrets | Restart pending, Unmanaged, Missing, Restart service, Restore previous, Add variable, Create file, Reveal; a store's: Variables, Files, Server, Not set, Declared, Not declared, Empty, Set, Generate, Type a value, Generate on the server, Upload, Upload file, Replace, Remove, Restore previous version, Build, kept by whoever deploys, Public, from the repository | Vault, Decrypt, Edit file, Rotate, Secret store, Environment |
 | Passwords | Change password, Dashboard password, Generate a strong one, Set my own, New password, Copy password | Set hash, Regenerate |
 | Backups | Snapshot, Scheduled, Before restore, Server, Offsite only, Restore, Restoring..., Restored, Offsite copy, Show all | Backup file, Revert, Rollback, Recover |
 | Activity | Event, Actor, Action, Target, Source, Site or host, From, To, Details, Load older, Export, CSV, JSON lines, Clear filters, Access changes; a source is Read, Latest 50, Can't read, Needs updating, Not installed; an actor is Owner, The server, Someone, alice@example.com (token), Example Accounting (password access) | Log entry, Audit trail, Download, Reset |
 | Unreachable | Can't reach the dashboard., Can't reach the server's secrets., Can't reach the access service on the server. | is not answering |
 | Common actions | Refresh, Retry, Sign in, Sign out, Copy, Copied, Cancel, Close, Done, Manage, See, History, All activity, Recent | Reload, Try again, Log out, Submit, Audit, Logs |
-| Empty states | No issues, No sites match "x", No site is restricted, No sites deployed yet, No project of yours yet, No project named x that you have a role on, Nobody else has access to cms yet, Nobody has access to a project yet, cms has no secret files, Not part of your role, Only the owner's | Nothing here! |
+| Empty states | No issues, No sites match "x", No sites match these filters, No sites deployed yet, No project of yours yet, No project named x that you have a role on, Nobody else has access to cms yet, Nobody has access to a project yet, cms has no secret files, Not part of your role, Only the owner's | Nothing here! |
 
 "Portal" names the component, on the machine: Activity's source for sign-ins,
 the banner saying the portal on the server still reads its own lists, the
@@ -745,34 +742,71 @@ page, `/team/` to Tokens, `/members/` to People, and a site's
 `/site/guests/`, `/site/sharing/` and `/site/members/` to its Access, `?s=`
 kept. A section without `?s=` goes to the home page.
 
-**Sites (the home page).** The machine plate (the server, its zone and its
-size, then load, memory and disk, with their ticks at 70 and 90 %), the Issues
-panel, errors first (a disagreement on general access names each side,
-"Restricted in sitesolide.json, public on the server: anyone can open the
-site. Choose one in its Access section"), then the search, the filters (All,
-Issues, Apps, Static, Restricted, Platform, each with its count) and the
-inventory, sites in discrepancy at the top: Site, Address, Access, Service,
-Size. A platform project carries a quiet *Platform* tag beside its name, the
-word the search finds it by. A search under All that finds only platform
-projects says so, "The platform's own projects are under Platform, where 2
-match.", with *Search platform projects*, the query kept. A server with no
-site of the owner's yet reads "No sites deployed yet", "A site appears here
-after its first sitesolide deploy, run in the project's folder. The
-platform's own projects are under Platform.", with *Show platform projects*;
-the search and the chips stay. A project that serves no page says so under its address, "Runs in the
-background, serves no page"; its Service column sums what its running
-services weigh, a scheduled service between two runs weighing nothing, and
-a project whose every service is scheduled reads *Scheduled* with its next
-run, "next run in 5h". The Access column gives the general access in the Access section's
-words, *Restricted* with the paths "Open to anyone, guarded by the app
-alone", *Public*, or *Anyone with the code* over the code itself with its
-copy and open buttons; a disagreement with `sitesolide.json` in red, in the
-same words ("Restricted in sitesolide.json, public on the server"). A person
-sees their role as a tag beside each site's name, *Your role* as its title;
-with no project yet, "No project of yours yet", and with the create right
-"You may create projects: create a token on the Tokens page, then run
-sitesolide deploy in the project's folder. You become its Admin.", never the
-server's folders. Summaries live in the rows, not in cards.
+**Sites (the home page).** Is anything wrong on the machine, and which site
+to open. Its intro, behind the title's (i); *History* opens Activity on the
+deployments.
+
+```
+| LOAD 1.3 on 6 cores        22% | MEMORY 5.7 of 12 GB   49% | DISK 49 of 120 GB   41% |   64 px strip
+[!] Server  The last backup run failed for photos, 5 h ago                           banners, 2 then "Show 3 more"
+[Search sites /] [Access v] [Kind v]                              3 of 16  [Issues first v]
+| x | [app] roster  Access mismatch +2 | roster.example.com | [shield] | 25m ago | ... |  44 px
+|   | [files] wheels                   | riverside-cycles.ex| [globe]  | 26d ago | ... |
+```
+
+- **The strip**, the owner's alone: load, memory and disk in one 64 px
+  panel, each its mono label, its caption ("1.3 on 6 cores", "5.7 of 12 GB
+  used"; on a phone the figure alone) and its figure over the track, ticked
+  at 70 and 90 %. The server's zone is the sidebar's. Memory and Disk are
+  the buttons of those two sorts, tinted `highlight` while in force:
+  pressed again, the list goes back to *Issues first*.
+- **No Issues panel.** A site's issues are its row's. What has no row, the
+  server's own discrepancies and those of a fragment with no folder, is a
+  `Banner` each, errors first, two of them then *Show 3 more*; nothing at
+  all when there is none, the verdict saying *All clear*.
+- **The row**, `DataTable` of 44 px: the gutter, drawn only while some row
+  is in trouble; the kind icon (`KindIcon`, its tooltip the number of
+  services or the next run), the slug, the real link, its description in
+  its title, the *Platform* tag or a person's role, then, only when not
+  fine, the state: the first issue's `label` from the server, errors
+  first, in its tone, "+2" for the others, every message whole in its
+  tooltip; the address visitors use in muted mono, cut, its arrow on hover,
+  *No page* for a project that serves none, the preview or a domain's
+  trouble in its title; the access icon (`AccessIcon`, the exempt paths and
+  the code in its tooltip); the deployment's age; the row menu (*Open site*,
+  *Copy address*, *Copy code*, *Copy link with code*, then the site's
+  sections). The whole row leads to the Overview. A restart pending, which no
+  discrepancy says, is the state's word in attention with no gutter icon,
+  after any issue, and in the tooltip.
+- **On two lines**, below 42 rem of the table: the kind, the slug and its
+  tags, the access icon; then the state where the address goes, or the
+  address, and the age. No menu and no link inside the row: it is one
+  target.
+- **Filters**: Access (Public, Restricted, Anyone with the code, Mismatch)
+  and Kind (Static, Apps, Background, Scheduled, No manifest, Platform),
+  each offering only what some project is, with the rows' own icons and
+  their counts. **Sort**: *Issues first* (errors, warnings, a restart
+  pending, then the rest, each by name), *Name*, *Last deployed*, *Memory*
+  and *Disk*, the heaviest first; those two bring their figure back as a
+  column, in the age's place on two lines. CPU, the services' count and
+  their memory bars are the Overview's.
+- **Counts agree**: the sidebar's badge and the verdict count every
+  discrepancy, which the rows' states with their "+N" and the banners say
+  once each; the header counts what the list holds, "3 of 16" said only
+  while narrowed.
+- **Empty is one line** in the table's panel: "No sites deployed yet. Run
+  sitesolide deploy in a project's folder." with *Show platform projects*
+  when there are some; "No sites match "x"." with *Clear search*; "1
+  platform project matches." with *Search platform projects*; "No sites
+  match these filters." with *Clear filters*. A person with no project yet
+  reads "No project of yours yet", and with the create right "You may create
+  projects: create a token on the Tokens page, then run sitesolide deploy in
+  the project's folder. You become its Admin.", never the server's
+  folders.
+- The search covers what the row shows and what it folds: names,
+  descriptions, the kind's words, addresses and their notes, aliases,
+  ports, access words, the service's state, variable names, *Restart
+  pending*.
 
 **Activity.** The machine's audit, every component's in one log, newest first,
 read with the session alone since no row holds a value. *Export* in the header,
@@ -1171,6 +1205,22 @@ change it.
 22. **Filters as one segmented control mixing dimensions**, All, Issues,
     Apps, Static, Restricted and Platform side by side: one facet per
     dimension, its menu showing the rows' own icons and counts.
+23. **The Issues panel on the home page**, 190 px saying "No issues" when
+    fine and 540 px of messages when not, which pushed every site below the
+    first screen: a site's issues are its row's word, the server's are
+    banners, and zero takes no room.
+24. **The machine plate's Server cell** (the zone, the cores, the memory
+    and the disk) and its 124 px: the zone is the sidebar's, the sizes are
+    the gauges' captions, and the plate became a 64 px strip.
+25. **Resource figures in every row**: a CPU share of the last minute, a
+    memory bar and "143 of 512 MB" on the apps alone, the services'
+    count, the folder's size. Noise in a fleet list, and uneven, since a
+    static site had none: they are the Overview's, and Sort by Memory or
+    Disk brings the one asked for back as a column.
+26. **The client reading a discrepancy's message** to name it in a row: the
+    server gives each one its `label`, chosen where it is judged.
+27. **The gutter on an all-clear list**, 28 px of empty space on every row:
+    drawn while some row is in trouble only.
 
 ## 9. Seeing the page, and looking at it
 

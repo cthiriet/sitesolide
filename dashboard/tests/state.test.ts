@@ -11,6 +11,7 @@ import {
   declaredSecrets,
   computeCpuShare,
   readTable,
+  unitLabel,
   unitOf,
   type Raw,
   type RawFolder,
@@ -406,7 +407,7 @@ describe("workers and scheduled services", () => {
       shop({ ...HEALTHY, "shop.sync": idle({ ActiveState: "failed", SubState: "failed", Result: result, ExecMainStatus: status, ExecMainExitTimestamp: before(2 * HOUR_S) }) });
     const snapshot = failed("exit-code", "1");
     expect(snapshot.discrepancies.filter((d) => d.slug === "shop")).toEqual([
-      { slug: "shop", severity: "warning", message: "Service sync: last run failed 2 h ago (exit code 1)" },
+      { slug: "shop", severity: "warning", label: "Last run failed", message: "Service sync: last run failed 2 h ago (exit code 1)" },
     ]);
     expect(snapshot.sites[0]!.services[1]!.schedule!.lastRun).toMatchObject({ ok: false, result: "exit-code", status: 1, failure: "exit code 1" });
     expect(messages(failed("timeout", "15"), "shop")).toEqual(["Service sync: last run failed 2 h ago (stopped after its timeout of 1h)"]);
@@ -417,7 +418,7 @@ describe("workers and scheduled services", () => {
   test("a timer that is not active is an error: the schedule stopped, and nothing runs", () => {
     const stopped = shop({ ...HEALTHY, "shop.sync.timer": timer({ ActiveState: "inactive", SubState: "dead" }) });
     expect(stopped.discrepancies.filter((d) => d.slug === "shop")).toEqual([
-      { slug: "shop", severity: "error", message: "Service sync: its schedule is stopped, shop.sync.timer is inactive (dead)" },
+      { slug: "shop", severity: "error", label: "Schedule stopped", message: "Service sync: its schedule is stopped, shop.sync.timer is inactive (dead)" },
     ]);
     expect(stopped.sites[0]!.services[1]!.schedule!.next).toBeNull();
 
@@ -433,7 +434,7 @@ describe("workers and scheduled services", () => {
   test("a worker that is not active is an error, as any service that runs for good", () => {
     const snapshot = shop({ ...HEALTHY, "shop.queue": unit({ ActiveState: "activating", SubState: "auto-restart", NRestarts: "12" }) });
     expect(snapshot.discrepancies.filter((d) => d.slug === "shop")).toEqual([
-      { slug: "shop", severity: "error", message: "Service queue activating (auto-restart)" },
+      { slug: "shop", severity: "error", label: "Service restarting", message: "Service queue activating (auto-restart)" },
     ]);
   });
 
@@ -790,5 +791,49 @@ describe("the portal's door", () => {
   test("with no protected site, a stopped portal says nothing", () => {
     const snapshot = buildSnapshot(raw([folder("showcase", { slug: "showcase", publicDir: "public" })]));
     expect(messages(snapshot, "portal").filter((m) => m.includes("behind the portal"))).toEqual([]);
+  });
+});
+
+describe("each discrepancy's label", () => {
+  /** One to three words, the first capitalised: what a site's row says beside its name. */
+  const SHORT = /^[A-Z]\S*( \S+){0,2}$/;
+
+  test("names it in one to three words, chosen where it is judged", () => {
+    const app = (slug: string, port: number) => ({ slug, port, publicDir: "public", start: "bun run server.ts" });
+    const snapshot = buildSnapshot(
+      raw(
+        [
+          folder("client", { slug: "client", publicDir: "public", lock: true }),
+          folder("forgotten", null),
+          { slug: "broken", manifest: "{ oops", unit: null, bytes: null, deployed: null },
+          folder("looping", app("looping", 3030), { unit: unit({ ActiveState: "activating", SubState: "auto-restart" }) }),
+          folder("heavy", app("heavy", 3031), { unit: unit({ MemoryPeak: String(Math.round(268435456 * 0.86)) }) }),
+          folder("shop", { slug: "shop", publicDir: "public", domain: { name: "shop.example", active: true } }),
+        ],
+        { blocks: { ghost: "" }, ports: [3031], codes: "{ oops" },
+      ),
+    );
+    const labels = snapshot.discrepancies.map((discrepancy) => [discrepancy.slug, discrepancy.label]);
+    expect(labels).toEqual([
+      [null, "Codes unreadable"],
+      ["broken", "Manifest unreadable"],
+      ["client", "Access mismatch"],
+      ["looping", "Restarting"],
+      ["looping", "Port not listening"],
+      ["shop", "Not routed"],
+      ["broken", "No manifest"],
+      ["forgotten", "No manifest"],
+      ["ghost", "No folder"],
+      ["heavy", "Memory 86%"],
+    ]);
+    for (const discrepancy of snapshot.discrepancies) expect(discrepancy.label).toMatch(SHORT);
+  });
+
+  test("a service's word is the page's: restarting, starting, stopping, down", () => {
+    expect(unitLabel("activating", "auto-restart")).toBe("Restarting");
+    expect(unitLabel("activating", "start")).toBe("Starting");
+    expect(unitLabel("deactivating", "stop-sigterm")).toBe("Stopping");
+    expect(unitLabel("failed", "failed")).toBe("Down");
+    expect(unitLabel("inactive", "dead")).toBe("Down");
   });
 });
