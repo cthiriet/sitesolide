@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { HISTORY_TYPES, historyRequest, historyUrl, matchesType, readHistory, sinceStart } from "../src/lib/history"
+import { HISTORY_TYPES, historyRequest, historyUrl, matchesType, readHistory, serverAction, sinceStart } from "../src/lib/history"
 
 const NOW = Date.UTC(2026, 9, 25, 12, 0, 0)
 
@@ -62,6 +62,14 @@ describe("a sheet's Recent", () => {
     expect(query).toBe("?target=cms&limit=100")
     expect(keep("access.remove")).toBe(true)
     expect(keep("deploy.success")).toBe(false)
+  })
+
+  test("an action and a type both given: the server takes the action, the page the type", () => {
+    const { action, keep } = serverAction({ action: "deploy.", type: "backups" })
+    expect(action).toBe("deploy.")
+    expect(keep?.("backup.run")).toBe(true)
+    expect(keep?.("deploy.success")).toBe(false)
+    expect(serverAction({})).toEqual({ action: null, keep: null })
   })
 
   test("a since becomes the server's from", () => {

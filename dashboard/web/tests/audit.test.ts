@@ -1,20 +1,23 @@
 import { describe, expect, test } from "bun:test"
 import {
-  ACCESS_ACTION,
-  NO_FILTERS,
+  PAGE_SIZE,
   SOURCES,
-  accessOnly,
+  activityDays,
+  activityKeep,
   activityUrl,
   actorLabel,
   auditQuery,
   auditWords,
-  countWords,
+  clockTime,
   csvField,
+  dayHeading,
+  dayKey,
   detailLines,
   exportName,
-  filtersFrom,
-  hasFilters,
   isAuditResponse,
+  isNarrowed,
+  readActivity,
+  serverKey,
   keyWords,
   mergeStatuses,
   refreshRows,
@@ -53,13 +56,6 @@ describe("the sources", () => {
     expect(windowNote([status("steward", 50, "unavailable")])).toBeNull()
   })
 
-  test("the count on the right of the filters", () => {
-    expect(countWords(120, false)).toBe("120 events, newest first")
-    expect(countWords(3, true)).toBe("3 matching events, newest first")
-    expect(countWords(1, true)).toBe("1 matching event")
-    expect(countWords(0, false)).toBe("0 events")
-  })
-
   test("a later page updates the sources it read, the others keep their state", () => {
     const known: SourceStatus[] = [
       { name: "portal", state: "ok", message: null, window: null },
@@ -75,23 +71,35 @@ describe("the sources", () => {
 })
 
 describe("the query", () => {
-  test("no filter: the first page, newest first", () => {
-    expect(auditQuery(NO_FILTERS)).toBe("?limit=100")
-    expect(hasFilters(NO_FILTERS)).toBe(false)
+  const NOW = new Date(2026, 9, 25, 12, 0, 0).getTime()
+
+  test("no filter: the first page of fifty, newest first", () => {
+    expect(PAGE_SIZE).toBe(50)
+    expect(auditQuery({}, NOW)).toBe("?limit=50")
+    expect(isNarrowed({})).toBe(false)
   })
 
-  test("the filters, trimmed, and the cursor of the next page", () => {
-    const query = new URLSearchParams(auditQuery({ ...NO_FILTERS, source: "portal", actor: " ada ", action: "portal.", target: "cms" }, "next-page", 50))
+  test("the History contract's fields, trimmed, and the cursor of the next page", () => {
+    const query = new URLSearchParams(auditQuery({ source: "portal", actor: " ada ", action: "portal.", target: "cms" }, NOW, "next-page"))
     expect(Object.fromEntries(query)).toEqual({ source: "portal", actor: "ada", action: "portal.", target: "cms", limit: "50", cursor: "next-page" })
-    expect(hasFilters({ ...NO_FILTERS, target: "cms" })).toBe(true)
-    expect(hasFilters({ ...NO_FILTERS, actor: "   " })).toBe(false)
+    expect(isNarrowed({ target: "cms" })).toBe(true)
   })
 
-  test("whole days where the person is: `to` includes its own day", () => {
-    const query = new URLSearchParams(auditQuery({ ...NO_FILTERS, from: "2026-10-01", to: "2026-10-04" }))
+  test("a type of one prefix goes as the action, a type of several stays the page's", () => {
+    expect(new URLSearchParams(auditQuery({ type: "backups" }, NOW)).get("action")).toBe("backup.")
+    expect(new URLSearchParams(auditQuery({ type: "access", target: "cms" }, NOW)).has("action")).toBe(false)
+  })
+
+  test("a range starts at its since, and a custom range includes its last day", () => {
+    expect(new URLSearchParams(auditQuery({ since: "24h" }, NOW)).get("from")).toBe(new Date(NOW - 24 * 3_600_000).toISOString())
+    const query = new URLSearchParams(auditQuery({ since: "2026-10-01", until: "2026-10-04" }, NOW))
     expect(query.get("from")).toBe(new Date(2026, 9, 1).toISOString())
     expect(query.get("to")).toBe(new Date(2026, 9, 5).toISOString())
-    expect(new URLSearchParams(auditQuery({ ...NO_FILTERS, from: "someday" })).has("from")).toBe(false)
+  })
+
+  test("the search reads nothing again: the server is asked the same", () => {
+    expect(serverKey({ target: "cms", query: "alice" })).toBe(serverKey({ target: "cms" }))
+    expect(serverKey({ target: "cms", type: "access" })).not.toBe(serverKey({ target: "cms" }))
   })
 
   test("an answer is read only in the shape the page expects", () => {
@@ -254,14 +262,101 @@ describe("a row in words", () => {
     expect(actorLabel(row({ actor: "alice@acme.test", detail: { method: "oidc" } }))).toBe("alice@acme.test")
   })
 
-  test("an address narrows the log: a site's Access links to its access changes", () => {
-    const params = new URLSearchParams("action=access&target=cms&source=steward&ignored=1")
-    expect(filtersFrom(params)).toEqual({ ...NO_FILTERS, source: "steward", action: "access", target: "cms" })
-    expect(filtersFrom(new URLSearchParams("source=nowhere"))).toEqual(NO_FILTERS)
+  test("an address narrows the log: every History link's six fields, the search and a range's end", () => {
+    const params = new URLSearchParams("action=access&target=cms&source=steward&type=access&since=7d&ignored=1")
+    expect(readActivity(params)).toEqual({ source: "steward", action: "access", target: "cms", type: "access", since: "7d" })
+    expect(readActivity(new URLSearchParams("source=nowhere&type=everything"))).toEqual({})
+    expect(readActivity(new URLSearchParams("q=%20alice%20&since=2026-10-21&until=2026-10-23"))).toEqual({ query: "alice", since: "2026-10-21", until: "2026-10-23" })
     expect(activityUrl({ action: "access", target: "cms" })).toBe("/activity/?action=access&target=cms")
     expect(activityUrl({})).toBe("/activity/")
-    expect(accessOnly({ ...NO_FILTERS, action: ACCESS_ACTION })).toBe(true)
-    expect(accessOnly({ ...NO_FILTERS, action: "access.add" })).toBe(false)
+  })
+
+  test("a range's end is kept only after a start that is a day, and not before it", () => {
+    expect(readActivity(new URLSearchParams("until=2026-10-23")).until).toBeUndefined()
+    expect(readActivity(new URLSearchParams("since=7d&until=2026-10-23")).until).toBeUndefined()
+    expect(readActivity(new URLSearchParams("since=2026-10-24&until=2026-10-23")).until).toBeUndefined()
+    expect(readActivity(new URLSearchParams("since=2026-10-24&until=2026-02-30")).until).toBeUndefined()
+  })
+})
+
+describe("what the page narrows itself", () => {
+  test("a type of several prefixes", () => {
+    const keep = activityKeep({ type: "access" })
+    expect(keep(row({ action: "access.add", source: "steward" }))).toBe(true)
+    expect(keep(row({ action: "sharing.update" }))).toBe(true)
+    expect(keep(row({ action: "deploy.success", source: "dashboard" }))).toBe(false)
+  })
+
+  test("the search: every word, in the actor, the sentence, the action, the target or the site, accents and case aside", () => {
+    const opened = row({ actor: "ada@test-zone.invalid", action: "portal.signin", detail: { role: "viewer" } })
+    expect(activityKeep({ query: "ADA cms" })(opened)).toBe(true)
+    expect(activityKeep({ query: "opened" })(opened)).toBe(true)
+    expect(activityKeep({ query: "portal.sign" })(opened)).toBe(true)
+    expect(activityKeep({ query: "Portal" })(opened)).toBe(true)
+    expect(activityKeep({ query: "ada photos" })(opened)).toBe(false)
+    expect(activityKeep({ query: "  " })(opened)).toBe(true)
+  })
+})
+
+describe("the days and the runs", () => {
+  const TZ = "Europe/Paris"
+  const NOW = Date.parse("2026-10-25T12:00:00Z")
+  const at = (iso: string, partial: Partial<AuditRow> = {}) => row({ id: `portal:${iso}`, at: iso, ...partial })
+
+  test("a day where the person is, and its heading", () => {
+    expect(dayKey(Date.parse("2026-10-24T23:30:00Z"), TZ)).toBe("2026-10-25")
+    expect(dayKey(Number.NaN, TZ)).toBe("")
+    expect(dayHeading("2026-10-25", NOW, TZ)).toBe("Today")
+    expect(dayHeading("2026-10-24", NOW, TZ)).toBe("Yesterday")
+    expect(dayHeading("2026-10-23", NOW, TZ)).toBe("Fri, Oct 23")
+    expect(dayHeading("2025-12-31", NOW, TZ)).toBe("Wed, Dec 31, 2025")
+    expect(dayHeading("", NOW, TZ)).toBe("Date unknown")
+  })
+
+  test("yesterday is the calendar's, even across a change of clocks", () => {
+    // 26 October 2026 follows the night Paris goes back an hour.
+    expect(dayHeading("2026-10-25", Date.parse("2026-10-26T09:00:00Z"), TZ)).toBe("Yesterday")
+  })
+
+  test("the time of day under an older day's heading", () => {
+    expect(clockTime(Date.parse("2026-10-23T18:05:00Z"), TZ)).toBe("20:05")
+    expect(clockTime(Number.NaN, TZ)).toBe("-")
+  })
+
+  test("the rows cut into days, newest first, whatever order the sources gave", () => {
+    const days = activityDays([at("2026-10-23T10:00:00Z"), at("2026-10-25T09:00:00Z", { actor: "bob@test-zone.invalid" }), at("2026-10-24T10:00:00Z")], NOW, TZ)
+    expect(days.map((day) => day.label)).toEqual(["Today", "Yesterday", "Fri, Oct 23"])
+  })
+
+  test("the same event repeated within a day folds into one run at its newest", () => {
+    const days = activityDays(
+      [
+        at("2026-10-25T11:00:00Z"),
+        at("2026-10-25T10:30:00Z", { actor: "bob@test-zone.invalid" }),
+        at("2026-10-25T10:00:00Z"),
+        at("2026-10-25T09:00:00Z"),
+        at("2026-10-24T09:00:00Z"),
+      ],
+      NOW,
+      TZ,
+    )
+    const today = days[0]!.items
+    expect(today.map((item) => item.rows.length)).toEqual([3, 1])
+    expect(today[0]!.key).toBe("run:portal:2026-10-25T11:00:00Z")
+    expect(today[0]!.rows.map((one) => one.at)).toEqual(["2026-10-25T11:00:00Z", "2026-10-25T10:00:00Z", "2026-10-25T09:00:00Z"])
+    // Another day starts its own.
+    expect(days[1]!.items.map((item) => item.rows.length)).toEqual([1])
+  })
+
+  test("a failure never hides in a run of successes, nor one variable in another's", () => {
+    const run = (detail: Record<string, unknown>) => row({ id: `backups:${JSON.stringify(detail)}`, source: "backups", actor: "system", action: "backup.run", target: null, site: null, at: "2026-10-25T10:00:00Z", detail })
+    const days = activityDays([run({ snapshots: 9 }), run({ snapshots: 9, failed: ["cms"] }), run({ snapshots: 8 })], NOW, TZ)
+    expect(days[0]!.items.map((item) => [item.words.summary, item.rows.length])).toEqual([
+      ["Scheduled backup", 2],
+      ["Scheduled backup failed for 1 site", 1],
+    ])
+    const set = (variable: string) => row({ id: `steward:${variable}`, source: "steward", actor: "owner", action: "secrets.set", target: "cms", detail: { variable, result: "ok" } })
+    expect(activityDays([set("A"), set("B")], NOW, TZ)[0]!.items).toHaveLength(2)
   })
 })
 

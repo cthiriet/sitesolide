@@ -7,7 +7,9 @@ import {
   DropdownMenuGroup,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
+  DropdownMenuItem,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
@@ -200,6 +202,8 @@ export type Facet = {
   options: readonly FacetOption[]
   /** The word for no choice, the menu's first item. */
   all?: string
+  /** One more item, at the menu's foot under a rule, that opens the page's own choice: Activity's *Custom range...*. */
+  more?: { label: string; onSelect: () => void }
 }
 
 export type SortOption = { value: string; label: string }
@@ -258,6 +262,14 @@ function FacetButton({ facet, value, onValue }: { facet: Facet; value: string | 
           <DropdownMenuLabel>{facet.label}</DropdownMenuLabel>
           <FacetItems facet={facet} value={value} onValue={onValue} />
         </DropdownMenuGroup>
+        {facet.more !== undefined && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={facet.more.onSelect} className="h-9">
+              {facet.more.label}
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -385,6 +397,18 @@ function FilterSheet({
                     {option.label}
                   </SheetChoice>
                 ))}
+                {facet.more !== undefined && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onOpenChange(false)
+                      facet.more?.onSelect()
+                    }}
+                    className="flex h-11 w-full items-center rounded-md px-2 text-left text-sm outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {facet.more.label}
+                  </button>
+                )}
               </div>
             )
           })}
@@ -425,6 +449,7 @@ export function FilterBar({
   total,
   noun,
   search = { label: "Search" },
+  count: countWords,
   className,
 }: {
   list: ListControls
@@ -435,11 +460,13 @@ export function FilterBar({
   /** What the rows are, singular and plural: { one: "site", many: "sites" }. */
   noun: { one: string; many: string }
   search?: { label: string; placeholder?: string }
+  /** The words on the right in place of "3 of 14", null for none: Activity, whose rows are read page by page, has no whole to count. */
+  count?: string | null
   className?: string
 }) {
   const field = useRef<HTMLInputElement>(null)
   const [sheet, setSheet] = useState(false)
-  const count = shownLabel(shown, total, list.narrowed)
+  const count = countWords === undefined ? shownLabel(shown, total, list.narrowed) : countWords
   const chosenFacets = facets.filter((facet) => (list.facets[facet.name] ?? null) !== null).length
   const showLabel = `Show ${shown} ${shown === 1 ? noun.one : noun.many}`
   const offersMore = facets.length > 0 || sorts.length > 1

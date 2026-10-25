@@ -365,12 +365,12 @@ gutters, bottom margin, touch target size.
 |---|---|---|
 | `@container/table`, every `DataTable` | `narrowBelow`, 42 rem unless the page says 36, 48 or 56 | one line per row in columns under a sticky head, otherwise two lines and no head |
 | `@container/filters`, every `FilterBar` | `@xl/filters:` (36 rem) | the search, a button per facet, the count and the sort; otherwise the search and one *Filter* button that opens a bottom sheet |
-| `@container/body` | `@4xl/body:` (56 rem) | two columns: a site's Overview and Audience; Tokens' deployments and activity |
+| `@container/body` | `@4xl/body:` (56 rem) | two columns: a site's Overview; Tokens' deployments and activity |
+| Audience's rankings | `@2xl/body:`, `@5xl/body:` (42, 64 rem) | two panels a row, then three; one below; the chart's four figures a row from `@2xl/body:`, two by two below |
 | list of sites on the home page | `@4xl:` | table, otherwise list |
 | a site's Activity panel (Secrets, Backups), the Connectors lists | `@2xl:` (42 rem) | table, otherwise list |
 | the People list | `@2xl:` | three columns under a header, *May create projects* said once there; otherwise the right under the roles, with its label |
-| the machine's Activity log, five columns | `@3xl:` (48 rem) | table, otherwise list |
-| Activity filters | `@4xl/body:` (56 rem) | five fields on one row, otherwise two columns |
+| Activity's tables, one per day | `narrowBelow` 48 rem | five columns, otherwise two lines |
 | machine plate | `@2xl:` | four columns, otherwise four rows |
 | Issues panel | `@lg:` (32 rem) | messages aligned behind the slugs |
 | `@container/file` | `@xl/file:` (36 rem) | Name, Value and action columns |
@@ -538,6 +538,9 @@ the dashboard:
 - **One action in the row at most**, the page's job, as a small outline or
   ghost button in its own column or on hover; everything else in the
   `RowMenu`.
+- `heading`, for a list cut into groups: one table per group, its heading
+  a sticky mono line in place of the column heads, pushed up by the next
+  (Activity's days); the heads stay for screen readers.
 - `label` names the table for screen readers, `caption` says the order and
   the filter. Under the rows, `foot` for one quiet line: *Show 1 revoked or
   expired*, *Show all 37*, *Load older*. Many rows: the same 44 px, the
@@ -645,7 +648,11 @@ when the page stays readable, in an `ErrorState` when there is nothing to show.
   button reads "Access: Restricted" and an x clears it; *Clear filters*
   appears from two filters.
 - On the right "3 of 14" only while narrowed, the header counting the
-  whole list; then the sort, its order's name, a menu of the orders.
+  whole list (`count`, null where there is no whole, Activity's rows read
+  page by page); then the sort, its order's name, a menu of the orders.
+- A facet's `more` puts one item under a rule at its menu's foot, and in
+  the phone's sheet, for a choice of the page's own: Date's *Custom
+  range...*.
 - Below 36 rem of its own width: the search and one *Filter* button with
   the count of facets chosen, which opens a bottom sheet holding the facets
   and the sort as 44 px choices, applied as chosen, with *Clear filters*
@@ -709,7 +716,8 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | Secrets | Restart pending, Unmanaged, Missing, Restart service, Restore previous, Add variable, Create file, Reveal; a store's: Variables, Files, Server, Not set, Declared, Not declared, Empty, Set, Generate, Type a value, Generate on the server, Upload, Upload file, Replace, Remove, Restore previous version, Build, kept by whoever deploys, Public, from the repository | Vault, Decrypt, Edit file, Rotate, Secret store, Environment |
 | Passwords | Change password, Dashboard password, Generate a strong one, Set my own, New password, Copy password | Set hash, Regenerate |
 | Backups | Snapshot, Scheduled, Before restore, Server, Offsite only, Restore, Restoring..., Restored, Offsite copy, Show all | Backup file, Revert, Rollback, Recover |
-| Activity | Event, Actor, Action, Target, Source, Site or host, From, To, Details, Load older, Export, CSV, JSON lines, Clear filters, Access changes; a source is Read, Latest 50, Can't read, Needs updating, Not installed; an actor is Owner, The server, Someone, alice@example.com (token), Example Accounting (password access) | Log entry, Audit trail, Download, Reset |
+| Activity | Event, Actor, Action, Target, Source, Type, Date, Search activity, Any time, Last 24 hours, Last 7 days, Last 30 days, Custom range, From, To, Apply, Today, Yesterday, Recorded, Same actor, Same site, Same target, Load older, 50 events read, Nothing matches in the 250 latest events, Export, CSV, JSON lines, Clear filters; a type is Deployments, Access changes, Secrets, Sign-ins, Tokens, Backups, Egress; a source that is not read: Can't read, Needs updating, and its latest 50 entries under the log; an actor is Owner, The server, Someone, alice@example.com (token), Example Accounting (password access) | Log entry, Audit trail, Download, Reset, Details, Site or host |
+| Audience | Visits, Views, Pages per visit, Time on page; Pages, Entry pages, Hostnames, Sources, Campaigns, Visitors, Devices, Browsers, Systems, Languages; Show all; No visit recorded for cms yet; cms isn't measured yet; serves no page: there is nothing to measure | Analytics, Traffic, Pageviews, Unique visitors, Sessions |
 | Unreachable | Can't reach the dashboard., Can't reach the server's secrets., Can't reach the access service on the server. | is not answering |
 | Common actions | Refresh, Retry, Sign in, Sign out, Copy, Copied, Cancel, Close, Done, Manage, See, History, All activity, Recent | Reload, Try again, Log out, Submit, Audit, Logs |
 | Empty states | No issues, No sites match "x", No site is restricted, No sites deployed yet, No project of yours yet, No project named x that you have a role on, Nobody else has access to cms yet, Nobody has access to a project yet, cms has no secret files, Not part of your role, Only the owner's | Nothing here! |
@@ -774,27 +782,44 @@ with no project yet, "No project of yours yet", and with the create right
 sitesolide deploy in the project's folder. You become its Admin.", never the
 server's folders. Summaries live in the rows, not in cards.
 
-**Activity.** The machine's audit, every component's in one log, newest first,
-read with the session alone since no row holds a value. *Export* in the header,
-CSV or JSON lines of the rows read, once something has been read. Then the
-sources once, each with its state in a word (*Read*, *Latest 50*, *Can't
-read*, *Needs updating*, *Not installed*), and a banner for each source that
-could not be read, saying what to do. Then the filters: the source as chips
-like the home page's, and *Access changes*, the actions that start with
-`access`; then *Actor*, *Action*, *Site or host*, *From* and *To*; typed
-fields apply once typing pauses, the count on the right. The address may carry
-`actor`, `action`, `target` and `source`, which is how a site's Access opens
-the log narrowed to its changes. The log: Actor, by name (*Owner*, *The
-server*, *Someone*, `alice@example.com (token)`, `Example Accounting (password
-access)`, *Someone with password access* on older rows); Action, a sentence
-("Gave dana@example.com Developer on cms", "Changed dana@example.com from
-Developer to Can open on cms", "Restricted cms", "Signed in with the owner's
-password", "Opened calendar as Admin"), its tone when it went wrong, the
-dotted action and a note below; Target (the site linked, the host below),
-Source, When, and *Details*, which opens every field and the detail as key
-and value, text only. *Load older* at the foot while a source has more; a page
-that finds nothing goes on by itself a few times before handing the choice
-back. Under the panel, which sources only hand over their latest entries.
+**Activity.** The machine's audit, every component's in one log, read with
+the session alone since no row holds a value. *Export* in the header, CSV or
+JSON lines of the rows shown, once something has been read; behind the
+title's (i), what the log holds. A source that could not be read, or needs
+updating, says so in a banner with what to do; a source read says nothing.
+Then one `FilterBar`: *Search activity*, which narrows the rows read by
+every word, found in the actor, the sentence, the dotted action, the target
+or the site; *Source* (Dashboard, Portal, Egress, Backups, Access); *Type*
+(Deployments, Access changes, Secrets, Sign-ins, Tokens, Backups, Egress);
+*Date* (Any time, the last 24 hours, 7 days or 30 days, and *Custom
+range...*, a dialog of two whole days, *From* and *To*, kept as `since` and
+`until`). The address is the History contract (5, *History*) with `q` and
+`until` beside it: an `actor`, `action` or `target` a link brings shows as
+a chip of its own, "Target: cms" with its x, and no field types one any
+more.
+
+The log: one table per day under its sticky heading, *Today*,
+*Yesterday*, *Fri, Oct 23*, rows of 40 px in time order: the actor by name
+(*Owner*, *The server*, *Someone*, `alice@example.com (token)`, `Example
+Accounting (password access)`, *Someone with password access* on older
+rows); the sentence ("Gave dana@example.com Developer on cms", "Changed
+dana@example.com from Developer to Can open on cms", "Restricted cms",
+"Signed in with the owner's password", "Opened calendar as Admin"), in its
+tone with the severity icon in the gutter when it went wrong, followed then
+by why, muted, "Refused: no secrets permission"; the site linked; the
+source, muted; the time, an age today and the time of day under an older
+day's heading. The same event repeated within a day, the same source,
+actor, action, target and sentence in the same tone, folds into one row at
+its newest with its count, which opens the run: an hourly backup is one
+line. A row opens its sheet, `?event=`: the sentence and its note, when,
+the actor and its raw form, the dotted action, the target and its host, the
+source, then *Recorded*, every field the component wrote, as text; *Same
+actor* and *Same site* narrow the log to them. Fifty rows at a time, *Load
+older* at the foot with how many were read; a filter the page applies
+itself, the search or a type of several prefixes, goes on by itself a few
+times while the rows read hold nothing, then says "Nothing matches in the
+250 latest events." with *Load older*. Under the panel, which sources only
+hand over their latest entries.
 
 **People.** The owner's alone. Its intro, behind the title's (i): roles are
 given and changed in each project's Access section, here someone is let create projects or removed
@@ -936,6 +961,29 @@ stopped* or *No timer* in error, with its last run ("Last run 3h ago",
 "Failed 3h ago: exit code 1") and its next ("Next run in 42m") under it.
 The column reads *Receives* when every service is a server, *How it runs*
 otherwise.
+
+**A site's Audience.** Behind the title's (i): how a visit is counted, no
+cookie and a fingerprint the day's salt destroys, when a site becomes
+measured, how the bounce rate and the time on page read. One panel for the
+chart, its head the four figures, *Visits*, *Views*, *Pages per visit* and
+*Time on page*, the first three the tabs that switch the series below, the
+current one ruled in the accent; time on page, kept for the period alone,
+is a figure and no tab. The plot is 220 px tall on every screen, its three
+graduations and three dates text beside it; a crosshair snaps to the
+nearest day with the value then the day in its tooltip, the arrow keys
+walk the days, a table carries them for a screen reader, and pages per
+visit leaves a day nobody came empty rather than draw a fall. Then three
+panels, *Pages* (Pages, Entry pages, Hostnames), *Sources* (Sources,
+Campaigns) and *Visitors* (Devices, Browsers, Systems, Languages): each
+ranking a tab, a tab with no row left out, a panel left with one ranking
+titled by it; a mono head naming the rows and what they count; rows of
+36 px, the bar a pale accent fill behind the row, as long as its share of
+the first; the first six, then *Show all 9*, the whole ranking in a sheet,
+`?ranking=pages`. A site the measurement does not know says so in one
+line, "cms isn't measured yet: it joins the list within a minute of a
+deployment.", "courier serves no page: there is nothing to measure."; one
+with no visit yet gives the tag to paste, with its copy button; numbers
+older than ten minutes, a banner.
 
 **A site's Secrets.** Every write asks for the unlock when pressed, as
 everywhere (5, *Writes and the unlock*). The owner's dialog, titled after
@@ -1171,6 +1219,34 @@ change it.
 22. **Filters as one segmented control mixing dimensions**, All, Issues,
     Apps, Static, Restricted and Platform side by side: one facet per
     dimension, its menu showing the rows' own icons and counts.
+
+23. **Four figure tiles above the Audience chart**, the "big number, small
+    label" tiles of point 1, over a chart that drew one of them again: the
+    figures are the chart's head, and its tabs.
+24. **Nine ranking panels**, each row 48 px with its bar on a line of its
+    own under the text: three panels of tabs, rows of 36 px, the bar
+    behind the row, the first six and the rest in a sheet.
+25. **Time on page as a tab**: the snapshot keeps it for the whole period
+    and no day of it, and a tab would draw a line that does not exist.
+26. **A "How measurement works" link** beside an unmeasured site: the
+    dashboard links to no documentation site, whose address would name a
+    machine (CLAUDE.md); the (i) says how.
+27. **Activity's strip of sources**, five green *Read* on every visit: a
+    source read is not news, one that could not be read keeps its banner.
+28. **Five filter fields**, Actor, Action, Site or host, From and To, on a
+    row of their own under the source chips and an *Access changes*
+    toggle: one search and three facets; the address still takes an actor,
+    an action and a target, which the History links write.
+29. **A Details chevron on every row**, opening its fields under it: the
+    row opens the sheet.
+30. **The dotted action and the note under every sentence**, rows of 63 px:
+    both are the sheet's, but a failure's note, which says why, beside its
+    sentence.
+31. **An age on every row of an older day**, "3d ago" twenty times under
+    one heading: the heading says the day, the row its time.
+32. **Runs folded only while consecutive**: an hourly backup between other
+    events was never folded, and the log stayed full of routine. The same
+    event folds within its day, at its newest.
 
 ## 9. Seeing the page, and looking at it
 

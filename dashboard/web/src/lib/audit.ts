@@ -10,8 +10,10 @@
 import { ROLE_TEXTS } from "./access"
 import { callApi } from "./api"
 import { activityLine } from "./connectors"
-import { historyUrl } from "./history"
+import { historyUrl, readHistory, serverAction, sinceStart, type HistoryFilter } from "./history"
 import { capitalise, dateTime, plural } from "./format"
+import { QUERY_PARAM } from "./list-state"
+import { normalize, queryWords } from "./search"
 import { operationOutcome, operationParts } from "./secrets"
 import type { Tone } from "./tones"
 import type { AccessRole, AuditResponse, AuditRow, AuditSource, LogEntry, Operation, SourceStatus } from "./types"
@@ -76,89 +78,105 @@ export function windowNote(statuses: readonly SourceStatus[]): string | null {
   return `${who} ${verb} the dashboard ${names.length === 1 ? "its" : "their"} latest ${window} entries; older ones stay on the server.`
 }
 
-/** What the toolbar says on its right: how many, in which order. */
-export function countWords(shown: number, narrowed: boolean): string {
-  const noun = shown === 1 ? "event" : "events"
-  return `${shown} ${narrowed ? `matching ${noun}` : noun}${shown > 1 ? ", newest first" : ""}`
-}
-
 // --- The query -------------------------------------------------------------------
 
-export type AuditFilters = {
-  /** One source, or every one. */
-  source: AuditSource | null
-  actor: string
-  action: string
-  target: string
-  /** `yyyy-mm-dd`, in the browser's time zone, as a date field gives it. */
-  from: string
-  to: string
+/**
+ * What Activity is narrowed to: the History contract every link speaks
+ * (lib/history.ts), then the page's own two, the search and the last day
+ * of a custom range. The search narrows the rows read, as the server does
+ * not search; everything else goes to the server, a type of several
+ * prefixes aside (`serverAction`).
+ */
+export type ActivityFilter = HistoryFilter & {
+  /** The search as typed: every word found in the actor, the action, its sentence, the target or the site. */
+  query?: string
+  /** The last day of a custom range, `yyyy-mm-dd`, included; only after a `since` that is a day. */
+  until?: string
 }
 
-export const NO_FILTERS: AuditFilters = { source: null, actor: "", action: "", target: "", from: "", to: "" }
+/** The custom range's end, in the address. */
+export const UNTIL_PARAM = "until"
 
-/** The action every access change starts with: someone given access, changed or taken off, a site restricted or made public. */
-export const ACCESS_ACTION = "access"
+const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
-/** Is the log narrowed to access changes, the filter the toolbar offers as a chip? */
-export function accessOnly(filters: AuditFilters): boolean {
-  return filters.action.trim().toLowerCase() === ACCESS_ACTION
+/** A real day, `2026-10-21`: what a custom range's two ends are. */
+export function isDay(value: string): boolean {
+  return DAY_PATTERN.test(value) && sinceStart(value, 0) !== null
 }
 
 /**
- * The filters an address asks for, `/activity/?action=access&target=cms`
- * from a site's Access section; anything else starts empty.
+ * The filter an address asks for: the History contract as `readHistory`
+ * reads it, the search, and the range's end when it follows its start.
  */
-export function filtersFrom(params: { get: (name: string) => string | null }): AuditFilters {
-  const value = (name: string) => (params.get(name) ?? "").slice(0, 200)
-  const source = SOURCES.find((entry) => entry.key === params.get("source"))?.key ?? null
-  return { ...NO_FILTERS, source, actor: value("actor"), action: value("action"), target: value("target") }
+export function readActivity(params: { get: (name: string) => string | null }): ActivityFilter {
+  const filter: ActivityFilter = readHistory(params)
+  const query = (params.get(QUERY_PARAM) ?? "").trim().slice(0, 200)
+  if (query !== "") filter.query = query
+  const until = params.get(UNTIL_PARAM)?.trim() ?? ""
+  if (until !== "" && filter.since !== undefined && isDay(filter.since) && isDay(until) && until >= filter.since) filter.until = until
+  return filter
+}
+
+/** Is the log narrowed at all? */
+export function isNarrowed(filter: ActivityFilter): boolean {
+  return Object.values(filter).some((value) => value !== undefined && value !== "")
+}
+
+/** What the server is asked, the search aside: rows read again only when this changes. */
+export function serverKey(filter: ActivityFilter): string {
+  const { query: _query, ...server } = filter
+  return JSON.stringify(server)
 }
 
 /** The Activity page's address, narrowed: the History links' contract, lib/history.ts. */
 export const activityUrl = historyUrl
 
-export function hasFilters(filters: AuditFilters): boolean {
-  return (
-    filters.source !== null ||
-    filters.actor.trim() !== "" ||
-    filters.action.trim() !== "" ||
-    filters.target.trim() !== "" ||
-    filters.from !== "" ||
-    filters.to !== ""
-  )
+/** Midnight of a `yyyy-mm-dd` day in the browser's time zone, `days` later. */
+function midnight(day: string, days = 0): Date {
+  const [year, month, date] = day.split("-").map(Number) as [number, number, number]
+  return new Date(year, month - 1, date + days)
 }
 
-/** Midnight of a `yyyy-mm-dd` day in the browser's time zone, `days` later; null when it does not read. */
-function midnight(day: string, days = 0): Date | null {
-  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day)
-  if (parts === null) return null
-  const date = new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]) + days)
-  return Number.isNaN(date.getTime()) ? null : date
-}
-
-/** The page asked for, rows newest first. */
-export const PAGE_SIZE = 100
+/** The page asked for, rows newest first: *Load older* reads the next. */
+export const PAGE_SIZE = 50
 
 /**
- * The query string of `/api/audit`. The days are whole days where the person
- * is: `to` includes its day, so the server, which takes it exclusive, gets the
+ * The query string of `/api/audit`. A `since` becomes its start, `now`
+ * minus the range or the day's midnight where the person is; `until`
+ * includes its day, so the server, which takes `to` exclusive, gets the
  * next midnight.
  */
-export function auditQuery(filters: AuditFilters, cursor: string | null = null, limit = PAGE_SIZE): string {
+export function auditQuery(filter: ActivityFilter, now: number, cursor: string | null = null, limit = PAGE_SIZE): string {
   const query = new URLSearchParams()
-  if (filters.source !== null) query.set("source", filters.source)
-  for (const key of ["actor", "action", "target"] as const) {
-    const value = filters[key].trim()
+  for (const key of ["source", "actor", "target"] as const) {
+    const value = filter[key]?.trim() ?? ""
     if (value !== "") query.set(key, value)
   }
-  const from = midnight(filters.from)
-  const to = midnight(filters.to, 1)
-  if (from !== null) query.set("from", from.toISOString())
-  if (to !== null) query.set("to", to.toISOString())
+  const { action } = serverAction(filter)
+  if (action !== null) query.set("action", action)
+  const start = filter.since === undefined ? null : sinceStart(filter.since, now)
+  if (start !== null) query.set("from", new Date(start).toISOString())
+  if (filter.until !== undefined && isDay(filter.until)) query.set("to", midnight(filter.until, 1).toISOString())
   query.set("limit", String(limit))
   if (cursor !== null) query.set("cursor", cursor)
   return `?${query}`
+}
+
+/**
+ * What the page narrows itself, past the server: a type of several
+ * prefixes, and the search, every word of which a row must hold somewhere
+ * in what it shows or keeps, accents and case aside.
+ */
+export function activityKeep(filter: ActivityFilter): (row: AuditRow) => boolean {
+  const { keep } = serverAction(filter)
+  const words = queryWords(filter.query ?? "")
+  return (row) => {
+    if (keep !== null && !keep(row.action)) return false
+    if (words.length === 0) return true
+    const said = auditWords(row)
+    const text = normalize([row.actor, actorLabel(row), row.action, said.summary, said.note ?? "", row.target ?? "", row.site ?? "", sourceLabel(row.source)].join(" "))
+    return words.every((word) => text.includes(word))
+  }
 }
 
 export function readAudit(query: string) {
@@ -602,6 +620,101 @@ export function actorLabel(row: AuditRow): string {
   }
   if (text(row.detail?.method) === "password-access") return `${row.actor} (password access)`
   return row.actor
+}
+
+// --- The days and the runs -------------------------------------------------------
+
+/** A row, or a run of rows saying the same thing: newest first, one when it is a single event. */
+export type ActivityItem = { key: string; rows: AuditRow[]; words: AuditWords }
+
+/** One day of the log under its heading. */
+export type ActivityDay = { day: string; label: string; items: ActivityItem[] }
+
+/** A day where the person is, `2026-10-25`; "" for a time that does not read. */
+export function dayKey(ms: number, timeZone?: string): string {
+  if (!Number.isFinite(ms)) return ""
+  const parts = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "2-digit", day: "2-digit", timeZone }).formatToParts(ms)
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((piece) => piece.type === type)?.value ?? ""
+  return `${value("year")}-${value("month")}-${value("day")}`
+}
+
+/** The day before a `yyyy-mm-dd` day, counted on the calendar rather than in hours, which a change of clocks would cut short. */
+function dayBefore(day: string): string {
+  const [year, month, date] = day.split("-").map(Number) as [number, number, number]
+  return new Date(Date.UTC(year, month - 1, date - 1)).toISOString().slice(0, 10)
+}
+
+/**
+ * A day's heading: "Today", "Yesterday", then "Thu, Oct 23", with its year
+ * once it is not this one's.
+ */
+export function dayHeading(day: string, now: number, timeZone?: string): string {
+  if (day === "") return "Date unknown"
+  const today = dayKey(now, timeZone)
+  if (day === today) return "Today"
+  if (day === dayBefore(today)) return "Yesterday"
+  const date = new Date(`${day}T12:00:00Z`)
+  if (Number.isNaN(date.getTime())) return day
+  const year = day.slice(0, 4) === today.slice(0, 4) ? undefined : "numeric"
+  return date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year, timeZone: "UTC" })
+}
+
+/** The time of day, `14:05`, where the person is: what a row says under a day's heading, once that day is gone. */
+export function clockTime(ms: number, timeZone?: string): string {
+  if (!Number.isFinite(ms)) return "-"
+  const parts = new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone }).formatToParts(ms)
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((piece) => piece.type === type)?.value ?? ""
+  return `${value("hour")}:${value("minute")}`
+}
+
+/**
+ * What makes two rows one run: the same source, actor, action and target,
+ * and the same sentence in the same tone. The sentence carries the variable
+ * set or the host refused, so "Set MAIL_KEY" and "Set API_KEY" stay apart;
+ * the tone keeps a failure out of a run of successes, where it would hide.
+ */
+function runKey(row: AuditRow, words: AuditWords): string {
+  return [row.source, row.actor, row.action, row.target ?? "", words.summary, words.tone].join("\u0000")
+}
+
+/**
+ * The rows cut into days where the person is, newest first, and within a
+ * day the same event repeated folded into one run at its newest: an hourly
+ * backup is one line, "6", rather than six lines between the others.
+ *
+ * The rows are put in time order first: the server merges each source in
+ * its own order, which a source that rewrites a row's time, the portal
+ * counting repeated sign-ins, does not keep in time.
+ */
+export function activityDays(rows: readonly AuditRow[], now: number, timeZone?: string): ActivityDay[] {
+  const time = (row: AuditRow) => {
+    const ms = Date.parse(row.at)
+    return Number.isFinite(ms) ? ms : Number.NEGATIVE_INFINITY
+  }
+  const ordered = [...rows].sort((a, b) => time(b) - time(a))
+  const days: ActivityDay[] = []
+  let runs = new Map<string, ActivityItem>()
+  for (const row of ordered) {
+    const words = auditWords(row, timeZone)
+    const day = dayKey(Date.parse(row.at), timeZone)
+    let current = days.at(-1)
+    if (current === undefined || current.day !== day) {
+      current = { day, label: dayHeading(day, now, timeZone), items: [] }
+      days.push(current)
+      runs = new Map()
+    }
+    const key = runKey(row, words)
+    const run = runs.get(key)
+    if (run !== undefined) {
+      run.rows.push(row)
+      run.key = `run:${run.rows[0]!.id}`
+      continue
+    }
+    const item: ActivityItem = { key: row.id, rows: [row], words }
+    runs.set(key, item)
+    current.items.push(item)
+  }
+  return days
 }
 
 // --- The detail, as text ---------------------------------------------------------
