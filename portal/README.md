@@ -683,10 +683,16 @@ exception: the lock's page is served for every URL of the locked host, and its
 own resources would serve themselves in a loop.
 
 It is drawn in Ledger, the landing page's design, light or dark as the browser
-prefers. Its faces are named, Hanken Grotesk and IBM Plex Mono, and never
-fetched: a font file cannot be served beside the lock's page, and carried in
-`data:` they would add some 65 KB to every 401 of every protected site. A
-browser without them shows its system face at Ledger's sizes and weights.
+prefers, with the landing page's values and, where it has none, the
+dashboard's, so that the dashboard's sign-in and this one read as one product:
+the same mark, the same card on the same paper, the field sunk as the
+dashboard's is, the same pressable teal, and the dashboard's error red, since
+the landing page's own falls short of 4.5:1 on the notice. Its faces are named,
+Hanken Grotesk and IBM Plex Mono, and never fetched: a font file cannot be
+served beside the lock's page, and carried in `data:` they would add some
+65 KB to every 401 of every protected site. A browser without them shows its
+system face at Ledger's sizes and weights, the one difference left with the
+dashboard, which serves its own.
 
 The portal's own host shows the same card at its root, `public/index.html`,
 committed and written from the template by `bun run home-page`; a test fails

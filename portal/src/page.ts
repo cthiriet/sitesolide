@@ -49,8 +49,13 @@ const LOGO = `<svg viewBox="0 0 32 32" aria-hidden="true">
  * Ledger, the design of the landing page: mineral paper, one raised card with
  * a hairline and a soft layered shadow, fields sunk below it, the pressable
  * teal for the one primary action and the teal focus ring, light and dark from
- * the browser's preference. The values are the landing page's own tokens; the
- * red alone is the dashboard's, since red means an error and nothing else.
+ * the browser's preference. The values are the landing page's own tokens, and
+ * where it has none the dashboard's (dashboard/web/src/styles/global.css), so
+ * that its sign-in and this one read as one product: the field is its well,
+ * `sunk` ringed by `input`, white once focused in light; the red is its
+ * `destructive`, since the landing page's own down red falls to 4.2:1 on the
+ * notice; the muted text is its `muted-foreground`, the landing page's moved
+ * a step so that a placeholder holds 4.5:1 in the well.
  *
  * The faces are named, Hanken Grotesk and IBM Plex Mono, but never fetched:
  * this page cannot fetch anything (see above), and carrying them in `data:`
@@ -65,12 +70,13 @@ const STYLE = `
       --bg: #F4F5F1;
       --card: #FBFBF9;
       --raised: #FFFFFF;
-      --field: #FFFFFF;
+      --field: #ECEEE8;
+      --field-focus: #FFFFFF;
       --line: #E2E3DC;
       --line-2: #D3D6CE;
       --ink: #141816;
       --ink-2: #3A413D;
-      --muted: #6A6F69;
+      --muted: #636862;
       --faint: #9EA39C;
       --accent: #0B6E79;
       --accent-text: #0A6570;
@@ -80,9 +86,9 @@ const STYLE = `
       --accent-soft: #E3EDEB;
       --on-accent: #FFFFFF;
       --ring: rgba(11, 110, 121, .24);
-      --error: #B3253F;
-      --error-soft: rgba(179, 37, 63, .06);
-      --error-line: rgba(179, 37, 63, .2);
+      --error: #AE4029;
+      --error-soft: rgba(174, 64, 41, .06);
+      --error-line: rgba(174, 64, 41, .22);
       --dots: rgba(20, 24, 22, .085);
       --sh-panel: inset 0 1px 0 rgba(255,255,255,.85), 0 1px 1px rgba(22,32,28,.03), 0 2px 4px rgba(22,32,28,.03), 0 10px 20px -8px rgba(22,32,28,.07), 0 30px 60px -28px rgba(22,32,28,.16);
       --sh-well: inset 0 1px 2px rgba(22,32,28,.07), inset 0 0 0 1px rgba(22,32,28,.025);
@@ -100,7 +106,8 @@ const STYLE = `
         --bg: #0D1211;
         --card: #141A19;
         --raised: #1C2422;
-        --field: #0F1514;
+        --field: #0C1110;
+        --field-focus: #0C1110;
         --line: #232C2A;
         --line-2: #303B38;
         --ink: #E8EDEA;
@@ -114,9 +121,9 @@ const STYLE = `
         --accent-edge: #04363B;
         --accent-soft: #112828;
         --ring: rgba(63, 166, 174, .3);
-        --error: #F36F84;
-        --error-soft: rgba(243, 111, 132, .08);
-        --error-line: rgba(243, 111, 132, .24);
+        --error: #F0896D;
+        --error-soft: rgba(240, 137, 109, .08);
+        --error-line: rgba(240, 137, 109, .26);
         --dots: rgba(232, 237, 234, .06);
         --sh-panel: inset 0 1px 0 rgba(255,255,255,.045), 0 1px 1px rgba(0,0,0,.32), 0 2px 4px rgba(0,0,0,.26), 0 12px 24px -10px rgba(0,0,0,.5), 0 32px 64px -28px rgba(0,0,0,.65);
         --sh-well: inset 0 1px 3px rgba(0,0,0,.5), inset 0 0 0 1px rgba(0,0,0,.25);
@@ -238,11 +245,12 @@ const STYLE = `
 
     input:not([type="hidden"]):focus {
       outline: 2px solid transparent;
+      background: var(--field-focus);
       border-color: var(--accent);
       box-shadow: var(--sh-well), 0 0 0 3px var(--ring);
     }
 
-    input::placeholder { color: var(--faint); opacity: 1; }
+    input::placeholder { color: var(--muted); opacity: 1; }
 
     /* The code: six characters of a fixed alphabet, set like a key. The indent
        gives back the tracking after the last character, so the code centres. */

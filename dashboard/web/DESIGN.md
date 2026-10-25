@@ -116,6 +116,10 @@ and 3.1:1 on `popover`. On `highlight`: `strong` 16.2:1 in light and 14.6:1
 in dark, `primary` 5.0 and 5.4:1. The full list is in the comment of
 `styles/global.css`.
 
+The portal's visitor pages (`portal/src/page.ts`) carry the same values in
+their own inline CSS, the moved ones below included, so that a visitor's
+sign-in and the owner's share one red, one muted grey and one field.
+
 Four values move from the landing page to clear those floors: its muted
 `#6a6f69` (4.2:1 on `muted`) became `#636862`, its down red `#c24e33` (4.3:1
 on its pill) became `#ae4029`, and the ticks, which the landing page has
@@ -683,6 +687,13 @@ without is ticked for you and says which, "Needed by bookshop and wheels":
 a public project for the owner's own, exempted paths, a declared domain.
 Then *Expires*. The token is then shown once, with *Copy message*.
 
+**The sign-in page** is the portal's card (`portal/src/page.ts`), which a
+visitor meets in front of a restricted site, so that both read as one
+product: the landing page's 24 px panel, `rounded-3xl`, and its 44 px
+controls with 12 px corners, the field the same well as every other, the
+same pressable teal. It is the one place the dashboard takes the landing
+page's sizes, being a page read once (section 8, point 15).
+
 **The sign-in page, with a provider.** Above the password, *Sign in with
 <provider>*, an outline link to `/api/sso/begin` and not a form, the flow
 leaving for the portal's host; then a rule with *or with the owner's
@@ -951,6 +962,7 @@ change it.
 15. **The landing page's 24 px panels and 44 px buttons**: drawn for a page you
     read once; at the dashboard's density they would cost a row in four. The
     panels take its cards' 14 px, the buttons its small sizes, 32 and 36 px.
+    The sign-in alone keeps them, being such a page, and the portal's.
 
 ## 9. Seeing the page, and looking at it
 

@@ -16,6 +16,14 @@ import { cn } from "@/lib/utils"
 const NO_HASH = "Sign-in is disabled: no password hash is configured on the server."
 
 /**
+ * The card's field and buttons, at the portal's size: 44 px and 12 px
+ * corners; a button's label at 15 px, the field keeping the 16 px below which
+ * a phone zooms in on focus.
+ */
+const CONTROL = "h-11 rounded-[0.75rem]"
+const BUTTON = cn(CONTROL, "text-[0.9375rem]")
+
+/**
  * The address to come back to after the provider: this page, without the
  * reason a previous attempt left in it.
  */
@@ -114,6 +122,10 @@ export function SignIn({
   const errorText = configured ? error : ""
   const buttonLabel = inProgress ? "Signing in…" : remainingS > 0 ? waitMessage(remainingS) : "Sign in"
 
+  // The portal's sign-in card, which a visitor meets in front of a restricted
+  // site (portal/src/page.ts): a page read once, so the landing page's panel
+  // radius, 24 px, and its 44 px controls with their 12 px corners, where the
+  // rest of the dashboard keeps its denser 14 px panels and small buttons.
   const card = (
     <div className="grid w-full max-w-xs justify-items-center gap-6">
       <div className="flex items-center gap-3">
@@ -125,7 +137,7 @@ export function SignIn({
         )}
       </div>
 
-      <Card className="w-full rounded-xl py-6 [--card-spacing:--spacing(6)]">
+      <Card className="w-full rounded-3xl py-6 [--card-spacing:--spacing(6)]">
         <CardHeader>
           <CardTitle id={titleId} className="text-[1.0625rem] leading-6 font-semibold tracking-[-0.01em]">
             Sign in
@@ -140,7 +152,7 @@ export function SignIn({
           )}
           {sso.offered && (
             <>
-              <a href={signInUrl(currentReturn())} className={cn(buttonVariants({ variant: "outline" }), "h-10 w-full [&_svg]:text-signin-ink")}>
+              <a href={signInUrl(currentReturn())} className={cn(buttonVariants({ variant: "outline" }), BUTTON, "w-full [&_svg]:text-signin-ink")}>
                 <LogIn />
                 Sign in with {sso.providerName ?? "your company account"}
               </a>
@@ -170,16 +182,16 @@ export function SignIn({
                   onChange={(event) => setPassword(event.target.value)}
                   aria-invalid={errorText !== "" || undefined}
                   aria-describedby={errorText !== "" ? errorId : undefined}
-                  className="h-10 pr-10"
+                  className={cn(CONTROL, "pr-11")}
                 />
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   disabled={!configured}
                   aria-label={visible ? "Hide password" : "Show password"}
                   onClick={() => setVisible((before) => !before)}
-                  className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  className="absolute top-1/2 right-1.5 size-8 -translate-y-1/2 text-muted-foreground after:absolute after:-inset-1.5 hover:text-foreground"
                 >
                   {visible ? <EyeOff /> : <Eye />}
                 </Button>
@@ -191,7 +203,7 @@ export function SignIn({
             <Button
               type="submit"
               disabled={!configured || inProgress || remainingS > 0}
-              className="h-10 w-full tabular-nums"
+              className={cn(BUTTON, "w-full tabular-nums")}
             >
               {buttonLabel}
             </Button>
@@ -205,7 +217,7 @@ export function SignIn({
   // document, so last for the keyboard: the password field stays the first
   // stop. In the overlay it sits inside the dialog, the page below being
   // inert.
-  const themeToggle = <ThemeToggleButton className="absolute top-3 right-3 size-10 text-muted-foreground" />
+  const themeToggle = <ThemeToggleButton className="absolute top-3 right-3 size-11 text-muted-foreground" />
 
   if (overlay) {
     return (

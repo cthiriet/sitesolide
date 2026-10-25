@@ -11,8 +11,10 @@ const BLOCK =
  * through them in both themes. The gradient's id is the instance's own: two
  * marks on a page, the sidebar's and the header's, must not share one.
  *
- * The favicon, in layouts/main.astro, is the same block and the same
- * gradient, as the landing page's is.
+ * The favicon, in layouts/main.astro, is the same block, and the landing
+ * page's and the portal's favicon byte for byte: a gradient of its own, a
+ * lighter one in a dark browser, where this one's deep end would sink into
+ * the tab strip.
  */
 export function Logo({ className }: { className?: string }) {
   const gradient = `mark-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`
