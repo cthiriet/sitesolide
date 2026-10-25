@@ -3,7 +3,7 @@ import { FilePlus, FileText, Pencil, Plus, RectangleEllipsis, RotateCcw, Trash2,
 import { Button } from "@/components/ui/button"
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { Command } from "@/components/copy"
-import { CellText, DataTable, RowMenu, type Column } from "@/components/data-table"
+import { CellText, DataTable, RowMenu, gutterFor, type Column } from "@/components/data-table"
 import { Banner, Panel, StateLabel, Status } from "@/components/page"
 import { fileKey, useSecretsActions, type FileTarget } from "@/components/secrets-actions"
 import { LockGlyph } from "@/components/unlock"
@@ -381,7 +381,7 @@ export function FilesPanel({ project }: { project: ProjectView }) {
           rows={lines}
           rowKey={lineKey}
           columns={columns}
-          severity={severity}
+          severity={gutterFor(lines, severity)}
           menu={menu}
         />
         {errors.map((entry) => (

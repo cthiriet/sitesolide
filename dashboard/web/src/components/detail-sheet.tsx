@@ -103,7 +103,7 @@ export function DetailSheet({
   state?: ReactNode
   /** A line under the title. */
   description?: ReactNode
-  /** Its actions, the row menu's, as buttons; destructive last. */
+  /** Its actions, the row menu's, as buttons; the destructive one goes at the body's foot, after *Recent*. */
   actions?: ReactNode
   /** Its Activity: *Recent*, the last ten lines, then *All activity*. No section without it. */
   history?: HistoryFilter

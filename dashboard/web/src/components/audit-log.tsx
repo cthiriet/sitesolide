@@ -4,7 +4,7 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { CellText, DataTable, RowButton, type Column } from "@/components/data-table"
+import { CellText, DataTable, RowButton, gutterFor, type Column } from "@/components/data-table"
 import { DetailSheet, SheetFacts, SheetSection } from "@/components/detail-sheet"
 import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
@@ -158,6 +158,12 @@ export function ActivityLog({
     else onOpen(line.row)
   }
 
+  // One gutter for every day or none, so that the days' columns stay aligned.
+  const gutter = gutterFor(
+    days.flatMap((day) => linesOf(day.items)),
+    (line: Line) => severityOf(line.words),
+  )
+
   return (
     <>
       {days.map((day) => {
@@ -216,7 +222,7 @@ export function ActivityLog({
             rows={linesOf(day.items)}
             rowKey={(line) => line.key}
             columns={columns}
-            severity={(line) => severityOf(line.words)}
+            severity={gutter}
             onRowClick={press}
             selected={selected}
           />

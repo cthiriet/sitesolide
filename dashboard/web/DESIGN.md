@@ -528,7 +528,10 @@ the dashboard:
 - **Gutter**: given `severity`, a 28 px first column holds the
   `SeverityIcon` of a row in trouble and nothing for a fine one, the line
   the eye scans for problems; the row's word, a `StateLabel`, follows the
-  name. No tinted background, no word for a fine row.
+  name. No tinted background, no word for a fine row. The gutter is drawn
+  only while some row is in trouble (`gutterFor`): an all-clear list
+  starts at its names; Activity decides once for all its days, whose
+  columns stay aligned.
 - **Click**: a row is a page (`rowHref`) or a sheet (`onRowClick`). Its name
   is the real link (`RowLink`) or the sheet's button (`RowButton`), the one
   for the keyboard and for screen readers; the rest of the row follows the
@@ -556,11 +559,14 @@ destructive action is never a bare cross in the row.
 **Details.** A list whose rows are not pages opens each row in the
 `DetailSheet`: from the right at 440 px on a computer, from the bottom at
 up to 90 % of the height on a phone. Its head: the object's name, its
-`StateLabel`, its actions as buttons, destructive last. Its body: every
-field as a key and its value (`SheetFacts`, 36 px lines), the sections the
-object needs (`SheetSection`, a mono label over its content), then
-*Recent*, the object's last ten lines of Activity, and *All activity*
-(`history`). Its address is the page's (`useSheet`): `?token=`, `?person=`,
+`StateLabel`, a line saying what it is, and its actions that change
+nothing for good as buttons (*Change*, *Let create projects*, *Same
+actor*). Its body: every field as a key and its value (`SheetFacts`, 36 px
+lines), the sections the object needs (`SheetSection`, a mono label over
+its content), then *Recent*, the object's last ten lines of Activity, and
+*All activity* (`history`); last, at its foot, the destructive action, an
+outline button in red, still confirmed: *Revoke token*, *Remove from every
+project*, *Remove connector*. Its address is the page's (`useSheet`): `?token=`, `?person=`,
 `?event=`, `?connector=`; Back closes it, a link opens it.
 
 **History.** A page's own activity is in Activity, never in a panel of the
@@ -601,7 +607,7 @@ with one meaning everywhere and its words in its tooltip (`lib/legend.ts`):
 | `Lock`, 12 px, after a label | a write that asks for the unlock first | the label's |
 | `Server`, `Cloud` | where a snapshot lives: on this server, in the offsite copy | muted |
 | `Layers`, `History`, `UsersRound`, `KeySquare`, `Plug` | the machine's pages in the sidebar, the tabs and the Sites row menu: Sites, Activity, People, Tokens, Connectors | `secondary-foreground` |
-| `Gauge`, `ChartNoAxesColumn`, `Vault`, `ShieldCheck`, `DatabaseBackup` | a site's sections, there and in the Sites row menu: Overview, Audience, Secrets, Access, Backups | `secondary-foreground` |
+| `Gauge`, `ChartNoAxesColumn`, `SquareAsterisk`, `ShieldCheck`, `DatabaseBackup` | a site's sections, there and in the Sites row menu: Overview, Audience, Secrets, Access, Backups | `secondary-foreground` |
 
 Navigation borrows no row's icon: Sites is not a `Globe`, which says
 *Public*, nor Secrets a `KeyRound`, which says a code; a note under every
@@ -1417,7 +1423,8 @@ and no table.
 26. **The client reading a discrepancy's message** to name it in a row: the
     server gives each one its `label`, chosen where it is judged.
 27. **The gutter on an all-clear list**, 28 px of empty space on every row:
-    drawn while some row is in trouble only.
+    drawn while some row is in trouble only, on every list (`gutterFor`),
+    the Sites list having been the first.
 28. **A site's Overview in five panels**, Service, Addresses, Storage,
     General access and Secrets, each with its own head, a 26 px memory
     figure and a caption under every fact: a site read like a form, its
@@ -1490,7 +1497,6 @@ and no table.
 48. **Who added a person, and when, in People's sheet**: the People route
     carries each person's roles, not who gave them. It is on the person's
     row in each project's Access section.
-
 49. **A status line and an activity panel in Secrets**, "Running, up 20h,
     cms" under the panel's title and a log of the site's operations below
     it: the Overview says the service, Activity the history. A restart
@@ -1508,6 +1514,15 @@ and no table.
     and offsite" twelve times, and a *Restore* button on each: a tag for a
     before-restore snapshot alone, two icons for where, *Restore* under the
     pointer and in the row menu.
+54. **Navigation drawn with the rows' icons**, Sites as a `Globe` and
+    Secrets as a `KeyRound`, the icons that say *Public* and a code one
+    column away: the sites are a stack, the secrets a masked value.
+55. **Running and a green dot on the site's card in the sidebar**, on every
+    healthy site, the word the rows had stopped saying: the card says what
+    the site is when fine, its state in its tone when not.
+56. **A leftover grant in red** among Connectors' requests, under a verdict
+    saying *All clear*: it lends nothing until a project of that name asks
+    again, a warning like a Caddy fragment with no folder.
 
 ## 9. Seeing the page, and looking at it
 

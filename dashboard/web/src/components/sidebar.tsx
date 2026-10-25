@@ -1,5 +1,5 @@
 import { useMemo } from "react"
-import { ChartNoAxesColumn, ChevronLeft, DatabaseBackup, Gauge, History, KeySquare, Layers, LogOut, PanelLeft, Plug, ShieldCheck, UsersRound, Vault, type LucideIcon } from "lucide-react"
+import { ChartNoAxesColumn, ChevronLeft, DatabaseBackup, Gauge, History, KeySquare, Layers, LogOut, PanelLeft, Plug, ShieldCheck, SquareAsterisk, UsersRound, type LucideIcon } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -27,7 +27,7 @@ import { VERSION } from "@/lib/version"
 /**
  * The icon of each machine page. None borrows a row's icon (web/DESIGN.md
  * section 5, *Icons*): Globe says Public and KeyRound a code, so the sites
- * are a stack and the secrets a vault.
+ * are a stack and the secrets a masked value.
  */
 const MACHINE_ICONS: Record<MachinePage, LucideIcon> = {
   home: Layers,
@@ -41,7 +41,7 @@ const MACHINE_ICONS: Record<MachinePage, LucideIcon> = {
 export const SECTION_ICONS: Record<Section, LucideIcon> = {
   overview: Gauge,
   audience: ChartNoAxesColumn,
-  secrets: Vault,
+  secrets: SquareAsterisk,
   access: ShieldCheck,
   backups: DatabaseBackup,
 }

@@ -3,7 +3,7 @@ import { Check, ChevronRight, Copy, Dices, FileUp, Pencil, Plus, RotateCcw, Tras
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Command, CopyFallback, useAnnounce, useCopy } from "@/components/copy"
-import { CellText, DataTable, RowMenu, type Column } from "@/components/data-table"
+import { CellText, DataTable, RowMenu, gutterFor, type Column } from "@/components/data-table"
 import { Banner, InlineEmpty, Panel, StateLabel, Status } from "@/components/page"
 import { ProblemBanner, pendingSentence } from "@/components/secrets"
 import { useSecretsActions } from "@/components/secrets-actions"
@@ -621,7 +621,7 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
             rows={lines}
             rowKey={(line) => line.name}
             columns={variableColumns}
-            severity={(line) => (line.missing ? "error" : null)}
+            severity={gutterFor(lines, (line) => (line.missing ? "error" : null))}
             menu={variableMenu}
           />
         )}
@@ -651,7 +651,7 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
             rows={files}
             rowKey={(one) => one.name}
             columns={fileColumns}
-            severity={fileSeverity}
+            severity={gutterFor(files, fileSeverity)}
             menu={fileMenu}
           />
         </Panel>

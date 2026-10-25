@@ -127,6 +127,16 @@ const GUTTER = "28px"
 const MENU = "44px"
 
 /**
+ * A table's `severity` while some row is in trouble, nothing otherwise: an
+ * all-clear list draws no gutter, 28 px of empty space on every row. Tables
+ * read as one, Activity's days, pass every row so that their columns stay
+ * aligned.
+ */
+export function gutterFor<Row>(rows: readonly Row[], severity: (row: Row) => Severity | null): ((row: Row) => Severity | null) | undefined {
+  return rows.some((row) => severity(row) !== null) ? severity : undefined
+}
+
+/**
  * The 28 px gutter at a row's left edge: the severity icon when the row is in
  * trouble, with its word for screen readers, and nothing when it is fine.
  * The vertical line the eye scans for problems.
@@ -165,7 +175,7 @@ export function DataTable<Row>({
   rows: readonly Row[]
   rowKey: (row: Row) => string
   columns: readonly Column<Row>[]
-  /** A row's trouble, for the gutter; the gutter exists only with this. */
+  /** A row's trouble, for the gutter; the gutter exists only with this, given while some row is in trouble (`gutterFor`). */
   severity?: (row: Row) => Severity | null
   /** A row that is a page: its address. Cmd, Ctrl and the middle button open it in a new tab. */
   rowHref?: (row: Row) => string

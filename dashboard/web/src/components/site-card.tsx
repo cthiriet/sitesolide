@@ -4,7 +4,7 @@ import { Track } from "@/components/gauge"
 import { ExternalLink } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
 import { Banner, Panel, StateLabel, Status } from "@/components/page"
-import { CellText, DataTable, type Column } from "@/components/data-table"
+import { CellText, DataTable, gutterFor, type Column } from "@/components/data-table"
 import { accessEntry } from "@/components/legend"
 import { accessKey } from "@/lib/legend"
 import {
@@ -350,7 +350,7 @@ export function ServicesPanel({ site, now }: { site: Site; now: number }) {
         rows={rows}
         rowKey={(row) => row.unit}
         columns={scheduled ? SERVICE_COLUMNS : SERVICE_COLUMNS.filter((column) => column.key !== "when")}
-        severity={rowSeverity}
+        severity={gutterFor(rows, rowSeverity)}
         narrowBelow="42rem"
       />
     </Panel>
