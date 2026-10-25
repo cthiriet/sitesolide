@@ -22,6 +22,7 @@ import { DetailSheet, SheetFacts, SheetSection, useSheet } from "@/components/de
 import { FilterBar, useListState } from "@/components/filter-bar"
 import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
+import { ProjectLink } from "@/components/project-link"
 import {
   Banner,
   Count,
@@ -61,7 +62,6 @@ import {
 import { ago, dateTime } from "@/lib/format"
 import { RECENT_LINES, historyUrl } from "@/lib/history"
 import { FILTER_BAR_FROM, type ListSpec } from "@/lib/list-state"
-import { siteUrl } from "@/lib/pages"
 import { normalize } from "@/lib/search"
 import { refusalOf } from "@/lib/secrets"
 import type { ConnectorView, ConnectorsView, EgressAuditRow } from "@/lib/types"
@@ -101,16 +101,6 @@ const ACTIVITY_AFTER_WRITE_MS = 6_000
 
 function isView(body: unknown): body is ConnectorsView {
   return typeof body === "object" && body !== null && Array.isArray((body as ConnectorsView).connectors) && Array.isArray((body as ConnectorsView).grants)
-}
-
-function SiteLink({ slug, known }: { slug: string | null; known: ReadonlySet<string> }) {
-  if (slug === null) return null
-  if (!known.has(slug)) return <span>{slug}</span>
-  return (
-    <InternalLink href={siteUrl(slug)} className={TEXT_LINK}>
-      {slug}
-    </InternalLink>
-  )
 }
 
 /** A form field: label, control, help, error under the field. */
@@ -391,7 +381,6 @@ function RemoveDialog({
  */
 function RequestsPanel({
   rows,
-  known,
   canWrite,
   inFlight,
   error,
@@ -399,7 +388,6 @@ function RequestsPanel({
   onAdd,
 }: {
   rows: readonly GrantRow[]
-  known: ReadonlySet<string>
   canWrite: boolean
   inFlight: string | null
   error: string
@@ -419,7 +407,7 @@ function RequestsPanel({
       head: "Project",
       width: "minmax(140px,1fr)",
       slot: "meta",
-      cell: (row) => <SiteLink slug={row.slug} known={known} />,
+      cell: (row) => <ProjectLink slug={row.slug} />,
     },
     {
       key: "state",
@@ -523,7 +511,7 @@ function ProjectsCell({ rows }: { rows: readonly GrantRow[] }) {
         {shown.map((row, index) => (
           <span key={row.slug} className={cn(row.state === "unasked" && "text-muted-foreground")}>
             {index > 0 && <span className="text-muted-foreground">, </span>}
-            {row.slug}
+            <ProjectLink slug={row.slug} />
           </span>
         ))}
       </span>
@@ -584,7 +572,6 @@ function connectorColumns(view: ConnectorsView, serverNow: number, open: (connec
 function ConnectorSheet({
   connector,
   view,
-  known,
   serverNow,
   canWrite,
   inFlight,
@@ -597,7 +584,6 @@ function ConnectorSheet({
 }: {
   connector: ConnectorView | null
   view: ConnectorsView
-  known: ReadonlySet<string>
   serverNow: number
   canWrite: boolean
   inFlight: string | null
@@ -656,7 +642,7 @@ function ConnectorSheet({
                   return (
                     <li key={row.slug} className="flex min-h-11 items-center justify-between gap-3 py-1.5">
                       <span className="grid min-w-0 gap-0.5">
-                        <SiteLink slug={row.slug} known={known} />
+                        <ProjectLink slug={row.slug} />
                         {row.state === "granted" ? (
                           <span className="text-xs text-muted-foreground">Granted, asked for</span>
                         ) : (
@@ -673,7 +659,7 @@ function ConnectorSheet({
             )}
           </SheetSection>
 
-          <ConnectorRecent name={connector.name} activity={activity} known={known} serverNow={serverNow} />
+          <ConnectorRecent name={connector.name} activity={activity} serverNow={serverNow} />
 
           {canWrite && (
             <div className="grid justify-items-start gap-2 border-t pt-4">
@@ -696,7 +682,7 @@ function ConnectorSheet({
 }
 
 /** The connector's last calls, changes, grants and refusals, from the egress proxy itself; then all of the proxy's in Activity. */
-function ConnectorRecent({ name, activity, known, serverNow }: { name: string; activity: ActivityState; known: ReadonlySet<string>; serverNow: number }) {
+function ConnectorRecent({ name, activity, serverNow }: { name: string; activity: ActivityState; serverNow: number }) {
   const rows = activity.state === "ready" ? connectorRows(activity.rows, name).slice(0, RECENT_LINES) : []
   return (
     <SheetSection
@@ -730,16 +716,9 @@ function ConnectorRecent({ name, activity, known, serverNow }: { name: string; a
                 <When at={line.at} serverNow={serverNow} />
                 {meta !== "" && (
                   <span className="col-span-2 truncate text-xs text-muted-foreground">
-                    {line.site !== null && known.has(line.site) ? (
-                      <>
-                        <InternalLink href={siteUrl(line.site)} className={TEXT_LINK}>
-                          {line.site}
-                        </InternalLink>
-                        {line.detail !== null && ` · ${line.detail}`}
-                      </>
-                    ) : (
-                      meta
-                    )}
+                    {line.site !== null && <ProjectLink slug={line.site} />}
+                    {line.site !== null && line.detail !== null && line.detail !== "" && " · "}
+                    {line.detail}
                   </span>
                 )}
               </li>
@@ -754,7 +733,7 @@ function ConnectorRecent({ name, activity, known, serverNow }: { name: string; a
 // --- The page ----------------------------------------------------------------------
 
 export function ConnectorsPage() {
-  const { generation, snapshot, secrets, sessionExpired } = useData()
+  const { generation, secrets, sessionExpired } = useData()
   const actions = useSecretsActions()
   const announce = useAnnounce()
   const sheet = useSheet("connector")
@@ -843,7 +822,6 @@ export function ConnectorsPage() {
 
   const { retrying, retry } = useRetry(load)
 
-  const known = new Set(snapshot?.sites.map((site) => site.slug) ?? [])
   const ready = list.state === "ready" ? list.view : null
   // The writes are offered locked too: each asks for the unlock when pressed.
   const canWrite = ready !== null && ready.installed && ready.state === "managed"
@@ -923,7 +901,6 @@ export function ConnectorsPage() {
         {ready !== null && requests.length > 0 && (
           <RequestsPanel
             rows={requests}
-            known={known}
             canWrite={canWrite}
             inFlight={grantInFlight}
             error={opened === null ? grantError : ""}
@@ -1000,7 +977,6 @@ export function ConnectorsPage() {
         <ConnectorSheet
           connector={opened}
           view={ready}
-          known={known}
           serverNow={actions.serverNow}
           canWrite={canWrite}
           inFlight={grantInFlight}

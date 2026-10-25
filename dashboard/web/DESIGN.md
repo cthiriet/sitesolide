@@ -542,6 +542,11 @@ the dashboard:
 - **One action in the row at most**, the page's job, as a small outline or
   ghost button in its own column or on hover; everything else in the
   `RowMenu`.
+- **A project's name** on People, Tokens and Connectors, in a row as in a
+  sheet, is a link to its site (`ProjectLink`): its Overview, People's to
+  its Access, where the role is changed. A project the server does not
+  serve, a token's not deployed yet, a grant left to a removed site, stays
+  plain text.
 - `heading`, for a list cut into groups: one table per group, its heading
   a sticky mono line in place of the column heads, pushed up by the next
   (Activity's days); the heads stay for screen readers.
@@ -914,7 +919,7 @@ asks for the unlock first; *History* opens what tokens did,
 revoked and the expired fold under the rows, *Show 1 revoked or expired*.
 
 A row, 44 px: *Name*; *Owner*, "You" or the person's email, for the owner
-alone; *Projects*, "cms, photos" then "+2", a project where the person's
+alone; *Projects*, "cms, photos" then "+2", each linked to its site, a project where the person's
 role is below Developer muted after the `Pause` glyph; *Permissions*, what
 it may do beyond deploying, at most two chips then "+N", *Public sites*,
 *Secrets*, *Domain*, *Network*, *New projects*, a person's paused one dashed
@@ -1008,8 +1013,8 @@ not granted, *Asked, not granted* in attention, with *Grant*; one that asks
 for a connector the server lacks, *No such connector* in attention, with
 *Add connector*, its name filled in. Then the connectors, one 44 px row
 each: the name in mono, the base address without its scheme, muted and cut,
-the projects it is granted to, "cms, roster", one that does not ask for it
-muted, and when it changed; the row menu, *Change* and *Remove connector*,
+the projects it is granted to, "cms, roster", each linked to its site, one
+that does not ask for it muted, and when it changed; the row menu, *Change* and *Remove connector*,
 each asking for the unlock first. A click opens the sheet (`?connector=`):
 *Write-only*, said there and in the dialog rather than on every row; the
 whole base address, the header, when it changed; every project it concerns,

@@ -8,8 +8,7 @@ import { useData } from "@/components/data"
 import { CellText, DataTable, RowButton, RowMenu, RowMenuLink, type Column } from "@/components/data-table"
 import { DetailSheet, SheetFacts, SheetRecent, SheetSection, useSheet, type Fact } from "@/components/detail-sheet"
 import { FilterBar, useListState } from "@/components/filter-bar"
-import { TEXT_LINK } from "@/components/link"
-import { InternalLink } from "@/components/navigation"
+import { ProjectLink } from "@/components/project-link"
 import { Banner, Count, ErrorState, InlineEmpty, PageBody, PageHeader, Panel, PanelSkeleton, StateLabel } from "@/components/page"
 import { WriteButton, WriteMenuItem } from "@/components/unlock"
 import { useSecretsActions } from "@/components/secrets-actions"
@@ -19,7 +18,6 @@ import { ago, dateTime, fromNow } from "@/lib/format"
 import { historyUrl } from "@/lib/history"
 import { isPerson } from "@/lib/identity"
 import { FILTER_BAR_FROM, type ListSpec } from "@/lib/list-state"
-import { siteUrl } from "@/lib/pages"
 import {
   PERMISSION_WORDS,
   expiryCell,
@@ -113,7 +111,7 @@ function ProjectsCell({ reach, ended }: { reach: readonly Reach[]; ended: boolea
           <span key={one.slug} className={cn("inline-flex min-w-0 items-center gap-1", one.paused && "text-muted-foreground")}>
             {index > 0 && <span className="text-muted-foreground">,&nbsp;</span>}
             {one.paused && <PauseGlyph />}
-            <span className="truncate">{one.slug}</span>
+            <ProjectLink slug={one.slug} />
             {one.paused && <span className="sr-only"> (paused: {one.detail})</span>}
           </span>
         ))}
@@ -246,7 +244,6 @@ function TokenSheet({
   now,
   owner,
   rights,
-  known,
   onClose,
   onRevoke,
 }: {
@@ -255,7 +252,6 @@ function TokenSheet({
   /** The owner reads it; a person reads their own. */
   owner: boolean
   rights: Rights | null
-  known: ReadonlySet<string>
   onClose: () => void
   onRevoke: (token: TokenView) => void
 }) {
@@ -267,7 +263,7 @@ function TokenSheet({
       title={token?.label ?? ""}
       state={status === null ? undefined : <StateLabel tone={status.tone}>{status.label}</StateLabel>}
     >
-      {token !== null && <TokenDetails token={token} now={now} owner={owner} rights={rights} known={known} onRevoke={onRevoke} />}
+      {token !== null && <TokenDetails token={token} now={now} owner={owner} rights={rights} onRevoke={onRevoke} />}
     </DetailSheet>
   )
 }
@@ -277,14 +273,12 @@ function TokenDetails({
   now,
   owner,
   rights,
-  known,
   onRevoke,
 }: {
   token: TokenView
   now: number
   owner: boolean
   rights: Rights | null
-  known: ReadonlySet<string>
   onRevoke: (token: TokenView) => void
 }) {
   const reach = liveReach(token, rights?.roles ?? null)
@@ -317,13 +311,7 @@ function TokenDetails({
           <ul className="divide-y divide-divider">
             {reach.map(({ slug, detail, paused }) => (
               <li key={slug} className="flex min-h-9 items-center justify-between gap-3 py-1.5">
-                {known.has(slug) ? (
-                  <InternalLink href={siteUrl(slug)} className={cn(TEXT_LINK, "min-w-0 truncate")}>
-                    {slug}
-                  </InternalLink>
-                ) : (
-                  <span className="min-w-0 truncate">{slug}</span>
-                )}
+                <ProjectLink slug={slug} />
                 {detail !== null && (
                   <span className={cn("inline-flex shrink-0 items-center gap-1 text-xs", paused ? "text-muted-foreground" : "text-secondary-foreground")}>
                     {paused && <PauseGlyph />}
@@ -449,7 +437,6 @@ export function TokensPage() {
   const askRevoke = (token: TokenView) => setRevoking({ token, open: true, inProgress: false, error: "" })
 
   const projects = tokenProjects(snapshot?.sites ?? [], snapshot?.zone ?? null)
-  const known = new Set(snapshot?.sites.map((site) => site.slug) ?? [])
   const list = loaded.state === "ready" ? loaded.list : null
   const person = list?.member ?? null
   const owner = person === null
@@ -602,7 +589,6 @@ export function TokensPage() {
         now={serverNow}
         owner={owner}
         rights={opened === null ? null : rightsOf(opened)}
-        known={known}
         onClose={sheet.close}
         onRevoke={askRevoke}
       />

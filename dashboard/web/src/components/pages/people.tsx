@@ -24,13 +24,13 @@ import { FilterBar, useListState, type Facet } from "@/components/filter-bar"
 import { LegendEntry } from "@/components/legend"
 import { TEXT_LINK } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
+import { ProjectLink } from "@/components/project-link"
 import { Banner, Count, EmptyState, ErrorState, INPUT_DIALOG, InlineEmpty, PageBody, PageHeader, Panel, PanelSkeleton } from "@/components/page"
 import { WriteButton, WriteMenuItem } from "@/components/unlock"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { readPeople, readTokens, removeAccess, removePerson, setCreate } from "@/lib/api"
 import { ACCESS_UNREACHABLE, passwordExpiry, refusalText } from "@/lib/access"
 import { FILTER_BAR_FROM, narrowList, type ListSpec } from "@/lib/list-state"
-import { siteUrl } from "@/lib/pages"
 import {
   ENTRY_KINDS,
   ENTRY_WORDS,
@@ -83,15 +83,11 @@ function KindMark({ kind }: { kind: EntryKind }) {
   )
 }
 
-const LINK = cn(TEXT_LINK, "text-foreground")
-
 /** "calendar Admin", the role muted; a password access's project alone, its icon saying the rest. */
 function ProjectWord({ project, kind }: { project: EntryProject; kind: EntryKind }) {
   return (
     <span className="inline-flex min-w-0 items-baseline gap-1">
-      <InternalLink href={siteUrl(project.slug, "access")} className={cn(LINK, "truncate")}>
-        {project.slug}
-      </InternalLink>
+      <ProjectLink slug={project.slug} section="access" className="text-foreground" />
       {kind !== "password" && <span className="shrink-0 text-muted-foreground">{project.role}</span>}
     </span>
   )
@@ -379,9 +375,7 @@ function EntryProjects({ entry, now }: { entry: PeopleEntry; now: number }) {
         const expiry = password === null ? null : passwordExpiry(password, now)
         return (
           <li key={project.slug} className="flex min-h-9 items-center justify-between gap-3 py-1.5">
-            <InternalLink href={siteUrl(project.slug, "access")} className={cn(TEXT_LINK, "min-w-0 truncate")}>
-              {project.slug}
-            </InternalLink>
+            <ProjectLink slug={project.slug} section="access" />
             <span className="shrink-0 text-xs text-secondary-foreground">
               {project.role}
               {expiry !== null && <span className={expiry.tone === "attention" ? TONE_TEXT.attention : "text-muted-foreground"}>, {expiry.text}</span>}
