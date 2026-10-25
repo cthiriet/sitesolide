@@ -158,6 +158,9 @@ describe("a blank machine", () => {
       "kit deploy-steward.sh",
     ]);
 
+    // Served directly, the loopback rule is checked as it always was.
+    expect(b.machine.known.get("loopback")).toEqual(["loopback-table", "loopback-unit"]);
+
     // The portal's hash went before the portal's deploy, its account first.
     const portalRun = b.machine.calls.find((call) => call.tag === "setup:portal-password:run")!;
     expect(portalRun.input).toContain(`PASSWORD_HASH=${PORTAL_HASH}`);

@@ -90,7 +90,8 @@ export function computeFingerprint(salt: string, host: string, ip: string, agent
  * symptom shows in the dashboard, many page views for one visit. That is a
  * machine served through a Cloudflare Tunnel, whose peer is cloudflared on the
  * loopback: infra/tunnel/tunnel.caddy has Caddy take the visitor's address
- * from `Cf-Connecting-Ip` there, and there alone. Trusted from anywhere else,
+ * from `Cf-Connecting-Ip` there, from ::1 alone, which the loopback rule keeps
+ * to the connector (bin/cli/loopback.ts). Trusted from anywhere else,
  * that header is forged in one line of `curl`, and anyone's fingerprint would
  * be choosable; this module never reads it.
  */

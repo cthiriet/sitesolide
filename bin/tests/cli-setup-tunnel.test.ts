@@ -102,6 +102,13 @@ describe("a machine at home, behind a NAT", () => {
     expect(firewall.input).toContain(`for port in 22; do ufw allow`);
     expect(b.machine.calls.find((call) => call.tag === "setup:web-ports:run")!.input).toContain(`for port in 80 443; do ufw delete allow`);
 
+    // The loopback rule checked for the connector's line: a table laid before
+    // the tunnel lets any account speak from the address Caddy believes.
+    expect(b.machine.known.get("loopback")).toEqual(["loopback-table", "loopback-unit", "loopback-tunnel"]);
+    expect(b.machine.calls.find((call) => call.tag === "setup:loopback:check")!.input).toContain(
+      `nft list chain inet sitesolide_boucle output | grep -Fq "ip6 saddr ::1 tcp dport 443 meta skuid $uid accept"`,
+    );
+
     // The credentials went to the machine once, in the tunnel's run, and nowhere else.
     const carrying = b.machine.calls.filter((call) => call.input.includes(SECRET));
     expect(carrying.map((call) => call.tag)).toEqual(["setup:tunnel:run"]);

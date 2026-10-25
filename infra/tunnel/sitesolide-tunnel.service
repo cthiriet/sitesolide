@@ -27,15 +27,30 @@ LoadCredential=tunnel.json:/etc/cloudflared/tunnel.json
 Restart=always
 RestartSec=5
 
-# An account drawn for the run, which owns nothing on the machine: the
-# connector writes no file, it logs to the journal, and it reads its
-# configuration, 0644, and its credentials through systemd.
-DynamicUser=true
+# A static system account of its own, sitesolide-tunnel, with its own group,
+# no home and no login shell, made by the tunnel's step of setup before this
+# file is laid. It owns nothing on the machine: the connector writes no file,
+# it logs to the journal, and it reads its configuration, 0644, and its
+# credentials through systemd.
+#
+# NOT DynamicUser=, which this unit used to be: the loopback rule names this
+# account by its uid, the one account that may open a connection from ::1 to
+# Caddy's 443, where Caddy believes the visitor's address in Cf-Connecting-Ip
+# (bin/cli/loopback.ts). systemd draws a dynamic uid at each start, with
+# nothing to promise the same one twice, and the other way nftables tells a
+# service, its cgroup, changes id at each restart: 10365, then 12715,
+# measured on Debian 13 and systemd 257.
+User=sitesolide-tunnel
+Group=sitesolide-tunnel
+# What DynamicUser implied and no other line lays: no IPC object of the
+# account's outlives a run. ProtectSystem=strict, ProtectHome, PrivateTmp,
+# NoNewPrivileges and RestrictSUIDSGID are laid below already.
+RemoveIPC=yes
 UMask=0077
 
 # No capability at all: it opens connections out, to the edge, and one in
-# over the loopback, to Caddy's 443, and binds nothing but its metrics on
-# 127.0.0.1:20240, which the monitor reads.
+# over the loopback, to Caddy on [::1]:443, and binds nothing but its metrics
+# on 127.0.0.1:20240, which the monitor reads.
 NoNewPrivileges=true
 CapabilityBoundingSet=
 AmbientCapabilities=

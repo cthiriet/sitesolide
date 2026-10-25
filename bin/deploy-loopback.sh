@@ -3,7 +3,8 @@
 # The loopback rule: on the VM, only Caddy and root open a connection to the
 # ports of the services, 3000 to 3099, and to Caddy's administration API,
 # 2019. One exception: the dashboard towards the portal, for the guest
-# accesses.
+# accesses. Behind a Cloudflare Tunnel, only the tunnel's connector opens one
+# from ::1 to Caddy's 443, where Caddy believes the visitor's address.
 #
 #   bin/deploy-loopback.sh observe   counts and logs what would be refused, refusing nothing
 #   bin/deploy-loopback.sh state     what has been counted, and the journal's last lines
@@ -15,7 +16,8 @@
 # Caddy. Without this rule, any service of the machine would reach its port
 # without going through Caddy. Worse, it would reach Caddy's administration
 # API, which authenticates nobody: a configuration without forward_auth opens
-# every site of the portal there, a stop cuts the whole machine. See
+# every site of the portal there, a stop cuts the whole machine. Behind a
+# tunnel, any service would give Caddy any visitor's address. See
 # bin/cli/loopback.ts.
 #
 # What the gesture touches, and nothing else: the nftables table inet
@@ -28,8 +30,9 @@
 # THE SAFETY NET. Before closing, a systemd timer is armed to remove the table
 # two minutes later. It is only disarmed once these are verified: Caddy towards
 # each listening port, the refusal of any other account, the rule of the
-# administration API loaded in the kernel with Caddy alone reaching it, and each
-# site over HTTPS.
+# administration API loaded in the kernel with Caddy alone reaching it, behind
+# a tunnel the connector alone reaching Caddy from ::1, and each site over
+# HTTPS, through the tunnel when there is one.
 # Should this script die on the way or the ssh connection drop, the rule
 # withdraws on its own.
 #
@@ -104,6 +107,32 @@ CADDY_UID="$(ssh "$SITESOLIDE_SERVER" 'id -u caddy')"
 # script stops before having set anything.
 DASHBOARD_UID="$(ssh "$SITESOLIDE_SERVER" 'id -u site-dashboard')"
 PORTAL_PORT="$(cd "$REPO_ROOT" && bun -e 'import { PORTAL_PORT } from "./bin/cli/portal"; console.log(PORTAL_PORT)')"
+
+# Behind a Cloudflare Tunnel, the connector's uid, the one account that may
+# speak from ::1, where Caddy believes the visitor's address in
+# Cf-Connecting-Ip. The machine is behind one when Caddy's options for it are
+# laid, which is what makes Caddy believe the header: then they must be the
+# kit's, trusting ::1 alone, and the connector must run as its own account,
+# or the rule would cut every site from the Internet. Either one missing,
+# nothing is laid. The names are bin/cli/tunnel.ts's: CADDY_TUNNEL_FILE,
+# TUNNEL_KIT_FILES.caddy, TUNNEL_ACCOUNT and TUNNEL_UNIT.
+TUNNEL_CADDY=/etc/caddy/global.d/tunnel.caddy
+TUNNEL_ACCOUNT=sitesolide-tunnel
+TUNNEL_UID=""
+if ssh -n "$SITESOLIDE_SERVER" "test -f $TUNNEL_CADDY"; then
+  if ! ssh -n "$SITESOLIDE_SERVER" "cat $TUNNEL_CADDY" | cmp -s - "$REPO_ROOT/infra/tunnel/tunnel.caddy"; then
+    echo "$TUNNEL_CADDY is not this kit's: bring the tunnel up to date first, sitesolide upgrade" >&2
+    exit 1
+  fi
+  # SYSTEMD_NSS_DYNAMIC_BYPASS=1: the static account alone, never the dynamic
+  # one of the same name a unit from before it would run as.
+  TUNNEL_UID="$(ssh -n "$SITESOLIDE_SERVER" "SYSTEMD_NSS_DYNAMIC_BYPASS=1 id -u $TUNNEL_ACCOUNT" 2>/dev/null || true)"
+  running="$(ssh -n "$SITESOLIDE_SERVER" 'pid=$(systemctl show -p MainPID --value sitesolide-tunnel); [ "$pid" = 0 ] || stat -c %u /proc/$pid' || true)"
+  if [ -z "$TUNNEL_UID" ] || [ "$running" != "$TUNNEL_UID" ]; then
+    echo "the tunnel's connector does not run as $TUNNEL_ACCOUNT${running:+ (uid $running)}: bring the tunnel up to date first, sitesolide upgrade" >&2
+    exit 1
+  fi
+fi
 ADMIN_PORT="$(cd "$REPO_ROOT" && bun -e 'import { CADDY_ADMIN_PORT } from "./bin/cli/loopback"; console.log(CADDY_ADMIN_PORT)')"
 WORK="$(mktemp -d)"
 WORK_VM=""
@@ -113,13 +142,14 @@ on_exit() {
 }
 trap on_exit EXIT
 
-(cd "$REPO_ROOT" && CADDY_UID="$CADDY_UID" DASHBOARD_UID="$DASHBOARD_UID" MODE="$MODE" ADMIN_MODE="$ADMIN_MODE" bun -e '
+(cd "$REPO_ROOT" && CADDY_UID="$CADDY_UID" DASHBOARD_UID="$DASHBOARD_UID" MODE="$MODE" ADMIN_MODE="$ADMIN_MODE" TUNNEL_UID="$TUNNEL_UID" bun -e '
   import { loopbackRule } from "./bin/cli/loopback";
   process.stdout.write(loopbackRule(
     Number(process.env.CADDY_UID),
     process.env.MODE as "observe" | "close",
     Number(process.env.DASHBOARD_UID),
     process.env.ADMIN_MODE as "observe" | "close",
+    process.env.TUNNEL_UID === "" ? null : Number(process.env.TUNNEL_UID),
   ));
 ') > "$WORK/loopback.nft"
 # The two lines of the administration API as nft list table will return them, in
@@ -130,9 +160,18 @@ ADMIN_PATTERNS="$(cd "$REPO_ROOT" && CADDY_UID="$CADDY_UID" MODE="$ADMIN_MODE" b
   console.log(adminPatterns(Number(process.env.CADDY_UID), process.env.MODE as "observe" | "close").join("\n"));
 ')"
 [ "$(printf '%s\n' "$ADMIN_PATTERNS" | grep -c .)" = 2 ] || { echo "administration API patterns unreadable, nothing is set" >&2; exit 1; }
+# The tunnel's two lines, the same way, on a machine behind one.
+TUNNEL_PATTERNS=""
+if [ -n "$TUNNEL_UID" ]; then
+  TUNNEL_PATTERNS="$(cd "$REPO_ROOT" && TUNNEL_UID="$TUNNEL_UID" MODE="$MODE" bun -e '
+    import { tunnelPatterns } from "./bin/cli/loopback";
+    console.log(tunnelPatterns(Number(process.env.TUNNEL_UID), process.env.MODE as "observe" | "close").join("\n"));
+  ')"
+  [ "$(printf '%s\n' "$TUNNEL_PATTERNS" | grep -c .)" = 2 ] || { echo "tunnel patterns unreadable, nothing is set" >&2; exit 1; }
+fi
 sed "s|@NFT@|$NFT|g" "$REPO_ROOT/infra/loopback/sitesolide-loopback.service" > "$WORK/sitesolide-loopback.service"
 
-echo "-> rule ($MODE, administration API $ADMIN_MODE), Caddy uid $CADDY_UID, dashboard uid $DASHBOARD_UID"
+echo "-> rule ($MODE, administration API $ADMIN_MODE), Caddy uid $CADDY_UID, dashboard uid $DASHBOARD_UID${TUNNEL_UID:+, connector uid $TUNNEL_UID}"
 WORK_VM="$(ssh "$SITESOLIDE_SERVER" 'mktemp -d /tmp/loopback.XXXXXXXX')"
 rsync -a "$WORK/loopback.nft" "$WORK/sitesolide-loopback.service" "$SITESOLIDE_SERVER:$WORK_VM/"
 
@@ -188,9 +227,9 @@ fi
 # curl would report as 000, the very code of a refusal. $1 is an account, or
 # '#<uid>'. ssh -n: called inside a while loop reading a here-string, ssh would
 # otherwise swallow the rest of it, and every pair after the first would go
-# untested without a word.
+# untested without a word. $3, the address, 127.0.0.1 unless given.
 connects() {
-  ssh -n "$SITESOLIDE_SERVER" "sudo -u '$1' timeout 5 bash -c 'exec 3<>/dev/tcp/127.0.0.1/$2' >/dev/null 2>&1 && echo open || echo closed"
+  ssh -n "$SITESOLIDE_SERVER" "sudo -u '$1' timeout 5 bash -c 'exec 3<>/dev/tcp/${3:-127.0.0.1}/$2' >/dev/null 2>&1 && echo open || echo closed"
 }
 
 echo "-> Caddy towards each listening port, then any account"
@@ -268,6 +307,37 @@ if [ "$ADMIN_MODE" = close ] && { [ "$admin_other" != "000" ] || [ "$admin_dashb
 fi
 printf "   caddy %s, other %s, dashboard %s (expected for the last two %s)  %s\n" \
   "$admin_caddy" "$admin_other" "$admin_dashboard" "$expected_admin" "$verdict"
+
+if [ -n "$TUNNEL_UID" ]; then
+  echo "-> behind the tunnel: Caddy's 443 from ::1, the connector's alone"
+  verdict="ok"
+  previous=0
+  while IFS= read -r pattern; do
+    rank="$(printf '%s\n' "$LOADED" | grep -nE -e "$pattern" | head -1 | cut -d: -f1 || true)"
+    if [ -z "$rank" ] || [ "$rank" -le "$previous" ]; then
+      verdict="FAILED: rule missing or out of order"
+      FAILURES=$((FAILURES + 1))
+      break
+    fi
+    previous="$rank"
+  done <<< "$TUNNEL_PATTERNS"
+  printf "   rule loaded  %s\n" "$verdict"
+  # A TCP connection again: the connector's account from ::1; nobody and root
+  # refused there; and 127.0.0.1, the monitor's and the gatekeeper's, where
+  # Caddy believes no header, open to all as before.
+  connector="$(connects "$TUNNEL_ACCOUNT" 443 ::1)"
+  other="$(connects nobody 443 ::1)"
+  root="$(connects root 443 ::1)"
+  plain="$(connects nobody 443 127.0.0.1)"
+  verdict="ok"
+  if [ "$connector" != open ]; then verdict="FAILED: the connector no longer reaches Caddy, every site is cut"; FAILURES=$((FAILURES + 1)); fi
+  if [ "$MODE" = close ] && { [ "$other" != closed ] || [ "$root" != closed ]; }; then
+    verdict="FAILED: another account speaks from ::1"; FAILURES=$((FAILURES + 1))
+  fi
+  if [ "$plain" != open ]; then verdict="FAILED: 127.0.0.1:443 refused, the probes fail"; FAILURES=$((FAILURES + 1)); fi
+  printf "   ::1: connector %s, other %s, root %s (expected for the last two %s); 127.0.0.1: other %s  %s\n" \
+    "$connector" "$other" "$root" "$([ "$MODE" = close ] && echo closed || echo '(free)')" "$plain" "$verdict"
+fi
 
 echo "-> each site, over HTTPS"
 # The bare domain is the landing's, queried like any project only when it

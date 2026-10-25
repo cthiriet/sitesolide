@@ -16,6 +16,12 @@
  * `forward_auth` there, which opened all the portal's sites at once, or stopped
  * Caddy, and therefore every site on the machine. See CADDY_ADMIN_PORT.
  *
+ * Behind a Cloudflare Tunnel, one more: Caddy believes the visitor's address
+ * in `Cf-Connecting-Ip` from ::1 alone, where the connector reaches it, and
+ * the rule keeps ::1 to the connector. Without it, any service opened a
+ * connection from there with any address in that header, and was counted as
+ * that visitor. See TUNNEL_ORIGIN.
+ *
  * A separate nftables table, `inet` for IPv4 and IPv6 at once, which neither
  * ufw nor a Caddy reload touches. `oifname "lo"` holds there for both families,
  * and for any address of the machine: the kernel sends through the loopback
@@ -65,6 +71,35 @@ export const PROJECT_PORTS_FILE = "/etc/sitesolide-loopback-projects.nft";
 export const CADDY_ADMIN_PORT = 2019;
 
 /**
+ * Caddy's HTTPS, which the tunnel's connector reaches from TUNNEL_ORIGIN.
+ * From any other address it stays open to every account, as on a machine
+ * served directly: the monitor's and the gatekeeper's probes reach it on
+ * 127.0.0.1, where Caddy believes no header.
+ */
+export const CADDY_HTTPS_PORT = 443;
+
+/**
+ * Where the tunnel's connector reaches Caddy: ::1, the loopback's IPv6
+ * address, which nothing else on the machine uses to reach it. Caddy believes
+ * the visitor's address in Cf-Connecting-Ip from there alone
+ * (infra/tunnel/tunnel.caddy), and this rule refuses every other account,
+ * root included, a connection from there to its 443.
+ *
+ * Not 127.0.0.1, where the monitor's and the gatekeeper's probes reach Caddy,
+ * and any project's service can: Caddy cannot tell one account from another
+ * by an address they share, and believing the header there let a project's
+ * service open 127.0.0.1:443 with any address in it and be counted as that
+ * visitor, by the analytics and by the dashboard's limiter (measured on the
+ * test machine, 25 October 2026). Nor another address of 127.0.0.0/8: a
+ * connection to it still leaves from 127.0.0.1, as `ip route get` says.
+ *
+ * The loopback must therefore keep its IPv6, which Debian gives it: without
+ * ::1, the connector reaches no site. The tunnel's step of setup refuses a
+ * machine without it (bin/cli/tunnel.ts).
+ */
+export const TUNNEL_ORIGIN = "::1";
+
+/**
  * `observe` counts and logs what `close` would refuse, refusing nothing:
  * enough to know, before closing, whether a service reaches a port other than
  * its own.
@@ -79,6 +114,13 @@ export type LoopbackMode = "observe" | "close";
 function checkCaddyUid(caddyUid: number): void {
   if (!Number.isInteger(caddyUid) || caddyUid <= 0 || caddyUid >= 65534) {
     throw new Error(`unexpected uid for Caddy: ${caddyUid}`);
+  }
+}
+
+/** The connector's, read on the VM like Caddy's: a failed read must let nobody else through. */
+function checkTunnelUid(tunnelUid: number): void {
+  if (!Number.isInteger(tunnelUid) || tunnelUid <= 0 || tunnelUid >= 65534) {
+    throw new Error(`unexpected uid for the tunnel's connector: ${tunnelUid}`);
   }
 }
 
@@ -100,13 +142,30 @@ function othersVerdict(mode: LoopbackMode): string {
  * whole rule. Enough to observe it on its own: switching all of it to
  * `observe` would reopen the services' ports, already closed, for the duration
  * of the observation.
+ *
+ * `tunnelUid` is that of the tunnel's connector, TUNNEL_ACCOUNT in
+ * bin/cli/tunnel.ts, on a machine served through a Cloudflare Tunnel, and
+ * null on one served directly, whose rule stays what it was. It follows the
+ * mode of the whole rule.
  */
-export function loopbackRule(caddyUid: number, mode: LoopbackMode, dashboardUid: number, adminMode: LoopbackMode = mode): string {
+export function loopbackRule(
+  caddyUid: number,
+  mode: LoopbackMode,
+  dashboardUid: number,
+  adminMode: LoopbackMode = mode,
+  tunnelUid: number | null = null,
+): string {
   checkCaddyUid(caddyUid);
   // The same refusal for the dashboard, and one more: mistaken for Caddy, it
   // would receive every port without the rule saying so.
   if (!Number.isInteger(dashboardUid) || dashboardUid <= 0 || dashboardUid >= 65534 || dashboardUid === caddyUid) {
     throw new Error(`unexpected uid for the dashboard: ${dashboardUid}`);
+  }
+  // The connector's, mistaken for Caddy's or the dashboard's, would let that
+  // account speak from the address Caddy believes the header from.
+  if (tunnelUid !== null) {
+    checkTunnelUid(tunnelUid);
+    if (tunnelUid === caddyUid || tunnelUid === dashboardUid) throw new Error(`unexpected uid for the tunnel's connector: ${tunnelUid}`);
   }
 
   const ports = `${SERVICE_PORTS.first}-${SERVICE_PORTS.last}`;
@@ -151,6 +210,18 @@ export function loopbackRule(caddyUid: number, mode: LoopbackMode, dashboardUid:
     "\t\t# separate rules for a separate counter.",
     `\t\toifname "lo" tcp dport ${CADDY_ADMIN_PORT} meta skuid { 0, ${caddyUid} } accept`,
     `\t\toifname "lo" tcp dport ${CADDY_ADMIN_PORT} ct state new ${adminOthers}`,
+    ...(tunnelUid === null
+      ? []
+      : [
+          "",
+          "\t\t# Behind a Cloudflare Tunnel: Caddy believes the visitor's address in",
+          "\t\t# Cf-Connecting-Ip from ::1 alone, where the connector reaches it,",
+          "\t\t# and the connector alone opens a connection from there to its",
+          "\t\t# HTTPS. Nobody else, not even root. See TUNNEL_ORIGIN in",
+          "\t\t# bin/cli/loopback.ts.",
+          `\t\toifname "lo" ip6 saddr ${TUNNEL_ORIGIN} tcp dport ${CADDY_HTTPS_PORT} meta skuid ${tunnelUid} accept`,
+          `\t\toifname "lo" ip6 saddr ${TUNNEL_ORIGIN} tcp dport ${CADDY_HTTPS_PORT} ct state new ${others}`,
+        ]),
     "\t}",
     "}",
     "",
@@ -168,15 +239,29 @@ export function loopbackRule(caddyUid: number, mode: LoopbackMode, dashboardUid:
  */
 export function adminPatterns(caddyUid: number, mode: LoopbackMode): string[] {
   checkCaddyUid(caddyUid);
-  const counter = "counter( packets [0-9]+ bytes [0-9]+)?";
-  const verdict =
-    mode === "close"
-      ? `${counter} reject with tcp reset`
-      : `${counter} limit rate 30/minute( burst [0-9]+ packets)? log prefix "sitesolide-loopback: " flags skuid`;
   return [
     `oifname "lo" tcp dport ${CADDY_ADMIN_PORT} meta skuid \\{ 0, ${caddyUid} \\} accept$`,
-    `oifname "lo" tcp dport ${CADDY_ADMIN_PORT} ct state new ${verdict}$`,
+    `oifname "lo" tcp dport ${CADDY_ADMIN_PORT} ct state new ${verdictPattern(mode)}$`,
   ];
+}
+
+/**
+ * The tunnel's two lines, as adminPatterns gives the API's: what
+ * bin/deploy-loopback.sh looks for in the loaded rule on a machine served
+ * through a tunnel. `mode` is the whole rule's.
+ */
+export function tunnelPatterns(tunnelUid: number, mode: LoopbackMode): string[] {
+  checkTunnelUid(tunnelUid);
+  const from = `oifname "lo" ip6 saddr ${TUNNEL_ORIGIN} tcp dport ${CADDY_HTTPS_PORT}`;
+  return [`${from} meta skuid ${tunnelUid} accept$`, `${from} ct state new ${verdictPattern(mode)}$`];
+}
+
+/** The refusal of the others as written and as listed, with its counters and `limit`'s default burst. */
+function verdictPattern(mode: LoopbackMode): string {
+  const counter = "counter( packets [0-9]+ bytes [0-9]+)?";
+  return mode === "close"
+    ? `${counter} reject with tcp reset`
+    : `${counter} limit rate 30/minute( burst [0-9]+ packets)? log prefix "sitesolide-loopback: " flags skuid`;
 }
 
 /** A project as the set sees it: its manifest, and the uid of its system user read on the VM. */

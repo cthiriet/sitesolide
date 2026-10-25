@@ -4,17 +4,19 @@
 #
 # Behind the tunnel every request reaches Caddy from cloudflared, over the
 # loopback, and the visitor's address is in Cf-Connecting-Ip, which
-# Cloudflare's edge sets on every request it hands the tunnel. Trusting the
-# loopback, and that header from it alone, makes that address {client_ip},
-# which every generated block hands its app as X-Forwarded-For
-# (bin/cli/fragment.ts). Without it, every visitor reaches every app as
-# 127.0.0.1: one visitor in the analytics, and the dashboard's limiter of
-# failed attempts shared by the whole Internet.
+# Cloudflare's edge sets on every request it hands the tunnel. Trusting ::1,
+# where the connector reaches Caddy, and that header from it alone, makes that
+# address {client_ip}, which every generated block hands its app as
+# X-Forwarded-For (bin/cli/fragment.ts). Without it, every visitor reaches
+# every app as the loopback: one visitor in the analytics, and the dashboard's
+# limiter of failed attempts shared by the whole Internet.
 #
-# The header is believed from the loopback alone: a request from anywhere else
-# keeps its peer's address, whatever header it carries. What the loopback
-# lets through besides cloudflared is a process of the machine itself.
+# ::1 alone, never 127.0.0.1: the monitor's and the gatekeeper's probes reach
+# Caddy there, and so can any project's service, which would then be counted
+# as any visitor it names. The loopback rule keeps ::1 to the connector's
+# account (bin/cli/loopback.ts). A request from anywhere else keeps its peer's
+# address, whatever header it carries.
 servers {
-	trusted_proxies static 127.0.0.1/32 ::1/128
+	trusted_proxies static ::1/128
 	client_ip_headers Cf-Connecting-Ip
 }

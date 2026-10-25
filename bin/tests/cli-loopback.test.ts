@@ -6,23 +6,27 @@ import {
   type LoopbackMode,
   adminPatterns,
   CADDY_ADMIN_PORT,
+  CADDY_HTTPS_PORT,
   loopbackRule,
   LOOPBACK_TABLE,
   PROJECT_PORTS_SET,
   projectPortPairs,
   projectPortsFile,
   reachesOwnPorts,
+  TUNNEL_ORIGIN,
+  tunnelPatterns,
 } from "../cli/loopback";
 import { SERVICE_PORTS, servicesOf, type Manifest } from "../cli/manifest";
 import { PORTAL_PORT } from "../cli/portal";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 
-/** uid 997 for caddy, as on a Debian; 1022 for the dashboard; 1500 any other; 1600 a project with several services. */
+/** uid 997 for caddy, as on a Debian; 1022 for the dashboard; 1500 any other; 1600 a project with several services; 987 the tunnel's connector. */
 const CADDY = 997;
 const DASHBOARD = 1022;
 const OTHER = 1500;
 const PROJECT = 1600;
+const TUNNEL = 987;
 const NOBODY = 65534;
 
 /** A project with a front, an API and an internal worker. */
@@ -52,18 +56,20 @@ interface Issue {
  * verdict decides, a rule that only counts and logs lets it continue, and the
  * `accept` policy settles it last. Only reads the grammar that loopbackRule
  * writes, and throws on any other line: a rule it skipped would make the test
- * green without checking anything.
+ * green without checking anything. `from` is the connection's source, which
+ * only the tunnel's lines look at.
  */
-function walk(rule: string, uid: number, port: number, pairs: [number, number][] = PROJECT_PAIRS): Issue {
+function walk(rule: string, uid: number, port: number, pairs: [number, number][] = PROJECT_PAIRS, from = "127.0.0.1"): Issue {
   let logged = false;
   for (const line of rulesOf(rule)) {
     if (line === `oifname "lo" tcp dport . meta skuid @${PROJECT_PORTS_SET} accept`) {
       if (pairs.some(([p, u]) => p === port && u === uid)) return { verdict: "accepted", logged };
       continue;
     }
-    const m = line.match(/^oifname "lo" tcp dport (\d+)(?:-(\d+))?(?: meta skuid (?:\{ ([\d, ]+) \}|(\d+)))?(?: ct state new)? (.+)$/);
+    const m = line.match(/^oifname "lo"(?: ip6 saddr (\S+))? tcp dport (\d+)(?:-(\d+))?(?: meta skuid (?:\{ ([\d, ]+) \}|(\d+)))?(?: ct state new)? (.+)$/);
     if (m === null) throw new Error(`unreadable rule: ${line}`);
-    const [, first, last, set, single, action] = m;
+    const [, source, first, last, set, single, action] = m;
+    if (source !== undefined && source !== from) continue;
     if (port < Number(first) || port > Number(last ?? first)) continue;
     const uids = set?.split(",").map((u) => Number(u.trim())) ?? (single === undefined ? null : [Number(single)]);
     if (uids !== null && !uids.includes(uid)) continue;
@@ -291,6 +297,81 @@ describe("the loopback rule", () => {
   });
 });
 
+describe("behind a tunnel", () => {
+  test("a machine served directly gets the rule it had, with nothing of the tunnel", () => {
+    for (const mode of ["close", "observe"] as const) {
+      const rule = loopbackRule(CADDY, mode, DASHBOARD);
+      expect(rule).toBe(loopbackRule(CADDY, mode, DASHBOARD, mode, null));
+      expect(rule).not.toContain(`dport ${CADDY_HTTPS_PORT}`);
+      expect(rule).not.toContain("saddr");
+    }
+  });
+
+  test.each(["close", "observe"] as const)("%s: from ::1 to Caddy's 443, the connector alone; from 127.0.0.1, everyone as before", (mode: LoopbackMode) => {
+    const rule = loopbackRule(CADDY, mode, DASHBOARD, mode, TUNNEL);
+    expect(rule).toInclude(
+      `\t\toifname "lo" ip6 saddr ::1 tcp dport 443 meta skuid ${TUNNEL} accept\n\t\toifname "lo" ip6 saddr ::1 tcp dport 443 ct state new counter `,
+    );
+    expect(rulesOf(rule)).toHaveLength(8);
+    const allowed: Issue = { verdict: "accepted", logged: false };
+    const other: Issue = mode === "close" ? { verdict: "refused", logged: false } : { verdict: "accepted", logged: true };
+    const expected: [uid: number, port: number, from: string, issue: Issue][] = [
+      [TUNNEL, CADDY_HTTPS_PORT, TUNNEL_ORIGIN, allowed],
+      // Nobody else, root and Caddy included: nothing of theirs uses ::1.
+      [0, CADDY_HTTPS_PORT, TUNNEL_ORIGIN, other],
+      [CADDY, CADDY_HTTPS_PORT, TUNNEL_ORIGIN, other],
+      [DASHBOARD, CADDY_HTTPS_PORT, TUNNEL_ORIGIN, other],
+      [PROJECT, CADDY_HTTPS_PORT, TUNNEL_ORIGIN, other],
+      [OTHER, CADDY_HTTPS_PORT, TUNNEL_ORIGIN, other],
+      [NOBODY, CADDY_HTTPS_PORT, TUNNEL_ORIGIN, other],
+      // 127.0.0.1, where Caddy believes no header: the monitor's and the
+      // gatekeeper's probes, and anyone's, as on a machine served directly.
+      [OTHER, CADDY_HTTPS_PORT, "127.0.0.1", allowed],
+      [PROJECT, CADDY_HTTPS_PORT, "127.0.0.1", allowed],
+      [TUNNEL, CADDY_HTTPS_PORT, "127.0.0.1", allowed],
+      // ::1 to any other port: the rule of before.
+      [OTHER, 8443, TUNNEL_ORIGIN, allowed],
+      [OTHER, SERVICE_PORTS.first, TUNNEL_ORIGIN, other],
+      // The connector is no exception elsewhere.
+      [TUNNEL, SERVICE_PORTS.first, "127.0.0.1", other],
+      [TUNNEL, CADDY_ADMIN_PORT, "127.0.0.1", other],
+      [TUNNEL, PORTAL_PORT, "127.0.0.1", other],
+    ];
+    for (const [uid, port, from, issue] of expected) {
+      expect({ uid, port, from, issue: walk(rule, uid, port, PROJECT_PAIRS, from) }).toEqual({ uid, port, from, issue });
+    }
+    // The rest walks as without the tunnel.
+    expect(walk(rule, OTHER, SERVICE_PORTS.first)).toEqual(walk(loopbackRule(CADDY, mode, DASHBOARD), OTHER, SERVICE_PORTS.first));
+    expect(walk(rule, CADDY, CADDY_ADMIN_PORT)).toEqual(allowed);
+  });
+
+  test("the check's patterns recognise the tunnel's lines, as written and as nft list table renders them, for this uid and mode alone", () => {
+    for (const mode of ["close", "observe"] as const) {
+      const found = ranks(tunnelPatterns(TUNNEL, mode), loopbackRule(CADDY, mode, DASHBOARD, mode, TUNNEL));
+      expect(found.every((index) => index >= 0)).toBe(true);
+      expect(found[0]!).toBeLessThan(found[1]!);
+    }
+    expect(ranks(tunnelPatterns(TUNNEL, "close"), loopbackRule(CADDY, "observe", DASHBOARD, "observe", TUNNEL))[1]).toBe(-1);
+    expect(ranks(tunnelPatterns(TUNNEL + 1, "close"), loopbackRule(CADDY, "close", DASHBOARD, "close", TUNNEL))[0]).toBe(-1);
+    expect(ranks(tunnelPatterns(TUNNEL, "close"), loopbackRule(CADDY, "close", DASHBOARD)).every((index) => index === -1)).toBe(true);
+    // Recorded on the test machine, nftables 1.1.3 on Debian 13.
+    const listed = [
+      '\t\toifname "lo" ip6 saddr ::1 tcp dport 443 meta skuid 987 accept',
+      '\t\toifname "lo" ip6 saddr ::1 tcp dport 443 ct state new counter packets 1 bytes 80 limit rate 30/minute burst 5 packets log prefix "sitesolide-loopback: " flags skuid',
+      '\t\toifname "lo" ip6 saddr ::1 tcp dport 443 ct state new counter packets 1 bytes 80 reject with tcp reset',
+    ];
+    expect(ranks(tunnelPatterns(TUNNEL, "observe"), listed.slice(0, 2).join("\n"))).toEqual([0, 1]);
+    expect(ranks(tunnelPatterns(TUNNEL, "close"), [listed[0], listed[2]].join("\n"))).toEqual([0, 1]);
+  });
+
+  test("a connector uid read wrong is refused, Caddy's and the dashboard's included", () => {
+    for (const uid of [0, -1, Number.NaN, 1.5, 65534, 70000, CADDY, DASHBOARD]) {
+      expect(() => loopbackRule(CADDY, "close", DASHBOARD, "close", uid)).toThrow(/tunnel's connector/);
+    }
+    for (const uid of [0, -1, Number.NaN, 65534]) expect(() => tunnelPatterns(uid, "close")).toThrow();
+  });
+});
+
 /**
  * The rule in a real Linux kernel, a container on the workstation: nothing is
  * tried on the VM. Opt-in, like the VM tests, because Docker and the network
@@ -300,7 +381,7 @@ describe("the loopback rule", () => {
  */
 const DOCKER = Bun.which("docker");
 describe.skipIf(process.env.LOOPBACK_TEST !== "1" || DOCKER === null)("in a Linux kernel", () => {
-  function container(mode: LoopbackMode, adminMode: LoopbackMode = mode): { code: number; output: string } {
+  function container(mode: LoopbackMode, adminMode: LoopbackMode = mode, tunnelUid: number | null = null): { code: number; output: string } {
     // The admin API listens on both of its loopbacks and on the container's
     // address: a future configuration could change Caddy's one, and the kernel
     // routes through lo what a process sends to its own address.
@@ -311,6 +392,7 @@ adduser -D -u ${CADDY} caddy
 adduser -D -u ${DASHBOARD} dashboard
 adduser -D -u ${OTHER} other
 adduser -D -u ${PROJECT} project
+adduser -D -u ${TUNNEL} tunnel
 mkdir -p /srv/www && echo ok > /srv/www/index.html
 IP=$(ip -4 addr show dev eth0 | awk '/inet /{print $2; exit}' | cut -d/ -f1)
 [ -n "$IP" ]
@@ -323,8 +405,10 @@ httpd -p [::1]:3043 -h /srv/www
 httpd -p 127.0.0.1:${CADDY_ADMIN_PORT} -h /srv/www
 httpd -p [::1]:${CADDY_ADMIN_PORT} -h /srv/www
 httpd -p $IP:${CADDY_ADMIN_PORT} -h /srv/www
+httpd -p 127.0.0.1:${CADDY_HTTPS_PORT} -h /srv/www
+httpd -p [::1]:${CADDY_HTTPS_PORT} -h /srv/www
 cat > /rule.nft <<'RULE'
-${loopbackRule(CADDY, mode, DASHBOARD, adminMode)}
+${loopbackRule(CADDY, mode, DASHBOARD, adminMode, tunnelUid)}
 RULE
 nft -f /rule.nft
 nft -f /rule.nft
@@ -346,6 +430,13 @@ for target in "127.0.0.1" "[::1]" "$IP"; do
   echo "other:admin:$family=$(code other "http://$target:${CADDY_ADMIN_PORT}/")"
   echo "dashboard:admin:$family=$(code dashboard "http://$target:${CADDY_ADMIN_PORT}/")"
 done
+# Caddy's HTTPS, from ::1 and from 127.0.0.1: the tunnel's lines, when laid.
+for who in tunnel caddy other project dashboard; do
+  echo "$who:https:v6=$(code $who 'http://[::1]:${CADDY_HTTPS_PORT}/')"
+  echo "$who:https:v4=$(code $who http://127.0.0.1:${CADDY_HTTPS_PORT}/)"
+done
+echo "root:https:v6=$(root 'http://[::1]:${CADDY_HTTPS_PORT}/')"
+echo "root:https:v4=$(root http://127.0.0.1:${CADDY_HTTPS_PORT}/)"
 echo "--- list"
 nft list table inet ${LOOPBACK_TABLE}
 echo "--- end"
@@ -415,6 +506,30 @@ echo "project:3052:refilled=$(code project http://127.0.0.1:3052/)"
     const found = ranks(adminPatterns(CADDY, "close"), list(output));
     expect(found.every((index) => index >= 0)).toBe(true);
     expect(found[0]!).toBeLessThan(found[1]!);
+    // Served directly, Caddy's 443 stays everyone's, from either loopback.
+    for (const who of ["root", "tunnel", "caddy", "other", "project", "dashboard"]) {
+      expect(output).toInclude(`${who}:https:v6=200`);
+      expect(output).toInclude(`${who}:https:v4=200`);
+    }
+  }, 120_000);
+
+  test("behind a tunnel: Caddy's 443 from ::1 to the connector alone, from 127.0.0.1 to all, the rest as served directly", () => {
+    const { code, output } = container("close", "close", TUNNEL);
+    expect(code).toBe(0);
+    expect(output).toInclude("tunnel:https:v6=200");
+    for (const who of ["root", "caddy", "other", "project", "dashboard"]) expect(output).toInclude(`${who}:https:v6=000`);
+    for (const who of ["root", "tunnel", "caddy", "other", "project", "dashboard"]) expect(output).toInclude(`${who}:https:v4=200`);
+    expect(output).toInclude("caddy:3022=200");
+    expect(output).toInclude("other:3022=000");
+    expect(output).toInclude("dashboard:portal=200");
+    expect(output).toInclude("project:3052=200");
+    for (const family of ["v4", "v6", "ip"]) expect(output).toInclude(`other:admin:${family}=000`);
+    // What bin/deploy-loopback.sh looks for, both blocks, as the kernel lists them.
+    for (const patterns of [adminPatterns(CADDY, "close"), tunnelPatterns(TUNNEL, "close")]) {
+      const found = ranks(patterns, list(output));
+      expect(found.every((index) => index >= 0)).toBe(true);
+      expect(found[0]!).toBeLessThan(found[1]!);
+    }
   }, 120_000);
 
   test("observe: nobody is refused, the others are counted", () => {

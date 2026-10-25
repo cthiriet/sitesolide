@@ -8,15 +8,16 @@
  *              made with the zone's Cloudflare token, the one Caddy holds
  *   firewall   ssh alone: nothing reaches 80 nor 443 but through the tunnel
  *   tunnel     cloudflared from Cloudflare's repository, its configuration, its
- *              credentials, infra/tunnel/sitesolide-tunnel.service, and a
- *              connection to the edge
- *   Caddy      the loopback trusted for the visitor's address,
- *              infra/tunnel/tunnel.caddy
+ *              credentials, its account, infra/tunnel/sitesolide-tunnel.service,
+ *              and a connection to the edge
+ *   Caddy      ::1 trusted for the visitor's address, infra/tunnel/tunnel.caddy
  *
  * Caddy goes on as everywhere else: the zone's wildcard through the DNS-01
  * challenge, which needs no port open, and every site on its 443. cloudflared
- * hands it each request over the loopback, with the name asked as SNI, so
- * that Caddy picks the site and its certificate exactly as for a visitor.
+ * hands it each request over the loopback, from ::1, with the name asked as
+ * SNI, so that Caddy picks the site and its certificate exactly as for a
+ * visitor. The loopback rule keeps ::1 to the connector: see TUNNEL_ORIGIN in
+ * bin/cli/loopback.ts.
  *
  * THE TUNNEL IS ITS OWNER'S TO CREATE. `cloudflared tunnel login`, then
  * `cloudflared tunnel create <name>`, on the workstation: the second writes the
@@ -44,6 +45,7 @@
  * Pure: returns text, touches nothing. setup sends it (bin/cli/setup.ts).
  */
 import { APT, machineCheck, runScript } from "./harden";
+import { CADDY_HTTPS_PORT, LOOPBACK_TABLE, TUNNEL_ORIGIN } from "./loopback";
 import type { Condition } from "./steps";
 
 export const TUNNEL_FOLDER = "/etc/cloudflared";
@@ -51,6 +53,11 @@ export const TUNNEL_CONFIG = `${TUNNEL_FOLDER}/config.yml`;
 export const TUNNEL_CREDENTIALS = `${TUNNEL_FOLDER}/tunnel.json`;
 export const TUNNEL_UNIT = "sitesolide-tunnel";
 export const TUNNEL_UNIT_FILE = `/etc/systemd/system/${TUNNEL_UNIT}.service`;
+/**
+ * The connector's account, a static one that the loopback rule names by its
+ * uid (bin/cli/loopback.ts). Made by the step before the unit that names it.
+ */
+export const TUNNEL_ACCOUNT = "sitesolide-tunnel";
 /** Caddy's global options for the tunnel, which the Caddyfile imports by glob. */
 export const CADDY_TUNNEL_FILE = "/etc/caddy/global.d/tunnel.caddy";
 /**
@@ -151,14 +158,14 @@ export function tunnelTarget(id: string): string {
  *
  * `matchSNItoHost` sends the name asked as SNI, which Caddy picks the site and
  * its certificate by. `noTLSVerify`, because the hop never leaves the machine:
- * cloudflared to 127.0.0.1, where only Caddy listens on 443. Verifying would
+ * cloudflared to ::1, where only Caddy listens on 443. Verifying would
  * add nothing a visitor sees, and would turn a renewal that failed into every
  * site down at the certificate's expiry, which the monitor already warns of
  * fourteen days ahead, reading the certificate on that same loopback.
  */
 export function tunnelConfig(zone: string, id: string): string {
   if (!TUNNEL_ID.test(id)) throw new Error(`not a tunnel's id: ${JSON.stringify(id)}`);
-  const origin = ["    service: https://127.0.0.1:443", "    originRequest:", "      matchSNItoHost: true", "      noTLSVerify: true"];
+  const origin = [`    service: https://[${TUNNEL_ORIGIN}]:${CADDY_HTTPS_PORT}`, "    originRequest:", "      matchSNItoHost: true", "      noTLSVerify: true"];
   return [
     "# Laid by sitesolide setup (bin/cli/tunnel.ts): every name of the zone goes to",
     "# Caddy on the loopback, any other answers 404. See docs/tunnel.md.",
@@ -191,21 +198,37 @@ function namesTunnel(path: string, id: string): string {
   return `grep -Eq '"TunnelID"[[:space:]]*:[[:space:]]*"${id}"' ${path}`;
 }
 
+/**
+ * The account's uid, the static account alone: while a unit with
+ * DynamicUser= runs, its dynamic account bears this same name, and the bypass
+ * keeps id and useradd from taking one for the other (bin/deploy-monitor.sh).
+ */
+export const TUNNEL_ACCOUNT_UID = `SYSTEMD_NSS_DYNAMIC_BYPASS=1 id -u ${TUNNEL_ACCOUNT}`;
+
+/** ::1 on the loopback, in the kernel's own list of its IPv6 addresses. */
+const LOOPBACK_IPV6 = "grep -Eq '^0{31}1 .* lo$' /proc/net/if_inet6";
+
+/** The connector runs as its account: the uid the loopback rule lets through. */
+const RUNS_AS_ACCOUNT = `pid=$(systemctl show -p MainPID --value ${TUNNEL_UNIT}) && [ "$pid" != 0 ] && [ "$(stat -c %u /proc/$pid)" = "$(${TUNNEL_ACCOUNT_UID})" ]`;
+
 export type TunnelFiles = { zone: string; id: string; unit: string; caddy: string };
 
 /** Everything the tunnel step leaves on the machine, condition by condition. */
 export function tunnelConditions(files: TunnelFiles): Condition[] {
   return [
+    { label: "loopback-ipv6", test: LOOPBACK_IPV6 },
     { label: "cloudflared-package", test: "dpkg-query -W -f='${Status}' cloudflared | grep -q 'ok installed'" },
     { label: "tunnel-credentials", test: namesTunnel(TUNNEL_CREDENTIALS, files.id) },
     { label: "tunnel-credentials-permissions", test: `[ "$(stat -c '%U:%G %a' ${TUNNEL_CREDENTIALS})" = 'root:root 600' ]` },
     ...sameFile("tunnel-config", TUNNEL_CONFIG, tunnelConfig(files.zone, files.id), "644"),
+    { label: "tunnel-account", test: `${TUNNEL_ACCOUNT_UID} >/dev/null 2>&1` },
     ...sameFile("tunnel-unit", TUNNEL_UNIT_FILE, files.unit, "644"),
     ...sameFile("tunnel-caddy", CADDY_TUNNEL_FILE, files.caddy, "644"),
     ...sameFile("tunnel-upgrades", TUNNEL_UPGRADES, TUNNEL_UPGRADES_CONTENT, "644"),
     ...sameFile("tunnel-after-upgrade", TUNNEL_AFTER_UPGRADE, TUNNEL_AFTER_UPGRADE_CONTENT, "755"),
     { label: "tunnel-enabled", test: `systemctl is-enabled --quiet ${TUNNEL_UNIT}` },
     { label: "tunnel-active", test: `systemctl is-active --quiet ${TUNNEL_UNIT}` },
+    { label: "tunnel-as-account", test: RUNS_AS_ACCOUNT },
     { label: "tunnel-ready", test: `curl -fsS --max-time 5 http://${TUNNEL_METRICS}/ready` },
     // A connector of the package's own, laid by `cloudflared service install`,
     // reading the configuration this step rewrites.
@@ -222,6 +245,7 @@ export const TUNNEL_SAID = {
   installed: "tunnel: cloudflared installed",
   credentials: "tunnel: credentials laid",
   adopted: "tunnel: credentials taken from",
+  account: `tunnel: account ${TUNNEL_ACCOUNT} created`,
   started: "tunnel: connector started",
   caddy: "tunnel: Caddy reloaded with it",
   second: "tunnel: the package's own connector stopped",
@@ -284,6 +308,10 @@ case "$changed" in *credentials*) echo "${TUNNEL_SAID.credentials}" ;; esac`;
   return runScript(
     "setup:tunnel:run",
     `
+if ! ${LOOPBACK_IPV6} 2>/dev/null; then
+  echo "tunnel: the loopback has no ::1, where the connector reaches Caddy: IPv6 is off on lo (net.ipv6.conf.lo.disable_ipv6, or ipv6.disable on the kernel's command line)" >&2
+  exit 1
+fi
 if ! dpkg-query -W -f='\${Status}' cloudflared 2>/dev/null | grep -q 'ok installed'; then
   install -d -m 0755 /usr/share/keyrings
   curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
@@ -296,10 +324,16 @@ install -d -m 0755 -o root -g root ${TUNNEL_FOLDER}
 changed=""
 ${credentialsPart}
 ${layFile(TUNNEL_CONFIG, "644", tunnelConfig(files.zone, id), "CONFIG", "config")}
+# The account before the unit that names it: its own group, no home, no shell.
+if ! ${TUNNEL_ACCOUNT_UID} >/dev/null 2>&1; then
+  SYSTEMD_NSS_DYNAMIC_BYPASS=1 useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ${TUNNEL_ACCOUNT}
+  changed="$changed account"
+  echo "${TUNNEL_SAID.account}"
+fi
 ${layFile(TUNNEL_UNIT_FILE, "644", files.unit, "UNIT", "unit")}
 case "$changed" in *unit*) systemctl daemon-reload ;; esac
 systemctl enable ${TUNNEL_UNIT} >/dev/null 2>&1
-if [ -n "$changed" ] || ! systemctl is-active --quiet ${TUNNEL_UNIT}; then
+if [ -n "$changed" ] || ! systemctl is-active --quiet ${TUNNEL_UNIT} || ! { ${RUNS_AS_ACCOUNT}; }; then
   if ! systemctl restart ${TUNNEL_UNIT}; then
     echo "tunnel: the connector did not start" >&2
     journalctl -u ${TUNNEL_UNIT} -n 15 --no-pager >&2 || true
@@ -341,4 +375,14 @@ fi
 [ -z "$previous" ] || rm -f "$previous"
 `,
   );
+}
+
+/**
+ * A test for sh: the loaded table lets the connector's account, as it is now,
+ * reach Caddy from ::1. setup's check of the loopback rule on a machine
+ * served through a tunnel, so that a run of setup lays the rule again over a
+ * table laid before the tunnel, or before its account.
+ */
+export function tunnelRuleLoaded(): string {
+  return `uid=$(${TUNNEL_ACCOUNT_UID}) && nft list chain inet ${LOOPBACK_TABLE} output | grep -Fq "ip6 saddr ${TUNNEL_ORIGIN} tcp dport ${CADDY_HTTPS_PORT} meta skuid $uid accept"`;
 }

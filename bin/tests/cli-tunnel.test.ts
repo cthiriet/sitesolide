@@ -19,12 +19,15 @@ import {
   TUNNEL_KIT_FILES,
   TUNNEL_METRICS,
   TUNNEL_UNIT,
+  TUNNEL_UNIT_FILE,
+  TUNNEL_ACCOUNT,
   TUNNEL_AFTER_UPGRADE,
   TUNNEL_AFTER_UPGRADE_CONTENT,
   TUNNEL_UPGRADES,
   TUNNEL_UPGRADES_CONTENT,
   type TunnelFiles,
 } from "../cli/tunnel";
+import { TUNNEL_ORIGIN } from "../cli/loopback";
 
 /**
  * A machine served through a Cloudflare Tunnel, bin/cli/tunnel.ts: the
@@ -78,12 +81,16 @@ describe("the tunnel's credentials", () => {
 });
 
 describe("the connector's configuration", () => {
-  test("the zone and its wildcard go to Caddy on the loopback, with their own name as SNI; anything else 404", () => {
+  test("the zone and its wildcard go to Caddy on ::1, with their own name as SNI; anything else 404", () => {
     const config = tunnelConfig(ZONE, ID);
     expect(config).toContain(`tunnel: ${ID}\n`);
     expect(config).toContain(`metrics: ${TUNNEL_METRICS}\n`);
-    expect(config).toContain(`  - hostname: ${ZONE}\n    service: https://127.0.0.1:443\n    originRequest:\n      matchSNItoHost: true\n      noTLSVerify: true\n`);
-    expect(config).toContain(`  - hostname: "*.${ZONE}"\n    service: https://127.0.0.1:443\n`);
+    // ::1, the one address Caddy believes Cf-Connecting-Ip from, and the
+    // loopback rule keeps to the connector: never 127.0.0.1, which everyone uses.
+    expect(TUNNEL_ORIGIN).toBe("::1");
+    expect(config).toContain(`  - hostname: ${ZONE}\n    service: https://[::1]:443\n    originRequest:\n      matchSNItoHost: true\n      noTLSVerify: true\n`);
+    expect(config).toContain(`  - hostname: "*.${ZONE}"\n    service: https://[::1]:443\n`);
+    expect(config).not.toContain("127.0.0.1:443");
     expect(config.trimEnd().endsWith("  - service: http_status:404")).toBe(true);
     // The credentials are the unit's to hand over, from systemd's copy.
     expect(config).not.toContain("credentials-file");
@@ -139,6 +146,40 @@ describe("the step's run", () => {
     expect(script).toContain(`if [ -n "$previous" ]; then mv -f "$previous" ${CADDY_TUNNEL_FILE}; else rm -f ${CADDY_TUNNEL_FILE}; fi`);
   });
 
+  test("a loopback without ::1 is refused before anything; the account is made before the unit that names it", () => {
+    const script = tunnelRun(files(), null);
+    const ipv6 = script.indexOf("/proc/net/if_inet6");
+    expect(ipv6).toBeGreaterThan(0);
+    expect(ipv6).toBeLessThan(script.indexOf("dpkg-query"));
+    // The static account alone: a unit from before it runs as a dynamic one
+    // of the same name, which id and useradd would otherwise take for it.
+    const account = script.indexOf(`SYSTEMD_NSS_DYNAMIC_BYPASS=1 useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin ${TUNNEL_ACCOUNT}`);
+    expect(account).toBeGreaterThan(0);
+    expect(account).toBeLessThan(script.indexOf(`mv -f "$next" ${TUNNEL_UNIT_FILE}`));
+    // Restarted until it runs as that account, whose uid the loopback rule names.
+    expect(script).toContain(`|| ! { pid=$(systemctl show -p MainPID --value ${TUNNEL_UNIT}) && [ "$pid" != 0 ] && [ "$(stat -c %u /proc/$pid)" = "$(SYSTEMD_NSS_DYNAMIC_BYPASS=1 id -u ${TUNNEL_ACCOUNT})" ]; }; then`);
+    expect(Bun.spawnSync(["sh", "-n"], { stdin: new TextEncoder().encode(script), stderr: "pipe" }).exitCode).toBe(0);
+  });
+
+  test("::1 is read in the kernel's list of IPv6 addresses, as Debian 13 writes it", () => {
+    const test = tunnelConditions(files()).find((condition) => condition.label === "loopback-ipv6")!.test;
+    const folder = mkdtempSync(join(tmpdir(), "tunnel-ipv6-"));
+    try {
+      // Recorded on the test machine, Debian 13 on arm64; the second without ::1.
+      const lists = {
+        with: "00000000000000000000000000000001 01 80 10 80       lo\nfe80000000000000505555fffeb38da2 02 40 20 80     eth0\n",
+        without: "fe80000000000000505555fffeb38da2 02 40 20 80     eth0\n",
+      };
+      const verdicts = Object.entries(lists).map(([name, text]) => {
+        writeFileSync(join(folder, name), text);
+        return [name, Bun.spawnSync(["sh", "-c", test.replace("/proc/net/if_inet6", join(folder, name))]).exitCode];
+      });
+      expect(Object.fromEntries(verdicts)).toEqual({ with: 0, without: 1 });
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
   test("every file is replaced whole or not at all, and only when its text differs", () => {
     const script = tunnelRun(files(), null);
     for (const path of [TUNNEL_CONFIG, "/etc/systemd/system/sitesolide-tunnel.service", CADDY_TUNNEL_FILE]) {
@@ -149,11 +190,13 @@ describe("the step's run", () => {
   test("the check reads the connector connected, its files the kit's, and no second connector", () => {
     const labels = tunnelConditions(files()).map((condition) => condition.label);
     expect(labels).toEqual([
+      "loopback-ipv6",
       "cloudflared-package",
       "tunnel-credentials",
       "tunnel-credentials-permissions",
       "tunnel-config",
       "tunnel-config-permissions",
+      "tunnel-account",
       "tunnel-unit",
       "tunnel-unit-permissions",
       "tunnel-caddy",
@@ -164,6 +207,7 @@ describe("the step's run", () => {
       "tunnel-after-upgrade-permissions",
       "tunnel-enabled",
       "tunnel-active",
+      "tunnel-as-account",
       "tunnel-ready",
       "no-second-connector",
     ]);
@@ -247,10 +291,14 @@ describe("the kit's files", () => {
   const unit = readFileSync(join(REPO_ROOT, TUNNEL_KIT_FILES.unit), "utf8");
   const caddy = readFileSync(join(REPO_ROOT, TUNNEL_KIT_FILES.caddy), "utf8");
 
-  test("the unit runs the configuration setup lays, its credentials handed over by systemd, as nobody in particular", () => {
+  test("the unit runs the configuration setup lays, its credentials handed over by systemd, as its own account", () => {
     expect(unit).toContain(`ExecStart=/usr/bin/cloudflared --no-autoupdate --config ${TUNNEL_CONFIG} tunnel run --credentials-file %d/tunnel.json\n`);
     expect(unit).toContain(`LoadCredential=tunnel.json:${TUNNEL_CREDENTIALS}\n`);
-    expect(unit).toContain("DynamicUser=true\n");
+    // A static account, which the loopback rule names by its uid: a dynamic
+    // one is drawn at each start.
+    expect(unit).toContain(`User=${TUNNEL_ACCOUNT}\nGroup=${TUNNEL_ACCOUNT}\n`);
+    expect(unit).not.toMatch(/^DynamicUser=/m);
+    expect(unit).toContain("RemoveIPC=yes\n");
     expect(unit).toContain("CapabilityBoundingSet=\n");
     expect(unit).toContain("InaccessiblePaths=-/etc/sitesolide -/etc/caddy");
     // The home network the machine may sit on is out of its reach.
@@ -258,9 +306,9 @@ describe("the kit's files", () => {
     expect(unit).toContain(`${TUNNEL_METRICS}, which the monitor reads`);
   });
 
-  test("Caddy trusts the loopback alone, and that one header from it", () => {
+  test("Caddy trusts ::1 alone, and that one header from it", () => {
     const directives = caddy.split("\n").filter((line) => line.trim() !== "" && !line.trim().startsWith("#"));
-    expect(directives).toEqual(["servers {", "\ttrusted_proxies static 127.0.0.1/32 ::1/128", "\tclient_ip_headers Cf-Connecting-Ip", "}"]);
+    expect(directives).toEqual(["servers {", `\ttrusted_proxies static ${TUNNEL_ORIGIN}/128`, "\tclient_ip_headers Cf-Connecting-Ip", "}"]);
   });
 
   test("the Caddyfile imports the folder by glob in its global options, which a machine served directly leaves empty", () => {
@@ -292,12 +340,12 @@ describe.skipIf(CADDY === null)("the tunnel's options, in Caddy", () => {
     return JSON.parse(run.stdout.toString()) as Record<string, unknown>;
   }
 
-  test("with the file, every server trusts the loopback for Cf-Connecting-Ip; without it, nothing is trusted", () => {
+  test("with the file, every server trusts ::1 for Cf-Connecting-Ip; without it, nothing is trusted", () => {
     const servers = (json: Record<string, unknown>) => Object.values(((json.apps as Record<string, unknown>).http as { servers: Record<string, Record<string, unknown>> }).servers);
     const trusted = servers(adapt(true));
     expect(trusted.length).toBeGreaterThan(0);
     for (const server of trusted) {
-      expect(server.trusted_proxies).toEqual({ ranges: ["127.0.0.1/32", "::1/128"], source: "static" });
+      expect(server.trusted_proxies).toEqual({ ranges: ["::1/128"], source: "static" });
       expect(server.client_ip_headers).toEqual(["Cf-Connecting-Ip"]);
     }
     for (const server of servers(adapt(false))) {

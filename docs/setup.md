@@ -132,7 +132,7 @@ missing. The output is a checklist: `[done]` already there, `[ok]` done now,
 | collector | its timer enabled and active | `bin/deploy-collector.sh` |
 | portal-password | `/etc/sitesolide/portal.env` exists | the `site-portal` account, then the file, site-portal 0600 |
 | portal | `portal` active | `sitesolide deploy` in `portal/` |
-| loopback | the `sitesolide_boucle` table loaded, its unit enabled | `bin/deploy-loopback.sh close` |
+| loopback | the `sitesolide_boucle` table loaded, its unit enabled; behind a tunnel, its line for the connector's account | `bin/deploy-loopback.sh close` |
 | monitor | its timer enabled and active | `bin/deploy-monitor.sh` |
 | backups | the backup timer enabled and active | `bin/deploy-backup.sh install`, `bin/deploy-steward.sh`, `bin/deploy-backup.sh enable` |
 | installer | its code and unit template present | `bin/deploy-installer.sh` |

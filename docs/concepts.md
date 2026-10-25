@@ -264,6 +264,14 @@ own: they run as the project's account, which its servers' pairs already let
 through. A project with a single service does not appear in the set, nor does
 one whose services all listen on nothing: it has nothing of its own to call.
 
+Behind a [Cloudflare Tunnel](tunnel.md), two more lines. Caddy takes the
+visitor's address from the `Cf-Connecting-Ip` header of a request that comes
+from `::1`, where the tunnel's connector reaches it, and hands it to every app
+as `X-Forwarded-For`: the analytics and the dashboard's limiter of failed
+attempts count by it. The rule lets the connector's account alone, not even
+root, open a connection from `::1` to Caddy's 443; anyone may still reach
+Caddy on `127.0.0.1`, where it believes no header.
+
 ## Egress
 
 A service reaches the loopback and nothing else, DNS included, unless its

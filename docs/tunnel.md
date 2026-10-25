@@ -64,16 +64,19 @@ On top of [the usual steps](setup.md#the-steps), in this order:
 |---|---|
 | preflight | a private address is taken as it is: nothing points at it |
 | firewall | ssh opened alone: no request comes in but through the connector's own connection |
-| tunnel | `cloudflared` from Cloudflare's repository, `/etc/cloudflared/config.yml`, the credentials in `/etc/cloudflared/tunnel.json` (root, `0600`), the connector's unit, Caddy's options for it, and cloudflared's upgrades; waited for until the edge answers. `config.json` then records the tunnel's id, `"tunnel"`, never its secret |
+| tunnel | `cloudflared` from Cloudflare's repository, `/etc/cloudflared/config.yml`, the credentials in `/etc/cloudflared/tunnel.json` (root, `0600`), the connector's account and unit, Caddy's options for it, and cloudflared's upgrades; waited for until the edge answers. Refused on a machine whose loopback has no `::1`. `config.json` then records the tunnel's id, `"tunnel"`, never its secret |
 | dns | `example.com` and `*.example.com` become proxied CNAMEs to `<id>.cfargotunnel.com`; address records there are refused unless `--dns-replace` |
 | resolution | waits until your workstation resolves the zone to Cloudflare's edge, and no longer to the machine's own address |
 | web-ports | 80 and 443 closed, if an earlier run opened them |
+| loopback | the rule's two more lines: from `::1`, Caddy's 443 to the connector's account alone |
 
 The records come once the connector runs, and the web's ports close once
 resolvers see Cloudflare: a machine that served the zone directly moves
-behind a tunnel without a moment where its sites answer nowhere. All of it
-runs before Caddy's configuration, since what `bin/deploy-caddy.sh` and every
-deploy verify next is asked of the sites' public addresses.
+behind a tunnel without a moment where its sites answer nowhere. All of it but
+the loopback's lines runs before Caddy's configuration, since what
+`bin/deploy-caddy.sh` and every deploy verify next is asked of the sites'
+public addresses; the loopback rule comes where it always does, after the
+portal.
 
 Run again without `--tunnel`, setup takes the configuration's tunnel and
 changes nothing, without the zone's token too: it reads the records through
@@ -92,31 +95,48 @@ waits for them.
 
 **The connector**, `sitesolide-tunnel.service`
 ([infra/tunnel](../infra/tunnel/sitesolide-tunnel.service)), runs
-`cloudflared` as an account drawn for it, with no capability, the system
-read-only, the projects' secrets, Caddy's files and the steward's state out of
-its sight. systemd hands it a copy of the credentials. It may not reach the
-private ranges, `192.168.0.0/16` among them: compromised, it reaches no other
-machine of the network it sits on. Its configuration sends the zone and its
-wildcard to Caddy on `127.0.0.1:443`, the name asked as SNI so that Caddy
-picks the site and its certificate as for any visitor, and answers 404 to any
-other name.
+`cloudflared` as its own account, `sitesolide-tunnel`, which owns nothing,
+with no capability, the system read-only, the projects' secrets, Caddy's
+files and the steward's state out of its sight. systemd hands it a copy of the
+credentials. It may not reach the private ranges, `192.168.0.0/16` among
+them: compromised, it reaches no other machine of the network it sits on. Its
+configuration sends the zone and its wildcard to Caddy on `[::1]:443`, the
+name asked as SNI so that Caddy picks the site and its certificate as for any
+visitor, and answers 404 to any other name.
 
-**The visitor's address.** Every request reaches Caddy from the loopback, and
-Cloudflare's edge sets the visitor's address in `Cf-Connecting-Ip`.
-`/etc/caddy/global.d/tunnel.caddy` ([the file](../infra/tunnel/tunnel.caddy))
-has Caddy believe that header from the loopback alone, and every block hands
-its app the result as `X-Forwarded-For`, one value, the visitor's: the
-analytics count visitors, and the dashboard's limiter counts each address on
-its own. A visitor who sends their own `X-Forwarded-For` changes nothing, and
-Cloudflare refuses a request that carries its own `Cf-Connecting-Ip`.
+**The visitor's address.** Every request reaches Caddy from the connector,
+over the loopback, and Cloudflare's edge sets the visitor's address in
+`Cf-Connecting-Ip`. `/etc/caddy/global.d/tunnel.caddy` ([the
+file](../infra/tunnel/tunnel.caddy)) has Caddy believe that header from `::1`
+alone, where the connector reaches it, and every block hands its app the
+result as `X-Forwarded-For`, one value, the visitor's: the analytics count
+visitors, and the dashboard's limiter counts each address on its own. A
+visitor who sends their own `X-Forwarded-For` changes nothing, and Cloudflare
+refuses a request that carries its own `Cf-Connecting-Ip`.
 
-What the loopback lets through besides the connector is a process of the
-machine itself: one of the projects' services can open `127.0.0.1:443` with
-any address in that header, and be counted as that visitor, by the analytics
-of any site and by the dashboard's limiter of failed attempts, which it could
-fill for an address of its choosing. On a machine served directly the same
-service only ever appears as `127.0.0.1`. Behind a tunnel, a project you do
-not trust with that does not belong on the machine.
+`::1` is the connector's alone: [the loopback rule](concepts.md#the-loopback-rule)
+refuses every other account, root included, a connection from there to
+Caddy's 443. Everything else on the machine, the monitor's and the
+gatekeeper's probes as any project's service, reaches Caddy on `127.0.0.1`,
+where it believes no header: a service that sends one there is counted as
+`127.0.0.1`, as on a machine served directly. Measured on a test machine
+behind a tunnel: a project's account that named `203.0.113.66` in that
+header reached the apps as that address, from `127.0.0.1` as from `::1`; now
+it reaches them as `127.0.0.1` from the first and is refused on the second,
+root too, while a visitor through the tunnel keeps their own address, after a
+restart of the connector and a reboot alike.
+
+The rule names the connector by its uid, which is why its account is a
+static one rather than one systemd draws at each start; its cgroup, the
+other way nftables tells a service, changes id at every restart. And not
+`127.0.0.1` for the connector: every account shares it, and a connection to
+another address of `127.0.0.0/8` still leaves from it.
+
+**The loopback must keep its IPv6**, which Debian gives it. Without `::1` the
+connector reaches no site, and the monitor, which reads Caddy on `127.0.0.1`,
+sees nothing wrong. setup refuses such a machine. Turned off later,
+`net.ipv6.conf.all.disable_ipv6=1` included, every site answers 502 through
+the tunnel until it is turned back on, measured on the test machine.
 
 **The certificates.** Caddy obtains the wildcard through the DNS-01
 challenge, which needs no port open, exactly as on a machine with a public
@@ -233,11 +253,16 @@ there first.
 
 ## Upgrading
 
-`sitesolide upgrade` keeps the connector's unit, its configuration and
-Caddy's options current on a machine that has a tunnel, and says nothing of a
-tunnel on one served directly. It never touches the credentials. A change to
-the connector restarts it: the sites answer 502 for the few seconds the edge
-takes to see it connected again, measured at under ten.
+`sitesolide upgrade` keeps the connector's account, unit and configuration
+and Caddy's options current on a machine that has a tunnel, and says nothing
+of a tunnel on one served directly. It never touches the credentials. A
+change to the connector restarts it: the sites answer 502 for the few seconds
+the edge takes to see it connected again, measured at under ten.
+
+The loopback rule is not upgrade's: `bin/deploy-loopback.sh close`, or a run
+of setup, which checks for the connector's lines, lays them. It refuses to,
+laying nothing, while Caddy's options for the tunnel are not the kit's or the
+connector runs as another account than its own: run upgrade first.
 
 ## Leaving a tunnel
 
@@ -252,7 +277,11 @@ that have not caught up; then, once the zone resolves to the machine:
 sudo rm /etc/caddy/global.d/tunnel.caddy && sudo systemctl reload caddy
 sudo systemctl disable --now sitesolide-tunnel
 sudo rm /etc/systemd/system/sitesolide-tunnel.service /etc/apt/apt.conf.d/52sitesolide-cloudflared && sudo systemctl daemon-reload
+sudo userdel sitesolide-tunnel
 ```
+
+Then, from the workstation, `bin/deploy-loopback.sh close` lays the rule
+again without the connector's lines.
 
 Until the unit file is gone, `sitesolide upgrade` takes the machine for one
 behind a tunnel, and refuses it once the configuration names none.

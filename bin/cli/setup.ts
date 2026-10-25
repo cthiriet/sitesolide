@@ -100,8 +100,10 @@ import {
   NO_CREDENTIALS_EXIT,
   readTunnelCredentials,
   tunnelCheck,
+  tunnelRuleLoaded,
   tunnelRun,
   tunnelTarget,
+  TUNNEL_ACCOUNT,
   TUNNEL_CREDENTIALS,
   TUNNEL_KIT_FILES,
   TUNNEL_SAID,
@@ -1206,6 +1208,7 @@ function tunnelStep(): Step<SetupContext> {
         execution.output.includes(TUNNEL_SAID.installed) ? "cloudflared installed" : null,
         execution.output.includes(TUNNEL_SAID.credentials) ? `credentials in ${TUNNEL_CREDENTIALS}` : null,
         execution.output.includes(TUNNEL_SAID.adopted) ? `credentials taken from the machine's own file` : null,
+        execution.output.includes(TUNNEL_SAID.account) ? `account ${TUNNEL_ACCOUNT} created` : null,
         execution.output.includes(TUNNEL_SAID.second) ? "the package's own connector stopped" : null,
         execution.output.includes(TUNNEL_SAID.caddy) ? "Caddy reloaded to trust it for the visitor's address" : null,
       ].filter((part) => part !== null);
@@ -1440,10 +1443,14 @@ export function installSteps(tunnel = false): Step<SetupContext>[] {
     {
       id: "loopback",
       title: "loopback rule",
-      check: installCheck("setup:loopback:check", [
-        { label: "loopback-table", test: "nft list table inet sitesolide_boucle" },
-        enabled("loopback-unit", "sitesolide-loopback"),
-      ]),
+      // Behind a tunnel, the connector's lines too: a table laid before the
+      // tunnel lets any account speak from the address Caddy believes.
+      check: (context) =>
+        installCheck("setup:loopback:check", [
+          { label: "loopback-table", test: "nft list table inet sitesolide_boucle" },
+          enabled("loopback-unit", "sitesolide-loopback"),
+          ...(context.tunnel === null ? [] : [{ label: "loopback-tunnel", test: tunnelRuleLoaded() }]),
+        ])(context),
       run: (context) => script(context, "deploy-loopback.sh", ["close"]),
       inspect: (context) => `ssh ${context.server} 'sudo nft list table inet sitesolide_boucle'`,
     },

@@ -61,7 +61,8 @@ export function createLimiter(clock: () => number = Date.now, max = MAX_ADDRESSE
  * Caddy's `{client_ip}`, one value (FORWARD_GENERATIONS in
  * bin/cli/fragment.ts): the peer's on a machine served directly, and behind a
  * Cloudflare Tunnel, whose peer is always the loopback, the address the edge
- * read, which infra/tunnel/tunnel.caddy trusts from the loopback alone. The
+ * read, which infra/tunnel/tunnel.caddy trusts from ::1 alone, the address the
+ * loopback rule keeps to the tunnel's connector (bin/cli/loopback.ts). The
  * last value is read all the same: it is the one Caddy writes in every
  * configuration, a block of an earlier generation included, and the first
  * would let anyone choose their address, and someone else's wait.
