@@ -5,6 +5,7 @@
  * there; this is the other half, for a machine already in service.
  *
  *   caddy-unit     Caddy's drop-in            setup's own run: install, daemon-reload, restart
+ *   tunnel         the Cloudflare Tunnel      setup's own run: its unit, configuration and Caddy's options
  *   backups        the backup component       bin/deploy-backup.sh install, before the steward
  *   egress         the egress proxy           bin/deploy-egress.sh, the steward restarted after it
  *   steward        the steward                bin/deploy-steward.sh
@@ -86,6 +87,7 @@ import {
   type SetupOutput,
 } from "./setup";
 import { runSteps, StepFailure, type Check, type Condition, type Step, type StepReport } from "./steps";
+import { tunnelConditions, tunnelRun, TUNNEL_KIT_FILES, TUNNEL_UNIT, TUNNEL_UNIT_FILE, type TunnelFiles } from "./tunnel";
 
 // --- the command line ------------------------------------------------------------
 
@@ -306,6 +308,18 @@ export const STEWARD_WRITES_BACKUPS: Condition = {
 
 // --- the components --------------------------------------------------------------------------
 
+/**
+ * What the tunnel's step lays, from the configuration's tunnel: setup wrote
+ * its id there. A machine whose tunnel no configuration names is refused
+ * before any component, see runUpgrade.
+ */
+function tunnelFiles(context: UpgradeContext): TunnelFiles {
+  const id = context.config.tunnel;
+  if (id === undefined) throw new Error("no tunnel in the configuration");
+  const read = (path: string) => readFileSync(join(context.deps.kitRoot, path), "utf8");
+  return { zone: context.config.zone, id, unit: read(TUNNEL_KIT_FILES.unit), caddy: read(TUNNEL_KIT_FILES.caddy) };
+}
+
 /** A script of the kit's bin/, run with upgrade's environment; what it printed quoted when it fails. */
 async function script(context: UpgradeContext, name: string, args: string[] = []): Promise<void> {
   const { code, output } = await context.deps.kit({ kind: "script", name, args }, context.childEnvironment);
@@ -330,6 +344,12 @@ export type Component = {
   installed: Condition;
   /** What a run does, for the dry run and the report. */
   plan: string;
+  /**
+   * A way of serving rather than a part of every machine, the tunnel: a
+   * machine without it is no machine short of it, and the report leaves it
+   * out rather than call it missing.
+   */
+  optional?: true;
   check(context: UpgradeContext): Promise<Check>;
   run(context: UpgradeContext): Promise<void>;
   inspect(context: UpgradeContext): string;
@@ -348,6 +368,18 @@ export function upgradeComponents(): Component[] {
         machineState(context, "caddy-unit", [...C["caddy-unit"], sameFile({ sha256: sha256(dropIn(context.deps.kitRoot)), path: CADDY_DROP_IN })]),
       run: (context) => rootRun(context.machine, context.operator, "setup:caddy-unit:run", caddyUnitRun(dropIn(context.deps.kitRoot)), "Caddy did not restart with its drop-in"),
       inspect: (context) => journal(context, "caddy"),
+    },
+    {
+      // Early: every site reaches a machine behind a tunnel through it.
+      id: "tunnel",
+      title: "the Cloudflare Tunnel",
+      installed: present("installed", TUNNEL_UNIT_FILE),
+      optional: true,
+      plan: "its unit, its configuration and Caddy's options laid, the connector restarted and connected, then the package's own stopped",
+      check: (context) => machineState(context, "tunnel", tunnelConditions(tunnelFiles(context))),
+      // The credentials stay as they are: the run takes the machine's own.
+      run: (context) => rootRun(context.machine, context.operator, "setup:tunnel:run", tunnelRun(tunnelFiles(context), null), "the tunnel's connector could not be set up"),
+      inspect: (context) => journal(context, TUNNEL_UNIT),
     },
     {
       id: "backups",
@@ -609,6 +641,16 @@ export async function runUpgrade(options: UpgradeOptions, deps: UpgradeDependenc
     ]);
   }
 
+  // A machine behind a tunnel whose id the configuration lacks: its
+  // connector's configuration cannot be written, nor read against anything.
+  if (installed.has("tunnel") && config.tunnel === undefined) {
+    return refuse(`${config.server} runs a Cloudflare Tunnel that ${join(folder, "config.json")} does not name`, [
+      `the machine carries ${TUNNEL_UNIT_FILE}, and its configuration depends on the tunnel's id`,
+      `${setupCommand} --tunnel <its id> records it, the id the machine's /etc/cloudflared/config.yml names`,
+      "nothing was changed",
+    ]);
+  }
+
   const context: UpgradeContext = {
     machine,
     operator,
@@ -623,7 +665,8 @@ export async function runUpgrade(options: UpgradeOptions, deps: UpgradeDependenc
   const plans = new Map(components.map((component) => [component.id, component.plan]));
 
   // 3. The components, in order: each checked, and run only if it differs.
-  const outcome = await runSteps(upgradeSteps(components), context, {
+  const carried = components.filter((component) => component.optional !== true || installed.has(component.id));
+  const outcome = await runSteps(upgradeSteps(carried), context, {
     checkOnly: options.dryRun,
     describe: (missing) => `differs: ${missing.join(", ")}`,
     report: (report) => {

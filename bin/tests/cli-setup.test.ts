@@ -1019,6 +1019,9 @@ describe("the command line", () => {
       REFUSALS.disk(HOST, "1.0 GB"),
       REFUSALS.servesOtherZone(HOST, "x.invalid"),
       REFUSALS.privateAddress("10.0.0.5"),
+      REFUSALS.tunnelDns("route53"),
+      REFUSALS.tunnelUnreadable("~/.cloudflared/x.json"),
+      REFUSALS.tunnelCredentials("~/.cloudflared/x.json", "it is not JSON"),
     ];
     expect(samples).toHaveLength(Object.keys(REFUSALS).length);
     const failures = [
@@ -1029,6 +1032,8 @@ describe("the command line", () => {
       `setup stopped at resolution: ${ZONE} does not resolve to ${HOST} from this workstation yet`,
       "setup stopped at ssh: sshd refused the change",
       "setup stopped at caddy: Caddy could not be installed (exit code 1)",
+      "setup stopped at tunnel: the machine holds no credentials for the tunnel 6f1c2b8e-1d3a-4c5b-9e7f-0a1b2c3d4e5f",
+      "setup stopped at tunnel: the tunnel's connector could not be set up (exit code 1)",
     ];
     for (const message of [...samples.map((sample) => sample.message), ...failures]) {
       expect({ message, covered: hintFor(message) !== DEFAULT_HINT }).toEqual({ message, covered: true });

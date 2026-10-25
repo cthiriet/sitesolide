@@ -57,7 +57,7 @@ test("no fragment relays anything to the portal beyond its door, its login and /
   }
 
   for (const [name, text] of fragments) {
-    const allowed = name === "portal.caddy" ? [...door, `reverse_proxy @dynamic ${upstream}`] : door;
+    const allowed = name === "portal.caddy" ? [...door, `reverse_proxy @dynamic ${upstream} {`] : door;
     for (const line of text.split("\n").filter((l) => l.includes(upstream)).map((l) => l.trim())) {
       expect({ name, line, allowed: allowed.includes(line) }).toEqual({ name, line, allowed: true });
     }

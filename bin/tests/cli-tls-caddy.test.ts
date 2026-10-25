@@ -73,6 +73,16 @@ function withoutHidden(json: unknown, path: string): unknown {
   );
 }
 
+/** The configuration with no proxy handing on the visitor's address, which the landing's form proxy does since the Cloudflare Tunnel. */
+function withoutVisitorAddress(json: unknown): unknown {
+  if (Array.isArray(json)) return json.map(withoutVisitorAddress);
+  if (json === null || typeof json !== "object") return json;
+  const entries = Object.entries(json).filter(
+    ([key, value]) => !(key === "headers" && JSON.stringify(value) === JSON.stringify({ request: { set: { "X-Forwarded-For": ["{http.vars.client_ip}"] } } })),
+  );
+  return Object.fromEntries(entries.map(([key, value]) => [key, withoutVisitorAddress(value)]));
+}
+
 describe.skipIf(CADDY === null)(`the zone's TLS policy in a file, in Caddy${WITH_MODULE ? "" : " (without the Cloudflare module: the directive stood in for)"}`, () => {
   // Made in beforeAll, so that a run without Caddy leaves nothing behind.
   let folder = "";
@@ -151,13 +161,17 @@ describe.skipIf(CADDY === null)(`the zone's TLS policy in a file, in Caddy${WITH
     const after = adapt(caddyfile);
     expect({ code: before.code, after: after.code }).toEqual({ code: 0, after: 0 });
 
-    // One difference, and it is Caddy's own: a file server hides the files
+    // Two differences. The first is Caddy's own: a file server hides the files
     // its block was read from, and the blocks that import the snippet were
     // read from the policy too. It lives in /etc/caddy, which no file
     // server's root reaches.
     expect(hideLists(after.json).some((list) => list.includes(policy))).toBe(true);
     expect(hideLists(before.json).some((list) => list.includes(policy))).toBe(false);
-    expect(withoutHidden(after.json, policy)).toEqual(before.json!);
+    // The other is this release's: the landing's form proxy hands its service
+    // the visitor's address, as every generated block does (FORWARD_GENERATIONS
+    // in bin/cli/fragment.ts), and the app's block is this release's on both
+    // sides.
+    expect(withoutVisitorAddress(withoutHidden(after.json, policy))).toEqual(withoutVisitorAddress(before.json!));
 
     // And the comparison is worth something: the zone's names, the app's
     // preview among them, are under the zone's policy, the DNS challenge's

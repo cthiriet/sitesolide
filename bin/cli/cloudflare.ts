@@ -170,10 +170,15 @@ export function desiredRecords(zone: string, ipv4: string, ipv6: string | null):
   ]);
 }
 
+/**
+ * One step of a plan. `proxied`, behind a Cloudflare Tunnel alone: the record
+ * goes through Cloudflare's proxy, which a tunnel's CNAME needs. Every other
+ * record setup writes is DNS only.
+ */
 export type RecordAction =
   | { kind: "keep"; record: DnsRecord }
-  | { kind: "create"; name: string; type: "A" | "AAAA"; content: string }
-  | { kind: "update"; record: DnsRecord; content: string }
+  | { kind: "create"; name: string; type: "A" | "AAAA" | "CNAME"; content: string; proxied?: true }
+  | { kind: "update"; record: DnsRecord; content: string; proxied?: true }
   | { kind: "delete"; record: DnsRecord }
   | { kind: "conflict"; record: DnsRecord; reason: string };
 
@@ -249,6 +254,43 @@ export function planRecords(existing: readonly DnsRecord[], desired: readonly De
   return actions;
 }
 
+/** A host name as one spelling: `X.cfargotunnel.com.` is `x.cfargotunnel.com`. */
+function sameHost(a: string, b: string): boolean {
+  return a.trim().toLowerCase().replace(/\.$/, "") === b.trim().toLowerCase().replace(/\.$/, "");
+}
+
+/**
+ * The plan of a zone served through a Cloudflare Tunnel: its name and its
+ * wildcard, each a proxied CNAME to the tunnel, `<id>.cfargotunnel.com`.
+ * An address record at either name stands in its way, a CNAME elsewhere
+ * points the zone at something else: both are conflicts unless `replace`.
+ * The tunnel's own CNAME left DNS only is taken into the proxy, without which
+ * it leads nowhere.
+ */
+export function planTunnelRecords(existing: readonly DnsRecord[], zone: string, target: string, replace: boolean): RecordAction[] {
+  const actions: RecordAction[] = [];
+  for (const name of [zone, `*.${zone}`]) {
+    const at = existing.filter((record) => record.name.toLowerCase() === name.toLowerCase());
+    for (const record of at.filter((candidate) => candidate.type === "A" || candidate.type === "AAAA")) {
+      actions.push(replace ? { kind: "delete", record } : { kind: "conflict", record, reason: "an address record, beside which the tunnel's CNAME cannot exist" });
+    }
+    const aliases = at.filter((record) => record.type === "CNAME");
+    if (aliases.length === 0) {
+      actions.push({ kind: "create", name, type: "CNAME", content: target, proxied: true });
+      continue;
+    }
+    const own = aliases.find((record) => sameHost(record.content, target));
+    const kept = own ?? aliases[0]!;
+    if (own === undefined && !replace) {
+      actions.push({ kind: "conflict", record: kept, reason: `points at ${kept.content}, not at the tunnel` });
+      continue;
+    }
+    actions.push(own !== undefined && kept.proxied ? { kind: "keep", record: kept } : { kind: "update", record: kept, content: target, proxied: true });
+    for (const record of aliases) if (record !== kept) actions.push({ kind: "delete", record });
+  }
+  return actions;
+}
+
 /** One record as a line: `example.com A 203.0.113.10`. */
 export function recordLine(record: { name: string; type: string; content: string }): string {
   return `${record.name} ${record.type} ${record.content}`;
@@ -259,9 +301,9 @@ export function describePlan(actions: readonly RecordAction[]): string[] {
   return actions.flatMap((action) => {
     switch (action.kind) {
       case "create":
-        return [`created ${recordLine(action)}`];
+        return [`created ${recordLine(action)}${action.proxied === true ? ", proxied" : ""}`];
       case "update":
-        return [`updated ${recordLine(action.record)} -> ${action.content}, DNS only`];
+        return [`updated ${recordLine(action.record)} -> ${action.content}, ${action.proxied === true ? "proxied" : "DNS only"}`];
       case "delete":
         return [`deleted ${recordLine(action.record)}`];
       default:
@@ -270,18 +312,23 @@ export function describePlan(actions: readonly RecordAction[]): string[] {
   });
 }
 
-/** One record created, DNS only, TTL auto. */
-export async function createRecord(api: Api, zoneId: string, record: { type: string; name: string; content: string }): Promise<void> {
-  await call(api, "POST", `/zones/${encodeURIComponent(zoneId)}/dns_records`, {}, { type: record.type, name: record.name, content: record.content, proxied: false, ttl: 1 });
+/** One record created, DNS only unless `proxied`, a tunnel's CNAME, TTL auto. */
+export async function createRecord(api: Api, zoneId: string, record: { type: string; name: string; content: string; proxied?: boolean }): Promise<void> {
+  await call(api, "POST", `/zones/${encodeURIComponent(zoneId)}/dns_records`, {}, { type: record.type, name: record.name, content: record.content, proxied: record.proxied === true, ttl: 1 });
 }
 
-/** One record pointed elsewhere, and taken out of Cloudflare's proxy. */
-export async function updateRecord(api: Api, zoneId: string, id: string, content: string): Promise<void> {
-  await call(api, "PATCH", `/zones/${encodeURIComponent(zoneId)}/dns_records/${encodeURIComponent(id)}`, {}, { content, proxied: false, ttl: 1 });
+/** One record pointed elsewhere, and taken out of Cloudflare's proxy unless `proxied`. */
+export async function updateRecord(api: Api, zoneId: string, id: string, content: string, proxied = false): Promise<void> {
+  await call(api, "PATCH", `/zones/${encodeURIComponent(zoneId)}/dns_records/${encodeURIComponent(id)}`, {}, { content, proxied, ttl: 1 });
 }
 
 export async function deleteRecord(api: Api, zoneId: string, id: string): Promise<void> {
   await call(api, "DELETE", `/zones/${encodeURIComponent(zoneId)}/dns_records/${encodeURIComponent(id)}`);
+}
+
+/** The records to create by hand for a zone behind a tunnel, `--skip-dns`'s list then. */
+export function tunnelManualRecords(zone: string, target: string): string[] {
+  return [zone, `*.${zone}`].map((name) => `${name.padEnd(zone.length + 3)} CNAME ${target}   proxied, TTL auto`);
 }
 
 /** The records to create by hand, `--skip-dns`'s list. */

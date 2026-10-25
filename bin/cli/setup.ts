@@ -9,6 +9,7 @@
  *   caddy, bun         from their own repositories, Caddy with the provider's DNS module
  *   dns-credentials    /etc/caddy/cloudflare.env, root:caddy 0640, the provider's credentials
  *   tls-zone           /etc/caddy/tls-zone.caddy, the zone's tls block (bin/cli/tls.ts)
+ *   tunnel             under --tunnel, the Cloudflare Tunnel's connector (bin/cli/tunnel.ts)
  *   resolution         this workstation resolves the zone to the machine
  *   caddy-zone ...     bin/deploy-caddy.sh, the drop-in, bin/deploy-caddy.sh again
  *   api ... monitor    every component, in the order docs/install.md verified
@@ -63,13 +64,13 @@ import { homedir } from "node:os";
 import { isIP } from "node:net";
 import { join, resolve } from "node:path";
 import { generatePassword } from "../../dashboard/src/password";
-import { canonicalAddress, describePlan, manualRecords } from "./cloudflare";
-import { DnsError, ensureZoneRecords, type DnsEntry, type ZoneApi } from "./dns/dns";
+import { canonicalAddress, describePlan, manualRecords, tunnelManualRecords } from "./cloudflare";
+import { DnsError, ensureTunnelRecords, ensureZoneRecords, type DnsEntry, type ZoneApi } from "./dns/dns";
 import { DNS_PROVIDERS, dnsEntry, dnsVariables, MANUAL } from "./dns/registry";
 import { fieldsToAsk, fromEnvironment, isFailure, missingFields, parseStdinCredentials, scrubSecrets, secretValues } from "./machine";
 import { ProviderError, type Credentials, type Fetch } from "./providers/provider";
 import { CADDY_RESTART, caddyRestartScript, policyPending, tlsZoneCheck, tlsZoneContent, tlsZoneRun, TLS_ZONE_FILE, TLS_ZONE_RESTARTED } from "./tls";
-import { ACME_STAGING, adoptLegacyKeys, composeConfig, CONFIG_DIR_VARIABLE, privateFolder, writeConfig } from "./config";
+import { ACME_STAGING, adoptLegacyKeys, composeConfig, CONFIG_DIR_VARIABLE, expandHome, privateFolder, writeConfig } from "./config";
 import {
   APT,
   BAN_ADVICE,
@@ -91,6 +92,19 @@ import { hintFor } from "./hints";
 import { isCompiled, kitEnv, kitRoot } from "./kit";
 import { eventFor, forEachLine, formatEvent, type OutputEvent } from "./output";
 import { runSteps, StepFailure, type Check, type Condition, type Step, type StepReport } from "./steps";
+import {
+  isTunnelId,
+  NO_CREDENTIALS_EXIT,
+  readTunnelCredentials,
+  tunnelCheck,
+  tunnelRun,
+  tunnelTarget,
+  TUNNEL_CREDENTIALS,
+  TUNNEL_KIT_FILES,
+  TUNNEL_SAID,
+  TUNNEL_UNIT,
+  type TunnelFiles,
+} from "./tunnel";
 
 // --- the command line ----------------------------------------------------------
 
@@ -122,11 +136,18 @@ export type SetupOptions = {
    * `--acme` was not given: the configuration's, else production.
    */
   acme: string | null;
+  /**
+   * `--tunnel`: the machine is served through a Cloudflare Tunnel, named by
+   * its credentials file, the one `cloudflared tunnel create` writes, or by
+   * its id when the machine already holds them. Null when not given: the
+   * configuration's tunnel, else none. See bin/cli/tunnel.ts.
+   */
+  tunnel: string | null;
   configDir: string | null;
   json: boolean;
 };
 
-const VALUED = ["--zone", "--email", "--contact", "--user", "--config-dir", "--dns", "--acme"] as const;
+const VALUED = ["--zone", "--email", "--contact", "--user", "--config-dir", "--dns", "--acme", "--tunnel"] as const;
 const FLAGS = ["--skip-dns", "--dns-replace", "--minimal", "--any-os", "--dry-run", "--cloudflare-token-stdin", "--dns-credentials-stdin", "--json"] as const;
 
 export const ACCOUNT = /^[a-z_][a-z0-9_-]{0,31}$/;
@@ -205,7 +226,22 @@ export const REFUSALS = {
   }),
   privateAddress: (address: string): Refusal => ({
     message: `the machine's IPv4 is private, ${address}: it is behind a NAT`,
-    details: ["give its public IPv4 as the host, setup root@<public address>, or create the records by hand with --skip-dns"],
+    details: [
+      "give its public IPv4 as the host, setup root@<public address>",
+      "or serve it through a Cloudflare Tunnel, which needs no public address: --tunnel, see docs/tunnel.md",
+    ],
+  }),
+  tunnelDns: (dns: string): Refusal => ({
+    message: `--tunnel needs the zone's DNS at Cloudflare, not ${dns}`,
+    details: ["Cloudflare routes into a tunnel the names of its own zones alone; see docs/tunnel.md"],
+  }),
+  tunnelUnreadable: (path: string): Refusal => ({
+    message: `cannot read the tunnel's credentials: ${path}`,
+    details: ["--tunnel takes the file cloudflared tunnel create wrote, ~/.cloudflared/<id>.json, or the tunnel's id when the machine already holds it"],
+  }),
+  tunnelCredentials: (path: string, problem: string): Refusal => ({
+    message: `${path} is not a tunnel's credentials: ${problem}`,
+    details: ["nothing of it is shown: it holds the tunnel's secret"],
   }),
 };
 
@@ -258,6 +294,8 @@ export function parseSetupArguments(arguments_: readonly string[]): SetupOptions
   if (dns === MANUAL && (flags.has("--dns-credentials-stdin") || flags.has("--cloudflare-token-stdin") || flags.has("--dns-replace"))) {
     return REFUSALS.usage("--dns manual uses no DNS API: the records are made by hand, and nothing reads credentials nor replaces records");
   }
+  const tunnel = values["--tunnel"] ?? null;
+  if (tunnel !== null && dns !== null && dns !== "cloudflare") return REFUSALS.tunnelDns(dns);
   const acme = values["--acme"] ?? null;
   if (acme !== null && acme !== "production" && acme !== ACME_STAGING) {
     return REFUSALS.invalid("--acme", /^[a-z]{1,20}$/.test(acme) ? acme : "(not shown)", "production, the default, or staging, for a test installation whose certificates no browser trusts");
@@ -278,6 +316,7 @@ export function parseSetupArguments(arguments_: readonly string[]): SetupOptions
     skipDns: flags.has("--skip-dns"),
     dns,
     acme,
+    tunnel,
     configDir: values["--config-dir"] ?? null,
     json,
   };
@@ -598,7 +637,14 @@ export type SetupContext = HardenContext & {
   /** `user@host` as the configuration says it. */
   server: string;
   contact: string | null;
+  /** What the records point at: the machine's addresses, which a tunnel leaves unused. */
   addresses: { ipv4: string; ipv6: string | null };
+  /**
+   * The Cloudflare Tunnel the machine is served through, null when it is
+   * served directly: its id, and its credentials when `--tunnel` named their
+   * file, null when the machine is to hold them already.
+   */
+  tunnel: { id: string; credentials: string | null } | null;
   /** Who serves the zone's DNS; null for `--dns manual`. */
   dns: DnsEntry | null;
   /** Its credentials once obtained; undefined until a step asked for them. */
@@ -1011,6 +1057,22 @@ export function resolvesToMachine(observed: Observed, addresses: { ipv4: string;
   return observed.ipv6.every((address) => addresses.ipv6 !== null && canonicalAddress(address) === canonicalAddress(addresses.ipv6));
 }
 
+/**
+ * Whether the workstation resolves a name through Cloudflare's proxy, for a
+ * machine behind a tunnel: any answer at all. A proxied record answers the
+ * edge's addresses, never the tunnel's name, so nothing in the answer tells
+ * this zone's records from others: the dns step has read them through the
+ * API, and this only waits until resolvers see them.
+ */
+export function resolvesAtAll(observed: Observed): boolean {
+  return observed.ipv4.length > 0 || observed.ipv6.length > 0;
+}
+
+/** The judge of resolution: the machine's own addresses, or, behind a tunnel, any answer. */
+function resolves(context: SetupContext, observed: Observed): boolean {
+  return context.tunnel === null ? resolvesToMachine(observed, context.addresses) : resolvesAtAll(observed);
+}
+
 function describeObserved(name: string, observed: Observed): string {
   const all = [...observed.ipv4, ...observed.ipv6];
   return `${name} answers ${all.length === 0 ? "nothing" : all.join(", ")}`;
@@ -1027,11 +1089,11 @@ async function resolution(context: SetupContext): Promise<{ check: Check; seen: 
   const { zone } = context.options;
   const random = `x${context.deps.random()}.${zone}`;
   const wildcard = await context.deps.resolve(random);
-  if (!resolvesToMachine(wildcard, context.addresses)) {
+  if (!resolves(context, wildcard)) {
     return { check: { state: "missing", missing: [`*.${zone}`] }, seen: [describeObserved(random, wildcard)] };
   }
   const bare = await context.deps.resolve(zone);
-  if (!resolvesToMachine(bare, context.addresses)) return { check: { state: "missing", missing: [zone] }, seen: [describeObserved(zone, bare)] };
+  if (!resolves(context, bare)) return { check: { state: "missing", missing: [zone] }, seen: [describeObserved(zone, bare)] };
   return { check: { state: "done" }, seen: [] };
 }
 
@@ -1044,12 +1106,13 @@ async function waitForResolution(context: SetupContext): Promise<string> {
   const bound = options.skipDns ? WAIT_BY_HAND_MS : WAIT_MS;
   const deadline = deps.now() + bound;
   let said = deps.now();
-  deps.output.say(`   waiting until this workstation resolves ${options.zone} and *.${options.zone} to ${[context.addresses.ipv4, context.addresses.ipv6].filter(Boolean).join(" and ")}, ${bound / 60_000} minutes at most`);
+  const target = context.tunnel === null ? [context.addresses.ipv4, context.addresses.ipv6].filter(Boolean).join(" and ") : "Cloudflare's edge, which hands them to the tunnel";
+  deps.output.say(`   waiting until this workstation resolves ${options.zone} and *.${options.zone} to ${target}, ${bound / 60_000} minutes at most`);
   for (;;) {
     const { check, seen } = await resolution(context);
     if (check.state === "done") return "the zone and its wildcard resolve to the machine";
     if (deps.now() >= deadline) {
-      throw new StepFailure(`${options.zone} does not resolve to ${context.addresses.ipv4} from this workstation yet`, [
+      throw new StepFailure(`${options.zone} does not resolve to ${context.tunnel === null ? context.addresses.ipv4 : "Cloudflare's edge"} from this workstation yet`, [
         ...seen,
         options.skipDns ? "create the records listed at the start of the run, DNS only" : "the records are created: a resolver may still be serving an older answer",
         "a resolver keeps an absence for as long as the zone's SOA says, up to half an hour: run setup again later, it resumes here",
@@ -1063,8 +1126,49 @@ async function waitForResolution(context: SetupContext): Promise<string> {
   }
 }
 
+/** What the tunnel step lays: the zone, the tunnel, and the kit's two files as they are. */
+function tunnelFiles(context: SetupContext): TunnelFiles {
+  const read = (path: string) => readFileSync(join(kitRoot(), path), "utf8");
+  return { zone: context.options.zone, id: context.tunnel!.id, unit: read(TUNNEL_KIT_FILES.unit), caddy: read(TUNNEL_KIT_FILES.caddy) };
+}
+
+/**
+ * The Cloudflare Tunnel's connector, under --tunnel alone, before the
+ * resolution step: what bin/deploy-caddy.sh and every deploy verify next is
+ * asked of the sites' public addresses, which reach the machine through it.
+ */
+function tunnelStep(): Step<SetupContext> {
+  return {
+    id: "tunnel",
+    title: "the Cloudflare Tunnel",
+    check: (context) => rootCheck(context.machine, context.operator, "setup:tunnel:check", tunnelCheck(tunnelFiles(context))),
+    run: async (context) => {
+      const { id, credentials } = context.tunnel!;
+      const execution = await asRoot(context.machine, context.operator, "setup:tunnel:run", tunnelRun(tunnelFiles(context), credentials), true);
+      if (execution.code === NO_CREDENTIALS_EXIT) {
+        throw new StepFailure(`the machine holds no credentials for the tunnel ${id}`, [
+          `give them: --tunnel ~/.cloudflared/${id}.json, the file cloudflared tunnel create wrote on this workstation`,
+          "see docs/tunnel.md",
+        ]);
+      }
+      if (execution.code !== 0) {
+        throw new StepFailure(`the tunnel's connector could not be set up (exit code ${execution.code})`, `${execution.output}\n${execution.error}`.split("\n").filter((line) => line.trim() !== "").slice(-8));
+      }
+      const done = [
+        execution.output.includes(TUNNEL_SAID.installed) ? "cloudflared installed" : null,
+        execution.output.includes(TUNNEL_SAID.credentials) ? `credentials in ${TUNNEL_CREDENTIALS}` : null,
+        execution.output.includes(TUNNEL_SAID.adopted) ? `credentials taken from the machine's own file` : null,
+        execution.output.includes(TUNNEL_SAID.second) ? "the package's own connector stopped" : null,
+        execution.output.includes(TUNNEL_SAID.caddy) ? "Caddy reloaded to trust it for the visitor's address" : null,
+      ].filter((part) => part !== null);
+      return `tunnel ${id}, connected to Cloudflare's edge${done.length === 0 ? "" : `: ${done.join(", ")}`}`;
+    },
+    inspect: (context) => journal(context, TUNNEL_UNIT),
+  };
+}
+
 /** The steps that follow the hardening, every one of them run through the deploy account. */
-export function installSteps(): Step<SetupContext>[] {
+export function installSteps(tunnel = false): Step<SetupContext>[] {
   const optional = (context: SetupContext): string | null => (context.options.minimal ? "--minimal" : null);
   const zoneFiles = installCheck("setup:caddy-zone:check", [present("zone-file", "/etc/caddy/sitesolide.env"), present("domain-table", "/etc/caddy/domaines.map")]);
   return [
@@ -1166,6 +1270,7 @@ export function installSteps(): Step<SetupContext>[] {
       },
       inspect: (context) => `ssh ${context.server} "sudo grep -Eo '^[[:space:]]*[A-Z_]+=' ${CADDY_ENV_FILE}"`,
     },
+    ...(tunnel ? [tunnelStep()] : []),
     {
       id: "resolution",
       title: "DNS seen from this workstation",
@@ -1352,7 +1457,8 @@ function configurationStep(): Step<SetupContext> {
         file.email === context.options.email &&
         (file.contact ?? null) === context.contact &&
         (file.dns ?? "cloudflare") === (context.options.dns ?? "cloudflare") &&
-        (file.acme ?? "production") === (context.options.acme ?? "production");
+        (file.acme ?? "production") === (context.options.acme ?? "production") &&
+        (file.tunnel ?? null) === (context.tunnel?.id ?? null);
       return same ? { state: "done" } : { state: "missing", missing: [path(context)] };
     },
     run: async (context) => {
@@ -1364,6 +1470,9 @@ function configurationStep(): Step<SetupContext> {
       // Production too: written only for staging.
       if (context.options.acme === ACME_STAGING) config.acme = ACME_STAGING;
       else delete config.acme;
+      // The tunnel's id, which later runs and the CLI read; nothing of its credentials.
+      if (context.tunnel !== null) config.tunnel = context.tunnel.id;
+      else delete config.tunnel;
       // The marker first, so that a run stopped anywhere after this point is
       // this install's to resume. One left by an install on another machine
       // or zone, whose configuration is gone, is replaced: this step only
@@ -1434,20 +1543,43 @@ function zoneTls(context: SetupContext): string {
   );
 }
 
+/**
+ * Whether the zone's records point at the tunnel, read through Cloudflare's
+ * API: what resolves tells a tunnel's proxied CNAME from nothing else
+ * Cloudflare proxies (resolvesAtAll). Without the token at hand, the step is
+ * to do, and its run asks for it.
+ */
+async function tunnelRecordsCheck(context: SetupContext): Promise<Check> {
+  const entry = context.dns!;
+  const credentials = await knownDnsCredentials(context, entry);
+  if (credentials === null) return { state: "missing", missing: ["tunnel-records"] };
+  const { open, scrub } = dnsSession(context, entry, credentials);
+  try {
+    const { actions } = await ensureTunnelRecords(open(), context.options.zone, tunnelTarget(context.tunnel!.id), false, true);
+    const todo = actions.filter((action) => action.kind !== "keep");
+    return todo.length === 0 ? { state: "done" } : { state: "missing", missing: ["tunnel-records"] };
+  } catch (error) {
+    return { state: "unreadable", reason: scrub(error instanceof Error ? error.message : String(error)) };
+  }
+}
+
 /** The records, through the DNS provider's API, at the start: they propagate while the machine installs. */
 function dnsStep(): Step<SetupContext> {
   return {
     id: "dns",
     title: "DNS records",
     skip: (context) => (context.options.skipDns ? `${context.dns === null ? "--dns manual" : "--skip-dns"}: by hand, as listed above` : null),
-    check: async (context) => (await resolution(context)).check,
+    check: async (context) => (context.tunnel === null ? (await resolution(context)).check : tunnelRecordsCheck(context)),
     run: async (context) => {
       // Never reached under --dns manual, which skips this step.
       const entry = context.dns!;
       const credentials = await requireDnsCredentials(context, entry);
       const { open, scrub } = dnsSession(context, entry, credentials);
       try {
-        const { zone, actions } = await ensureZoneRecords(open(), context.options.zone, context.addresses, context.options.dnsReplace);
+        const { zone, actions } =
+          context.tunnel === null
+            ? await ensureZoneRecords(open(), context.options.zone, context.addresses, context.options.dnsReplace)
+            : await ensureTunnelRecords(open(), context.options.zone, tunnelTarget(context.tunnel.id), context.options.dnsReplace);
         const changes = describePlan(actions);
         return changes.length === 0 ? `already in the ${entry.title} zone ${zone}` : `${changes.join("; ")}, in the ${entry.title} zone ${zone}`;
       } catch (error) {
@@ -1464,9 +1596,9 @@ function dnsStep(): Step<SetupContext> {
   };
 }
 
-/** Every step, in order. */
-export function setupSteps(): Step<SetupContext>[] {
-  return [configurationStep(), dnsStep(), ...hardeningSteps<SetupContext>(), ...installSteps()];
+/** Every step, in order; the tunnel's only on a machine served through one. */
+export function setupSteps(tunnel = false): Step<SetupContext>[] {
+  return [configurationStep(), dnsStep(), ...hardeningSteps<SetupContext>(), ...installSteps(tunnel)];
 }
 
 // --- the run ------------------------------------------------------------------------
@@ -1549,7 +1681,29 @@ export async function runSetup(given: SetupOptions, deps: SetupDependencies): Pr
   if (dnsEntry(dnsName) === undefined) return refuse(REFUSALS.invalid("dns in the configuration", dnsName, `one of ${[...DNS_PROVIDERS.map((entry) => entry.name), MANUAL].join(", ")}`));
   // The certificate authority likewise: --acme, else the configuration's, else production.
   const acmeName = given.acme ?? (file.acme === ACME_STAGING ? ACME_STAGING : "production");
-  const options: SetupOptions = { ...given, dns: dnsName, acme: acmeName, skipDns: given.skipDns || dnsName === MANUAL };
+  // The tunnel likewise: --tunnel, else the one the configuration recorded.
+  // A file named is read now, before anything leaves the workstation, and
+  // checked: what reaches the machine is the tunnel's secret.
+  const tunnelName = given.tunnel ?? (typeof file.tunnel === "string" && isTunnelId(file.tunnel) ? file.tunnel : null);
+  let tunnel: SetupContext["tunnel"] = null;
+  if (tunnelName !== null) {
+    if (dnsName !== "cloudflare") return refuse(REFUSALS.tunnelDns(dnsName));
+    if (isTunnelId(tunnelName)) {
+      tunnel = { id: tunnelName, credentials: null };
+    } else {
+      const path = expandHome(tunnelName, deps.home);
+      let text: string;
+      try {
+        text = readFileSync(path, "utf8");
+      } catch {
+        return refuse(REFUSALS.tunnelUnreadable(tunnelName));
+      }
+      const read = readTunnelCredentials(text);
+      if ("problem" in read) return refuse(REFUSALS.tunnelCredentials(tunnelName, read.problem));
+      tunnel = { id: read.id, credentials: read.text };
+    }
+  }
+  const options: SetupOptions = { ...given, dns: dnsName, acme: acmeName, tunnel: tunnel?.id ?? null, skipDns: given.skipDns || dnsName === MANUAL };
   const configured = {
     server: deps.environment.SITESOLIDE_SERVER ?? file.server,
     zone: deps.environment.SITESOLIDE_ZONE ?? file.zone,
@@ -1589,13 +1743,16 @@ export async function runSetup(given: SetupOptions, deps: SetupDependencies): Pr
   if (operator !== options.login) out.say(`   ${options.login} may no longer log in: going on as ${operator}`);
   const judged = judgeFacts(facts, options, operator);
   if (judged !== null) return refuse(judged);
-  const addresses = chooseAddresses(options.host, facts);
+  // Behind a tunnel nothing points at the machine's addresses, which may be
+  // private: they are read, and only shown.
+  const addresses = tunnel === null ? chooseAddresses(options.host, facts) : { ipv4: facts.ipv4 ?? "none", ipv6: facts.ipv6 };
   if ("message" in addresses) return refuse(addresses);
+  const reached = tunnel === null ? [addresses.ipv4, addresses.ipv6].filter(Boolean).join(" and ") : `served through the tunnel ${tunnel.id}`;
   out.check({
     step: "preflight",
     title: "preflight",
     status: "ok",
-    detail: `${facts.system}, ${facts.architecture}, ${(facts.freeKb / 1024 / 1024).toFixed(0)} GB free, ${[addresses.ipv4, addresses.ipv6].filter(Boolean).join(" and ")}, as ${operator}`,
+    detail: `${facts.system}, ${facts.architecture}, ${(facts.freeKb / 1024 / 1024).toFixed(0)} GB free, ${reached}, as ${operator}`,
   });
 
   const context: SetupContext = {
@@ -1607,6 +1764,7 @@ export async function runSetup(given: SetupOptions, deps: SetupDependencies): Pr
     accountReady: false,
     clientAddress: facts.clientAddress,
     ignoredAddress: null,
+    tunnel,
     options,
     deps,
     folder,
@@ -1618,7 +1776,7 @@ export async function runSetup(given: SetupOptions, deps: SetupDependencies): Pr
     dashboardDrawn: false,
     childEnvironment: childEnvironment(deps.environment, { server, zone: options.zone, email: options.email, contact, folder, acme: acmeName }, options.json),
   };
-  const steps = setupSteps();
+  const steps = setupSteps(tunnel !== null);
 
   // 3. Read only: a dry run, or a machine setup did not install, which it
   // leaves alone unless every step is already done there.
@@ -1633,7 +1791,8 @@ export async function runSetup(given: SetupOptions, deps: SetupDependencies): Pr
 
   if (options.skipDns) {
     out.say(`-> ${options.dns === MANUAL ? "--dns manual" : "--skip-dns"}: create these records at your DNS provider; setup waits for them before Caddy's configuration`);
-    for (const line of manualRecords(options.zone, addresses.ipv4, addresses.ipv6)) out.say(`   ${line}`);
+    const records = tunnel === null ? manualRecords(options.zone, addresses.ipv4, addresses.ipv6) : tunnelManualRecords(options.zone, tunnelTarget(tunnel.id));
+    for (const line of records) out.say(`   ${line}`);
   }
 
   // 4. The steps.
@@ -1681,6 +1840,7 @@ export async function runSetup(given: SetupOptions, deps: SetupDependencies): Pr
   out.say(ran.length === 0 ? `-> ${server} was already installed: nothing was changed` : `-> sitesolide is installed on ${server}`);
   out.say(`   dashboard  ${dashboard}${context.dashboardDrawn ? "   its password was shown once, above" : ""}`);
   out.say(`   portal     ${portal}${portalDrawn ? "   its password is shown below, once" : ""}`);
+  if (tunnel !== null) out.say(`   tunnel     ${tunnel.id}: Cloudflare's edge hands the zone to the machine, whose firewall opens ssh alone`);
   out.say(`   run now: ${ran.length === 0 ? "nothing" : ran.join(", ")}`);
   out.say(`   already there: ${already.length === 0 ? "nothing" : already.join(", ")}`);
   if (skipped.length > 0) out.say(`   left out: ${skipped.join(", ")}`);

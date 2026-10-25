@@ -599,6 +599,26 @@ describe("the block against the one in service", () => {
     expect(decide(SERVED, `${before}\n\theader X-Extra yes`)).toBe("diverged");
   });
 
+  test("every proxy hands its service the visitor's address; a block from before it did is upgraded without --force", () => {
+    const SERVED: Manifest = { ...OPEN, publicDir: "public" };
+    const forwarded = "{\n\t\theader_up X-Forwarded-For {client_ip}\n\t}\n";
+    expect(block(OPEN)).toInclude(`\treverse_proxy 127.0.0.1:${OPEN.port} ${forwarded}`);
+    expect(block(SERVED)).toInclude(`\treverse_proxy @dynamic 127.0.0.1:${OPEN.port} ${forwarded}`);
+    const before = generateFragment(SERVED, "identity", "hidden", "closable", "peer")!;
+    expect(before).toInclude(`\treverse_proxy @dynamic 127.0.0.1:${OPEN.port}\n`);
+    expect(before).not.toInclude("X-Forwarded-For");
+    expect(isEarlierGeneration(before, SERVED)).toBe(true);
+    expect(decide(SERVED, before)).toBe("upgrades");
+    // Three releases behind at once: before identities, before hide, before the visitor's address.
+    const closed = { ...SERVED, portal: true as const };
+    expect(decide(closed, generateFragment(closed, "cookie", "plain", "closable", "peer"))).toBe("upgrades");
+    // The portal's own stanza is not a service of the project's: it keeps its form.
+    expect(block(closed)).toInclude("\treverse_proxy /_portal/* 127.0.0.1:");
+    expect(block(closed)).not.toInclude("forward_auth @portal_guard 127.0.0.1:3026 {\n\t\t\theader_up X-Forwarded-For");
+    // Hand-edited before the visitor's address: still a hand edit.
+    expect(decide(SERVED, `${before}\n\theader X-Extra yes`)).toBe("diverged");
+  });
+
   test("an earlier block edited by hand is still a hand edit", () => {
     const edited = generateFragment({ ...CLOSED, port: 3031 }, "cookie")!;
     expect(isEarlierGeneration(edited, CLOSED)).toBe(false);

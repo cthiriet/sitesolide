@@ -66,7 +66,7 @@ function cloudflare(api: Api): ZoneApi {
     },
     listRecords: (zone, name) => translated(() => listRecords(api, zone.id, name)),
     createRecord: (zone, record) => translated(() => createRecord(api, zone.id, record)),
-    updateRecord: (zone, record, content) => translated(() => updateRecord(api, zone.id, record.id, content)),
+    updateRecord: (zone, record, content, proxied) => translated(() => updateRecord(api, zone.id, record.id, content, proxied === true)),
     deleteRecord: (zone, record) => translated(() => deleteRecord(api, zone.id, record.id)),
   };
 }

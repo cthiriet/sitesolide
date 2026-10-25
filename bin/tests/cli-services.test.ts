@@ -434,8 +434,8 @@ describe("the Caddy block of a project with several services", () => {
   const fragment = generateFragment(LAB)!;
 
   test("the routed service gets its paths, the main one the rest, the internal one nothing", () => {
-    expect(fragment).toInclude("\t@service-api path /v1/*\n\treverse_proxy @service-api 127.0.0.1:3051\n");
-    expect(fragment).toInclude("\treverse_proxy 127.0.0.1:3050\n");
+    expect(fragment).toInclude("\t@service-api path /v1/*\n\treverse_proxy @service-api 127.0.0.1:3051 {\n\t\theader_up X-Forwarded-For {client_ip}\n\t}\n");
+    expect(fragment).toInclude("\treverse_proxy 127.0.0.1:3050 {\n\t\theader_up X-Forwarded-For {client_ip}\n\t}\n");
     expect(fragment).not.toInclude("3052");
     expect(fragment).not.toInclude("file_server");
   });
@@ -449,7 +449,7 @@ describe("the Caddy block of a project with several services", () => {
     const mixed = generateFragment({ ...LAB, publicDir: "public" })!;
     expect(mixed).toInclude("\troot * /srv/sites/lab/public\n");
     expect(mixed).toInclude("\t@service-platform {\n\t\tnot file\n\t\tnot path /v1/*\n\t}\n");
-    expect(mixed).toInclude("\treverse_proxy @service-platform 127.0.0.1:3050\n");
+    expect(mixed).toInclude("\treverse_proxy @service-platform 127.0.0.1:3050 {\n\t\theader_up X-Forwarded-For {client_ip}\n\t}\n");
     expect(mixed).toInclude("\tfile_server");
   });
 

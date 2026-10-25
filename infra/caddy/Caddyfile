@@ -34,6 +34,13 @@
 	on_demand_tls {
 		ask http://127.0.0.1:3001/interne/domaine-autorise
 	}
+
+	# Global options of this machine's own, laid by `sitesolide setup`: on a
+	# machine served through a Cloudflare Tunnel, infra/tunnel/tunnel.caddy,
+	# which trusts the loopback for the visitor's address. A glob, not a named
+	# import: a machine served directly has none, and must keep working
+	# without the file. One file only ever sits there.
+	import /etc/caddy/global.d/*.caddy
 }
 
 # TLS policy of the zone served, and of it alone.
@@ -151,7 +158,9 @@
 	# block form an exclusive group, which reverse_proxy and file_server do not.
 	# See the header of stanza() in api/src/locks.ts.
 	@form path /api/*
-	reverse_proxy @form 127.0.0.1:3000
+	reverse_proxy @form 127.0.0.1:3000 {
+		header_up X-Forwarded-For {client_ip}
+	}
 
 	# Nobody signs in on the landing, and the X-Sitesolide-* headers a visitor
 	# sends, in any spelling, are taken off before its service reads them, as in

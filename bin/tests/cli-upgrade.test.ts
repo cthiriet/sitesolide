@@ -27,6 +27,7 @@ import {
   type UpgradeOptions,
 } from "../cli/upgrade";
 import { scriptLabels } from "../cli/steps";
+import { tunnelConditions } from "../cli/tunnel";
 import { EMAIL, FakeMachine, fakeKit, HOST, printed, ZONE, type Printed } from "./setup-fakes";
 
 /**
@@ -56,8 +57,11 @@ function folder(prefix = "upgrade-"): string {
   return made;
 }
 
-/** The order the components are brought up to date in, as docs/upgrading.md gives it. */
+/** The order the components of a machine served directly are brought up to date in, as docs/upgrading.md gives it. */
 const ORDER = ["caddy-unit", "backups", "egress", "steward", "dashboard", "collector", "gatekeeper", "installer", "caddy-config", "api", "portal", "monitor"];
+
+/** Every component, the tunnel's included, which a machine served directly does not carry. */
+const ALL = ["caddy-unit", "tunnel", ...ORDER.slice(1)];
 
 /** What each script's --fingerprint prints, as the real scripts word it: checked against them below. */
 const FINGERPRINTED: Record<string, string[]> = {
@@ -306,8 +310,8 @@ describe("what deploy's comparison reads", () => {
 describe("the components", () => {
   test("in docs/upgrading.md's order, each with one survey condition", () => {
     const components = upgradeComponents();
-    expect(components.map((component) => component.id)).toEqual(ORDER);
-    expect(scriptLabels(surveyScript(components))).toEqual(ORDER);
+    expect(components.map((component) => component.id)).toEqual(ALL);
+    expect(scriptLabels(surveyScript(components))).toEqual(ALL);
     // The backup install and the egress proxy before the steward; the
     // gatekeeper and the installer after the dashboard and the steward.
     const at = (id: string) => ORDER.indexOf(id);
@@ -488,6 +492,46 @@ describe("--dry-run", () => {
     expect(real.print.errors[0]!.message).toBe("upgrade stopped at portal: could not tell whether it is done: sitesolide deploy --dry-run --compare in portal/: cannot tell whether /srv/sites/x/sitesolide.json is there");
     expect(runs(w)).toEqual([]);
     expect(hintFor(real.print.errors[0]!.message)).toContain("run `sitesolide upgrade` again");
+  });
+});
+
+describe("a machine served through a Cloudflare Tunnel", () => {
+  const TUNNEL = "6f1c2b8e-1d3a-4c5b-9e7f-0a1b2c3d4e5f";
+  const labels = tunnelConditions({ zone: ZONE, id: TUNNEL, unit: "", caddy: "" }).map((condition) => condition.label);
+  const tunnelWorld = (options: { stale?: string[]; config?: Record<string, string> } = {}) => {
+    const w = world({ config: options.config ?? { server: SERVER, zone: ZONE, email: EMAIL, tunnel: TUNNEL } });
+    w.machine.install(["tunnel", ...labels]);
+    for (const label of options.stale ?? []) w.machine.labels.delete(label);
+    return w;
+  };
+
+  test("a machine served directly carries no tunnel, and the report says nothing of one", async () => {
+    const r = await upgrade(world());
+    expect(r.code).toBe(0);
+    expect(r.statuses.some((status) => status.startsWith("tunnel:"))).toBe(false);
+    expect(r.print.lines.join("\n")).not.toContain("tunnel");
+  });
+
+  test("current, it is read and left; its unit out of date, setup's own run lays it, the credentials untouched", async () => {
+    const current = await upgrade(tunnelWorld());
+    expect(current.statuses[1]).toBe("tunnel:done");
+    const w = tunnelWorld({ stale: ["tunnel-unit"] });
+    const r = await upgrade(w);
+    expect(r.code).toBe(0);
+    expect(r.statuses[1]).toBe("tunnel:ok");
+    const run = w.machine.calls.find((call) => call.tag === "setup:tunnel:run")!;
+    expect(run.input).not.toContain("<<'CREDENTIALS'");
+    expect(run.input).toContain(`tunnel: ${TUNNEL}`);
+  });
+
+  test("a tunnel the configuration does not name is refused before any component, and setup is named", async () => {
+    const w = tunnelWorld({ config: { server: SERVER, zone: ZONE, email: EMAIL } });
+    const r = await upgrade(w);
+    expect(r.code).toBe(1);
+    expect(r.print.errors[0]!.message).toBe(`${SERVER} runs a Cloudflare Tunnel that ${join(w.home, ".config", "sitesolide", "config.json")} does not name`);
+    expect(r.print.errors[0]!.details.join("\n")).toContain("--tunnel <its id>");
+    expect(r.print.checks).toEqual([]);
+    expect(hintFor(r.print.errors[0]!.message)).toContain("--tunnel");
   });
 });
 

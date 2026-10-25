@@ -118,6 +118,23 @@ export const DOMAIN_GENERATIONS = ["closable", "open"] as const;
 
 export type DomainGeneration = (typeof DOMAIN_GENERATIONS)[number];
 
+/**
+ * The generations of a block's proxies, the current one first:
+ *
+ * - `visitor`: every `reverse_proxy` to the project's services hands them the
+ *   visitor's address as `X-Forwarded-For`, Caddy's `{client_ip}`. On a
+ *   machine served directly, that is the peer's address, the very value Caddy
+ *   wrote before; on one served through a Cloudflare Tunnel, whose peer is
+ *   always cloudflared on the loopback, it is the address the edge read,
+ *   which infra/tunnel/tunnel.caddy trusts. Either way the header holds one
+ *   value, the visitor's;
+ * - `peer`: the blocks deployed before, which let Caddy write its peer's
+ *   address, the loopback behind a tunnel.
+ */
+export const FORWARD_GENERATIONS = ["visitor", "peer"] as const;
+
+export type ForwardGeneration = (typeof FORWARD_GENERATIONS)[number];
+
 /** The variable that tells the preview locks whose site a block serves, see api/src/locks.ts. */
 export const SITE_VARIABLE = "sitesolide_site";
 
@@ -125,8 +142,13 @@ function fileServer(files: FileGeneration): string[] {
   return files === "hidden" ? ["\tfile_server {", `\t\thide ${NEVER_SENT.join(" ")}`, "\t}"] : ["\tfile_server"];
 }
 
+/** A proxy to one of the project's services, `@dynamic 127.0.0.1:3000` for instance: see FORWARD_GENERATIONS. */
+function proxy(target: string, forwarded: ForwardGeneration): string[] {
+  return forwarded === "visitor" ? [`\treverse_proxy ${target} {`, "\t\theader_up X-Forwarded-For {client_ip}", "\t}"] : [`\treverse_proxy ${target}`];
+}
+
 /** The routes snippet, shared by the preview and the customer domain. */
-export function generateRoutes(manifest: Manifest, files: FileGeneration = "hidden"): string {
+export function generateRoutes(manifest: Manifest, files: FileGeneration = "hidden", forwarded: ForwardGeneration = "visitor"): string {
   const paths = projectPaths(manifest.slug);
   const lines = [`(${manifest.slug}-routes) {`, "\timport commun", ""];
 
@@ -145,11 +167,11 @@ export function generateRoutes(manifest: Manifest, files: FileGeneration = "hidd
   }
 
   if (hasServices(manifest)) {
-    lines.push(...servicesRoutes(manifest, files));
+    lines.push(...servicesRoutes(manifest, files, forwarded));
   } else if (manifest.publicDir === undefined) {
     lines.push(
       "\t# No static file at all: the whole site is rendered by the service.",
-      `\treverse_proxy 127.0.0.1:${manifest.port}`,
+      ...proxy(`127.0.0.1:${manifest.port}`, forwarded),
     );
   } else {
     const rule = matcher(manifest);
@@ -162,7 +184,7 @@ export function generateRoutes(manifest: Manifest, files: FileGeneration = "hidd
           ? "\t# Whitelist declared in sitesolide.json. The door is not here: the\n\t# portal holds it for the whole block, see the preview block."
           : "\t# Whitelist declared in sitesolide.json: the service carries an\n\t# authentication, and its home must not be served in the clear.",
       `\t@dynamic ${rule}`,
-      `\treverse_proxy @dynamic 127.0.0.1:${manifest.port}`,
+      ...proxy(`@dynamic 127.0.0.1:${manifest.port}`, forwarded),
       "",
       "\t# The rest is served straight by Caddy, without waking the service.",
       ...fileServer(files),
@@ -187,7 +209,7 @@ export function generateRoutes(manifest: Manifest, files: FileGeneration = "hidd
  * An internal service has no line here: Caddy never reaches it, only the
  * project's other services do, over the loopback.
  */
-function servicesRoutes(manifest: Manifest, files: FileGeneration): string[] {
+function servicesRoutes(manifest: Manifest, files: FileGeneration, forwarded: ForwardGeneration): string[] {
   const paths = projectPaths(manifest.slug);
   const exposed = servicesOf(manifest).filter((service) => !service.internal);
   const routed = exposed.filter((service) => service.routes !== undefined);
@@ -200,7 +222,7 @@ function servicesRoutes(manifest: Manifest, files: FileGeneration): string[] {
     lines.push(
       `\t# Service ${service.name}: the paths sitesolide.json declares for it.`,
       `\t@service-${service.name} path ${service.routes!.map(writableRoute).join(" ")}`,
-      `\treverse_proxy @service-${service.name} 127.0.0.1:${service.port}`,
+      ...proxy(`@service-${service.name} 127.0.0.1:${service.port}`, forwarded),
       "",
     );
   }
@@ -209,7 +231,7 @@ function servicesRoutes(manifest: Manifest, files: FileGeneration): string[] {
     lines.push(
       `\t# Service ${rest.name}: every other path. Without a matcher, Caddy sorts`,
       "\t# it after the routed services.",
-      `\treverse_proxy 127.0.0.1:${rest.port}`,
+      ...proxy(`127.0.0.1:${rest.port}`, forwarded),
     );
   } else if (rest !== undefined) {
     const claimed = routed.flatMap((service) => service.routes!);
@@ -220,7 +242,7 @@ function servicesRoutes(manifest: Manifest, files: FileGeneration): string[] {
       "\t\tnot file",
       ...(claimed.length > 0 ? [`\t\tnot path ${claimed.map(writableRoute).join(" ")}`] : []),
       "\t}",
-      `\treverse_proxy @service-${rest.name} 127.0.0.1:${rest.port}`,
+      ...proxy(`@service-${rest.name} 127.0.0.1:${rest.port}`, forwarded),
     );
   }
 
@@ -282,6 +304,7 @@ export function generateFragment(
   generation: PortalGeneration = "identity",
   files: FileGeneration = "hidden",
   domains: DomainGeneration = "closable",
+  forwarded: ForwardGeneration = "visitor",
 ): string | null {
   if (!isApp(manifest)) return null;
 
@@ -308,7 +331,7 @@ export function generateFragment(
     "# hand: the next deployment overwrites it, and a fragment never validated",
     "# holds until the first restart of Caddy.",
     "",
-    generateRoutes(manifest, files),
+    generateRoutes(manifest, files, forwarded),
     "",
   ];
 
@@ -394,19 +417,23 @@ export function generateFragment(
  * Is this block what an earlier release of this generator wrote for the
  * manifest? Then it is the generator's own, behind by a release, and never a
  * decision taken by hand: replacing it with the current generation loses
- * nothing. Two cases today, and their combinations: every block deployed
+ * nothing. Four cases today, and their combinations: every block deployed
  * before the identity headers, protected or not, see PORTAL_GENERATIONS in
- * portal.ts, and the file servers deployed before they hid `.git` and `.env`,
- * see FILE_GENERATIONS.
+ * portal.ts; the file servers deployed before they hid `.git` and `.env`, see
+ * FILE_GENERATIONS; the blocks of a site's own domain before it closed with
+ * the preview, see DOMAIN_GENERATIONS; and the proxies deployed before they
+ * handed on the visitor's address, see FORWARD_GENERATIONS.
  */
 export function isEarlierGeneration(block: string, manifest: Manifest): boolean {
   const current = generateFragment(manifest);
   return PORTAL_GENERATIONS.some((generation) =>
     FILE_GENERATIONS.some((files) =>
-      DOMAIN_GENERATIONS.some((domains) => {
-        const earlier = generateFragment(manifest, generation, files, domains);
-        return earlier !== null && earlier !== current && sameDirectives(block, earlier);
-      }),
+      DOMAIN_GENERATIONS.some((domains) =>
+        FORWARD_GENERATIONS.some((forwarded) => {
+          const earlier = generateFragment(manifest, generation, files, domains, forwarded);
+          return earlier !== null && earlier !== current && sameDirectives(block, earlier);
+        }),
+      ),
     ),
   );
 }

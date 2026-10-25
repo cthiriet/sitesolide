@@ -51,6 +51,8 @@ export class FakeMachine implements Machine {
   readonly sudo = new Set<string>(["root"]);
   /** Run tags that fail, once each. */
   readonly failing = new Set<string>();
+  /** The exit code a failing run gives, 1 unless said here: the tunnel's run tells missing credentials by its own. */
+  readonly failingCode = new Map<string, number>();
   /** The deploy account's login fails even once it is made: a key the account did not get. */
   breakProof = false;
   /**
@@ -136,7 +138,7 @@ export class FakeMachine implements Machine {
 
     if (this.failing.has(match[2])) {
       this.failing.delete(match[2]);
-      return this.answer(1, "", `E: the run of ${step} broke`);
+      return this.answer(this.failingCode.get(match[2]) ?? 1, "", `E: the run of ${step} broke`);
     }
     for (const label of this.known.get(step) ?? []) this.labels.add(label);
     if (step === "account" && !this.breakProof) {
@@ -215,10 +217,14 @@ export function fakeKit(machine: FakeMachine): FakeKit {
   return { run, tasks, failing };
 }
 
+/** What a proxied record answers: an address of Cloudflare's edge, never what the record holds. */
+export const EDGE = { ipv4: "104.16.0.1", ipv6: "2606:4700::1" };
+
 /**
  * The workstation's resolver, reading the records the Cloudflare mock holds,
- * the wildcard answering every name under the zone. `lag` answers nothing for
- * that many questions, as resolvers that have not caught up yet.
+ * the wildcard answering every name under the zone, and a proxied record, a
+ * tunnel's CNAME, with the edge's addresses. `lag` answers nothing for that
+ * many questions, as resolvers that have not caught up yet.
  */
 export function fakeResolver(source: () => { name: string; type: string; content: string }[], lag = { questions: 0 }) {
   const asked: string[] = [];
@@ -231,6 +237,8 @@ export function fakeResolver(source: () => { name: string; type: string; content
     const records = source();
     const exact = records.filter((record) => record.name === name);
     const under = name.endsWith(`.${ZONE}`) && exact.length === 0 ? records.filter((record) => record.name === `*.${ZONE}`) : exact;
+    const proxied = under.some((record) => record.type === "CNAME" && (record as { proxied?: boolean }).proxied === true);
+    if (proxied) return { ipv4: [EDGE.ipv4], ipv6: [EDGE.ipv6] };
     return {
       ipv4: under.filter((record) => record.type === "A").map((record) => record.content),
       ipv6: under.filter((record) => record.type === "AAAA").map((record) => record.content),

@@ -33,7 +33,7 @@
  * message or an error: providers scrub what comes back from outside.
  */
 import { resolveNs } from "node:dns/promises";
-import { describePlan, desiredRecords, planRecords, recordLine, zoneCandidates, type DnsRecord, type RecordAction } from "../cloudflare";
+import { describePlan, desiredRecords, planRecords, planTunnelRecords, recordLine, zoneCandidates, type DnsRecord, type RecordAction } from "../cloudflare";
 import type { Clock, CredentialField, Credentials, Fetch } from "../providers/provider";
 
 export type { DnsRecord, RecordAction };
@@ -55,8 +55,8 @@ export class DnsError extends Error {
 /** A zone as the provider holds it: its id there, and its name, the one asked or a parent. */
 export type ZoneRef = { id: string; name: string };
 
-/** One record a plan creates. */
-export type NewRecord = { name: string; type: "A" | "AAAA"; content: string };
+/** One record a plan creates; `proxied` and a CNAME are a tunnel's, at Cloudflare alone. */
+export type NewRecord = { name: string; type: "A" | "AAAA" | "CNAME"; content: string; proxied?: boolean };
 
 /**
  * What setup asks of a provider's DNS API. Names are absolute, without a
@@ -72,7 +72,8 @@ export interface ZoneApi {
   /** Every record of exactly that name, of every type. */
   listRecords(zone: ZoneRef, name: string): Promise<DnsRecord[]>;
   createRecord(zone: ZoneRef, record: NewRecord): Promise<void>;
-  updateRecord(zone: ZoneRef, record: DnsRecord, content: string): Promise<void>;
+  /** `proxied`, a tunnel's CNAME at Cloudflare alone; every other provider has no proxy and ignores it. */
+  updateRecord(zone: ZoneRef, record: DnsRecord, content: string, proxied?: boolean): Promise<void>;
   deleteRecord(zone: ZoneRef, record: DnsRecord): Promise<void>;
 }
 
@@ -154,6 +155,31 @@ export async function ensureZoneRecords(
   for (const action of actions) if (action.kind === "delete") await api.deleteRecord(found, action.record);
   for (const action of actions) if (action.kind === "update") await api.updateRecord(found, action.record, action.content);
   for (const action of actions) if (action.kind === "create") await api.createRecord(found, { name: action.name, type: action.type, content: action.content });
+  return { zone: found.name, actions };
+}
+
+/**
+ * The zone and its wildcard pointed at a Cloudflare Tunnel, `target` being
+ * `<id>.cfargotunnel.com`: planned whole first, as ensureZoneRecords plans,
+ * nothing written while a record stands in the way unless `replace`.
+ * `dryRun` only reads, and returns the plan.
+ */
+export async function ensureTunnelRecords(api: ZoneApi, zone: string, target: string, replace: boolean, dryRun = false): Promise<{ zone: string; actions: RecordAction[] }> {
+  await api.verify();
+  const found = await api.findZone(zone);
+  const existing = [...(await api.listRecords(found, zone)), ...(await api.listRecords(found, `*.${zone}`))];
+  const actions = planTunnelRecords(existing, zone, target, replace);
+  if (dryRun) return { zone: found.name, actions };
+  const conflicts = actions.filter((action): action is Extract<RecordAction, { kind: "conflict" }> => action.kind === "conflict");
+  if (conflicts.length > 0) {
+    throw new DnsError("records that point elsewhere", "conflict", [
+      ...conflicts.map((conflict) => `${recordLine(conflict.record)}: ${conflict.reason}`),
+      "nothing was written: the zone may be serving something with them",
+    ]);
+  }
+  for (const action of actions) if (action.kind === "delete") await api.deleteRecord(found, action.record);
+  for (const action of actions) if (action.kind === "update") await api.updateRecord(found, action.record, action.content, action.proxied === true);
+  for (const action of actions) if (action.kind === "create") await api.createRecord(found, { name: action.name, type: action.type, content: action.content, proxied: action.proxied === true });
   return { zone: found.name, actions };
 }
 

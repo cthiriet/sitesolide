@@ -1,0 +1,82 @@
+# The zone's Cloudflare Tunnel: Cloudflare's edge hands every request for the
+# zone and its wildcard to this connector, which hands it to Caddy on the
+# loopback. A machine with no public address, behind a NAT at home, serves
+# through it. See docs/tunnel.md.
+#
+# Its configuration, /etc/cloudflared/config.yml, is laid by `sitesolide setup
+# --tunnel` (bin/cli/tunnel.ts). Its credentials, /etc/cloudflared/tunnel.json,
+# are root's alone in 0600: systemd hands the connector a copy of them
+# (LoadCredential), so that the account it runs as reads them without owning
+# them, and no other account reads them at all.
+#
+# Placed by `sitesolide setup`, and by `sitesolide upgrade` on a machine that
+# has it, never by `sitesolide deploy`.
+
+[Unit]
+Description=Cloudflare Tunnel: the zone's requests, from Cloudflare's edge to Caddy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# cloudflared tells systemd it is ready once its first connection to the edge
+# is up; at boot the network may take a while, and Restart= tries again.
+Type=notify
+TimeoutStartSec=60
+ExecStart=/usr/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run --credentials-file %d/tunnel.json
+LoadCredential=tunnel.json:/etc/cloudflared/tunnel.json
+Restart=always
+RestartSec=5
+
+# An account drawn for the run, which owns nothing on the machine: the
+# connector writes no file, it logs to the journal, and it reads its
+# configuration, 0644, and its credentials through systemd.
+DynamicUser=true
+UMask=0077
+
+# No capability at all: it opens connections out, to the edge, and one in
+# over the loopback, to Caddy's 443, and binds nothing but its metrics on
+# 127.0.0.1:20240, which the monitor reads.
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateIPC=true
+ProtectProc=invisible
+ProcSubset=pid
+# What it has no business seeing: the projects' secrets, Caddy's credentials
+# and the lock codes, the steward's and the gatekeeper's state.
+InaccessiblePaths=-/etc/sitesolide -/etc/caddy -/var/lib/sitesolide-steward -/run/sitesolide-steward -/run/sitesolide-gatekeeper -/srv/sites
+
+# The network: the edge, on the Internet, and Caddy on the loopback. The
+# private ranges, the home network the machine may sit on and the cloud's
+# metadata service, are refused: a compromised connector reaches no other
+# machine of the network it sits on. THE RESOLVER MUST NOT LIVE IN ONE OF
+# THESE RANGES: systemd-resolved's 127.0.0.53 passes, a box's 192.168.1.1
+# named in /etc/resolv.conf does not, and every connection to the edge fails.
+IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 fc00::/7 fe80::/10 multicast
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+# A few tens of MiB in service; the bound keeps a leak from taking the memory
+# of the projects, or of whatever else shares the host.
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

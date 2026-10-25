@@ -78,6 +78,12 @@ export type HardenContext = {
   /** The port ssh answered on, which the firewall must keep open. */
   sshPort: number;
   /**
+   * The Cloudflare Tunnel the machine is served through, null when it is
+   * served directly: the firewall then opens ssh alone, every visitor coming
+   * in through the connector's own connection out.
+   */
+  tunnel?: { id: string } | null;
+  /**
    * Whether the account step found the deploy account complete. Until then
    * nothing logs in as it: a login refused to an account that does not exist
    * is a line fail2ban counts against the workstation.
@@ -290,19 +296,30 @@ chmod 600 "$keys"
 
 // --- the firewall ------------------------------------------------------------------
 
+/** The web's ports, which a machine behind a tunnel keeps closed. */
+const WEB_PORTS = [80, 443];
+
 /**
  * The port ssh answered on rather than 22 by habit: a machine whose sshd
- * listens elsewhere would be cut off by the first `ufw enable`.
+ * listens elsewhere would be cut off by the first `ufw enable`. Behind a
+ * tunnel, that port alone: every request comes in over the connector's own
+ * connection out, and Let's Encrypt asks the zone's DNS, never the machine.
  */
-export function firewallPorts(sshPort: number): number[] {
-  return [...new Set([sshPort, 80, 443])].sort((a, b) => a - b);
+export function firewallPorts(sshPort: number, tunnel = false): number[] {
+  return [...new Set([sshPort, ...(tunnel ? [] : WEB_PORTS)])].sort((a, b) => a - b);
 }
 
-export function firewallCheck(sshPort: number): string {
+/** The web's ports a tunnel's firewall closes, the one ssh answers on spared. */
+function closedPorts(sshPort: number, tunnel: boolean): number[] {
+  return tunnel ? WEB_PORTS.filter((port) => port !== sshPort) : [];
+}
+
+export function firewallCheck(sshPort: number, tunnel = false): string {
   return machineCheck("setup:firewall:check", [
     { label: "ufw-active", test: "ufw status | grep -q '^Status: active'" },
     { label: "ufw-deny-incoming", test: "ufw status verbose | grep -q 'Default: deny (incoming)'" },
-    ...firewallPorts(sshPort).map((port) => ({ label: `ufw-${port}`, test: `ufw status | grep -Eq '^${port}/tcp +ALLOW'` })),
+    ...firewallPorts(sshPort, tunnel).map((port) => ({ label: `ufw-${port}`, test: `ufw status | grep -Eq '^${port}/tcp +ALLOW'` })),
+    ...closedPorts(sshPort, tunnel).map((port) => ({ label: `ufw-${port}-closed`, test: `! ufw status | grep -Eq '^${port}/tcp( \\(v6\\))? +ALLOW'` })),
   ]);
 }
 
@@ -311,11 +328,14 @@ export function firewallCheck(sshPort: number): string {
  * ufw is enabled: every command setup sends is a new connection, and one
  * refused between two lines would leave the script half run.
  */
-export function firewallRun(sshPort: number): string {
+export function firewallRun(sshPort: number, tunnel = false): string {
+  const closed = closedPorts(sshPort, tunnel);
   return runScript(
     "setup:firewall:run",
     `
-for port in ${firewallPorts(sshPort).join(" ")}; do ufw allow "$port/tcp" >/dev/null </dev/null; done
+for port in ${firewallPorts(sshPort, tunnel).join(" ")}; do ufw allow "$port/tcp" >/dev/null </dev/null; done${
+      closed.length === 0 ? "" : `\nfor port in ${closed.join(" ")}; do ufw delete allow "$port/tcp" >/dev/null 2>&1 </dev/null || true; done`
+    }
 ufw default deny incoming >/dev/null </dev/null
 ufw default allow outgoing >/dev/null </dev/null
 ufw --force enable >/dev/null </dev/null
@@ -527,10 +547,11 @@ export function hardeningSteps<C extends HardenContext>(): Step<C>[] {
     {
       id: "firewall",
       title: "firewall",
-      check: check("setup:firewall:check", (context) => firewallCheck(context.sshPort)),
+      check: check("setup:firewall:check", (context) => firewallCheck(context.sshPort, (context.tunnel ?? null) !== null)),
       run: async (context) => {
-        await rootRun(context.machine, context.operator, "setup:firewall:run", firewallRun(context.sshPort), "ufw refused the rules");
-        return `ufw: ${firewallPorts(context.sshPort).join(", ")} in, the rest refused`;
+        const tunnel = (context.tunnel ?? null) !== null;
+        await rootRun(context.machine, context.operator, "setup:firewall:run", firewallRun(context.sshPort, tunnel), "ufw refused the rules");
+        return `ufw: ${firewallPorts(context.sshPort, tunnel).join(", ")} in, the rest refused${tunnel ? ": the web comes in through the tunnel" : ""}`;
       },
       inspect: (context) => inspect(context, "sudo ufw status verbose"),
     },

@@ -82,6 +82,12 @@ export type Config = {
    * production. A test installation's alone.
    */
   acme?: string;
+  /**
+   * The id of the Cloudflare Tunnel the machine is served through, as setup
+   * was told with `--tunnel`; absent on a machine served directly. Nothing of
+   * its credentials, which the machine alone keeps. See bin/cli/tunnel.ts.
+   */
+  tunnel?: string;
 };
 
 /** The one value of `acme` that changes anything. */
@@ -244,7 +250,7 @@ export function configPath(home = homedir(), environment: Record<string, string 
 }
 
 /** The settings `init` writes only when they are given or already set. */
-export const OPTIONAL_SETTINGS = ["contact", "vault", "sites", "api", "dns", "acme"] as const;
+export const OPTIONAL_SETTINGS = ["contact", "vault", "sites", "api", "dns", "acme", "tunnel"] as const;
 
 /**
  * The file `sitesolide init` writes, and `sitesolide setup` too: the three
@@ -324,8 +330,10 @@ export function mergeConfig(
   const sites = environment.SITESOLIDE_SITES_REPO ?? adopted.sites ?? null;
   const contact = environment.SITESOLIDE_CONTACT ?? adopted.contact ?? null;
   const acme = environment.SITESOLIDE_ACME ?? adopted.acme;
+  const tunnel = adopted.tunnel;
   return {
     ...(acme === ACME_STAGING ? { acme } : {}),
+    ...(typeof tunnel === "string" && tunnel !== "" ? { tunnel } : {}),
     server: required.server as string,
     zone: required.zone as string,
     email: required.email as string,

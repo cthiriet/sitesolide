@@ -23,7 +23,10 @@ import { CLI, run, TESTS_ROOT, TEST_EMAIL, TEST_ZONE } from "./run";
 
 const FOLDERS: string[] = [];
 let vm: FakeVm | null = null;
-const IDS = upgradeComponents().map((component) => component.id);
+/** Every component a machine served directly may carry: an absent tunnel is no line of the report. */
+const IDS = upgradeComponents()
+  .filter((component) => component.optional !== true)
+  .map((component) => component.id);
 
 afterEach(() => {
   vm?.cleanup();
@@ -78,7 +81,9 @@ function machine(installed: string[], answers: Record<string, string> = {}): Fak
   made.acceptWrites();
   // The answers are printed in the order laid, and only the last `check:` line counts.
   made.answer(":check", "check: done\n");
-  const missing = IDS.filter((id) => !installed.includes(id));
+  const missing = upgradeComponents()
+    .map((component) => component.id)
+    .filter((id) => !installed.includes(id));
   made.answer("upgrade:survey:check", missing.length === 0 ? "check: done\n" : `check: missing ${missing.join(" ")}\n`);
   for (const [tag, output] of Object.entries(answers)) made.answer(tag, output);
   return made;
