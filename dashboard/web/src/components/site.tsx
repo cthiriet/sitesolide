@@ -16,8 +16,9 @@ import { WithSnapshot, PageBody, EmptyState, PageHeader, Panel } from "@/compone
 import type { HistoryFilter } from "@/lib/history"
 import { isPerson } from "@/lib/identity"
 import { pageTitle, siteUrl, type Section } from "@/lib/pages"
-import { siteDiscrepancies, siteState } from "@/lib/site-card"
-import { TONE_DOT } from "@/lib/tones"
+import { headerState, kindLine, siteDiscrepancies } from "@/lib/site-card"
+import type { ServiceState } from "@/lib/sites"
+import { TONE_DOT, TONE_TEXT } from "@/lib/tones"
 import type { Discrepancy, ProjectView, Site } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -49,13 +50,16 @@ export function useSite(slug: string): SiteData {
   }, [snapshot, secrets.projects, slug])
 }
 
-/** A site's state in one word and one tone, for the switcher and the sidebar: the same as under its title. */
-function useSiteStates(): { slug: string; tone: ReturnType<typeof siteState>["tone"]; label: string }[] {
+/**
+ * A site's state for the switcher, the same as under its title: quiet when
+ * fine, null then, its word and its tone otherwise.
+ */
+function useSiteStates(): { slug: string; state: ServiceState | null }[] {
   const { snapshot } = useData()
   return useMemo(() => {
     if (snapshot === null) return []
     return snapshot.sites
-      .map((site) => ({ slug: site.slug, ...siteState(site, siteDiscrepancies(snapshot.discrepancies, site.slug)) }))
+      .map((site) => ({ slug: site.slug, state: headerState(site, siteDiscrepancies(snapshot.discrepancies, site.slug)) }))
       .sort((a, b) => a.slug.localeCompare(b.slug, "en"))
   }, [snapshot])
 }
@@ -65,7 +69,8 @@ function useSiteStates(): { slug: string; tone: ReturnType<typeof siteState>["to
 /**
  * Moving from one site to another without going back through the home page, in
  * the same section: one site's Secrets lead to another's. The sites by name,
- * each with its state dot; the current one ticked. Every entry is a real link.
+ * a state dot on those in trouble alone; the current one ticked. Every entry
+ * is a real link.
  */
 function SiteMenu({ slug, section }: { slug: string; section: Section }) {
   const states = useSiteStates()
@@ -81,9 +86,9 @@ function SiteMenu({ slug, section }: { slug: string; section: Section }) {
               render={<InternalLink href={siteUrl(state.slug, section)} aria-current={current ? "page" : undefined} />}
               className="h-9 gap-2.5"
             >
-              <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", TONE_DOT[state.tone])} />
+              <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", state.state !== null && TONE_DOT[state.state.tone])} />
               <span className="min-w-0 flex-1 truncate">{state.slug}</span>
-              <span className="sr-only">, {state.label}</span>
+              {state.state !== null && <span className="sr-only">, {state.state.label}</span>}
               {current && <Check aria-hidden="true" className="text-muted-foreground" />}
             </DropdownMenuItem>
           )
@@ -94,14 +99,15 @@ function SiteMenu({ slug, section }: { slug: string; section: Section }) {
 }
 
 /**
- * The current site in the sidebar, on the card surface: its name and its
- * state, with the switcher behind it. Collapsed, the sidebar keeps only its
- * initial, with the state dot.
+ * The current site in the sidebar, on the card surface: its name, then what
+ * it is when fine, "App", and its state in its tone otherwise, "Restarting,
+ * 3 errors", with the switcher behind it. Collapsed, the sidebar keeps only
+ * its initial, with the state dot while it is in trouble.
  */
 export function SidebarSitePicker({ slug, section }: { slug: string; section: Section }) {
   const { snapshot } = useData()
   const { site, discrepancies } = useSite(slug)
-  const state = site === null ? null : siteState(site, discrepancies)
+  const state = site === null ? null : headerState(site, discrepancies)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -129,8 +135,8 @@ export function SidebarSitePicker({ slug, section }: { slug: string; section: Se
         </span>
         <span className="grid min-w-0 flex-1 text-left leading-tight">
           <span className="truncate font-semibold">{slug}</span>
-          <span className="truncate text-xs text-muted-foreground">
-            {state === null ? (snapshot === null ? "Loading" : "Not on this server") : state.label}
+          <span className={cn("truncate text-xs", state === null ? "text-muted-foreground" : TONE_TEXT[state.tone])}>
+            {site === null ? (snapshot === null ? "Loading" : "Not on this server") : state === null ? kindLine(site).text : state.label}
           </span>
         </span>
         <ChevronsUpDown aria-hidden="true" className="ml-auto text-muted-foreground" />

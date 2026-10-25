@@ -320,10 +320,13 @@ below them in mono.
 
 **Two levels.** On the machine's pages (Sites, Activity, People, Tokens,
 Connectors), the sidebar carries them. Inside a site it becomes that site's: the *All sites*
-return, the current site on a raised card (its initial on a tile, name, state
-in one sentence, tone dot), which opens the site switcher, then its five sections,
-Overview, Audience, Secrets, Access and Backups. Collapsed, the site is just
-its initial and its dot. On a phone the tabs follow the level: five for the
+return, the current site on a raised card (its initial on a tile, its name,
+then its kind when fine, "App", "Static site", and its state in its tone with
+a dot when not, "Restarting, 3 errors", quiet when fine like the Overview's
+header), which opens the site switcher, every site by name, a dot on those in
+trouble alone; then its five sections, Overview, Audience, Secrets, Access
+and Backups. Collapsed, the site is just its initial, with its dot while in
+trouble. On a phone the tabs follow the level: five for the
 machine, five for a site, on one row.
 
 **A person's shell.** Someone signed in with their company account sees the
@@ -598,6 +601,12 @@ with one meaning everywhere and its words in its tooltip (`lib/legend.ts`):
 | `Pause`, 12 px | a project or a permission a person's token holds but may not use now, their role being below it | muted |
 | `Lock`, 12 px, after a label | a write that asks for the unlock first | the label's |
 | `Server`, `Cloud` | where a snapshot lives: on this server, in the offsite copy | muted |
+| `Layers`, `History`, `UsersRound`, `KeySquare`, `Plug` | the machine's pages in the sidebar, the tabs and the Sites row menu: Sites, Activity, People, Tokens, Connectors | `secondary-foreground` |
+| `Gauge`, `ChartNoAxesColumn`, `Vault`, `ShieldCheck`, `DatabaseBackup` | a site's sections, there and in the Sites row menu: Overview, Audience, Secrets, Access, Backups | `secondary-foreground` |
+
+Navigation borrows no row's icon: Sites is not a `Globe`, which says
+*Public*, nor Secrets a `KeyRound`, which says a code; a note under every
+way a site opens is not a `Globe` either (`Link2`).
 
 The facet menus show the same icons beside the same words: they are the
 legend. A sheet's facts use `LegendEntry`, the icon and its word.
@@ -786,7 +795,7 @@ deployments.
   trouble in its title; the access icon (`AccessIcon`, the exempt paths and
   the code in its tooltip); the deployment's age; the row menu (*Open site*,
   *Copy address*, *Copy code*, *Copy link with code*, then the site's
-  sections). The whole row leads to the Overview. A restart pending, which no
+  sections with the sidebar's icons). The whole row leads to the Overview. A restart pending, which no
   discrepancy says, is the state's word in attention with no gutter icon,
   after any issue, and in the tooltip.
 - **On two lines**, below 42 rem of the table: the kind, the slug and its

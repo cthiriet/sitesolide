@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react"
-import { Globe, SearchX, createLucideIcon } from "lucide-react"
+import { Layers, SearchX, createLucideIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useData } from "@/components/data"
@@ -97,7 +97,7 @@ function EmptyRows({ list, narrowed }: { list: ListControls; narrowed: Narrowed<
     const platform = narrowed.counts.kind.platform ?? 0
     return (
       <InlineEmpty
-        icon={Globe}
+        icon={Layers}
         action={
           platform > 0 && (
             <Button variant="link" className={link} onClick={() => list.setFacet("kind", "platform")}>
@@ -161,7 +161,7 @@ function Sites({ snapshot, list, narrowed }: { snapshot: Snapshot; list: ListCon
     if (person) {
       return (
         <Panel>
-          <EmptyState icon={Globe} title="No project of yours yet">
+          <EmptyState icon={Layers} title="No project of yours yet">
             {identity.create
               ? "You may create projects: create a token on the Tokens page, then run sitesolide deploy in the project's folder. You become its Admin."
               : "A project appears here once an Admin of it, or the owner, gives you a role on it."}
@@ -174,7 +174,7 @@ function Sites({ snapshot, list, narrowed }: { snapshot: Snapshot; list: ListCon
         <MachineStrip snapshot={snapshot} sort={list.sort} onSort={(sort) => list.setSort(list.sort === sort ? SITE_SORTS[0]!.value : sort)} />
         <RowlessIssues issues={rowless} />
         <Panel full>
-          <InlineEmpty icon={Globe}>{FRESH_TITLE}. Run sitesolide deploy in a project's folder.</InlineEmpty>
+          <InlineEmpty icon={Layers}>{FRESH_TITLE}. Run sitesolide deploy in a project's folder.</InlineEmpty>
         </Panel>
       </>
     )

@@ -1,5 +1,5 @@
 import { useMemo } from "react"
-import { ChartNoAxesColumn, ChevronLeft, DatabaseBackup, Gauge, Globe, History, KeyRound, KeySquare, LogOut, PanelLeft, Plug, ShieldCheck, UsersRound, type LucideIcon } from "lucide-react"
+import { ChartNoAxesColumn, ChevronLeft, DatabaseBackup, Gauge, History, KeySquare, Layers, LogOut, PanelLeft, Plug, ShieldCheck, UsersRound, Vault, type LucideIcon } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -24,20 +24,24 @@ import { TONE_BADGE, TONE_DOT } from "@/lib/tones"
 import { cn } from "@/lib/utils"
 import { VERSION } from "@/lib/version"
 
-/** The icon of each machine page. */
+/**
+ * The icon of each machine page. None borrows a row's icon (web/DESIGN.md
+ * section 5, *Icons*): Globe says Public and KeyRound a code, so the sites
+ * are a stack and the secrets a vault.
+ */
 const MACHINE_ICONS: Record<MachinePage, LucideIcon> = {
-  home: Globe,
+  home: Layers,
   activity: History,
   people: UsersRound,
   tokens: KeySquare,
   connectors: Plug,
 }
 
-/** The icon of each section of a site, shared by the sidebar and the tabs. */
-const SECTION_ICONS: Record<Section, LucideIcon> = {
+/** The icon of each section of a site, shared by the sidebar, the tabs and the Sites row menu. */
+export const SECTION_ICONS: Record<Section, LucideIcon> = {
   overview: Gauge,
   audience: ChartNoAxesColumn,
-  secrets: KeyRound,
+  secrets: Vault,
   access: ShieldCheck,
   backups: DatabaseBackup,
 }

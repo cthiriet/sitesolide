@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react"
-import { KeyRound } from "lucide-react"
 import { GeneralAccessLine, GeneralAccessPanel } from "@/components/access-general"
 import { PeopleWithAccess } from "@/components/access-people"
 import { useData } from "@/components/data"
@@ -103,7 +102,7 @@ function Content({ site }: { site: Site }) {
       {problem !== null && <Banner tone={problem.tone}>{problem.text}</Banner>}
 
       {page !== null && !person && !page.signIn.configured && (
-        <Banner tone="attention" icon={KeyRound}>
+        <Banner tone="attention">
           Company sign-in isn't set up on this server, so everyone you add gets password access, and nobody but you signs
           in to the dashboard. Set <code className="font-mono text-xs">OIDC_ISSUER</code>,{" "}
           <code className="font-mono text-xs">OIDC_CLIENT_ID</code> and <code className="font-mono text-xs">OIDC_CLIENT_SECRET</code>{" "}

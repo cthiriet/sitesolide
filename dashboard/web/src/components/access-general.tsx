@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type SyntheticEvent } from "react"
-import { ChevronDown, CircleCheck, CircleX, Globe, Info, KeyRound, Lock, RefreshCw, type LucideIcon } from "lucide-react"
+import { ChevronDown, CircleCheck, CircleX, Globe, Info, KeyRound, Link2, Lock, RefreshCw, type LucideIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
@@ -339,7 +339,8 @@ export function GeneralAccessPanel({
           }
         />
       )}
-      {addressLine !== null && <Note icon={Globe}>{addressLine}</Note>}
+      {/* Link2, not Globe: Globe says Public, and this line stands under every way. */}
+      {addressLine !== null && <Note icon={Link2}>{addressLine}</Note>}
       {!reads && stewardReason !== null && (
         <Note icon={Info} label="Why it can't change here: ">
           {stewardReason}

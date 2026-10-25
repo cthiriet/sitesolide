@@ -8,6 +8,7 @@ import { useData } from "@/components/data"
 import { CellText, DataTable, RowLink, RowMenu, RowMenuLink, type Column } from "@/components/data-table"
 import { AccessIcon, KindIcon } from "@/components/legend"
 import { StateLabel, When } from "@/components/page"
+import { SECTION_ICONS } from "@/components/sidebar"
 import { roleLabel } from "@/lib/access"
 import { ABSENT, size, sizeOutOf } from "@/lib/format"
 import { roleOn } from "@/lib/identity"
@@ -167,11 +168,15 @@ function SiteMenu({ site }: { site: ListedSite }) {
         <>
           <DropdownMenuSeparator />
           <DropdownMenuGroup>
-            {sections.map((entry) => (
-              <RowMenuLink key={entry.section} href={siteUrl(site.slug, entry.section)}>
-                {entry.title}
-              </RowMenuLink>
-            ))}
+            {sections.map((entry) => {
+              const Icon = SECTION_ICONS[entry.section]
+              return (
+                <RowMenuLink key={entry.section} href={siteUrl(site.slug, entry.section)}>
+                  <Icon />
+                  {entry.title}
+                </RowMenuLink>
+              )
+            })}
           </DropdownMenuGroup>
         </>
       )}
