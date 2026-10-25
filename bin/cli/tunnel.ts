@@ -63,6 +63,43 @@ export const TUNNEL_METRICS = "127.0.0.1:20240";
 /** The unit `cloudflared service install` lays, a second connector beside this one's when it runs. */
 export const PACKAGE_UNIT = "cloudflared.service";
 
+/**
+ * cloudflared kept current: its repository among those unattended-upgrades
+ * takes, and the connector restarted once dpkg has replaced its binary.
+ * Cloudflare supports a connector for about a year, and a box at home is left
+ * alone longer than that; the security updates setup turns on take only
+ * Debian's own origins by default.
+ */
+export const TUNNEL_UPGRADES = "/etc/apt/apt.conf.d/52sitesolide-cloudflared";
+export const TUNNEL_AFTER_UPGRADE = "/usr/local/lib/sitesolide/tunnel-after-upgrade";
+
+/** The apt configuration: Cloudflare's origin, and the hook after every dpkg run. */
+export const TUNNEL_UPGRADES_CONTENT = [
+  "// Laid by sitesolide setup --tunnel (bin/cli/tunnel.ts): cloudflared, from",
+  "// Cloudflare's repository, upgraded with the security updates, and the",
+  "// connector restarted once its binary changed.",
+  'Unattended-Upgrade::Origins-Pattern { "origin=cloudflared,label=cloudflared"; };',
+  `DPkg::Post-Invoke { "${TUNNEL_AFTER_UPGRADE} || true"; };`,
+  "",
+].join("\n");
+
+/**
+ * The hook: after any dpkg run, the connector restarted when cloudflared's
+ * binary changed since it started. The change time, not the modification
+ * time, which dpkg sets to the package's own build date: the change time is
+ * the moment it was laid.
+ */
+export const TUNNEL_AFTER_UPGRADE_CONTENT = [
+  "#!/bin/sh",
+  "# Laid by sitesolide setup --tunnel (bin/cli/tunnel.ts), run by apt after dpkg:",
+  "# the tunnel's connector restarted when cloudflared changed since it started.",
+  `started=$(systemctl show -p ActiveEnterTimestamp --value ${TUNNEL_UNIT} 2>/dev/null)`,
+  '[ -n "$started" ] || exit 0',
+  '[ "$(stat -c %Z /usr/bin/cloudflared 2>/dev/null || echo 0)" -gt "$(date -d "$started" +%s)" ] || exit 0',
+  `systemctl try-restart ${TUNNEL_UNIT}`,
+  "",
+].join("\n");
+
 /** The kit's files the step lays as they are. */
 export const TUNNEL_KIT_FILES = { unit: "infra/tunnel/sitesolide-tunnel.service", caddy: "infra/tunnel/tunnel.caddy" } as const;
 
@@ -165,6 +202,8 @@ export function tunnelConditions(files: TunnelFiles): Condition[] {
     ...sameFile("tunnel-config", TUNNEL_CONFIG, tunnelConfig(files.zone, files.id), "644"),
     ...sameFile("tunnel-unit", TUNNEL_UNIT_FILE, files.unit, "644"),
     ...sameFile("tunnel-caddy", CADDY_TUNNEL_FILE, files.caddy, "644"),
+    ...sameFile("tunnel-upgrades", TUNNEL_UPGRADES, TUNNEL_UPGRADES_CONTENT, "644"),
+    ...sameFile("tunnel-after-upgrade", TUNNEL_AFTER_UPGRADE, TUNNEL_AFTER_UPGRADE_CONTENT, "755"),
     { label: "tunnel-enabled", test: `systemctl is-enabled --quiet ${TUNNEL_UNIT}` },
     { label: "tunnel-active", test: `systemctl is-active --quiet ${TUNNEL_UNIT}` },
     { label: "tunnel-ready", test: `curl -fsS --max-time 5 http://${TUNNEL_METRICS}/ready` },
@@ -227,6 +266,9 @@ export function tunnelRun(files: TunnelFiles, credentials: string | null): strin
       ? `
 if ! { [ -f ${TUNNEL_CREDENTIALS} ] && ${namesTunnel(TUNNEL_CREDENTIALS, id)}; }; then
   if [ -f ${own} ] && ${namesTunnel(own, id)}; then
+    # The file taken is a copy of the secret too: root's alone as well.
+    chown root:root ${own}
+    chmod 600 ${own}
     install -m 600 -o root -g root ${own} ${TUNNEL_CREDENTIALS}
     changed="$changed credentials"
     echo "${TUNNEL_SAID.adopted} ${own}"
@@ -279,6 +321,10 @@ if systemctl is-active --quiet ${PACKAGE_UNIT} || systemctl is-enabled --quiet $
   systemctl disable --now ${PACKAGE_UNIT} >/dev/null 2>&1
   echo "${TUNNEL_SAID.second}"
 fi
+# Its upgrades, laid once the connector runs: they restart nothing now.
+install -d -m 0755 -o root -g root ${TUNNEL_AFTER_UPGRADE.slice(0, TUNNEL_AFTER_UPGRADE.lastIndexOf("/"))}
+${layFile(TUNNEL_AFTER_UPGRADE, "755", TUNNEL_AFTER_UPGRADE_CONTENT, "HOOK", "hook")}
+${layFile(TUNNEL_UPGRADES, "644", TUNNEL_UPGRADES_CONTENT, "UPGRADES", "upgrades")}
 install -d -m 0755 -o root -g root ${CADDY_TUNNEL_FILE.slice(0, CADDY_TUNNEL_FILE.lastIndexOf("/"))}
 previous=""
 if [ -f ${CADDY_TUNNEL_FILE} ]; then previous=$(mktemp /etc/caddy/.sitesolide.XXXXXX); cp -p ${CADDY_TUNNEL_FILE} "$previous"; fi

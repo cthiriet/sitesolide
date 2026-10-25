@@ -470,6 +470,8 @@ describe("a closed site's domain switched on: what Caddy serves must close it", 
 
   test("an app: the block this manifest generates, nothing else", () => {
     expect(domainLeftOpen(OWN, { block: generateFragment(OWN), caddyfile: null, locks: null })).toBeNull();
+    // A block whose proxies predate the visitor's address closes the domain all the same.
+    expect(domainLeftOpen(OWN, { block: generateFragment(OWN, "identity", "hidden", "closable", "peer"), caddyfile: null, locks: null })).toBeNull();
     for (const block of [null, generateFragment(OWN, "identity", "hidden", "open"), generateFragment({ ...OWN, domain: { ...OWN.domain!, aliases: ["shop.sample-agency.example"] } })]) {
       expect(domainLeftOpen(OWN, { block, caddyfile: null, locks: null })).toBe("the Caddy block in service is not the one this sitesolide.json generates");
     }

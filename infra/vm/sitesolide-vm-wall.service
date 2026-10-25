@@ -1,10 +1,16 @@
 # The wall around sitesolide's VM, wall.nft, loaded at every boot before the
-# network and before the VM, which requires it: the VM never runs without it.
-# Laid by infra/vm/install.sh. See docs/tunnel.md.
+# network and before the VM, which is bound to it: the VM never runs without
+# it. Laid by infra/vm/install.sh. See docs/tunnel.md.
+#
+# After nftables.service, whose configuration on Debian and Ubuntu starts with
+# `flush ruleset`, which would take this table with it: loaded after it at
+# boot, and laid again after its every start, reload and stop by the drop-in
+# nftables-wall.conf.
 
 [Unit]
 Description=The wall around sitesolide's VM: its account reaches neither this machine nor its network
 DefaultDependencies=no
+After=nftables.service
 Before=network-pre.target
 Wants=network-pre.target
 

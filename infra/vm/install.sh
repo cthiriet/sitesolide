@@ -27,7 +27,8 @@
 #   seed         cloud-init's first boot: the key for root, and public
 #                resolvers, which the wall leaves the guest
 #   wall         wall.nft and sitesolide-vm-wall.service: QEMU's account opens
-#                no connection to this machine nor to its network
+#                no connection to this machine nor to its network; and a
+#                drop-in that lays it again after nftables.service flushes
 #   VM           sitesolide-vm.service, from this folder's template
 #
 # Then it starts the VM, proves the wall from QEMU's own account, and prints
@@ -187,6 +188,8 @@ fi
 echo "-> wall"
 install -m 0644 -o root -g root "$HERE/wall.nft" "$CONFIG/wall.nft"
 install -m 0644 -o root -g root "$HERE/sitesolide-vm-wall.service" /etc/systemd/system/sitesolide-vm-wall.service
+install -d -m 0755 -o root -g root /etc/systemd/system/nftables.service.d
+install -m 0644 -o root -g root "$HERE/nftables-wall.conf" /etc/systemd/system/nftables.service.d/50-sitesolide-vm.conf
 
 echo "-> VM"
 install -m 0755 -o root -g root "$HERE/powerdown" "$LIB/powerdown"
@@ -222,16 +225,20 @@ else
 fi
 
 echo "-> the wall, proven from QEMU's account"
-# This machine's own ssh, on its loopback, is open to every account but
-# QEMU's: reaching it would be reaching the host's other services.
+# This machine's own ssh, on its loopback and on the address its default
+# route leaves from, is open to every account but QEMU's: reaching it would
+# be reaching the host's other services.
+own=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1)
 if ss -Hltn 'sport = :22' | grep -q .; then
-  if runuser -u "$ACCOUNT" -- bash -c 'exec 3<>/dev/tcp/127.0.0.1/22' 2>/dev/null; then
-    systemctl stop sitesolide-vm.service
-    die "QEMU's account reached this machine's loopback: the wall does not hold, the VM is stopped" "sudo nft list table inet sitesolide_vm says what is loaded"
-  fi
-  echo "   127.0.0.1:22 refused to $ACCOUNT, open to the others"
+  for address in 127.0.0.1 ${own:+"$own"}; do
+    if runuser -u "$ACCOUNT" -- bash -c "exec 3<>/dev/tcp/$address/22" 2>/dev/null; then
+      systemctl stop sitesolide-vm.service
+      die "QEMU's account reached $address: the wall does not hold, the VM is stopped" "sudo nft list table inet sitesolide_vm says what is loaded"
+    fi
+    echo "   $address:22 refused to $ACCOUNT, open to the others"
+  done
 else
-  echo "   no ssh listening on this machine's loopback to prove it against: sudo nft list table inet sitesolide_vm"
+  echo "   no ssh listening on this machine to prove it against: sudo nft list table inet sitesolide_vm"
 fi
 
 echo

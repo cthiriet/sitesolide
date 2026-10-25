@@ -460,7 +460,12 @@ export type Served = { block: string | null; caddyfile: string | null; locks: st
  */
 export function domainLeftOpen(manifest: Manifest, served: Served): string | null {
   const generated = generateFragment(manifest);
-  if (generated !== null && (served.block === null || !sameDirectives(served.block, generated))) {
+  // The same block with the proxies of before, which hand the service the
+  // peer's address rather than the visitor's: nothing of what closes a domain
+  // differs, and a site deployed before them closes its domain as well.
+  const peer = generateFragment(manifest, "identity", "hidden", "closable", "peer");
+  const current = (block: string) => sameDirectives(block, generated!) || (peer !== null && sameDirectives(block, peer));
+  if (generated !== null && (served.block === null || !current(served.block))) {
     return "the Caddy block in service is not the one this sitesolide.json generates";
   }
   if (generated === null && (served.caddyfile === null || !served.caddyfile.includes(`\tvars ${SITE_VARIABLE} {folder}\n`))) {

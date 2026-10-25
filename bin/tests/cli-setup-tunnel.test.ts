@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseSetupArguments, REFUSALS, runSetup, type SetupOptions } from "../cli/setup";
+import { parseSetupArguments, REFUSALS, resolvesThroughEdge, runSetup, shownTunnel, type SetupOptions } from "../cli/setup";
 import { NO_CREDENTIALS_EXIT, tunnelTarget } from "../cli/tunnel";
 import { startCloudflareMock, type CloudflareMock } from "./cloudflare-mock";
 import { bench, EDGE, EMAIL, HOST, printed, TOKEN, ZONE, type Bench } from "./setup-fakes";
@@ -53,10 +53,13 @@ const AT_HOME = {
   addresses: JSON.stringify([{ ifname: "eth0", addr_info: [{ family: "inet", local: HOME_ADDRESS, scope: "global" }] }]),
 };
 
-function world(records: Parameters<typeof startCloudflareMock>[0]["records"] = []): { b: Bench; folder: string; credentials: string; mock: CloudflareMock } {
+function world(
+  records: Parameters<typeof startCloudflareMock>[0]["records"] = [],
+  machine: { facts?: Record<string, string>; token?: string | null } = { facts: AT_HOME },
+): { b: Bench; folder: string; credentials: string; mock: CloudflareMock } {
   mock = startCloudflareMock({ token: TOKEN, zones: [{ id: "zone-1", name: ZONE }], records });
   const { folder, credentials } = home();
-  return { b: bench(mock, folder, { facts: AT_HOME }), folder, credentials, mock };
+  return { b: bench(mock, folder, machine), folder, credentials, mock };
 }
 
 async function setup(b: Bench, given: SetupOptions) {
@@ -80,10 +83,11 @@ describe("a machine at home, behind a NAT", () => {
     expect(r.print.errors).toEqual([]);
     expect(r.code).toBe(0);
     const steps = r.statuses.map((status) => status.split(":")[0]);
-    // After the zone's policy, before the wait for the records and the first
-    // script that asks a site's public address.
-    expect(steps.indexOf("tunnel")).toBe(steps.indexOf("dns-leftovers") + 1);
-    expect(steps.indexOf("resolution")).toBe(steps.indexOf("tunnel") + 1);
+    // The connector after the zone's policy, then the records that send the
+    // zone to it, the wait for resolvers, and only then the web's ports
+    // closed, before the first script that asks a site's public address.
+    expect(steps.slice(steps.indexOf("dns-leftovers") + 1, steps.indexOf("caddy-zone"))).toEqual(["tunnel", "dns", "resolution", "web-ports"]);
+    expect(steps.indexOf("dns")).toBeGreaterThan(steps.indexOf("firewall"));
     expect(r.statuses).toContain("tunnel:ok");
     expect(r.print.checks[0]!.detail).toContain(`served through the tunnel ${ID}`);
 
@@ -93,10 +97,10 @@ describe("a machine at home, behind a NAT", () => {
       `${ZONE} CNAME ${tunnelTarget(ID)} true`,
     ]);
 
-    // The firewall: ssh alone, the web's ports closed.
+    // The firewall: ssh alone opened, the web's ports closed at the end.
     const firewall = b.machine.calls.find((call) => call.tag === "setup:firewall:run")!;
     expect(firewall.input).toContain(`for port in 22; do ufw allow`);
-    expect(firewall.input).toContain(`for port in 80 443; do ufw delete allow`);
+    expect(b.machine.calls.find((call) => call.tag === "setup:web-ports:run")!.input).toContain(`for port in 80 443; do ufw delete allow`);
 
     // The credentials went to the machine once, in the tunnel's run, and nowhere else.
     const carrying = b.machine.calls.filter((call) => call.input.includes(SECRET));
@@ -169,7 +173,67 @@ describe("a machine at home, behind a NAT", () => {
   });
 });
 
+describe("a run again, and a machine that moves behind a tunnel", () => {
+  test("without the zone's token at hand, the records setup made itself are taken as done once the names resolve", async () => {
+    const { b, credentials, folder } = world();
+    expect((await setup(b, options(HOME_ADDRESS, "--tunnel", credentials))).code).toBe(0);
+    const marker = JSON.parse(readFileSync(join(folder, ".config", "sitesolide", "setup.json"), "utf8"));
+    expect(marker.tunnelRecords).toBe(tunnelTarget(ID));
+    const tokenless = bench(mock!, folder, { facts: AT_HOME, token: null });
+    tokenless.machine.install(b.machine.labels);
+    tokenless.machine.logins.add("deploy");
+    tokenless.machine.sudo.add("deploy");
+    const again = await setup(tokenless, options(HOME_ADDRESS, "--dry-run"));
+    expect(again.print.errors).toEqual([]);
+    expect(again.statuses).toContain("dns:done");
+    expect(again.print.lines).toContain("-> every step is done: nothing to do");
+  });
+
+  test("a machine served directly keeps its web's ports until the zone resolves to the edge, and the configuration names the tunnel once its step is done", async () => {
+    const { b, folder, credentials, mock: m } = world(
+      [
+        { type: "A", name: ZONE, content: HOST, proxied: false, ttl: 1 },
+        { type: "A", name: `*.${ZONE}`, content: HOST, proxied: false, ttl: 1 },
+      ],
+      { facts: {} },
+    );
+    const r = await setup(b, options(HOST, "--tunnel", credentials, "--dns-replace"));
+    expect(r.code).toBe(0);
+    const tags = b.machine.calls.map((call) => call.tag);
+    // The records replaced, the web's ports closed after the connector runs,
+    // and never by the firewall step.
+    expect(m.records.map((record) => record.type)).toEqual(["CNAME", "CNAME"]);
+    expect(tags.indexOf("setup:firewall:run")).toBeLessThan(tags.indexOf("setup:tunnel:run"));
+    expect(tags.indexOf("setup:tunnel:run")).toBeLessThan(tags.indexOf("setup:web-ports:run"));
+    expect(b.machine.calls.find((call) => call.tag === "setup:firewall:run")!.input).not.toContain("delete");
+    expect(JSON.parse(readFileSync(join(folder, ".config", "sitesolide", "config.json"), "utf8")).tunnel).toBe(ID);
+  });
+
+  test("the configuration does not name a tunnel whose step has not passed", async () => {
+    const { b, folder, credentials } = world();
+    b.machine.failing.add("setup:tunnel:run");
+    expect((await setup(b, options(HOME_ADDRESS, "--tunnel", credentials))).code).toBe(1);
+    expect(JSON.parse(readFileSync(join(folder, ".config", "sitesolide", "config.json"), "utf8")).tunnel).toBeUndefined();
+  });
+
+  test("resolvers still answering the machine's own address are waited for", () => {
+    const own = { ipv4: HOST, ipv6: "2001:db8::10" };
+    expect(resolvesThroughEdge({ ipv4: [EDGE.ipv4], ipv6: [EDGE.ipv6] }, own)).toBe(true);
+    expect(resolvesThroughEdge({ ipv4: [HOST], ipv6: [] }, own)).toBe(false);
+    expect(resolvesThroughEdge({ ipv4: [EDGE.ipv4], ipv6: ["2001:DB8:0::10"] }, own)).toBe(false);
+    expect(resolvesThroughEdge({ ipv4: [], ipv6: [] }, own)).toBe(false);
+  });
+});
+
 describe("what --tunnel refuses before anything leaves the workstation", () => {
+  test("a value that is neither a file nor an id is never shown back: it may be the dashboard's token, pasted", () => {
+    const token = "eyJhIjoiMDEyMzQ1Njc4OWFiY2RlZiIsInQiOiI2ZjFjMmI4ZSIsInMiOiJzZWNyZXQifQ==";
+    expect(shownTunnel(token)).not.toContain(token.slice(0, 12));
+    expect(REFUSALS.tunnelUnreadable(token).message).not.toContain(token.slice(0, 12));
+    expect(shownTunnel("~/.cloudflared/6f1c2b8e-1d3a-4c5b-9e7f-0a1b2c3d4e5f.json")).toBe("~/.cloudflared/6f1c2b8e-1d3a-4c5b-9e7f-0a1b2c3d4e5f.json");
+    expect(shownTunnel("tunnel.json")).toBe("tunnel.json");
+  });
+
   test("a zone whose DNS is not Cloudflare's", () => {
     const parsed = parseSetupArguments([`root@${HOME_ADDRESS}`, "--zone", ZONE, "--email", EMAIL, "--tunnel", ID, "--dns", "route53"]);
     expect(parsed).toEqual(REFUSALS.tunnelDns("route53"));

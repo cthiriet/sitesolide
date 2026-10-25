@@ -79,11 +79,14 @@ import {
   hostKeyAdvice,
   fail2banRelease,
   asRoot,
+  closedPorts,
   hardeningSteps,
   machineCheck,
   rootCheck,
   rootRun,
   runScript,
+  webPortsCheck,
+  webPortsRun,
   type Execution,
   type HardenContext,
   type Machine,
@@ -236,16 +239,28 @@ export const REFUSALS = {
     details: ["Cloudflare routes into a tunnel the names of its own zones alone; see docs/tunnel.md"],
   }),
   tunnelUnreadable: (path: string): Refusal => ({
-    message: `cannot read the tunnel's credentials: ${path}`,
-    details: ["--tunnel takes the file cloudflared tunnel create wrote, ~/.cloudflared/<id>.json, or the tunnel's id when the machine already holds it"],
+    message: `cannot read the tunnel's credentials: ${shownTunnel(path)}`,
+    details: [
+      "--tunnel takes the file cloudflared tunnel create wrote, ~/.cloudflared/<id>.json, or the tunnel's id when the machine already holds it",
+      "not the token Cloudflare's dashboard shows in its install command: that one runs a tunnel configured there, which setup does not do",
+    ],
   }),
   tunnelCredentials: (path: string, problem: string): Refusal => ({
-    message: `${path} is not a tunnel's credentials: ${problem}`,
+    message: `${shownTunnel(path)} is not a tunnel's credentials: ${problem}`,
     details: ["nothing of it is shown: it holds the tunnel's secret"],
   }),
 };
 
 const MINIMUM_FREE_GB = 2;
+
+/**
+ * What `--tunnel` was given, as a refusal may show it: a path, a short one of
+ * the characters paths are made of, and nothing else. A value that is none,
+ * the token Cloudflare's dashboard hands out pasted in its place, is a secret.
+ */
+export function shownTunnel(value: string): string {
+  return /^[A-Za-z0-9._~\/-]{1,200}$/.test(value) && (value.includes("/") || value.endsWith(".json")) ? value : "(not shown: neither a file nor a tunnel's id)";
+}
 
 /** The command line, read; a refusal for anything it does not recognise. */
 export function parseSetupArguments(arguments_: readonly string[]): SetupOptions | Refusal {
@@ -328,9 +343,12 @@ export function parseSetupArguments(arguments_: readonly string[]): SetupOptions
  * What setup records beside the configuration when it starts installing a
  * machine. `rootClosed`: the ssh step is done there, so that a later run given
  * `root@` connects as the deploy account at once, rather than knocking with a
- * refused root login that fail2ban would count.
+ * refused root login that fail2ban would count. `tunnelRecords`: the target
+ * setup pointed the zone's records at, behind a tunnel, which a later run
+ * without the zone's token takes as done once the names resolve (see
+ * tunnelRecordsCheck).
  */
-export type Marker = { server: string; zone: string; startedAt: string; rootClosed?: boolean };
+export type Marker = { server: string; zone: string; startedAt: string; rootClosed?: boolean; tunnelRecords?: string };
 
 export const MARKER_NAME = "setup.json";
 
@@ -394,7 +412,13 @@ export function readJson(path: string): Record<string, unknown> | null {
 function readMarker(folder: string): Marker | null {
   const raw = readJson(join(folder, MARKER_NAME));
   if (raw === null || typeof raw.server !== "string" || typeof raw.zone !== "string") return null;
-  return { server: raw.server, zone: raw.zone, startedAt: typeof raw.startedAt === "string" ? raw.startedAt : "", rootClosed: raw.rootClosed === true };
+  return {
+    server: raw.server,
+    zone: raw.zone,
+    startedAt: typeof raw.startedAt === "string" ? raw.startedAt : "",
+    rootClosed: raw.rootClosed === true,
+    ...(typeof raw.tunnelRecords === "string" ? { tunnelRecords: raw.tunnelRecords } : {}),
+  };
 }
 
 /** The marker says root login is closed now: written once, when the ssh step is done. */
@@ -402,6 +426,25 @@ function noteRootClosed(folder: string): void {
   const marker = readMarker(folder);
   if (marker === null || marker.rootClosed === true) return;
   writeFileSync(join(folder, MARKER_NAME), `${JSON.stringify({ ...marker, rootClosed: true }, null, 2)}\n`);
+}
+
+/** The marker says the zone's records point at this tunnel's target: written when the dns step made them. */
+function noteTunnelRecords(folder: string, target: string): void {
+  const marker = readMarker(folder);
+  if (marker === null || marker.tunnelRecords === target) return;
+  writeFileSync(join(folder, MARKER_NAME), `${JSON.stringify({ ...marker, tunnelRecords: target }, null, 2)}\n`);
+}
+
+/**
+ * The configuration names the tunnel once its step is done, and not before:
+ * a run stopped earlier leaves a machine served directly that no later
+ * command takes for one behind a tunnel.
+ */
+function recordTunnel(folder: string, id: string): void {
+  const path = join(folder, "config.json");
+  const config = readJson(path);
+  if (config === null || config.tunnel === id) return;
+  writeFileSync(path, `${JSON.stringify({ ...config, tunnel: id }, null, 2)}\n`);
 }
 
 /**
@@ -1059,18 +1102,23 @@ export function resolvesToMachine(observed: Observed, addresses: { ipv4: string;
 
 /**
  * Whether the workstation resolves a name through Cloudflare's proxy, for a
- * machine behind a tunnel: any answer at all. A proxied record answers the
- * edge's addresses, never the tunnel's name, so nothing in the answer tells
- * this zone's records from others: the dns step has read them through the
- * API, and this only waits until resolvers see them.
+ * machine behind a tunnel: an answer, and none of them the machine's own
+ * address. A proxied record answers the edge's addresses, never the tunnel's
+ * name, so nothing in the answer tells this zone's records from others: the
+ * dns step has read them through the API, and this only waits until
+ * resolvers see them. A machine that served the zone directly before is
+ * still what a resolver that has not caught up answers: waited for too,
+ * before its web's ports close.
  */
-export function resolvesAtAll(observed: Observed): boolean {
-  return observed.ipv4.length > 0 || observed.ipv6.length > 0;
+export function resolvesThroughEdge(observed: Observed, addresses: { ipv4: string; ipv6: string | null }): boolean {
+  const answers = [...observed.ipv4, ...observed.ipv6.map(canonicalAddress)];
+  const own = [addresses.ipv4, ...(addresses.ipv6 === null ? [] : [canonicalAddress(addresses.ipv6)])];
+  return answers.length > 0 && !answers.some((address) => own.includes(address));
 }
 
-/** The judge of resolution: the machine's own addresses, or, behind a tunnel, any answer. */
+/** The judge of resolution: the machine's own addresses, or, behind a tunnel, Cloudflare's edge. */
 function resolves(context: SetupContext, observed: Observed): boolean {
-  return context.tunnel === null ? resolvesToMachine(observed, context.addresses) : resolvesAtAll(observed);
+  return context.tunnel === null ? resolvesToMachine(observed, context.addresses) : resolvesThroughEdge(observed, context.addresses);
 }
 
 function describeObserved(name: string, observed: Observed): string {
@@ -1270,7 +1318,10 @@ export function installSteps(tunnel = false): Step<SetupContext>[] {
       },
       inspect: (context) => `ssh ${context.server} "sudo grep -Eo '^[[:space:]]*[A-Z_]+=' ${CADDY_ENV_FILE}"`,
     },
-    ...(tunnel ? [tunnelStep()] : []),
+    // Behind a tunnel, the connector first, then the records that send the
+    // zone to it, then the web's ports closed once resolvers see Cloudflare:
+    // a machine that served the zone directly serves it all along.
+    ...(tunnel ? [tunnelStep(), dnsStep()] : []),
     {
       id: "resolution",
       title: "DNS seen from this workstation",
@@ -1278,6 +1329,7 @@ export function installSteps(tunnel = false): Step<SetupContext>[] {
       run: (context) => waitForResolution(context),
       inspect: (context) => `dig +short ${context.options.zone}; dig +short check.${context.options.zone}`,
     },
+    ...(tunnel ? [webPortsStep()] : []),
     {
       id: "caddy-zone",
       title: "zone file and domain table",
@@ -1457,8 +1509,7 @@ function configurationStep(): Step<SetupContext> {
         file.email === context.options.email &&
         (file.contact ?? null) === context.contact &&
         (file.dns ?? "cloudflare") === (context.options.dns ?? "cloudflare") &&
-        (file.acme ?? "production") === (context.options.acme ?? "production") &&
-        (file.tunnel ?? null) === (context.tunnel?.id ?? null);
+        (file.acme ?? "production") === (context.options.acme ?? "production");
       return same ? { state: "done" } : { state: "missing", missing: [path(context)] };
     },
     run: async (context) => {
@@ -1470,9 +1521,6 @@ function configurationStep(): Step<SetupContext> {
       // Production too: written only for staging.
       if (context.options.acme === ACME_STAGING) config.acme = ACME_STAGING;
       else delete config.acme;
-      // The tunnel's id, which later runs and the CLI read; nothing of its credentials.
-      if (context.tunnel !== null) config.tunnel = context.tunnel.id;
-      else delete config.tunnel;
       // The marker first, so that a run stopped anywhere after this point is
       // this install's to resume. One left by an install on another machine
       // or zone, whose configuration is gone, is replaced: this step only
@@ -1552,7 +1600,12 @@ function zoneTls(context: SetupContext): string {
 async function tunnelRecordsCheck(context: SetupContext): Promise<Check> {
   const entry = context.dns!;
   const credentials = await knownDnsCredentials(context, entry);
-  if (credentials === null) return { state: "missing", missing: ["tunnel-records"] };
+  if (credentials === null) {
+    // Without the token, what setup made itself: the records it pointed at
+    // this tunnel, and the names resolving. What resolves cannot tell more.
+    const made = readMarker(context.folder)?.tunnelRecords === tunnelTarget(context.tunnel!.id);
+    return made && (await resolution(context)).check.state === "done" ? { state: "done" } : { state: "missing", missing: ["tunnel-records"] };
+  }
   const { open, scrub } = dnsSession(context, entry, credentials);
   try {
     const { actions } = await ensureTunnelRecords(open(), context.options.zone, tunnelTarget(context.tunnel!.id), false, true);
@@ -1580,6 +1633,7 @@ function dnsStep(): Step<SetupContext> {
           context.tunnel === null
             ? await ensureZoneRecords(open(), context.options.zone, context.addresses, context.options.dnsReplace)
             : await ensureTunnelRecords(open(), context.options.zone, tunnelTarget(context.tunnel.id), context.options.dnsReplace);
+        if (context.tunnel !== null) noteTunnelRecords(context.folder, tunnelTarget(context.tunnel.id));
         const changes = describePlan(actions);
         return changes.length === 0 ? `already in the ${entry.title} zone ${zone}` : `${changes.join("; ")}, in the ${entry.title} zone ${zone}`;
       } catch (error) {
@@ -1596,9 +1650,27 @@ function dnsStep(): Step<SetupContext> {
   };
 }
 
-/** Every step, in order; the tunnel's only on a machine served through one. */
+/**
+ * Every step, in order. The records come first on a machine served directly,
+ * so that they propagate while it installs; behind a tunnel they come once
+ * the connector runs (installSteps), Cloudflare answering them at once.
+ */
 export function setupSteps(tunnel = false): Step<SetupContext>[] {
-  return [configurationStep(), dnsStep(), ...hardeningSteps<SetupContext>(), ...installSteps(tunnel)];
+  return [configurationStep(), ...(tunnel ? [] : [dnsStep()]), ...hardeningSteps<SetupContext>(), ...installSteps(tunnel)];
+}
+
+/** The web's ports closed behind a tunnel, once the zone resolves to Cloudflare: see closedPorts in harden.ts. */
+function webPortsStep(): Step<SetupContext> {
+  return {
+    id: "web-ports",
+    title: "the web's ports closed",
+    check: (context) => rootCheck(context.machine, context.operator, "setup:web-ports:check", webPortsCheck(context.sshPort)),
+    run: async (context) => {
+      await rootRun(context.machine, context.operator, "setup:web-ports:run", webPortsRun(context.sshPort), "ufw refused to close them");
+      return `${closedPorts(context.sshPort).join(" and ")} closed: every visitor comes in through the tunnel`;
+    },
+    inspect: (context) => `ssh ${context.server} 'sudo ufw status'`,
+  };
 }
 
 // --- the run ------------------------------------------------------------------------
@@ -1801,6 +1873,7 @@ export async function runSetup(given: SetupOptions, deps: SetupDependencies): Pr
     report: (report) => {
       out.check(report);
       if (report.step === "ssh" && (report.status === "done" || report.status === "ok")) noteRootClosed(folder);
+      if (report.step === "tunnel" && tunnel !== null && (report.status === "done" || report.status === "ok")) recordTunnel(folder, tunnel.id);
     },
     starting: (step) => out.say(`-> ${step.title}`),
   });

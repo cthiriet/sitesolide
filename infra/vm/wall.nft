@@ -2,17 +2,33 @@
 # QEMU runs as, sitesolide-vm, opens no connection to this machine nor to any
 # private network, its home network and the box that routes it included. It
 # still answers what reaches it, the ssh port forwarded on the loopback: an
-# established connection passes. Everything else of the Internet is open to
-# it, as a machine of its own would have it.
+# established connection passes. The rest of the Internet is open to it over
+# IPv4, as a machine of its own would have it.
 #
 # The VM's network is QEMU's user mode: every connection the guest opens is a
 # socket of QEMU's, owned by that account, which this table judges. The
 # guest's gateway, 10.0.2.2, is this machine's own loopback, where its other
 # services listen: refused here, like the rest.
 #
+# What is refused, and why each:
+#
+#   fib daddr type local   every address of this machine, its public IPv4 and
+#                          IPv6 included: traffic to them goes over the
+#                          loopback to whatever listens on them
+#   private IPv4 ranges    the home network, the box, a VPN's, a container's
+#   all of IPv6            a home's IPv6 is global: every device of the network
+#                          has a public address, which no range here could
+#                          tell from the Internet's. The guest has no IPv6
+#                          (ipv6=off in sitesolide-vm.service), so nothing of
+#                          sitesolide needs it
+#
+# Only QEMU's sockets are judged, matched by their owner: a packet the kernel
+# sends on its own, IPv6 neighbor discovery, a network mount, has no socket
+# and falls through to the policy, as everything of the host does.
+#
 # Laid by infra/vm/install.sh at /etc/sitesolide-vm/wall.nft, loaded by
-# sitesolide-vm-wall.service before the network and before the VM, which
-# requires it. A table of its own, which neither ufw nor anything else of the
+# sitesolide-vm-wall.service before the network and before the VM, which is
+# bound to it. A table of its own, which neither ufw nor anything else of the
 # machine touches. Declared, deleted and laid again in one transaction, so
 # that loading it twice never doubles a rule.
 table inet sitesolide_vm
@@ -20,9 +36,13 @@ delete table inet sitesolide_vm
 table inet sitesolide_vm {
 	chain output {
 		type filter hook output priority filter; policy accept;
-		meta skuid != "sitesolide-vm" accept
+		meta skuid "sitesolide-vm" jump vm
+	}
+
+	chain vm {
 		ct state established,related accept
+		meta nfproto ipv6 counter reject
+		fib daddr type local counter reject
 		ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4 } counter reject
-		ip6 daddr { ::/127, fc00::/7, fe80::/10, ff00::/8 } counter reject
 	}
 }

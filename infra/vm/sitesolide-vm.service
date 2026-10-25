@@ -6,11 +6,11 @@
 #
 # What the host keeps: QEMU runs as sitesolide-vm, an account that owns
 # nothing but /var/lib/sitesolide-vm, with no capability, the system
-# read-only, the home folders hidden, and /dev/kvm its only device. Its
+# read-only, the home folders and /run hidden, and /dev/kvm its only device. Its
 # memory is bounded, swap included, and its CPU and disk weights low: the
 # host's own services come first when both want the machine. Its network is
-# QEMU's user mode, behind sitesolide-vm-wall.service, which it requires: no
-# connection to this machine nor to its network. The guest's ssh is
+# QEMU's user mode, IPv4 alone, behind sitesolide-vm-wall.service, to which
+# it is bound: no connection to this machine nor to its network. The guest's ssh is
 # forwarded to this machine's loopback alone, reached through this
 # machine's own ssh.
 #
@@ -23,7 +23,7 @@
 
 [Unit]
 Description=sitesolide's VM, walled off from this machine and its network
-Requires=sitesolide-vm-wall.service
+BindsTo=sitesolide-vm-wall.service
 After=sitesolide-vm-wall.service network-online.target
 Wants=network-online.target
 
@@ -32,17 +32,17 @@ Type=simple
 User=sitesolide-vm
 Group=sitesolide-vm
 SupplementaryGroups=kvm
-RuntimeDirectory=sitesolide-vm
-RuntimeDirectoryMode=0700
+# Not without the wall in the kernel, whatever its unit says: run as root, `+`.
+ExecStartPre=+/usr/sbin/nft list table inet sitesolide_vm
 ExecStart=@QEMU@ -name sitesolide -nodefaults -no-user-config \
   -machine @MACHINE@ -cpu host -smp @CPUS@ -m @MEMORY@M @FIRMWARE@\
   -drive if=virtio,format=raw,file=/var/lib/sitesolide-vm/disk.raw,cache=none,aio=threads \
   -drive if=virtio,format=raw,file=/var/lib/sitesolide-vm/seed.img,readonly=on \
-  -netdev user,id=net0,hostfwd=tcp:127.0.0.1:@PORT@-:22 \
+  -netdev user,id=net0,ipv6=off,hostfwd=tcp:127.0.0.1:@PORT@-:22 \
   -device virtio-net-pci,netdev=net0,romfile= \
   -device virtio-rng-pci \
   -display none -chardev stdio,id=console,signal=off -serial chardev:console \
-  -qmp unix:/run/sitesolide-vm/qmp.sock,server=on,wait=off
+  -qmp unix:/var/lib/sitesolide-vm/qmp.sock,server=on,wait=off
 ExecStop=/usr/local/lib/sitesolide-vm/powerdown
 TimeoutStopSec=150
 Restart=on-failure
@@ -61,6 +61,11 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 ProtectSystem=strict
 ProtectHome=true
+# /run, where the host's services keep their sockets, the system bus and the
+# resolver's among them, an empty folder here: the wall judges connections
+# over the network, and a socket in a folder is none. The QMP socket lives in
+# the account's own folder instead.
+TemporaryFileSystem=/run:ro
 # What else of the host QEMU never sees, the data of its other services,
 # from install.sh's --hide; nothing when none was given.
 @HIDDEN@

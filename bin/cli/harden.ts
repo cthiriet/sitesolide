@@ -309,9 +309,14 @@ export function firewallPorts(sshPort: number, tunnel = false): number[] {
   return [...new Set([sshPort, ...(tunnel ? [] : WEB_PORTS)])].sort((a, b) => a - b);
 }
 
-/** The web's ports a tunnel's firewall closes, the one ssh answers on spared. */
-function closedPorts(sshPort: number, tunnel: boolean): number[] {
-  return tunnel ? WEB_PORTS.filter((port) => port !== sshPort) : [];
+/**
+ * The web's ports a machine behind a tunnel closes, the one ssh answers on
+ * spared. Not the firewall step's: a machine served directly that moves
+ * behind a tunnel still serves its visitors through them until the tunnel
+ * carries them, and setup closes them only then (the web-ports step).
+ */
+export function closedPorts(sshPort: number): number[] {
+  return WEB_PORTS.filter((port) => port !== sshPort);
 }
 
 export function firewallCheck(sshPort: number, tunnel = false): string {
@@ -319,8 +324,20 @@ export function firewallCheck(sshPort: number, tunnel = false): string {
     { label: "ufw-active", test: "ufw status | grep -q '^Status: active'" },
     { label: "ufw-deny-incoming", test: "ufw status verbose | grep -q 'Default: deny (incoming)'" },
     ...firewallPorts(sshPort, tunnel).map((port) => ({ label: `ufw-${port}`, test: `ufw status | grep -Eq '^${port}/tcp +ALLOW'` })),
-    ...closedPorts(sshPort, tunnel).map((port) => ({ label: `ufw-${port}-closed`, test: `! ufw status | grep -Eq '^${port}/tcp( \\(v6\\))? +ALLOW'` })),
   ]);
+}
+
+/** Whether the web's ports are closed, behind a tunnel. */
+export function webPortsCheck(sshPort: number): string {
+  return machineCheck(
+    "setup:web-ports:check",
+    closedPorts(sshPort).map((port) => ({ label: `ufw-${port}-closed`, test: `! ufw status | grep -Eq '^${port}/tcp( \\(v6\\))? +ALLOW'` })),
+  );
+}
+
+/** The web's ports closed, IPv4 and IPv6, behind a tunnel. */
+export function webPortsRun(sshPort: number): string {
+  return runScript("setup:web-ports:run", `for port in ${closedPorts(sshPort).join(" ")}; do ufw delete allow "$port/tcp" >/dev/null 2>&1 </dev/null || true; done`);
 }
 
 /**
@@ -329,13 +346,10 @@ export function firewallCheck(sshPort: number, tunnel = false): string {
  * refused between two lines would leave the script half run.
  */
 export function firewallRun(sshPort: number, tunnel = false): string {
-  const closed = closedPorts(sshPort, tunnel);
   return runScript(
     "setup:firewall:run",
     `
-for port in ${firewallPorts(sshPort, tunnel).join(" ")}; do ufw allow "$port/tcp" >/dev/null </dev/null; done${
-      closed.length === 0 ? "" : `\nfor port in ${closed.join(" ")}; do ufw delete allow "$port/tcp" >/dev/null 2>&1 </dev/null || true; done`
-    }
+for port in ${firewallPorts(sshPort, tunnel).join(" ")}; do ufw allow "$port/tcp" >/dev/null </dev/null; done
 ufw default deny incoming >/dev/null </dev/null
 ufw default allow outgoing >/dev/null </dev/null
 ufw --force enable >/dev/null </dev/null

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describePlan, planTunnelRecords, tunnelManualRecords, type DnsRecord } from "../cli/cloudflare";
-import { firewallCheck, firewallPorts, firewallRun } from "../cli/harden";
+import { firewallCheck, firewallPorts, firewallRun, webPortsCheck, webPortsRun } from "../cli/harden";
 import {
   CADDY_TUNNEL_FILE,
   isTunnelId,
@@ -19,6 +19,10 @@ import {
   TUNNEL_KIT_FILES,
   TUNNEL_METRICS,
   TUNNEL_UNIT,
+  TUNNEL_AFTER_UPGRADE,
+  TUNNEL_AFTER_UPGRADE_CONTENT,
+  TUNNEL_UPGRADES,
+  TUNNEL_UPGRADES_CONTENT,
   type TunnelFiles,
 } from "../cli/tunnel";
 
@@ -154,11 +158,32 @@ describe("the step's run", () => {
       "tunnel-unit-permissions",
       "tunnel-caddy",
       "tunnel-caddy-permissions",
+      "tunnel-upgrades",
+      "tunnel-upgrades-permissions",
+      "tunnel-after-upgrade",
+      "tunnel-after-upgrade-permissions",
       "tunnel-enabled",
       "tunnel-active",
       "tunnel-ready",
       "no-second-connector",
     ]);
+  });
+});
+
+describe("cloudflared kept current", () => {
+  test("its repository among the security updates, and the connector restarted once dpkg replaced its binary", () => {
+    expect(TUNNEL_UPGRADES_CONTENT).toContain('Unattended-Upgrade::Origins-Pattern { "origin=cloudflared,label=cloudflared"; };');
+    expect(TUNNEL_UPGRADES_CONTENT).toContain(`DPkg::Post-Invoke { "${TUNNEL_AFTER_UPGRADE} || true"; };`);
+    // The change time: dpkg sets the modification time to the package's build date.
+    expect(TUNNEL_AFTER_UPGRADE_CONTENT).toContain("stat -c %Z /usr/bin/cloudflared");
+    expect(TUNNEL_AFTER_UPGRADE_CONTENT).toContain(`systemctl try-restart ${TUNNEL_UNIT}`);
+    const run = Bun.spawnSync(["sh", "-n"], { stdin: new TextEncoder().encode(TUNNEL_AFTER_UPGRADE_CONTENT), stderr: "pipe" });
+    expect(run.exitCode).toBe(0);
+  });
+
+  test("laid once the connector runs, so that laying them restarts nothing", () => {
+    const script = tunnelRun(files(), null);
+    expect(script.indexOf(TUNNEL_UPGRADES)).toBeGreaterThan(script.indexOf(`systemctl restart ${TUNNEL_UNIT}`));
   });
 });
 
@@ -203,17 +228,18 @@ describe("the zone's records behind a tunnel", () => {
 });
 
 describe("the firewall behind a tunnel", () => {
-  test("ssh alone is open, and the web's ports closed when an earlier run opened them", () => {
+  test("ssh alone is opened; the web's ports an earlier run opened close later, once the tunnel carries the visitors", () => {
     expect(firewallPorts(22, true)).toEqual([22]);
     expect(firewallPorts(22)).toEqual([22, 80, 443]);
     const run = firewallRun(22, true);
     expect(run).toContain(`for port in 22; do ufw allow "$port/tcp"`);
-    expect(run).toContain(`for port in 80 443; do ufw delete allow "$port/tcp"`);
-    expect(firewallRun(22)).not.toContain("delete");
-    expect(firewallCheck(22, true)).toContain("ufw-443-closed");
+    // Never in the firewall step: a machine served directly would lose its visitors before the tunnel took them.
+    expect(run).not.toContain("delete");
+    expect(firewallCheck(22, true)).not.toContain("closed");
+    expect(webPortsRun(22)).toContain(`for port in 80 443; do ufw delete allow "$port/tcp"`);
+    expect(webPortsCheck(22)).toContain("ufw-443-closed");
     // ssh answering on 443 stays open.
-    expect(firewallPorts(443, true)).toEqual([443]);
-    expect(firewallRun(443, true)).toContain(`for port in 80; do ufw delete allow`);
+    expect(webPortsRun(443)).toContain(`for port in 80; do ufw delete allow`);
   });
 });
 

@@ -58,24 +58,32 @@ sitesolide setup root@192.168.1.40 --zone example.com --email you@example.com \
   --tunnel ~/.cloudflared/<id>.json
 ```
 
-On top of [the usual steps](setup.md#the-steps):
+On top of [the usual steps](setup.md#the-steps), in this order:
 
 | Step | What changes behind a tunnel |
 |---|---|
 | preflight | a private address is taken as it is: nothing points at it |
-| configuration | `config.json` records the tunnel's id, `"tunnel"`, never its secret |
+| firewall | ssh opened alone: no request comes in but through the connector's own connection |
+| tunnel | `cloudflared` from Cloudflare's repository, `/etc/cloudflared/config.yml`, the credentials in `/etc/cloudflared/tunnel.json` (root, `0600`), the connector's unit, Caddy's options for it, and cloudflared's upgrades; waited for until the edge answers. `config.json` then records the tunnel's id, `"tunnel"`, never its secret |
 | dns | `example.com` and `*.example.com` become proxied CNAMEs to `<id>.cfargotunnel.com`; address records there are refused unless `--dns-replace` |
-| firewall | ssh alone: 80 and 443 are closed, every request comes in through the connector's own connection |
-| tunnel | `cloudflared` from Cloudflare's repository, `/etc/cloudflared/config.yml`, the credentials in `/etc/cloudflared/tunnel.json` (root, `0600`), the connector's unit, and Caddy's options for it; waited for until the edge answers |
-| resolution | waits until your workstation resolves the zone to Cloudflare's edge |
+| resolution | waits until your workstation resolves the zone to Cloudflare's edge, and no longer to the machine's own address |
+| web-ports | 80 and 443 closed, if an earlier run opened them |
 
-The step runs before Caddy's configuration: what `bin/deploy-caddy.sh` and
-every deploy verify next is asked of the sites' public addresses, through the
-tunnel. Run again without `--tunnel`, setup takes the configuration's tunnel
-and changes nothing. `--tunnel <id>` takes a tunnel whose credentials the
-machine already holds at `/etc/cloudflared/<id>.json`, where Cloudflare's own
-guide puts them: setup copies them to `tunnel.json` there, and they never
-travel.
+The records come once the connector runs, and the web's ports close once
+resolvers see Cloudflare: a machine that served the zone directly moves
+behind a tunnel without a moment where its sites answer nowhere. All of it
+runs before Caddy's configuration, since what `bin/deploy-caddy.sh` and every
+deploy verify next is asked of the sites' public addresses.
+
+Run again without `--tunnel`, setup takes the configuration's tunnel and
+changes nothing, without the zone's token too: it reads the records through
+the API when the token is at hand, and otherwise takes the ones it made
+itself, which `setup.json` records, once the names resolve. `--tunnel <id>`
+takes a tunnel whose credentials the machine already holds at
+`/etc/cloudflared/<id>.json`, where Cloudflare's own guide puts them: setup
+copies them to `tunnel.json` there, and they never travel. A value that is
+neither a file nor an id, the token Cloudflare's dashboard shows in its
+install command for instance, is refused without being shown back.
 
 Under `--skip-dns` setup lists the two CNAMEs to create by hand, proxied, and
 waits for them.
@@ -100,9 +108,15 @@ has Caddy believe that header from the loopback alone, and every block hands
 its app the result as `X-Forwarded-For`, one value, the visitor's: the
 analytics count visitors, and the dashboard's limiter counts each address on
 its own. A visitor who sends their own `X-Forwarded-For` changes nothing, and
-Cloudflare refuses a request that carries its own `Cf-Connecting-Ip`. What
-the loopback lets through besides the connector is a process of the machine
-itself.
+Cloudflare refuses a request that carries its own `Cf-Connecting-Ip`.
+
+What the loopback lets through besides the connector is a process of the
+machine itself: one of the projects' services can open `127.0.0.1:443` with
+any address in that header, and be counted as that visitor, by the analytics
+of any site and by the dashboard's limiter of failed attempts, which it could
+fill for an address of its choosing. On a machine served directly the same
+service only ever appears as `127.0.0.1`. Behind a tunnel, a project you do
+not trust with that does not belong on the machine.
 
 **The certificates.** Caddy obtains the wildcard through the DNS-01
 challenge, which needs no port open, exactly as on a machine with a public
@@ -117,6 +131,12 @@ connection to the edge is up. A connector that stops, or runs and reaches
 nothing, its tunnel deleted, is a critical check that fails the heartbeat:
 every site is lost to the Internet then, while everything read on the
 loopback looks fine.
+
+**cloudflared's upgrades.** Cloudflare's repository is among those the
+security updates take (`/etc/apt/apt.conf.d/52sitesolide-cloudflared`), and
+the connector is restarted once dpkg has replaced its binary: Cloudflare
+supports a connector for about a year, and a box at home is often left alone
+longer.
 
 **The backups** copy `/etc/cloudflared` with the rest of the machine's own
 state. On a new machine, lay the copy's `tunnel.json` at
@@ -154,8 +174,9 @@ ssh host sudo sitesolide-vm/install.sh --ssh-key sitesolide-vm/key.pub \
 
 | What | How the host keeps its own |
 |---|---|
-| the account | QEMU runs as `sitesolide-vm`, which owns `/var/lib/sitesolide-vm` alone, with no capability, the system read-only, the home folders and every `--hide` folder out of its sight, `/dev/kvm` its only device |
-| the network | QEMU's user mode, and a wall of its own, the nftables table `sitesolide_vm`, on QEMU's account alone: no connection to the host's loopback, where its other services listen, nor to any private range, the home network and its box included. The Internet is open, and a connection that reaches the VM is answered |
+| the account | QEMU runs as `sitesolide-vm`, which owns `/var/lib/sitesolide-vm` alone, with no capability, the system read-only, the home folders, `/run` with every socket of the host's services, and every `--hide` folder out of its sight, `/dev/kvm` its only device |
+| the network | QEMU's user mode, IPv4 alone, and a wall of its own, the nftables table `sitesolide_vm`, which judges QEMU's sockets alone: no connection to any address of the host, its loopback where its other services listen and its public addresses included, nor to any private range, the home network and its box included, nor anywhere over IPv6, where every device of a home has a global address. The rest of the Internet is open over IPv4, and a connection that reaches the VM is answered. A packet the host's kernel sends on its own, neighbor discovery or a network mount, is none of the wall's |
+| the wall's life | loaded before the network, laid again after every start, reload and stop of `nftables.service`, whose configuration begins with `flush ruleset`; the VM is bound to its unit and refuses to start without the table in the kernel. A `nft flush ruleset` typed by hand takes it away: `sudo systemctl reload sitesolide-vm-wall` lays it again |
 | ssh | the guest's port 22 forwarded to the host's loopback alone, `127.0.0.1:2222`: reached through the host's own ssh, nothing else of the network sees it |
 | memory | bounded at the guest's plus 768 MiB, swap excluded: a guest that outgrows it costs QEMU, which restarts, never the host's services |
 | CPU and disk | `CPUWeight=20`, `IOWeight=20`: the host's own services come first when both want the machine; the disk is a raw file allocated whole at install, which never grows over the host's |
@@ -184,18 +205,28 @@ sitesolide setup root@sitesolide-vm --zone example.com --email you@example.com \
 ```
 
 Every ssh connection reaches the guest from QEMU's gateway, `10.0.2.2`, so
-fail2ban there would ban every client at once: setup spares the
-workstation's address while it runs, and nothing but the host's own ssh
-users can knock at all.
+fail2ban there bans every client at once: a few refused logins, root's once
+setup has closed it among them, and nobody gets in for ten minutes. setup
+spares that address while it runs, and nothing but the host's own ssh users
+can knock at all. Once setup has run, the guest's account is `deploy`, which
+the ssh configuration above then names as its `User`.
 
 **Measured** on an Ubuntu 24.04 arm64 host with nested KVM, standing in for
-a Raspberry Pi 5, with a service on its loopback and another on its network
-address standing in for a node's RPC: without the wall the guest reached
-both, with it neither, nor the network's gateway; the guest reached the
-Internet and public DNS, booted in ten seconds, came back on its own after
-the host rebooted, and shut down cleanly with it; a second run of
-`install.sh` changed nothing and left the VM running; and `sitesolide setup`
-through the host hardened the guest, closed root, opened ssh alone and
+a Raspberry Pi 5, with services standing in for a node's RPC on its loopback,
+on its network address and on a public address of its own:
+
+| The wall | the host's loopback | its network address | its public address | the Internet |
+|---|---|---|---|---|
+| none | reached | reached | reached | reached |
+| private ranges alone, its first version | refused | refused | **reached** | reached |
+| as laid now | refused | refused | refused | reached |
+
+The guest had no IPv6, booted in ten seconds, came back on its own after the
+host rebooted and shut down cleanly with it, in four seconds; the wall
+outlived `nftables.service` started, reloaded, restarted and stopped, the VM
+running all along; the host's own IPv6 neighbors still answered; a second run
+of `install.sh` changed nothing and left the VM running; and `sitesolide
+setup` through the host hardened the guest, closed root, opened ssh alone and
 installed Caddy with its DNS module and Bun before the step that needs the
 zone's token. Not measured on a Raspberry Pi itself: check `ls -l /dev/kvm`
 there first.
@@ -210,9 +241,18 @@ takes to see it connected again, measured at under ten.
 
 ## Leaving a tunnel
 
-setup does not move a machine off its tunnel. By hand: point the records at a
-public address with `--dns-replace` on a machine that has one, open 80 and 443
-(`sudo ufw allow 80/tcp`, `sudo ufw allow 443/tcp`), stop the connector
-(`sudo systemctl disable --now sitesolide-tunnel`), remove
-`/etc/caddy/global.d/tunnel.caddy` and reload Caddy (`sudo systemctl reload
-caddy`), and take `"tunnel"` out of `config.json`.
+setup does not move a machine off its tunnel by itself. On a machine that has
+a public address, in this order, so that the sites answer all along: take
+`"tunnel"` out of `config.json`, and `tunnelRecords` out of `setup.json`
+beside it; run setup with `--dns-replace`, which opens 80 and 443 and points
+the records at the machine, while the connector still serves the resolvers
+that have not caught up; then, once the zone resolves to the machine:
+
+```bash
+sudo rm /etc/caddy/global.d/tunnel.caddy && sudo systemctl reload caddy
+sudo systemctl disable --now sitesolide-tunnel
+sudo rm /etc/systemd/system/sitesolide-tunnel.service /etc/apt/apt.conf.d/52sitesolide-cloudflared && sudo systemctl daemon-reload
+```
+
+Until the unit file is gone, `sitesolide upgrade` takes the machine for one
+behind a tunnel, and refuses it once the configuration names none.
