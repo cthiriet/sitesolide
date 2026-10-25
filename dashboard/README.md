@@ -4,7 +4,9 @@ What the machine actually runs, at `dashboard.<zone>`, behind a password, on two
 levels. **The machine**: *Sites*, the home page, with the state of the machine,
 the discrepancies between what the repositories ask for and what the machine
 does, the only part of the dashboard that teaches you something, and the list
-of sites; *Activity*, the audit of the whole machine, every component's in one
+of sites, where the platform's own projects, the dashboard, the portal and
+analytics, are listed under *Platform* and elsewhere only while they have an
+issue or a restart pending; *Activity*, the audit of the whole machine, every component's in one
 log; *Tokens*, the tokens that deploy without SSH, and what they did; *People*, everyone with
 access to a project, their roles, and who may create projects; *Connectors*,
 the credentials the egress proxy lends to projects. **A site**: *Overview*,

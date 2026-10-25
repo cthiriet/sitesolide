@@ -10,6 +10,7 @@
 import { ago, duration, fromNow, size, sizeOutOf } from "./format"
 import { serviceLevel, type Level } from "./gauges"
 import type { Click } from "./pages"
+import type { SiteSecretsPanel } from "./secrets"
 import type { Tone } from "./tones"
 import type { Site, SiteService } from "./types"
 import type { Severity } from "./verdict"
@@ -19,6 +20,9 @@ export const TYPE_LABELS: Record<Site["type"], string> = {
   static: "Static",
   "no-manifest": "No manifest",
 }
+
+/** The tag beside the name of one of the platform's own projects, the word of its filter. */
+export const PLATFORM_TAG = "Platform"
 
 // --- The address -----------------------------------------------------------------
 
@@ -306,27 +310,49 @@ export function serviceSummaryOf(site: Pick<Site, "type" | "service"> & Partial<
 
 // --- Filters and order -----------------------------------------------------------
 
-export type SiteFilter = "all" | "issues" | "apps" | "static" | "restricted"
+export type SiteFilter = "all" | "issues" | "apps" | "static" | "restricted" | "platform"
 
 /** The inventory's filters, in the order they are displayed. */
 export const FILTERS: readonly { key: SiteFilter; label: string; description: string }[] = [
-  { key: "all", label: "All", description: "All sites" },
+  { key: "all", label: "All", description: "Every site, and the platform's own projects while they need you" },
   { key: "issues", label: "Issues", description: "Sites with an issue" },
   { key: "apps", label: "Apps", description: "Apps, which run a service" },
   { key: "static", label: "Static", description: "Static sites, served as files" },
   { key: "restricted", label: "Restricted", description: "Sites only the people with access can open" },
+  { key: "platform", label: PLATFORM_TAG, description: "Part of the platform: the dashboard, the portal and analytics" },
 ]
 
+/** What a filter reads of a site: the snapshot's, and the restart pending the secrets say once read. */
+type Filterable = Pick<Site, "slug" | "type" | "portal" | "platform"> & Partial<Pick<SiteSecretsPanel, "restartPending">>
+
 /**
- * A site behind the portal is so on both sides, requested or applied: a
- * disagreement between the two is precisely what you come looking for under
- * this filter.
+ * Listed outside Platform: every site of the owner's, and a project of the
+ * platform's own only while it needs the owner: an issue, of either severity,
+ * or a restart pending, which the secrets say and no discrepancy does. A
+ * healthy portal is nothing the owner looks after; a broken one is exactly
+ * what they must see, under All, where errors come first, and under Issues,
+ * and one still running with a file it has not read yet waits for their
+ * restart.
  */
-export function inFilter(
-  site: Pick<Site, "slug" | "type" | "portal">,
-  filter: SiteFilter,
+export function listed(
+  site: Pick<Site, "slug" | "platform"> & Partial<Pick<SiteSecretsPanel, "restartPending">>,
   worst: ReadonlyMap<string, Severity>,
 ): boolean {
+  return !site.platform || worst.has(site.slug) || site.restartPending === true
+}
+
+/**
+ * Every filter but Platform keeps a part of what All lists, so that its count
+ * never exceeds All's. Platform keeps every project of the platform's own,
+ * healthy or not, and nothing else.
+ *
+ * A site behind the portal is so on both sides, requested or applied: a
+ * disagreement between the two is precisely what you come looking for under
+ * Restricted.
+ */
+export function inFilter(site: Filterable, filter: SiteFilter, worst: ReadonlyMap<string, Severity>): boolean {
+  if (filter === "platform") return site.platform
+  if (!listed(site, worst)) return false
   switch (filter) {
     case "all":
       return true
@@ -341,7 +367,7 @@ export function inFilter(
   }
 }
 
-export function filterByKind<T extends Pick<Site, "slug" | "type" | "portal">>(
+export function filterByKind<T extends Filterable>(
   sites: readonly T[],
   filter: SiteFilter,
   worst: ReadonlyMap<string, Severity>,
@@ -351,14 +377,53 @@ export function filterByKind<T extends Pick<Site, "slug" | "type" | "portal">>(
 
 /** The number of sites under each filter, for the chip that carries it. */
 export function countFilters(
-  sites: readonly Pick<Site, "slug" | "type" | "portal">[],
+  sites: readonly Filterable[],
   worst: ReadonlyMap<string, Severity>,
 ): Record<SiteFilter, number> {
-  const counts = { all: 0, issues: 0, apps: 0, static: 0, restricted: 0 }
+  const counts = { all: 0, issues: 0, apps: 0, static: 0, restricted: 0, platform: 0 }
   for (const site of sites) {
     for (const { key } of FILTERS) if (inFilter(site, key, worst)) counts[key] += 1
   }
   return counts
+}
+
+/**
+ * The filters offered as chips: Platform only while the server carries one of
+ * the platform's own projects, which a person's view never does. Decided
+ * before the search: a chip does not come and go as a query is typed.
+ */
+export function offeredFilters(sites: readonly Pick<Site, "platform">[]): typeof FILTERS {
+  const platform = sites.some((site) => site.platform)
+  return FILTERS.filter((filter) => filter.key !== "platform" || platform)
+}
+
+/**
+ * The filter in force: Platform falls back to All once the list carries none
+ * of the platform's own projects, the chip being gone. The choice is
+ * remembered for the page's session, and a person signed in in the owner's
+ * place, without a reload, would otherwise inherit a Platform that names
+ * nothing of theirs.
+ */
+export function effectiveFilter(chosen: SiteFilter, sites: readonly Pick<Site, "platform">[]): SiteFilter {
+  return chosen === "platform" && !sites.some((site) => site.platform) ? "all" : chosen
+}
+
+/**
+ * What the toolbar and the page header count, before the search: what All
+ * lists under every filter but Platform, which counts its own. The figure
+ * then agrees with the All chip, or with the Platform chip under Platform.
+ */
+export function inventoryTotal(
+  sites: readonly Filterable[],
+  filter: SiteFilter,
+  worst: ReadonlyMap<string, Severity>,
+): number {
+  return filterByKind(sites, filter === "platform" ? "platform" : "all", worst).length
+}
+
+/** The projects of the platform's own that All leaves out: those that need nothing of the owner. */
+export function hiddenPlatform(sites: readonly Filterable[], worst: ReadonlyMap<string, Severity>): number {
+  return sites.filter((site) => site.platform && !listed(site, worst)).length
 }
 
 /**
@@ -399,13 +464,20 @@ export const INTERACTIVE = "a, button, input, textarea, select, label, [role='bu
 
 // --- The caption -----------------------------------------------------------------
 
-/** The table's caption, for screen readers: the order, the filter and the search. */
-export function sitesCaption(filter: SiteFilter, query: string | null): string {
+/**
+ * The table's caption, for screen readers: the order, the filter, the search,
+ * and outside Platform how many of the platform's own projects are left out,
+ * which the eye reads on the Platform chip.
+ */
+export function sitesCaption(filter: SiteFilter, query: string | null, hidden = 0): string {
   const parts = ["Sites served by the server, issues first, then by name"]
   if (filter !== "all") {
     const label = FILTERS.find((candidate) => candidate.key === filter)?.label ?? filter
     parts.push(`filtered by ${label}`)
   }
   if (query !== null) parts.push(`matching "${query}"`)
+  if (filter !== "platform" && hidden > 0) {
+    parts.push(`${hidden} platform ${hidden === 1 ? "project" : "projects"} left out, under Platform`)
+  }
   return parts.join(", ")
 }

@@ -16,7 +16,9 @@
  *   app, a service that loops, a preview lock, sites behind the portal,
  *   discrepancies of both severities; two projects that serve no page,
  *   `courier`, a worker beside two scheduled services whose hourly one's
- *   last run failed, and `reports`, whose every service is scheduled;
+ *   last run failed, and `reports`, whose every service is scheduled; the
+ *   platform's own three, `dashboard`, `portal` and `analytics`, each on its
+ *   own port, which the Sites page lists under Platform;
  * - a fake steward on a Unix socket, which follows `src/secrets/protocol.ts`
  *   and the real one's guard rails: every deployed site and its portal, the
  *   platform's own files alone, the dashboard's and the portal's, one of them
@@ -75,6 +77,8 @@
  *   BENCH_OLD_PORTAL=1    a portal that still reads its own lists: Access says changes don't reach it
  *   BENCH_NO_EGRESS=1     no egress proxy: the Connectors page's activity says so, and Activity
  *   BENCH_EMPTY=1             no snapshot at all: the "No snapshot" state
+ *   BENCH_FRESH=1             a fresh machine: the platform's own projects alone, all well
+ *   BENCH_PLATFORM_DOWN=1     the portal's unit failed: it shows under All and Issues
  *   BENCH_SHOWCASE=1          the same fleet healed, for the README's screenshots
  *   BENCH_NO_BACKUPS=1        the backup component not installed
  *   BENCH_OLD_STEWARD=1       a steward from before the backups: `no such route`
@@ -92,6 +96,7 @@ import { lockHeldMessage } from "../src/gatekeeper/transaction";
 import { HASH_ONLY, PASSWORD_VARIABLE, MIN_PASSWORD } from "../src/secrets/scope";
 import { storeMay, storeView } from "../src/secrets/store";
 import { hasStore, secretsOf, type Manifest } from "../borrowed/manifest";
+import { PLATFORM_PORTS } from "../borrowed/services";
 import { INTERRUPTED_TRANSACTION_REASON } from "../src/secrets/portal";
 import {
   EMPTY_CONNECTORS,
@@ -122,6 +127,15 @@ const PASSWORD = "demo";
  * shows this state, taken from the real page rather than drawn.
  */
 const SHOWCASE = process.env.BENCH_SHOWCASE === "1";
+/**
+ * A fresh machine, as `sitesolide setup` leaves it before a site's first
+ * deployment: the platform's own projects alone, all of them well, and
+ * nothing else the page would have to say. With BENCH_PLATFORM_DOWN, one of
+ * them is not well.
+ */
+const FRESH = process.env.BENCH_FRESH === "1";
+/** The portal's unit has failed: a project of the platform's own the Sites page must list. */
+const PLATFORM_DOWN = process.env.BENCH_PLATFORM_DOWN === "1";
 const PORT = Number(process.env.BENCH_PORT ?? 4322);
 const SERVICE_PORT = PORT + 1;
 const PROJECT_ROOT = resolve(import.meta.dir, "..");
@@ -314,6 +328,24 @@ const FOLDERS: FakeFolder[] = [
     deployedMs: 4 * DAY,
   },
   {
+    slug: "analytics",
+    manifest: {
+      slug: "analytics",
+      description: "Audience measurement of the projects, ingestion only",
+      publicDir: "public",
+      start: "bun run server.ts",
+      port: 3029,
+      routes: ["/e"],
+      memory: "256M",
+      portal: true,
+      portalExempt: ["/e", "/a.js"],
+    },
+    unit: { memory: 36 * MB, peak: 52 * MB, limit: 256 * MB, sinceMs: 4 * DAY, cpu: 0.3 },
+    bytes: 2 * MB,
+    deployedMs: 4 * DAY,
+    portal: true,
+  },
+  {
     slug: "lab",
     manifest: {
       slug: "lab",
@@ -430,6 +462,20 @@ if (SHOWCASE) {
   Object.assign(unit("cms"), { memory: 131 * MB, peak: 163 * MB });
 }
 
+if (FRESH) {
+  // Known by their slug on their own port, as src/state.ts knows them.
+  const own = FOLDERS.filter((d) => {
+    const port = d.manifest?.port;
+    return typeof port === "number" && PLATFORM_PORTS.get(port) === d.slug;
+  });
+  FOLDERS.splice(0, FOLDERS.length, ...own);
+}
+
+if (PLATFORM_DOWN) {
+  const portal = FOLDERS.find((d) => d.slug === "portal")!.unit!;
+  Object.assign(portal, { active: "failed", subState: "failed", memory: 0, restarts: 0, sinceMs: 0, cpu: 0 });
+}
+
 /** A unit's accumulated processor time, in nanoseconds, before and now. */
 function counters(unit: FakeUnit): { before: number; now: number } {
   const before = 3_600_000 * 1e6;
@@ -444,7 +490,7 @@ function counters(unit: FakeUnit): { before: number; now: number } {
  */
 function monitorStatus(generatedAt: number): string {
   const ago = (minutes: number) => generatedAt - minutes * MINUTE;
-  const down = SHOWCASE
+  const down = SHOWCASE || FRESH
     ? []
     : [
         {
@@ -600,7 +646,7 @@ function reading(now: number) {
     "\t\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\t\turi /verifier\n" +
     "\t\t\tcopy_headers X-Sitesolide-User X-Sitesolide-User-Name X-Sitesolide-Role\n\t\t}\n\t}\n";
   const kept = (slug: string) => (!SHOWCASE && slug === "photos" ? earlier : current);
-  const blocks: Record<string, string> = SHOWCASE ? {} : { "old-kiosk": "# forgotten block\n" };
+  const blocks: Record<string, string> = SHOWCASE || FRESH ? {} : { "old-kiosk": "# forgotten block\n" };
 
   // What systemctl show would return for a fake unit, its CPU counter kept
   // under `key` for the next reading's rate.
@@ -664,15 +710,17 @@ function reading(now: number) {
     zone: "example.com",
     folders,
     codes: JSON.stringify(CODES),
-    domains:
-      "\triverside-cycles.example wheels\n\twww.riverside-cycles.example wheels\n\tyoga-studio.example yoga-studio\n" +
-      (SHOWCASE ? "\tcorner-bookshop.example bookshop\n" : ""),
+    domains: FRESH
+      ? ""
+      : "\triverside-cycles.example wheels\n\twww.riverside-cycles.example wheels\n\tyoga-studio.example yoga-studio\n" +
+        (SHOWCASE ? "\tcorner-bookshop.example bookshop\n" : ""),
     audience: audience(generatedAt),
     monitor: monitorStatus(generatedAt),
-    // roster (3045) does not listen: it is looping.
-    ports: SHOWCASE
-      ? [3040, 3041, 3022, 3043, 3044, 3045, 3026, 3047, 3048, 3049]
-      : [3040, 3041, 3022, 3043, 3044, 3026, 3047, 3048, 3049],
+    // roster (3045) does not listen: it is looping; nor does the portal (3026) once its unit failed.
+    ports: (SHOWCASE
+      ? [3040, 3041, 3022, 3043, 3044, 3045, 3026, 3029, 3047, 3048, 3049]
+      : [3040, 3041, 3022, 3043, 3044, 3026, 3029, 3047, 3048, 3049]
+    ).filter((port) => !(PLATFORM_DOWN && port === 3026)),
     blocks,
     machine: {
       memoryTotal: 11.6 * GB,
@@ -689,7 +737,7 @@ function reading(now: number) {
 }
 
 /** The preview codes in force, which the bench's gatekeeper draws and takes away. */
-const CODES: Record<string, string> = { "bakery-martin": "K7PX3M" };
+const CODES: Record<string, string> = FRESH ? {} : { "bakery-martin": "K7PX3M" };
 
 async function writeState() {
   if (process.env.BENCH_EMPTY === "1") return;

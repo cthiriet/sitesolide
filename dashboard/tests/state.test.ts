@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { generateFragment } from "../borrowed/fragment";
 import type { Manifest } from "../borrowed/manifest";
+import { PLATFORM_PORTS } from "../borrowed/services";
 import {
   LANDING_FOLDER,
   LANDING_UNIT,
@@ -680,6 +681,47 @@ describe("the machine's special cases", () => {
   test("declaredSecrets never throws on a manifest it cannot read", () => {
     expect(declaredSecrets({ slug: "odd", secrets: 42 } as unknown as Manifest)).toEqual([]);
     expect(declaredSecrets({ slug: "none" } as Manifest)).toEqual([]);
+  });
+});
+
+describe("the platform's own projects", () => {
+  /** The port the platform keeps for one of its projects, read from the table the CLI reserves. */
+  function portOf(slug: string): number {
+    const found = [...PLATFORM_PORTS].find(([, owner]) => owner === slug);
+    if (found === undefined) throw new Error(`${slug} has no port of the platform's`);
+    return found[0];
+  }
+  const app = (slug: string, port: number) => ({ slug, port, publicDir: "public", start: "bun run server.ts" });
+  const platformOf = (folders: RawFolder[]) =>
+    Object.fromEntries(buildSnapshot(raw(folders)).sites.map((site) => [site.slug, site.platform]));
+
+  test("the dashboard, the portal and analytics, each on its own port", () => {
+    const slugs = ["dashboard", "portal", "analytics"];
+    expect(platformOf(slugs.map((slug) => folder(slug, app(slug, portOf(slug)), { unit: unit() })))).toEqual({
+      analytics: true,
+      dashboard: true,
+      portal: true,
+    });
+  });
+
+  /** An owner may deploy a project of their own named analytics, the platform's being optional. */
+  test("a project of the owner's under one of their names, or on one of their ports, is not", () => {
+    expect(
+      platformOf([
+        folder("analytics", { slug: "analytics", publicDir: "public", port: portOf("analytics") }),
+        folder("portal", app("portal", 3050), { unit: unit() }),
+        folder("shop", app("shop", portOf("dashboard")), { unit: unit() }),
+      ]),
+    ).toEqual({ analytics: false, portal: false, shop: false });
+  });
+
+  test("the landing is the owner's site, and an unreadable manifest names no port", () => {
+    expect(
+      platformOf([
+        folder(LANDING_FOLDER, null, { unit: unit() }),
+        { slug: "dashboard", manifest: "{ oops", unit: unit(), bytes: null, deployed: null },
+      ]),
+    ).toEqual({ [LANDING_FOLDER]: false, dashboard: false });
   });
 });
 

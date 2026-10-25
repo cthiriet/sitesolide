@@ -20,9 +20,20 @@ import { SearchField, SiteFilterChips } from "@/components/site-search"
 import { SiteList } from "@/components/sites"
 import { isPerson } from "@/lib/identity"
 import { siteUrl } from "@/lib/pages"
-import { searchAnnouncement, filterSites, countLabel, queryWords } from "@/lib/search"
+import { searchAnnouncement, filterSites, countLabel, countNoun, FRESH_TITLE, queryWords } from "@/lib/search"
 import { withSecrets } from "@/lib/secrets"
-import { countFilters, filterByKind, FILTERS, sitesCaption, sortSites, type SiteFilter } from "@/lib/sites"
+import {
+  countFilters,
+  effectiveFilter,
+  filterByKind,
+  FILTERS,
+  hiddenPlatform,
+  inventoryTotal,
+  offeredFilters,
+  sitesCaption,
+  sortSites,
+  type SiteFilter,
+} from "@/lib/sites"
 import type { Discrepancy, Snapshot, Site } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { worstSeverities, sortDiscrepancies } from "@/lib/verdict"
@@ -44,6 +55,7 @@ const EMPTY_FILTER: Record<Exclude<SiteFilter, "all">, string> = {
   apps: "No apps on this server",
   static: "No static sites on this server",
   restricted: "No site is restricted",
+  platform: "No platform projects on this server",
 }
 
 /**
@@ -92,20 +104,27 @@ function IssuesPanel({ discrepancies, sites }: { discrepancies: readonly Discrep
   )
 }
 
-function Inventory({ snapshot }: { snapshot: Snapshot }) {
+/**
+ * The search and the rows. The filter is the page's, the one in force rather
+ * than the one remembered, since the header's count follows it too.
+ */
+function Inventory({
+  snapshot,
+  filter,
+  setFilter,
+}: {
+  snapshot: Snapshot
+  filter: SiteFilter
+  setFilter: (filter: SiteFilter) => void
+}) {
   const { now, secretsBySite, identity } = useData()
   const announce = useAnnounce()
   const [query, setQueryState] = useState(memory.query)
-  const [filter, setFilterState] = useState<SiteFilter>(memory.filter)
   const field = useRef<HTMLInputElement>(null)
 
   function setQuery(value: string) {
     memory.query = value
     setQueryState(value)
-  }
-  function setFilter(value: SiteFilter) {
-    memory.filter = value
-    setFilterState(value)
   }
 
   const worst = useMemo(() => worstSeverities(snapshot.discrepancies), [snapshot.discrepancies])
@@ -114,11 +133,20 @@ function Inventory({ snapshot }: { snapshot: Snapshot }) {
   const found = useMemo(() => filterSites(sites, query), [sites, query])
   const counts = useMemo(() => countFilters(found, worst), [found, worst])
   const visible = useMemo(() => sortSites(filterByKind(found, filter, worst), worst), [found, filter, worst])
+  const filters = useMemo(() => offeredFilters(sites), [sites])
+  // Before the search, as the header counts: what All lists, or Platform's own set.
+  const total = useMemo(() => inventoryTotal(sites, filter, worst), [sites, filter, worst])
+  // The platform's own projects only Platform lists, among what the search
+  // finds, every one of them with no search: what the Platform chip counts
+  // beyond All, for the caption and the empty state.
+  const hiddenFound = useMemo(() => hiddenPlatform(found, worst), [found, worst])
 
   const words = queryWords(query)
   const key = `${filter} ${words.join(" ")}`
   const search = words.length > 0
-  const narrowed = search || filter !== "all"
+  // Platform counts its own set: chosen with no search, it narrows nothing of it.
+  const narrowed = search || (filter !== "all" && filter !== "platform")
+  const noun = countNoun(filter)
   const displayedQuery = query.trim().replace(/\s+/g, " ")
 
   // Only a change of search or filter is announced, never the first render nor a refresh.
@@ -127,10 +155,10 @@ function Inventory({ snapshot }: { snapshot: Snapshot }) {
     if (key === announced.current) return
     const timer = window.setTimeout(() => {
       announced.current = key
-      announce(searchAnnouncement(visible.length, sites.length, narrowed))
+      announce(searchAnnouncement(visible.length, total, narrowed, noun))
     }, ANNOUNCE_MS)
     return () => window.clearTimeout(timer)
-  }, [key, visible.length, sites.length, narrowed, announce])
+  }, [key, visible.length, total, narrowed, noun, announce])
 
   function clear() {
     setQuery("")
@@ -160,46 +188,76 @@ function Inventory({ snapshot }: { snapshot: Snapshot }) {
   }
 
   const filterLabel = FILTERS.find((candidate) => candidate.key === filter)?.label ?? ""
+  // A fresh machine, or one that serves nothing of the owner's yet: the
+  // platform's own projects alone, all of them well, which All leaves out.
+  const fresh = filter !== "platform" && total === 0
+  // Under All, a search that finds nothing listed but a project of the platform's own.
+  const elsewhere = filter === "all" && hiddenFound > 0
 
   return (
     <section aria-label="Sites" className="grid gap-4">
       <div className="flex flex-wrap items-center gap-3">
         <SearchField field={field} value={query} onValue={setQuery} className="w-full sm:w-64" />
-        <SiteFilterChips value={filter} counts={counts} onValue={setFilter} />
+        <SiteFilterChips filters={filters} value={filter} counts={counts} onValue={setFilter} />
         <p className="text-xs text-muted-foreground tabular-nums sm:ml-auto">
-          {countLabel(visible.length, sites.length, narrowed)}
+          {countLabel(visible.length, total, narrowed, noun)}
           {visible.length > 1 && ", issues first"}
         </p>
       </div>
 
-      {visible.length > 0 ? (
+      {fresh ? (
+        <Panel>
+          <EmptyState
+            icon={Globe}
+            title={FRESH_TITLE}
+            action={
+              <Button variant="outline" onClick={() => setFilter("platform")} className="max-md:h-10">
+                Show platform projects
+              </Button>
+            }
+          >
+            A site appears here after its first sitesolide deploy, run in the project's folder. The platform's own
+            projects are under Platform.
+          </EmptyState>
+        </Panel>
+      ) : visible.length > 0 ? (
         <SiteList
           sites={visible}
           worst={worst}
           now={now}
-          caption={sitesCaption(filter, search ? displayedQuery : null)}
+          caption={sitesCaption(filter, search ? displayedQuery : null, hiddenFound)}
         />
       ) : search ? (
         <Panel>
           <EmptyState
             icon={SearchX}
-            title={`No sites match "${displayedQuery}"`}
+            title={`No ${noun.many} match "${displayedQuery}"`}
             action={
               <div className="flex flex-wrap justify-center gap-2">
                 <Button variant="outline" onClick={clear} className="max-md:h-10">
                   Clear search
                 </Button>
-                {filter !== "all" && (
-                  <Button variant="ghost" onClick={() => setFilter("all")} className="max-md:h-10">
-                    Search all sites
+                {elsewhere ? (
+                  <Button variant="ghost" onClick={() => setFilter("platform")} className="max-md:h-10">
+                    Search platform projects
                   </Button>
+                ) : (
+                  filter !== "all" && (
+                    <Button variant="ghost" onClick={() => setFilter("all")} className="max-md:h-10">
+                      Search all sites
+                    </Button>
+                  )
                 )}
               </div>
             }
           >
-            {filter === "all"
-              ? "Search looks at names, descriptions, addresses, ports, access, service states and secret variable names."
-              : `Only sites under ${filterLabel} were searched.`}
+            {elsewhere
+              ? `The platform's own projects are under Platform, where ${hiddenFound === 1 ? "1 matches" : `${hiddenFound} match`}.`
+              : filter === "all"
+                ? "Search looks at names, descriptions, addresses, ports, access, service states and secret variable names."
+                : filter === "platform"
+                  ? "Only the platform's own projects were searched."
+                  : `Only sites under ${filterLabel} were searched.`}
           </EmptyState>
         </Panel>
       ) : (
@@ -236,22 +294,38 @@ function HomeSkeleton() {
 /**
  * The home page: the machine, what is wrong, then each site as one row that
  * leads to it, its pills included (restart pending, general access).
- * A search and filters, the sites in discrepancy at the top.
+ * A search and filters, the sites in discrepancy at the top. The platform's
+ * own projects are listed under Platform, and elsewhere only while they have
+ * an issue or a restart pending: the Issues panel above names them all the
+ * same.
  */
 export function HomePage() {
-  const { snapshot, identity } = useData()
+  const { snapshot, identity, secretsBySite } = useData()
   // The machine's own figures are the owner's: a person sees their projects.
   const person = isPerson(identity)
+  const [chosen, setChosen] = useState<SiteFilter>(memory.filter)
+  function setFilter(value: SiteFilter) {
+    memory.filter = value
+    setChosen(value)
+  }
+  // Enriched as the inventory enriches them: a restart pending lists a project of the platform's own.
+  const sites = useMemo(() => (snapshot === null ? null : withSecrets(snapshot.sites, secretsBySite)), [snapshot, secretsBySite])
+  const filter = sites === null ? chosen : effectiveFilter(chosen, sites)
+  // The count the toolbar gives before the search: the All chip's, or the Platform chip's under Platform.
+  const total = useMemo(
+    () => (snapshot === null || sites === null ? undefined : inventoryTotal(sites, filter, worstSeverities(snapshot.discrepancies))),
+    [snapshot, sites, filter],
+  )
   return (
     <>
-      <PageHeader title="Sites" count={snapshot?.sites.length} />
+      <PageHeader title="Sites" count={total} />
       <PageBody>
         <WithSnapshot skeleton={<HomeSkeleton />}>
           {(snapshot) => (
             <>
               {!person && <MachinePlate snapshot={snapshot} />}
               <IssuesPanel discrepancies={snapshot.discrepancies} sites={snapshot.sites} />
-              <Inventory snapshot={snapshot} />
+              <Inventory snapshot={snapshot} filter={filter} setFilter={setFilter} />
             </>
           )}
         </WithSnapshot>

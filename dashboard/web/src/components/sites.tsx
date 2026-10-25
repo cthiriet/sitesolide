@@ -13,6 +13,7 @@ import { siteUrl } from "@/lib/pages"
 import { PENDING_LABEL, type SiteSecretsPanel } from "@/lib/secrets"
 import {
   INTERACTIVE,
+  PLATFORM_TAG,
   siteAccess,
   siteAddress,
   serviceState,
@@ -58,15 +59,32 @@ function SiteName({ slug }: { slug: string }) {
   )
 }
 
+/** A small tag beside a site's name. */
+const TAG = "inline-flex h-5 shrink-0 items-center rounded-md bg-secondary px-1.5 text-xs"
+
 /** A person's role on the site, beside its name: what they may do there, read at a glance. The owner sees none. */
 function RoleTag({ slug }: { slug: string }) {
   const { identity } = useData()
   const role = roleOn(identity, slug)
   if (role === null) return null
   return (
-    <span title="Your role" className="inline-flex h-5 shrink-0 items-center rounded-md bg-secondary px-1.5 text-xs font-medium text-secondary-foreground">
+    <span title="Your role" className={cn(TAG, "font-medium text-secondary-foreground")}>
       <span className="sr-only">Your role: </span>
       {roleLabel(role)}
+    </span>
+  )
+}
+
+/**
+ * One of the platform's own projects, which the list shows outside Platform
+ * only while it has an issue or a restart pending. Quieter than a role: it
+ * says what the project is, not what to do with it.
+ */
+function PlatformTag({ site }: { site: Pick<Site, "platform"> }) {
+  if (!site.platform) return null
+  return (
+    <span title="Part of the platform" className={cn(TAG, "text-muted-foreground")}>
+      {PLATFORM_TAG}
     </span>
   )
 }
@@ -160,6 +178,7 @@ function SiteRow({ site, severity, now }: RowProps) {
           <div className="grid min-w-0 gap-0.5">
             <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <SiteName slug={site.slug} />
+              <PlatformTag site={site} />
               <RoleTag slug={site.slug} />
               {site.restartPending === true && <PendingPill />}
             </span>
@@ -218,6 +237,7 @@ function SiteEntry({ site, severity, now }: RowProps) {
         <div className="flex items-start justify-between gap-3">
           <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             <SiteName slug={site.slug} />
+            <PlatformTag site={site} />
             <RoleTag slug={site.slug} />
             {site.restartPending === true && <PendingPill />}
           </span>

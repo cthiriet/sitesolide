@@ -8,14 +8,15 @@
  * `collector.ts`, the display to the Astro application of `web/`.
  *
  * The rules are not rewritten: `isValidCode` comes from `api/src/locks.ts`,
- * which also decides what Caddy accepts, and `isApp` from
- * `bin/cli/manifest.ts`, which decides what the CLI generates. A dashboard
- * that rewrites these rules ends up displaying a state the machine denies, and
- * that is the reason the `dashboard/` folder is in this repository rather than
- * in a neighbouring one.
+ * which also decides what Caddy accepts, `isApp` from `bin/cli/manifest.ts`,
+ * which decides what the CLI generates, and `PLATFORM_PORTS` from
+ * `bin/cli/services.ts`, which keeps the platform's ports for its own
+ * projects. A dashboard that rewrites these rules ends up displaying a state
+ * the machine denies, and that is the reason the `dashboard/` folder is in
+ * this repository rather than in a neighbouring one.
  *
  * The import goes through `borrowed/`, where `scripts/borrow.ts` copies these
- * two files before every build: the deployment's rsync carries only
+ * files before every build: the deployment's rsync carries only
  * `dashboard/`, and an import climbing higher makes the service fail on the VM
  * after a deployment that otherwise succeeded.
  */
@@ -33,6 +34,7 @@ import {
 } from "../borrowed/manifest";
 import { fragmentIsProtected, fragmentPassesIdentity } from "../borrowed/portal";
 import { isValidCode, previewHost } from "../borrowed/locks";
+import { PLATFORM_PORTS } from "../borrowed/services";
 import { timerUnit } from "../borrowed/unit";
 import { duration, monitorDiscrepancies } from "./monitor";
 
@@ -260,6 +262,15 @@ export type Site = {
    * rather than present it as a page.
    */
   headless: boolean;
+  /**
+   * One of the platform's own projects, the dashboard, the portal or
+   * analytics, known by its slug deployed on that project's own port,
+   * `PLATFORM_PORTS` of bin/cli/services.ts. Neither a list of slugs, which
+   * would hide an owner's own project named `analytics`, nor a manifest key,
+   * which a token could set to hide a project from the owner. The landing is
+   * the owner's site, and not one of them.
+   */
+  platform: boolean;
   domain: Domain | null;
   lock: Lock;
   portal: Portal;
@@ -719,6 +730,7 @@ export function buildSnapshot(raw: Raw): Snapshot {
       type,
       address: addressOf(slug, raw.zone),
       headless: manifest !== null && app && isHeadless(manifest),
+      platform: port !== null && PLATFORM_PORTS.get(port) === slug,
       domain,
       lock: readLock(slug, manifest, codes, raw.zone),
       portal: readPortal(manifest, raw.blocks[slug]),

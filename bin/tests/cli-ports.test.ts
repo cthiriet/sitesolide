@@ -114,9 +114,13 @@ describe("the port written back", () => {
 test("the platform's ports are the ones its manifests declare", () => {
   // A drift here would give a project the dashboard's port, and refuse the
   // dashboard's next deployment.
-  const declared = ["dashboard", "portal", "analytics"].map((name) => {
+  const manifests = ["dashboard", "portal", "analytics"].map((name) => {
     const { manifest } = readManifest(readFileSync(join(REPO_ROOT, name, "sitesolide.json"), "utf8"));
-    return manifest?.port;
+    if (manifest === undefined || manifest.port === undefined) throw new Error(`${name}/sitesolide.json declares no port`);
+    return { slug: manifest.slug, port: manifest.port };
   });
-  expect(declared.sort()).toEqual([...PLATFORM_PORTS.keys()].sort());
+  expect(manifests.map((manifest) => manifest.port).sort()).toEqual([...PLATFORM_PORTS.keys()].sort());
+  // Each port belongs to the slug that deploys there: the dashboard knows the
+  // platform's own projects by that pair, and keeps them off its Sites page.
+  for (const { slug, port } of manifests) expect(PLATFORM_PORTS.get(port)).toBe(slug);
 });

@@ -41,6 +41,7 @@ export function site(partial: Partial<Site> = {}): Site {
     type: "app",
     address: "calendar.test-zone.invalid",
     headless: false,
+    platform: false,
     domain: null,
     lock: { closed: false, code: null, url: null },
     portal: { wanted: false, installed: false, exemptions: [] },

@@ -4,6 +4,7 @@ import {
   isTyping,
   filterSites,
   countLabel,
+  countNoun,
   queryWords,
   normalize,
   searchShortcut,
@@ -118,6 +119,12 @@ describe("fields covered", () => {
       const candidate = site({ type: type as Site["type"], port: null })
       expect(filterSites([candidate], label)).toHaveLength(1)
     }
+  })
+
+  /** The tag is read beside the name: "platform" finds the platform's own projects, and only them. */
+  test("the Platform tag of the platform's own projects", () => {
+    const own = site({ slug: "portal", platform: true, port: 3026 })
+    expect(slugs(filterSites([own, ...SITES], "platform"))).toEqual(["portal"])
   })
 
   test("the port, with or without its colon", () => {
@@ -244,6 +251,25 @@ describe("count and announcement", () => {
     expect(countLabel(1, 1, false)).toBe("1 site")
     expect(countLabel(3, 9, true)).toBe("3 of 9 sites")
     expect(countLabel(0, 9, true)).toBe("0 of 9 sites")
+  })
+
+  test("under Platform, the count names the platform's own projects", () => {
+    expect(countLabel(3, 3, false, countNoun("platform"))).toBe("3 platform projects")
+    expect(countLabel(1, 1, false, countNoun("platform"))).toBe("1 platform project")
+    expect(countLabel(1, 3, true, countNoun("platform"))).toBe("1 of 3 platform projects")
+    expect(countLabel(1, 1, false, countNoun("apps"))).toBe("1 site")
+    expect(searchAnnouncement(3, 3, false, countNoun("platform"))).toBe("Showing all 3 platform projects")
+    expect(searchAnnouncement(0, 3, true, countNoun("platform"))).toBe("No platform projects match")
+    expect(searchAnnouncement(1, 3, true, countNoun("platform"))).toBe("1 platform project matches")
+  })
+
+  /** A fresh machine: the screen reads its empty state's title, and so does the announcement. */
+  test("with no site listed outside Platform, the count says 0 and the announcement the empty state", () => {
+    expect(countLabel(0, 0, true)).toBe("0 sites")
+    expect(countLabel(0, 0, false)).toBe("0 sites")
+    expect(searchAnnouncement(0, 0, false)).toBe("No sites deployed yet")
+    expect(searchAnnouncement(0, 0, true)).toBe("No sites deployed yet")
+    expect(searchAnnouncement(0, 0, true, countNoun("issues"))).toBe("No sites deployed yet")
   })
 
   test("the announcement is stated in the singular, the plural, or with no result", () => {

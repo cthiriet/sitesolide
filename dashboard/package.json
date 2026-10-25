@@ -14,7 +14,8 @@
     "build": "bun run borrow && bun run web:install && bun run web:build",
     "test": "bun test",
     "check": "bun run borrow && bun test && tsc --noEmit && bun run web:install && bun run web:check",
-    "fingerprint": "bun scripts/fingerprint.ts"
+    "fingerprint": "bun scripts/fingerprint.ts",
+    "page-bench": "bun scripts/page-bench.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

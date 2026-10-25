@@ -390,7 +390,18 @@ field, with a `/` key hint, then the filters as a segmented control, a bordered
 card whose chosen segment takes the `muted` grey and `strong` text (in dark, the
 control sits on `background` so that the grey still shows). `/` focuses the
 site search, Escape clears it then returns focus. The count and the order on
-the right: "3 of 13 sites, issues first".
+the right: "3 of 13 sites, issues first". The count is of what All lists
+before the search, and the page header's agrees with it.
+
+**The platform's own projects**, the dashboard, the portal and analytics,
+known by their slug on their own port (`Site.platform`), have their chip,
+*Platform*, last and only while the list carries one; a Platform chosen
+then gone falls back to All. Every other filter lists them only while they
+need the owner, an issue of either severity or a restart pending: a healthy
+portal is nothing to look after, a broken one goes to the top of All and
+under Issues, and each filter keeps a part of what All lists. Under Platform
+the count is of its own set, "3 platform projects". On a phone five chips
+share one row, six take two rows of three.
 
 **Secrets and passwords.** A field that receives a secret is `type="password"`,
 `autoComplete="off"`, `data-1p-ignore`; a textarea, which cannot be, is masked
@@ -434,7 +445,7 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | Activity | Event, Actor, Action, Target, Source, Site or host, From, To, Details, Load older, Export, CSV, JSON lines, Clear filters, Access changes; a source is Read, Latest 50, Can't read, Needs updating, Not installed; an actor is Owner, The server, Someone, alice@example.com (token), Example Accounting (password access) | Log entry, Audit trail, Download, Reset |
 | Unreachable | Can't reach the dashboard., Can't reach the server's secrets., Can't reach the access service on the server. | is not answering |
 | Common actions | Refresh, Retry, Sign in, Sign out, Copy, Copied, Cancel, Close, Done, Manage, See | Reload, Try again, Log out, Submit |
-| Empty states | No issues, No sites match "x", No site is restricted, No project of yours yet, No project named x that you have a role on, Nobody else has access to cms yet, Nobody has access to a project yet, cms has no secret files, Not part of your role, Only the owner's | Nothing here! |
+| Empty states | No issues, No sites match "x", No site is restricted, No sites deployed yet, No project of yours yet, No project named x that you have a role on, Nobody else has access to cms yet, Nobody has access to a project yet, cms has no secret files, Not part of your role, Only the owner's | Nothing here! |
 
 "Portal" names the component, on the machine: Activity's source for sign-ins,
 the banner saying the portal on the server still reads its own lists, the
@@ -472,9 +483,16 @@ size, then load, memory and disk, with their ticks at 70 and 90 %), the Issues
 panel, errors first (a disagreement on general access names each side,
 "Restricted in sitesolide.json, public on the server: anyone can open the
 site. Choose one in its Access section"), then the search, the filters (All,
-Issues, Apps, Static, Restricted, each with its count) and the
+Issues, Apps, Static, Restricted, Platform, each with its count) and the
 inventory, sites in discrepancy at the top: Site, Address, Access, Service,
-Size. A project that serves no page says so under its address, "Runs in the
+Size. A platform project carries a quiet *Platform* tag beside its name, the
+word the search finds it by. A search under All that finds only platform
+projects says so, "The platform's own projects are under Platform, where 2
+match.", with *Search platform projects*, the query kept. A server with no
+site of the owner's yet reads "No sites deployed yet", "A site appears here
+after its first sitesolide deploy, run in the project's folder. The
+platform's own projects are under Platform.", with *Show platform projects*;
+the search and the chips stay. A project that serves no page says so under its address, "Runs in the
 background, serves no page"; its Service column sums what its running
 services weigh, a scheduled service between two runs weighing nothing, and
 a project whose every service is scheduled reads *Scheduled* with its next
@@ -862,17 +880,22 @@ on no list, refused with `no-role`. It seeds an expired password access on
 `library`, and alice's token `alice-ci`, paused on `photos`, where she is a
 Viewer now. Two projects serve no page: `courier`, a worker beside two
 scheduled services, the hourly one's last run failed outside the showcase,
-and `reports`, whose every service is scheduled. Variants:
+and `reports`, whose every service is scheduled. The platform's own three,
+`dashboard`, `portal` and `analytics`, sit under Platform. Variants:
 `BENCH_PORT`, `BENCH_STALE=1`, `BENCH_NO_STEWARD=1`, `BENCH_NO_PORTAL=1`,
 `BENCH_NO_SSO=1` (no provider: everyone added gets password access),
 `BENCH_NO_EGRESS=1`, `BENCH_NO_BACKUPS=1`, `BENCH_OLD_STEWARD=1`,
-`BENCH_EMPTY=1`, `BENCH_SHOWCASE=1`. After `bun run web:build`, a reload is
+`BENCH_EMPTY=1`, `BENCH_FRESH=1` (the platform's own projects alone, all
+well), `BENCH_PLATFORM_DOWN=1` (the portal's unit failed, alone or with
+`BENCH_FRESH=1`), `BENCH_SHOWCASE=1`. After `bun run web:build`, a reload is
 enough.
 
 A visible change is looked at before being shipped, through headless Chrome
 screenshots of the bench, in light and in dark:
 
-- the home page, Activity, People and Tokens; the five sections of a site,
+- the home page, Activity, People and Tokens; the home page under Platform,
+  on a fresh machine (`BENCH_FRESH=1`) and with the portal down
+  (`BENCH_PLATFORM_DOWN=1`); the five sections of a site,
   the Overview of a service in a restart loop and of a locked static site,
   of `courier` and of `reports`,
   the Secrets of a site with a store, and of the dashboard itself;
