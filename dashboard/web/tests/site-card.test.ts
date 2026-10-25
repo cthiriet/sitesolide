@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import { MEMORY_CRITICAL_SHARE, PEAK_WARNING_SHARE } from "../src/lib/gauges"
 import {
+  SAME_DEPLOYMENT_MS,
   SERVICE_THRESHOLD_POSITIONS,
+  addressSummary,
+  audienceHeadline,
+  deployedBy,
+  headerState,
+  kindLine,
+  secretsHeadline,
   siteAddresses,
   siteFolder,
   siteDiscrepancies,
@@ -11,7 +18,8 @@ import {
   readAccess,
   siteStorage,
 } from "../src/lib/site-card"
-import { discrepancy, scheduledService, service, site, siteService } from "./factory"
+import { discrepancy, scheduledService, secretFile, secretProject, service, site, siteService, storeFile, storeVariable, storeView } from "./factory"
+import type { AuditRow } from "../src/lib/types"
 
 const MO = 1024 ** 2
 const HOUR = 3600_000
@@ -83,14 +91,15 @@ describe("a site's service", () => {
       state: { tone: "ok", label: "Running" },
       unit: "cms.service",
       systemd: "active (running)",
+      uptime: { value: "20h", since: "since Jan 14, 16:00 UTC" },
       gauge: {
+        amount: "198 of 256 MB",
         tile: { heading: "Memory", percent: 77, value: "198 MB", detail: "of 256 MB", level: "warn" },
         peak: 86,
         peakDetail: "Peak 221 MB, 86% of the limit",
       },
       note: null,
       facts: [
-        { label: "Up", value: "20h", detail: "since Jan 14, 16:00 UTC", tone: "neutral" },
         { label: "CPU", value: "5%", detail: "of one core, over the last minute", tone: "neutral" },
         { label: "Restarts", value: "0", detail: "Automatic restarts by systemd", tone: "neutral" },
         { label: "Port", value: "3043", detail: "Listening on the loopback interface", tone: "neutral" },
@@ -101,7 +110,7 @@ describe("a site's service", () => {
   test("with no ceiling and no peak, the gauge says so rather than inventing a share", () => {
     const card = serviceCard(site({ service: service({ memory: 40 * MO, peak: null, limit: null }) }), NOW)
     expect(card).toMatchObject({
-      gauge: { tile: { percent: null, detail: "No limit" }, peak: null, peakDetail: "No peak recorded" },
+      gauge: { amount: "40 MB", tile: { percent: null, detail: "No limit" }, peak: null, peakDetail: "No peak recorded" },
     })
   })
 
@@ -112,10 +121,8 @@ describe("a site's service", () => {
 
   test("with no measured CPU share, a hyphen and when it will come", () => {
     const card = serviceCard(site({ service: service({ cpuShare: null, since: null }) }), NOW)
-    expect(card.kind === "app" && card.facts.slice(0, 2)).toEqual([
-      { label: "Up", value: "-", detail: null, tone: "neutral" },
-      { label: "CPU", value: "-", detail: "Measured from the next collection", tone: "neutral" },
-    ])
+    expect(card.kind === "app" && card.uptime).toEqual({ value: "-", since: null })
+    expect(card.kind === "app" && card.facts[0]).toEqual({ label: "CPU", value: "-", detail: "Measured from the next collection", tone: "neutral" })
   })
 
   /** A service in a crash loop: no current memory, but the peak can say it died of its memory. */
@@ -141,11 +148,12 @@ describe("a site's service", () => {
       state: { tone: "error", label: "Restarting" },
       unit: "calendar.service",
       systemd: "activating (auto-restart)",
+      uptime: null,
       gauge: null,
       note: "The service isn't running, so it has no memory in use.",
       facts: [
         { label: "Restarts", value: "7", detail: "Automatic restarts by systemd", tone: "attention" },
-        { label: "Memory peak", value: "34 MB", detail: "of 256 MB", tone: "neutral" },
+        { label: "Memory peak", value: "34 of 256 MB", detail: null, tone: "neutral" },
         { label: "Port", value: "3045", detail: "Nothing listens on it", tone: "error" },
       ],
     })
@@ -158,6 +166,7 @@ describe("a site's service", () => {
       state: { tone: "error", label: "Down" },
       unit: null,
       systemd: null,
+      uptime: null,
       gauge: null,
       note: "No systemd unit is loaded for this app: nothing answers behind Caddy.",
       facts: [{ label: "Port", value: "3040", detail: "Nothing listens on it", tone: "error" }],
@@ -302,14 +311,14 @@ describe("a site's door", () => {
 describe("a site's storage", () => {
   test("the size and the date of the last deployment", () => {
     expect(siteStorage(site({ bytes: 48 * MO, deployed: NOW - 20 * HOUR }), NOW, "UTC")).toEqual([
-      { label: "On disk", value: "48 MB", detail: null, tone: "neutral" },
+      { label: "Disk", value: "48 MB", detail: "/srv/sites/calendar", tone: "neutral" },
       { label: "Deployed", value: "20h ago", detail: "Jan 14, 16:00 UTC", tone: "neutral" },
     ])
   })
 
   test("with no manifest, nothing dates the deployment", () => {
     expect(siteStorage(site({ bytes: null, deployed: null }), NOW)).toEqual([
-      { label: "On disk", value: "-", detail: null, tone: "neutral" },
+      { label: "Disk", value: "-", detail: "/srv/sites/calendar", tone: "neutral" },
       { label: "Deployed", value: "-", detail: "No sitesolide.json to date it", tone: "neutral" },
     ])
   })
@@ -459,9 +468,11 @@ describe("a project whose every service is scheduled", () => {
       state: { tone: "ok", label: "Scheduled" },
       unit: "reports.service",
       systemd: "active (exited)",
+      // Its uptime says nothing of its services, which start and stop on their own.
+      uptime: null,
       gauge: null,
       note: "Every service of this project runs on a schedule, listed below. This unit runs nothing: it keeps their timers armed, at boot and after each deployment.",
-      facts: [{ label: "Up", value: "3h", detail: "since Jan 15, 09:00 UTC", tone: "neutral" }],
+      facts: [],
     })
   })
 
@@ -511,5 +522,79 @@ describe("a project that serves no page", () => {
       tone: "neutral",
     })
     expect(serviceRows(courier, NOW)).toEqual([])
+  })
+})
+
+describe("the Overview as a hub", () => {
+  test("under the title, the kind's word, with how many services it runs when it runs several", () => {
+    expect(kindLine(site())).toEqual({ kind: "app", text: "App" })
+    expect(kindLine(site({ type: "static", service: null }))).toEqual({ kind: "static", text: "Static site" })
+    expect(kindLine(site({ type: "no-manifest", service: null }))).toEqual({ kind: "none", text: "No manifest" })
+    const worker = siteService({ kind: "worker", main: true })
+    const hourly = scheduledService(NOW, { unit: "calendar.cleanup", name: "cleanup" })
+    expect(kindLine(site({ headless: true, services: [worker, hourly, hourly] }))).toEqual({ kind: "background", text: "Background, 3 services" })
+    expect(kindLine(site({ headless: true, services: [hourly] }))).toEqual({ kind: "scheduled", text: "Scheduled" })
+  })
+
+  /** Quiet when fine: the verdict says it once, the header only speaks when something is wrong. */
+  test("the state beside the kind only when it is not fine", () => {
+    expect(headerState(site(), [])).toBeNull()
+    expect(headerState(site({ type: "static", service: null }), [])).toBeNull()
+    expect(headerState(site(), [discrepancy("warning")])).toEqual({ tone: "attention", label: "Running, 1 warning" })
+    expect(headerState(site({ service: service({ active: "activating", subState: "auto-restart" }) }), [])).toEqual({ tone: "error", label: "Restarting" })
+    expect(headerState(site({ type: "static", service: null }), [discrepancy("error")])).toEqual({ tone: "error", label: "Static files, 1 error" })
+  })
+
+  test("the address that answers is the link; a domain not answering as asked says its state; the others are listed under it", () => {
+    expect(addressSummary(site())).toEqual({ name: "calendar.test-zone.invalid", href: "https://calendar.test-zone.invalid", domain: null, others: [], headless: false })
+    const routed = site({ domain: { name: "wheels.test", aliases: ["www.wheels.test"], active: true, route: true } })
+    expect(addressSummary(routed)).toMatchObject({ name: "wheels.test", href: "https://wheels.test", domain: null, others: ["www.wheels.test", "calendar.test-zone.invalid"] })
+    const pending = site({ domain: { name: "wheels.test", aliases: [], active: false, route: false } })
+    expect(addressSummary(pending)).toMatchObject({
+      name: "calendar.test-zone.invalid",
+      domain: { name: "wheels.test", state: { tone: "neutral", label: "Pending" } },
+      others: [],
+    })
+    const unrouted = site({ domain: { name: "wheels.test", aliases: [], active: true, route: false } })
+    expect(addressSummary(unrouted).domain?.state).toEqual({ tone: "error", label: "Not routed" })
+  })
+
+  /** The row and the sidebar's badge count the same problems: lib/secrets.ts fileProblems. */
+  test("the secrets in one line: what is kept, counted, then the first problem and how many more", () => {
+    const store = storeView({ variables: [storeVariable(), storeVariable({ name: "SMTP_URL", source: "none" })], missing: ["SMTP_URL"], files: [storeFile()] })
+    const headline = secretsHeadline(secretProject({ slug: "cms", files: [], store }), NOW)
+    expect(headline.text).toBe("2 variables, 1 file")
+    expect(headline.problem).toMatchObject({ text: "1 not set", tone: "error", more: 0 })
+    expect(secretsHeadline(secretProject({ slug: "cms", files: [], store: storeView() }), NOW)).toEqual({ text: "None", problem: null })
+    const portal = secretsHeadline(secretProject({ files: [secretFile({ state: "absent" }), secretFile({ name: "users.env", state: "unmanaged" })] }), NOW)
+    expect(portal.text).toBe("2 files")
+    expect(portal.problem).toEqual({ text: "Missing", tone: "error", more: 1, title: "portal.env: Missing. users.env: Unmanaged" })
+  })
+
+  test("the audience in one line, over the window analytics keeps", () => {
+    const measure = { views: 3000, visits: 1148, bounceRate: 40, timePerPage: 30, pagesPerVisit: 2.6, days: [], rankings: {} }
+    expect(audienceHeadline({ present: true, days: 30, sites: { cms: measure } }, "cms")).toEqual({ text: "1,148 visits in 30 days", measured: true })
+    expect(audienceHeadline({ present: true, days: 30, sites: {} }, "cms")).toEqual({ text: "Not measured yet", measured: false })
+    expect(audienceHeadline(null, "cms")).toEqual({ text: "No audience data", measured: false })
+  })
+
+  test("who deployed, only when Activity's latest success is the deployment the manifest dates", () => {
+    const deployed = NOW - 20 * HOUR
+    const row = (at: number, partial: Partial<AuditRow> = {}): AuditRow => ({
+      id: "dashboard:1",
+      source: "dashboard",
+      at: new Date(at).toISOString(),
+      actor: "token:a1b2c3",
+      action: "deploy.success",
+      target: "cms",
+      site: "cms",
+      detail: { email: "alice@example.com" },
+      ...partial,
+    })
+    expect(deployedBy([row(deployed + 60_000)], deployed)).toBe("alice@example.com (token)")
+    expect(deployedBy([row(deployed + SAME_DEPLOYMENT_MS + 1)], deployed)).toBeNull()
+    expect(deployedBy([row(deployed, { action: "deploy.failure" })], deployed)).toBeNull()
+    expect(deployedBy([], deployed)).toBeNull()
+    expect(deployedBy([row(deployed)], null)).toBeNull()
   })
 })

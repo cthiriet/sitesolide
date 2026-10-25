@@ -1,11 +1,18 @@
-import { useEffect, useId, useRef, useState, type SyntheticEvent } from "react"
-import { Check, CircleCheck, CircleX, Globe, Info, KeyRound, Lock, RefreshCw, type LucideIcon } from "lucide-react"
+import { useEffect, useId, useRef, useState, type ReactNode, type SyntheticEvent } from "react"
+import { ChevronDown, CircleCheck, CircleX, Globe, Info, KeyRound, Lock, RefreshCw, type LucideIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useAnnounce } from "@/components/copy"
-import { Banner, FormError, INPUT_DIALOG, Panel } from "@/components/page"
+import { Banner, FormError, INPUT_DIALOG, Panel, Tile } from "@/components/page"
 import { CodeChip } from "@/components/access-word"
 import { Track, useClock, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
 import { LockGlyph } from "@/components/unlock"
@@ -19,8 +26,9 @@ import {
   changeTexts,
   codeWithheld,
   confirmationValid,
-  generalLine,
+  GENERAL_CHOICES,
   removalConfirmation,
+  whoChanges,
   type ChangeTarget,
   type ChoiceOption,
   type GeneralReader,
@@ -63,13 +71,207 @@ function Code({ slug, state }: { slug: string; state: GeneralState }) {
   return <CodeChip slug={slug} code={state.code.code} url={state.code.url} large />
 }
 
+/** A quiet line under the choices: the addresses a change applies to, why nothing may change, a read that failed. */
+function Note({ icon: Icon, label, children }: { icon?: LucideIcon; label?: string; children: string }) {
+  return (
+    <p className="flex gap-2 border-t px-4 py-3 text-xs text-pretty text-muted-foreground">
+      {Icon !== undefined && <Icon aria-hidden="true" className="mt-px size-3.5 shrink-0" />}
+      <span>
+        {label !== undefined && <span className="sr-only">{label}</span>}
+        {children}
+      </span>
+    </p>
+  )
+}
+
 /**
- * The three ways a site opens, the current one marked as the sidebar marks
- * the current page. For the owner and the project's Admins, each other way
- * says what choosing it does, with a button that names the change; the code
- * in force has *New code* beside it. What the steward refuses for one choice
- * is said under it, for all of them once under the choices. Whoever only
- * reads it gets one line. Nothing changes until the confirmation.
+ * How the site opens, in one row, the share dialog's: the way's icon on its
+ * tile, its name and its sentence, then what it carries, the code and its
+ * link for a site that opens with one, the exempt paths of a restricted one.
+ * `action`, at the row's end: *Change* for whoever may change it. `note`,
+ * under the sentence: who changes it, for whoever only reads it.
+ */
+export function GeneralAccessLine({
+  slug,
+  state,
+  action,
+  extra,
+  note,
+}: {
+  slug: string
+  state: GeneralState
+  action?: ReactNode
+  /** Beside the code in force: *New code*. */
+  extra?: ReactNode
+  note?: string
+}) {
+  const choice = GENERAL_CHOICES.find((one) => one.access === state.current)!
+  return (
+    <div className="flex items-start gap-3 px-4 py-3">
+      <Tile icon={ICONS[state.current]} size={32} />
+      <div className="grid min-w-0 flex-1 gap-0.5">
+        <p className="font-medium text-strong">{choice.title}</p>
+        <p className="text-pretty text-muted-foreground">{choice.sentence}</p>
+        {state.current === "code" && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <Code slug={slug} state={state} />
+            {extra}
+          </div>
+        )}
+        {state.current === "restricted" && state.exemptions.length > 0 && (
+          <div className="mt-1">
+            <Exemptions paths={state.exemptions} />
+          </div>
+        )}
+        {note !== undefined && <p className="mt-0.5 text-xs text-pretty text-muted-foreground">{note}</p>}
+      </div>
+      {action !== undefined && <div className="flex shrink-0 items-center">{action}</div>}
+    </div>
+  )
+}
+
+/**
+ * *Change*: the three ways a site opens, in a menu, each with its sentence,
+ * the current one ticked. A way the steward refuses here is offered greyed
+ * with its reason in place of its sentence. Choosing one runs its
+ * confirmation, after the unlock for a way that lets more people in, which
+ * carries the lock glyph while changes are locked. The choice waits for the
+ * menu to close, so that focus is back on *Change* when its dialog opens.
+ */
+function ChangeMenu({
+  slug,
+  options,
+  current,
+  locked,
+  onChoose,
+}: {
+  slug: string
+  options: ChoiceOption[]
+  current: GeneralAccess
+  locked: boolean
+  onChoose: (target: ChangeTarget) => void
+}) {
+  const trigger = useRef<HTMLButtonElement>(null)
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button ref={trigger} variant="outline" size="sm" data-general="change" aria-label={`Change how ${slug} opens`} className="max-md:h-10" />
+        }
+      >
+        Change
+        <ChevronDown aria-hidden="true" data-icon="inline-end" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-96 max-w-[calc(100vw-2rem)]">
+        <DropdownMenuRadioGroup
+          value={current}
+          onValueChange={(value: GeneralAccess) => {
+            if (value === current) return
+            window.setTimeout(() => {
+              trigger.current?.focus()
+              onChoose(value)
+            }, 0)
+          }}
+        >
+          {options.map((option) => {
+            const Icon = ICONS[option.access]
+            const offered = option.current || option.available
+            return (
+              <DropdownMenuRadioItem
+                key={option.access}
+                value={option.access}
+                disabled={!offered}
+                closeOnClick
+                data-general={option.access}
+                className="items-start gap-2.5 py-2 max-md:py-2.5"
+              >
+                <Icon aria-hidden="true" className="mt-0.5 text-muted-foreground" />
+                <span className="grid min-w-0 gap-0.5">
+                  <span className="flex items-center gap-1.5 font-medium">
+                    {option.title}
+                    {/* Restricting lets nobody new in: it asks for no unlock. */}
+                    {locked && !option.current && option.available && option.access !== "restricted" && <LockGlyph />}
+                  </span>
+                  <span className="text-xs text-pretty whitespace-normal text-muted-foreground">{option.reason ?? option.sentence}</span>
+                </span>
+              </DropdownMenuRadioItem>
+            )
+          })}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/**
+ * In a disagreement between sitesolide.json and the server, the three ways
+ * stay laid out, each side marked, *Keep* one and *Apply* the other, the
+ * third a plain choice: it is an error, and it earns the room.
+ */
+function Chooser({
+  slug,
+  state,
+  options,
+  locked,
+  onChoose,
+}: {
+  slug: string
+  state: GeneralState
+  options: ChoiceOption[]
+  locked: boolean
+  onChoose: (target: ChangeTarget) => void
+}) {
+  return (
+    <ul className="divide-y divide-divider" aria-label={`How ${slug} opens`}>
+      {options.map((option) => {
+        const Icon = ICONS[option.access]
+        return (
+          <li
+            key={option.access}
+            aria-current={option.current ? "true" : undefined}
+            className={cn("flex flex-wrap items-start gap-x-3 gap-y-2 px-4 py-3", option.current && "bg-highlight")}
+          >
+            <Icon aria-hidden="true" className={cn("mt-0.5 size-4 shrink-0", option.current ? "text-primary" : "text-muted-foreground")} />
+            <div className="grid min-w-0 flex-1 basis-56 gap-0.5">
+              <p className={cn("flex flex-wrap items-center gap-x-2", option.current ? "font-semibold text-strong" : "font-medium")}>
+                {option.title}
+                {option.side !== null && <span className="text-xs font-normal text-muted-foreground">{option.side}</span>}
+              </p>
+              <p className="text-pretty text-muted-foreground">{option.sentence}</p>
+              {option.current && option.access === "code" && (
+                <div className="mt-1.5">
+                  <Code slug={slug} state={state} />
+                </div>
+              )}
+              {option.current && option.access === "restricted" && state.exemptions.length > 0 && (
+                <div className="mt-1">
+                  <Exemptions paths={state.exemptions} />
+                </div>
+              )}
+              {option.reason !== null && <p className="mt-0.5 text-xs text-pretty text-muted-foreground">{option.reason}</p>}
+            </div>
+            {option.available && option.action !== null && (
+              <Button variant="outline" size="sm" data-general={option.access} onClick={() => onChoose(option.access)} className="max-md:h-10">
+                {option.action}
+                {locked && option.access !== "restricted" && <LockGlyph />}
+              </Button>
+            )}
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+/**
+ * General access, the first thing a site's Access section says: how the site
+ * opens, in one row, with *Change* for the owner and the project's Admins,
+ * a menu of the three ways, each with its sentence; the code in force has
+ * *New code* beside it. A disagreement with sitesolide.json is said above in
+ * red and lays the three ways out with Keep and Apply. What the steward
+ * refuses for one way is said in the menu, for all of them once under the
+ * row. Whoever only reads it gets the row and who changes it. Nothing changes
+ * until the confirmation.
  */
 export function GeneralAccessPanel({
   slug,
@@ -91,7 +293,7 @@ export function GeneralAccessPanel({
   addresses: string[]
   /** *New code* is offered beside the code in force. */
   renewable: boolean
-  /** The steward's reason when no other choice may be taken from here, said once under the choices. */
+  /** The steward's reason when no other choice may be taken from here, said once under the row. */
   stewardReason: string | null
   /** When who has access could not be read: the choices wait for the server. */
   failedNote: string | null
@@ -107,104 +309,43 @@ export function GeneralAccessPanel({
         </Banner>
       </div>
     )
-
-  if (reader === "reader") {
-    return (
-      <Panel title="General access" full>
-        {problem}
-        <div className="grid gap-2 px-4 py-3">
-          <p className="text-pretty">{generalLine(state, slug)}</p>
-          {addressesLine(addresses) !== null && <p className="text-xs text-pretty text-muted-foreground">{addressesLine(addresses)}</p>}
-          {state.current === "code" && <Code slug={slug} state={state} />}
-          {state.current === "restricted" && state.exemptions.length > 0 && <Exemptions paths={state.exemptions} />}
-        </div>
-      </Panel>
-    )
-  }
+  const addressLine = addressesLine(addresses)
+  const reads = reader === "reader"
+  const choosing = !reads && state.problem !== null
 
   return (
     <Panel title="General access" full>
       {problem}
-      <ul className="divide-y divide-divider" aria-label={`How ${slug} opens`}>
-        {options.map((option) => {
-          const Icon = ICONS[option.access]
-          return (
-            <li
-              key={option.access}
-              aria-current={option.current ? "true" : undefined}
-              className={cn("flex flex-wrap items-start gap-x-3 gap-y-2 px-4 py-3", option.current && "bg-highlight")}
-            >
-              <Icon aria-hidden="true" className={cn("mt-0.5 size-4 shrink-0", option.current ? "text-primary" : "text-muted-foreground")} />
-              <div className="grid min-w-0 flex-1 basis-56 gap-0.5">
-                <p className={cn("flex flex-wrap items-center gap-x-2", option.current ? "font-semibold text-strong" : "font-medium")}>
-                  {option.title}
-                  {option.side !== null ? (
-                    <span className="text-xs font-normal text-muted-foreground">{option.side}</span>
-                  ) : (
-                    option.current && (
-                      <span className="inline-flex items-center gap-1 text-xs font-normal text-muted-foreground">
-                        <Check aria-hidden="true" className="size-3.5" />
-                        Current
-                      </span>
-                    )
-                  )}
-                </p>
-                <p className="text-pretty text-muted-foreground">{option.sentence}</p>
-                {option.current && option.access === "code" && (
-                  <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                    <Code slug={slug} state={state} />
-                    {renewable && (
-                      <Button variant="outline" size="sm" data-general="renew" onClick={() => onChoose("renew")} className="max-md:h-10">
-                        <RefreshCw aria-hidden="true" />
-                        New code
-                        {locked && <LockGlyph />}
-                      </Button>
-                    )}
-                  </div>
-                )}
-                {option.current && option.access === "restricted" && state.exemptions.length > 0 && (
-                  <div className="mt-1">
-                    <Exemptions paths={state.exemptions} />
-                  </div>
-                )}
-                {option.reason !== null && <p className="mt-0.5 text-xs text-pretty text-muted-foreground">{option.reason}</p>}
-              </div>
-              {option.available && option.action !== null && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  data-general={option.access}
-                  onClick={() => onChoose(option.access)}
-                  className="max-md:h-10"
-                >
-                  {option.action}
-                  {/* Restricting lets nobody new in: it asks for no unlock. */}
-                  {locked && option.access !== "restricted" && <LockGlyph />}
-                </Button>
-              )}
-            </li>
-          )
-        })}
-      </ul>
-
-      {addressesLine(addresses) !== null && (
-        <p className="flex gap-2 border-t px-4 py-3 text-xs text-pretty text-muted-foreground">
-          <Globe aria-hidden="true" className="mt-px size-3.5 shrink-0" />
-          <span>{addressesLine(addresses)}</span>
-        </p>
+      {choosing ? (
+        <Chooser slug={slug} state={state} options={options} locked={locked} onChoose={onChoose} />
+      ) : (
+        <GeneralAccessLine
+          slug={slug}
+          state={state}
+          note={reads ? whoChanges(slug) : undefined}
+          action={
+            !reads && options.some((option) => option.available) ? (
+              <ChangeMenu slug={slug} options={options} current={state.current} locked={locked} onChoose={onChoose} />
+            ) : undefined
+          }
+          extra={
+            renewable ? (
+              <Button variant="outline" size="sm" data-general="renew" onClick={() => onChoose("renew")} className="max-md:h-10">
+                <RefreshCw aria-hidden="true" />
+                New code
+                {locked && <LockGlyph />}
+              </Button>
+            ) : undefined
+          }
+        />
       )}
-
-      {stewardReason !== null && (
-        <p className="flex gap-2 border-t px-4 py-3 text-xs text-pretty text-muted-foreground">
-          <Info aria-hidden="true" className="mt-px size-3.5 shrink-0" />
-          <span>
-            <span className="sr-only">Why it can't change here: </span>
-            {stewardReason}
-          </span>
-        </p>
+      {addressLine !== null && <Note icon={Globe}>{addressLine}</Note>}
+      {!reads && stewardReason !== null && (
+        <Note icon={Info} label="Why it can't change here: ">
+          {stewardReason}
+        </Note>
       )}
-
-      {failedNote !== null && <p className="border-t px-4 py-3 text-xs text-pretty text-muted-foreground">{failedNote}</p>}
+      {!reads && failedNote !== null && <Note>{failedNote}</Note>}
     </Panel>
   )
 }

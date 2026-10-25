@@ -25,8 +25,11 @@ import {
   type RunLine,
   type ServiceState,
 } from "./sites"
+import { actorLabel } from "./audit"
+import { KIND_WORDS, siteKind, type Kind } from "./legend"
+import { fileProblems } from "./secrets"
 import type { Tone } from "./tones"
-import type { Discrepancy, Site, SiteService } from "./types"
+import type { Audience, AuditRow, Discrepancy, ProjectView, Site, SiteService } from "./types"
 import { countBySeverity, sortDiscrepancies } from "./verdict"
 
 /** A fact on the card: a label, its value, a clarification, and the value's tone. */
@@ -82,6 +85,8 @@ export const SERVICE_THRESHOLDS_TITLE = `Warning once the peak reaches ${PEAK_WA
 
 export type ServiceGauge = {
   tile: Tile
+  /** What the row says beside its track: "131 of 256 MB", or the memory alone with no ceiling. */
+  amount: string
   /** Where the peak sits on the track, as a percentage capped at one hundred, or null with no peak and no ceiling. */
   peak: number | null
   /** "Peak 221 MB, 86% of the limit". */
@@ -100,6 +105,8 @@ export type ServiceCard =
       unit: string | null
       /** "active (running)", what `systemctl status` displays. */
       systemd: string | null
+      /** How long it has been up, "20h", and since when; null when it is not active. */
+      uptime: { value: string; since: string | null } | null
       /** Null when the service is not running: no current memory to measure. */
       gauge: ServiceGauge | null
       /** What the panel says in place of the gauge, why there is none. */
@@ -111,6 +118,7 @@ function serviceGaugeOf(memory: number | null, peak: number | null, limit: numbe
   if (memory === null) return null
   const peakShare = peak === null || limit === null || limit <= 0 ? null : Math.round((peak / limit) * 100)
   return {
+    amount: limit === null ? size(memory) : sizeOutOf(memory, limit),
     tile: {
       heading: "Memory",
       percent: memoryShare(memory, limit),
@@ -239,14 +247,14 @@ export function serviceCard(
     state: serviceState(site),
     unit: service === null ? null : `${service.unit}.service`,
     systemd: service === null ? null : `${service.active} (${service.subState})`,
+    // An anchor's uptime says nothing of its services, which start and stop on their own schedule.
+    uptime:
+      service === null || !active || isAnchoredSite(site)
+        ? null
+        : service.since === null
+          ? { value: ABSENT, since: null }
+          : { value: duration(now - service.since), since: `since ${dateTime(service.since, timeZone)}` },
     facts,
-  }
-  if (service !== null && active) {
-    facts.push(
-      service.since === null
-        ? fact("Up", ABSENT)
-        : fact("Up", duration(now - service.since), `since ${dateTime(service.since, timeZone)}`),
-    )
   }
 
   if (isAnchoredSite(site)) {
@@ -282,7 +290,7 @@ export function serviceCard(
     )
     if (!active && service.peak !== null) {
       facts.push(
-        fact("Memory peak", size(service.peak), service.limit === null ? null : `of ${size(service.limit)}`),
+        fact("Memory peak", service.limit === null ? size(service.peak) : sizeOutOf(service.peak, service.limit)),
       )
     }
   }
@@ -470,12 +478,147 @@ export function siteFolder(slug: string): string {
   return `/srv/sites/${slug}`
 }
 
-/** The folder's size and the date of the last deployment, which the manifest dates. */
-export function siteStorage(site: Pick<Site, "bytes" | "deployed">, now: number, timeZone?: string): Fact[] {
+/**
+ * The folder's size, its path in the tooltip, and the date of the last
+ * deployment, which the manifest dates.
+ */
+export function siteStorage(site: Pick<Site, "slug" | "bytes" | "deployed">, now: number, timeZone?: string): Fact[] {
   return [
-    fact("On disk", size(site.bytes)),
+    fact("Disk", size(site.bytes), siteFolder(site.slug)),
     site.deployed === null
       ? fact("Deployed", ABSENT, "No sitesolide.json to date it")
       : fact("Deployed", ago(now - site.deployed), dateTime(site.deployed, timeZone)),
   ]
+}
+
+// --- The kind --------------------------------------------------------------------
+
+/**
+ * What the project is, under its title: its kind's word, and how many
+ * services it runs when it runs several. "App", "Static site", "Background,
+ * 3 services". The tooltip says the kind's sentence (lib/legend.ts).
+ */
+export function kindLine(site: Pick<Site, "type" | "headless" | "services">): { kind: Kind; text: string } {
+  const kind = siteKind(site)
+  const count = site.services.length
+  const text = count > 1 ? `${KIND_WORDS[kind].label}, ${plural(count, "service")}` : KIND_WORDS[kind].label
+  return { kind, text }
+}
+
+/**
+ * The state said beside the kind under the title, quiet when fine: nothing
+ * for a running app, nor for a static site or a folder with no manifest,
+ * whose kind already says there is nothing to run; the word in its tone
+ * otherwise, with what the discrepancies count. Null when there is nothing
+ * to say.
+ */
+export function headerState(site: Pick<Site, "type" | "service">, discrepancies: readonly Discrepancy[]): ServiceState | null {
+  const state = siteState(site, discrepancies)
+  if (state.tone === "ok") return null
+  if (state.tone === "neutral" && site.type !== "app") return null
+  return state
+}
+
+// --- The Site panel --------------------------------------------------------------
+
+/**
+ * The Site panel's Address: the address that answers, a link; a domain that
+ * does not answer as asked, in its state's word (Pending, Not routed);
+ * under it, muted, the other addresses it answers on. A project that serves
+ * no page says so instead of being offered as a page.
+ */
+export type AddressSummary = {
+  name: string
+  href: string
+  /** The declared domain when it is not the one that answers, or not as asked: its name and its state. */
+  domain: { name: string; state: ServiceState } | null
+  /** Every other address it answers on: the aliases and the preview under an active domain. */
+  others: string[]
+  headless: boolean
+}
+
+export function addressSummary(site: Pick<Site, "slug" | "address" | "domain" | "headless">): AddressSummary {
+  const lines = siteAddresses(site)
+  const preview = lines[lines.length - 1]!
+  const domain = lines.find((line) => line.role === "domain") ?? null
+  const routed = domain !== null && domain.href !== null && domain.state?.tone === "ok"
+  if (domain !== null && routed) {
+    return {
+      name: domain.name,
+      href: domain.href!,
+      domain: null,
+      others: lines.filter((line) => line !== domain).map((line) => line.name),
+      headless: site.headless,
+    }
+  }
+  return {
+    name: preview.name,
+    href: preview.href!,
+    domain: domain === null || domain.state === null ? null : { name: domain.name, state: domain.state },
+    others: [],
+    headless: site.headless,
+  }
+}
+
+/**
+ * The Site panel's Secrets, in one line: what the project keeps, counted,
+ * never a name, and what needs a look, the Secrets section's own problems
+ * (lib/secrets.ts `fileProblems`), so that the row and the sidebar's badge
+ * count the same things. The first problem is said, the others counted.
+ */
+export type SecretsHeadline = {
+  text: string
+  problem: { text: string; tone: Tone; more: number; title: string } | null
+}
+
+export function secretsHeadline(project: ProjectView, serverNow: number): SecretsHeadline {
+  const store = project.store
+  const variables = store?.variables.length ?? 0
+  const files = (store?.files.length ?? 0) + project.files.length
+  const pieces = [variables > 0 ? plural(variables, "variable") : null, files > 0 ? plural(files, "file") : null].filter(
+    (piece): piece is string => piece !== null,
+  )
+  const problems = fileProblems(project, serverNow)
+  const first = problems[0]
+  return {
+    text: pieces.length === 0 ? "None" : pieces.join(", "),
+    problem:
+      first === undefined
+        ? null
+        : {
+            text: first.label,
+            tone: first.tone,
+            more: problems.length - 1,
+            title: problems.map((problem) => ("file" in problem ? `${problem.file}: ${problem.label}` : problem.label)).join(". "),
+          },
+  }
+}
+
+/**
+ * The Site panel's Audience, in one line: the visits over the window
+ * analytics keeps, "1,148 visits in 30 days"; muted words when there is
+ * nothing to count yet.
+ */
+export function audienceHeadline(audience: Pick<Audience, "present" | "days" | "sites"> | null, slug: string): { text: string; measured: boolean } {
+  if (audience === null || !audience.present) return { text: "No audience data", measured: false }
+  const measure = audience.sites[slug]
+  if (measure === undefined) return { text: "Not measured yet", measured: false }
+  return { text: `${NUMBER.format(measure.visits)} ${measure.visits === 1 ? "visit" : "visits"} in ${plural(audience.days, "day")}`, measured: true }
+}
+
+const NUMBER = new Intl.NumberFormat("en-US")
+
+/** A deployment recorded this close to the manifest's date is the one that dated it. */
+export const SAME_DEPLOYMENT_MS = 15 * 60_000
+
+/**
+ * Who made the deployment the manifest dates, in Activity's words: the
+ * latest success recorded for the site, when it is that deployment. Null
+ * otherwise, a folder copied by hand or a history that does not reach it.
+ */
+export function deployedBy(rows: readonly AuditRow[], deployed: number | null): string | null {
+  const row = rows.find((candidate) => candidate.action === "deploy.success")
+  if (row === undefined || deployed === null) return null
+  const at = Date.parse(row.at)
+  return Number.isFinite(at) && Math.abs(at - deployed) <= SAME_DEPLOYMENT_MS ? actorLabel(row) : null
 }

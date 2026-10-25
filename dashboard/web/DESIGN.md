@@ -374,6 +374,8 @@ gutters, bottom margin, touch target size.
 | machine plate | `@2xl:` | four columns, otherwise four rows |
 | Issues panel | `@lg:` (32 rem) | messages aligned behind the slugs |
 | `@container/file` | `@xl/file:` (36 rem) | Name, Value and action columns |
+| `@container/facts`, a site's Overview panels | `@sm/facts:` (24 rem) | a 6.5 rem label column and a 120 px memory track, otherwise 5.5 rem and 64 px |
+| `@container/people`, a site's people with access | `@xl/people:` (36 rem) | what a row is beside its name, otherwise under it |
 
 Useful content widths: 1088 px at 1440 with the sidebar expanded, 984 at 1280,
 912 at 1024 collapsed, 728 at 1024 expanded, 358 on a phone.
@@ -699,8 +701,8 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | Age | Updated 26s ago, just now | Last sync |
 | Service | Running, Starting, Restarting, Stopping, Down; Static files, No manifest; Unknown; Scheduled, for a project whose every service is | Up, Offline, Dead |
 | Workers and scheduled services | Background; Runs hourly, or the schedule as written; Waiting, Running, Last run failed, Schedule stopped, No timer, Not loaded; Last run 3h ago, Failed 3h ago: exit code 1, Started 2m ago, Last started 5h ago, No run yet, Next run in 42m; Main unit; Runs in the background, serves no page | Idle, Cron, Job, Daemon, Down for a scheduled service between its runs |
-| General access | General access, Public, Restricted, Anyone with the code, Current; Make public, Restrict; in a disagreement, On the server, In sitesolide.json, Keep Public, Apply Restricted; Preview code, Replace the code, Remove the code; Open to anyone, guarded by the app alone (the exempt paths); See changes in Activity | Door, Gate, Portal on, Portal off, Turn on portal, Behind the portal, Private, Password protected, Enable, Disable |
-| People with access | People with access, Add people, Add, Remove; Can open, Viewer, Developer, Admin; company account, password access, Password access lasts, No expiry, expires in 5d, Expired, Added by; Can't sign in until company sign-in is set up; Copy message; What each role can do, a disclosure from Can open to Admin, (your role), (you); Also open it | Sharing, Share, Guest, Member, Team, Invite, Permissions, ACL, work account, Super admin, Project admin; an Owner row or rung |
+| General access | General access, Public, Restricted, Anyone with the code, Current, Change; Make public, Restrict; in a disagreement, On the server, In sitesolide.json, Keep Public, Apply Restricted; Preview code, Replace the code, Remove the code; Open to anyone, guarded by the app alone (the exempt paths); See changes in Activity | Door, Gate, Portal on, Portal off, Turn on portal, Behind the portal, Private, Password protected, Enable, Disable |
+| People with access | People with access, Add people, Add, Remove access; Can open, Viewer, Developer, Admin; company account, password access, Password access lasts, No expiry, expires in 5d, Expired, Added by; Can't sign in until company sign-in is set up; Copy message; What each role can do, a disclosure from Can open to Admin, (your role), (you); Also open it | Sharing, Share, Guest, Member, Team, Invite, Permissions, ACL, work account, Super admin, Project admin; an Owner row or rung |
 | People | People, May create projects, Let someone create projects, Allow, Remove from every project, Remove expired, Domains; Every site, as admin: set on the server in OIDC_ADMIN_EMAILS | Members, Invite |
 | Tokens | Tokens, New token, Create token, Name, Whose token, Mine, For someone in People, Projects it may deploy, New projects, Permissions, Manage secrets, Needed by cms, Expires; Made by you, Made by you for alice@example.com, Made by alice@example.com, Made by the owner for you; Can create projects, Can deploy public sites, Can declare a domain, Can use outbound network, Can manage secrets, Can create projects (paused: no longer allowed), Can manage secrets (paused: no project to deploy now); calendar (Admin), cms (paused: Viewer now); Revoke, Revoke token, Active, Expired, Revoked, Copy message, Recent deployments, Token activity, All activity | Team, API key, Yours, Their own, Public sites allowed, Restricted sites only, Write secrets, Secrets access |
 | The lock | Unlocked, 9 min, and its x, Lock changes now; in its dialog, Unlock changes, Unlock to create a token (the write that waits), Unlock, Sign in again; under a field, Giving Developer asks to unlock changes first.; after a person's re-sign-in, Unlocked. Press Add to finish.; in Activity, Unlocked changes, Locked changes | Unlock the secrets, Locked, Unlock to add, Unlock to create, Unlock to allow, an Unlock changes button |
@@ -904,38 +906,80 @@ calls and changes, read from the proxy itself. The add and change dialog types
 the value in a password field and leaves it empty on a change to keep it; a
 removal retypes the name.
 
-**A site's Overview.** Under the title, the state in one sentence, the
-description and the main address, "Runs in the background, serves no page"
-beside it for a project that serves none; its discrepancies as banners. Then
-two columns: on the left the site on the machine, **Service**, **Services**,
-**Addresses**, **Storage**; on the right what opens it and what it keeps,
-**General access** and **Secrets**, each with *Manage* to its section, General access's
-after who has access in a few words, "6 people and 1 domain have access ·
-Manage", *See* for whoever only reads who has access, a Viewer or a
-Developer. **General access** names how the site opens and what that does to a
-visitor, the code for *Anyone with the code*, the exempt paths for
-*Restricted*, and, when it disagrees, `sitesolide.json` and the server side by
-side. Every role sees it,
-with its *Manage* or *See*; **Secrets** shows from Developer up. A Developer or an
-Admin finds *Restart* in **Service**'s header, which confirms, waits for the
-steward's verdict and says it in plain words, or shows the steward's refusal
-as it stands.
+**A site's Overview.** The site's hub: is it working, and which of its
+sections needs me. Under the title, what the project is, its kind's icon and
+word (`kindLine`: *App*, *Static site*, *Background, 3 services*), its state
+only when it is not fine (*Restarting, 3 errors* in its tone, nothing for a
+running app nor a static site), the description and the main address, which a
+project serving no page does not offer as a page; its discrepancies as
+banners of one line each. Then two panels side by side, a single column below
+56 rem of the body, in this order:
 
-**Service** is the project's main unit: *Main service* beside others, and a
-worker's says *Port: None*, since it listens on nothing. For a project whose
-every service is scheduled it is *Main unit*, the anchor, *Scheduled* while
-active, with one sentence on what it does and no gauge. **Services** lists
-every process of a project that runs several, or of one whose every service
-is scheduled, the main one first: its name and unit, then what it receives,
-its paths, *All other paths* or *Internal*, its port; *Background* for a
-worker; for a scheduled service its schedule, *Runs hourly* or the
-expression as written, the timer named in the badge's title. Then its memory
-while it runs, and its word: a scheduled service is *Waiting* between two
-runs, *Running* during one, *Last run failed* in attention, *Schedule
-stopped* or *No timer* in error, with its last run ("Last run 3h ago",
-"Failed 3h ago: exit code 1") and its next ("Next run in 42m") under it.
-The column reads *Receives* when every service is a server, *How it runs*
-otherwise.
+```
+| Service             cms.service [Restart] |  | Site                                  |
+| State     Running  up 20h                 |  | Address   cms.example.com ↗           |
+| Memory    131 of 256 MB  [====|--||]  51% |  | Access    [Lock] Restricted  4 people >|
+| CPU       5%                              |  | Secrets   3 variables  1 not set     > |
+| Restarts  0                               |  | Backups   Last snapshot 45m ago     > |
+| Port      3043                            |  | Audience  1,148 visits in 30 days   > |
+                                                | Disk      48 MB                       |
+                                                | Deployed  20h ago  by alice (token)   |
+```
+
+Both are facts lists of 44 px lines (`FactRow` in components/site-card.tsx),
+the label in a 6.5 rem column (5.5 in a panel under 24 rem, `@container/facts`,
+where the memory track also shortens). A caption that explains a value, "of
+one core, over the last minute", "Automatic restarts by systemd", the peak,
+the folder's path, the date, waits in its tooltip and reaches a screen reader
+beside the value; a value in trouble says it beside it, in its tone: "3045
+Nothing listens on it", "7 Automatic restarts by systemd". No big figure, no
+dot on a fine state.
+
+**Service** is the project's main unit: its state and how long it has been up
+(the date and systemd's words in the tooltip), its memory on one line, the
+amount, a 120 px track ticked at the service's thresholds with the peak
+marked across it, and the share, amber or red past them, its CPU, its
+restarts, its port (*None* for a worker). A service that is down says why
+under its state, "The service isn't running, so it has no memory in use.",
+and shows its memory peak. *Main service* beside others; *Main unit* for the
+anchor of a project whose every service is scheduled, shown only when it is
+not fine or carries *Restart*: an anchor that keeps its timers armed has
+nothing to say the Services table does not. A static site and a folder with
+no manifest run no service: no Service panel, the kind under the title says
+it, and the Site panel stands alone. A Developer or an Admin finds *Restart*
+in its header, which confirms, waits for the steward's verdict and says it in
+plain words, or shows the steward's refusal as it stands.
+
+**Site** is one line per section, its headline and a chevron, the whole line
+the link (`FactRow` with `href`), shown for whoever may open that section:
+*Access*, the Access section's icon and word (`accessEntry`) and who is on the
+list, "4 people", "3 people, 1 domain", "Nobody on the list" said only of a
+restricted site; *Secrets*, from Developer up, what the store keeps counted,
+"3 variables, 1 file", then the Secrets section's first problem in its tone
+and "+N" for the others (`secretsHeadline`, the same problems as the
+sidebar's badge); *Backups*, for the owner and an Admin, the last snapshot's
+age in the Backups section's words, red when the last run failed;
+*Audience*, the visits over analytics' window, "1,148 visits in 30 days".
+Around them, the facts that are no section: *Address*, the address that
+answers, a domain not answering as asked in its state's word ("Pending:
+martin-bakery.example"), the other addresses muted under it, "Serves no page"
+for a project that serves none; *Disk*, its folder in the tooltip;
+*Deployed*, the age, and who deployed when Activity's latest success for the
+site is the deployment the manifest dates (`deployedBy`). A disagreement
+between `sitesolide.json` and the server turns the Access line red, in its
+words, "Restricted in sitesolide.json, public on the server", and lays under
+it each setting from both sides; the table is never drawn when they agree.
+
+**Services** spans both columns under them for a project that runs several,
+or one whose every service is scheduled, a `DataTable` of one line each, the
+main one first: its kind's icon (`AppWindow` a server, `Cog` a worker,
+`CalendarClock` a scheduled service), its name, its state only when not fine
+(*Last run failed*, its failure in the tooltip; a silent port; restarts), its
+unit in muted mono, what reaches it or how it runs (its paths, *All other
+paths*, *Internal*, *Background*, *Runs hourly* or the expression as written,
+the timer and the port in the tooltip), its memory while it runs, and its
+next run, or since when it runs. On two lines the unit goes, the name's
+tooltip keeping it.
 
 **A site's Secrets.** Every write asks for the unlock when pressed, as
 everywhere (5, *Writes and the unlock*). The owner's dialog, titled after
@@ -982,28 +1026,31 @@ to read who has access (`sitesolide upgrade`); for the owner, company sign-in
 not set up, so that everyone added gets password access, with where to set
 it, the portal's `portal.env`.
 
-**General access** first. For the owner and the project's Admins: Public,
-Restricted and Anyone with the code, one sentence each, the current one
-marked as the sidebar marks the current page, *Current* beside its name;
-under Restricted, the paths "Open to anyone, guarded by the app alone"; under
-Anyone with the code, the code and its link, to copy or open, and *New code*
-beside them. Each other way has its button, *Make public*, *Restrict* or *Use
-a code*, once the steward accepts; a choice it refuses says why under its
-row, "it serves its own domain, riverside-cycles.example, which a code would
-not close: switch it back to its preview first, sitesolide domain
---deactivate", and a reason that stops all three, a change in progress, is
-said once under the choices. A disagreement between `sitesolide.json` and the
-server is said above them in red, "Restricted in sitesolide.json, public on
-the server. Anyone can open it right now. Choose one below."; each side is
-then marked *On the server* or *In sitesolide.json*, *Keep Public* and *Apply
-Restricted*, or *Apply Public* and *Keep Restricted*, and the third stays a
-plain choice; a code on the server that sitesolide.json no longer asks for
-reads *Apply Public* and *Keep Anyone with the code*. A Viewer or a Developer
-reads general access in one line, "Restricted: only the people with access
-can open it, once signed in. Only an Admin of cms, or the owner, changes
-it.", the exempt paths under it, and for a site that opens with a code "An
-Admin of cms, or the owner, has the code.": the code itself is the owner's
-and the Admins'.
+**General access** first, one row, the share dialog's: the way the site
+opens on its 32 px tile, its name and its sentence, the code and its link
+under them for *Anyone with the code*, to copy or open, with *New code*
+beside them, the paths "Open to anyone, guarded by the app alone" under
+*Restricted*. At the row's end, for the owner and the project's Admins,
+*Change*, a menu of the three ways, Public, Restricted and Anyone with the
+code, each with its icon and its sentence, the current one ticked, a way that
+lets more people in carrying the lock glyph while changes are locked; a way
+the steward refuses here is greyed with its reason in place of its sentence,
+"it serves its own domain, riverside-cycles.example, which a code would not
+close: switch it back to its preview first, sitesolide domain --deactivate".
+*Change* appears once the steward has said what may change, and a reason
+that stops every way, a change in progress, is said once under the row
+instead. Choosing a way runs its confirmation, below, focus back on *Change*
+when it closes. A disagreement between `sitesolide.json` and the server is an
+error and earns the room: said above in red, "Restricted in sitesolide.json,
+public on the server. Anyone can open it right now. Choose one below.", the
+three ways laid out as rows, each side marked *On the server* or *In
+sitesolide.json*, *Keep Public* and *Apply Restricted*, or *Apply Public* and
+*Keep Restricted*, the third a plain choice; a code on the server that
+sitesolide.json no longer asks for reads *Apply Public* and *Keep Anyone with
+the code*. A Viewer or a Developer reads the same row without *Change*, and
+"Only an Admin of cms, or the owner, changes it." under the sentence; for a
+site that opens with a code, "An Admin of cms, or the owner, has the code.":
+the code itself is the owner's and the Admins'.
 
 Restricting waits for no unlock; making public, using a code and a new code
 do, then open their confirmation once unlocked. Making public and using a
@@ -1054,36 +1101,44 @@ Google account.", and from Developer up adds "To deploy, create a token on
 the Tokens page, then run sitesolide login --url
 https://dashboard.example.com.";
 for password access, a dialog with the address, the password and its end, and
-*Copy message*. Under the field, *What each role can do*, a disclosure
-open for everyone, the owner and Admins included, who give the roles: Can
-open to Admin, each including the ones below it, the reader's own marked
-*(your role)*. A Viewer or a Developer finds, in place of the field, whom to ask:
+*Copy message*. Under the field, *What each role can do*, a closed
+disclosure, reference read once, since each role's menu says the same beside
+each choice: Can open to Admin, each including the ones below it, the
+reader's own marked *(your role)*. A Viewer or a Developer finds, in place of the field, whom to ask:
 "To add someone, ask an Admin: bruno@example.com.", or "To add someone, ask
 the owner."
 
 Then one list, the same for every reader, controls only for those who manage
-it: higher roles first, then people, domains and password access, what
-expired last. Each row says who, *(you)* on one's own; what it is (everyone
-at a domain, password access and its expiry, "Can't sign in until company
-sign-in is set up.", for a person or a domain, "Can't sign in: acme.com isn't
-one of the company's domains."); who added it and when, quietly, except on what was carried over;
-its role in a menu when the viewer may change it, as a word otherwise,
-greyed for someone who can't sign in, *Expired* greyed for a password access
-that ended; and *Remove*, which confirms. A role raised once unlocked is
-given at once. An Admin lowering or removing themselves is asked first:
-"You'll no longer manage cms. Only another Admin or the owner can give it
-back." Lowering someone to Can open, or removing them, when they keep no
-role above Can open nor the create right, is asked first too, naming what
-goes with it: "chloe@example.com will no longer sign in to the dashboard.
-Also revokes 2 tokens: alice-ci (made by them), Alice's laptop (made by
-you)." Under the list, one quiet line: "Also open
-it: the owner, and owner@example.com (an admin email set on the server; sites
-see them as admin).", or "The owner also opens it."
+it, one 44 px line each: higher roles first, then people, domains and
+password access, what expired last. Each row says who, *(you)* on one's own,
+and beside it, muted, what it is (everyone at a domain, password access and
+its expiry, in attention within a day, "Can't sign in until company sign-in
+is set up.", for a person or a domain, "Can't sign in: acme.com isn't one of
+the company's domains."), on a second line when the list is narrower than 36
+rem (`@container/people`); who added it and when sits in the name's tooltip,
+except on what was carried over. On the right its role, the Google Docs way:
+a quiet button, the role's bars and its word, that opens a menu of the roles
+the viewer may give, each with what it can do, the current one ticked, a
+raise that waits for the unlock carrying the glyph; then, under a separator,
+*Remove access*, destructive, which confirms. A row whose role cannot change
+but which may be removed, a domain or a password access, opens the same menu,
+its one role greyed. A word otherwise, greyed for someone who can't sign in,
+*Expired* greyed for a password access that ended. No cross in the row. A
+role raised once unlocked is given at once. An Admin lowering or removing
+themselves is asked first: "You'll no longer manage cms. Only another Admin
+or the owner can give it back." Lowering someone to Can open, or removing
+them, when they keep no role above Can open nor the create right, is asked
+first too, naming what goes with it: "chloe@example.com will no longer sign
+in to the dashboard. Also revokes 2 tokens: alice-ci (made by them), Alice's
+laptop (made by you)." An empty list is one line, "Nobody else has access to
+cms yet." Under the list, one quiet line: "Also open it without being
+listed: the owner, and owner@example.com, set on the server to open every
+site.", or "The owner also opens it."
 
 A project of the platform (portal, dashboard, api, analytics, landing, www,
-and the landing named after the zone) shows one panel: how it opens, in one
-line, then "portal is part of the platform. Only the owner opens it when
-restricted; no one can be given a role on it."
+and the landing named after the zone) shows one panel: how it opens, the same
+row without *Change*, then "portal is part of the platform. Only the owner
+opens it when restricted; no one can be given a role on it."
 
 **A site's Backups.** *Restore* asks for the unlock when pressed, like a
 secret's write, then confirms. **Schedule**: how fresh the last snapshot is (the last
@@ -1171,6 +1226,27 @@ change it.
 22. **Filters as one segmented control mixing dimensions**, All, Issues,
     Apps, Static, Restricted and Platform side by side: one facet per
     dimension, its menu showing the rows' own icons and counts.
+23. **A site's Overview in five panels**, Service, Addresses, Storage,
+    General access and Secrets, each with its own head, a 26 px memory
+    figure and a caption under every fact: a site read like a form, its
+    sections' news scattered. Two panels now, the Service facts and one Site
+    line per section with its headline and a chevron; the captions in the
+    tooltips, said beside a value only when it is in trouble.
+24. **The sitesolide.json and Server table on every Overview**, "Restricted,
+    Requested, In the live Caddy block" when both sides agree: a check that
+    passes is nothing to read. It is drawn on a disagreement alone, under the
+    red Access line.
+25. **General access as three rows with a button each**, outside a
+    disagreement: three ways of equal weight where one is in force. One row
+    says the way in force, and *Change* holds the three with their sentence;
+    the three rows stay for a disagreement, an error that earns the room.
+26. **A cross on every person's row, and a well around every role**: eleven
+    destructive controls one slip away and a column of fields. The role is a
+    quiet button, its menu ends with *Remove access* under a separator, still
+    confirmed.
+27. **What each role can do, open by default**: reference read once, 100 px
+    above the list every time. Closed, and said again beside each choice of
+    a role's menu.
 
 ## 9. Seeing the page, and looking at it
 
