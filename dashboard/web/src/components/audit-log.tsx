@@ -177,7 +177,7 @@ function Target({ row, known, compact = false }: { row: AuditRow; known: Readonl
     <span className="grid min-w-0 gap-0.5">
       {/* A slug keeps its letters together: the column never narrows below it. */}
       <span className="wrap-break-word">{site}</span>
-      {row.site !== null && row.target.toLowerCase() !== row.site && <span className="text-xs text-muted-foreground wrap-anywhere">{row.target}</span>}
+      {row.site !== null && row.target.toLowerCase() !== row.site && <span className="font-mono text-[0.6875rem] text-muted-foreground wrap-anywhere">{row.target}</span>}
     </span>
   )
 }
@@ -194,7 +194,7 @@ function Summary({ row }: { row: AuditRow }) {
         <span className="wrap-anywhere">{words.summary}</span>
       )}
       <span className="text-xs text-muted-foreground wrap-anywhere">
-        {row.action}
+        <code className="font-mono text-[0.6875rem]">{row.action}</code>
         {words.note !== null && ` · ${words.note}`}
       </span>
     </span>
@@ -213,7 +213,7 @@ function Details({ row, id }: { row: AuditRow; id: string }) {
     ...detailLines(row.detail),
   ]
   return (
-    <dl id={id} className="grid gap-x-6 gap-y-1 text-xs @xl:grid-cols-[minmax(7rem,max-content)_minmax(0,1fr)]">
+    <dl id={id} className="grid gap-x-6 gap-y-1 font-mono text-xs @xl:grid-cols-[minmax(7rem,max-content)_minmax(0,1fr)]">
       {lines.map((line, index) => (
         <Fragment key={`${line.key}-${index}`}>
           <dt className="text-muted-foreground">{line.key}</dt>
@@ -262,7 +262,7 @@ export function AuditLog({ rows, known, serverNow, caption }: { rows: readonly A
       <table className="hidden w-full text-sm @3xl:table">
         <caption className="sr-only">{caption}</caption>
         <thead>
-          <tr className="h-10 border-b bg-muted text-left text-xs font-medium text-muted-foreground">
+          <tr className="h-10 border-b bg-cell text-left mono-label">
             <th scope="col" className="px-3 pl-4 font-medium">
               Actor
             </th>
@@ -306,7 +306,7 @@ export function AuditLog({ rows, known, serverNow, caption }: { rows: readonly A
                   </td>
                 </tr>
                 {expanded && (
-                  <tr className="bg-muted/30">
+                  <tr className="bg-cell">
                     <td colSpan={6} className="px-4 py-3">
                       <Details row={row} id={id} />
                     </td>
@@ -341,7 +341,7 @@ export function AuditLog({ rows, known, serverNow, caption }: { rows: readonly A
                 </span>
               </div>
               {expanded && (
-                <div className="rounded-md bg-muted/40 px-3 py-2.5">
+                <div className="rounded-lg bg-sunk px-3 py-2.5 shadow-well">
                   <Details row={row} id={id} />
                 </div>
               )}

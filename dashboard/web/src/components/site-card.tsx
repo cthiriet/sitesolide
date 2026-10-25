@@ -1,5 +1,5 @@
 import { useId, type ReactNode } from "react"
-import { CalendarClock, Cog, FileCode2, Globe, KeyRound, Lock, ShieldCheck, ShieldOff, ShieldX, type LucideIcon } from "lucide-react"
+import { CalendarClock, Cog, FileCode2, Globe, KeyRound, Lock, ShieldX, type LucideIcon } from "lucide-react"
 import { LEVEL_TEXT, MemoryBar, Track } from "@/components/gauge"
 import { ExternalLink } from "@/components/link"
 import { Banner, Panel, Status } from "@/components/page"
@@ -30,6 +30,9 @@ function Terminal({ children }: { children: string }) {
   return <code className="font-mono text-xs text-muted-foreground">{children}</code>
 }
 
+/** The facts whose value is a machine string, set in monospace like every other: a port. */
+const MACHINE_FACTS: ReadonlySet<string> = new Set(["Port"])
+
 /** Facts as divided rows: the label on the left, the value and its clarification on the right. */
 function FactList({ facts, className }: { facts: readonly Fact[]; className?: string }) {
   if (facts.length === 0) return null
@@ -37,11 +40,14 @@ function FactList({ facts, className }: { facts: readonly Fact[]; className?: st
     <dl className={cn("divide-y divide-divider", className)}>
       {facts.map((fact) => {
         const marked = fact.tone === "attention" || fact.tone === "error"
+        const machine = MACHINE_FACTS.has(fact.label) && /^\d+$/.test(fact.value)
         return (
           <div key={fact.label} className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 px-4 py-2.5">
             <dt className="text-muted-foreground">{fact.label}</dt>
             <dd className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-              <span className={cn("tabular-nums", marked && cn("font-medium", TONE_TEXT[fact.tone]))}>{fact.value}</span>
+              <span className={cn("tabular-nums", machine && "font-mono text-[0.8125rem]", marked && cn("font-medium", TONE_TEXT[fact.tone]))}>
+                {fact.value}
+              </span>
               {fact.detail !== null && (
                 <span className={cn("text-xs", marked ? TONE_TEXT[fact.tone] : "text-muted-foreground")}>{fact.detail}</span>
               )}
@@ -267,7 +273,7 @@ function StateLine({ row, end = false }: { row: ServiceRow; end?: boolean }) {
   )
 }
 
-const SERVICES_HEAD = "h-10 px-3 text-xs font-medium text-muted-foreground"
+const SERVICES_HEAD = "h-10 px-3 mono-label"
 const SERVICES_CELL = "px-3 py-3 align-top whitespace-normal"
 
 /**
@@ -305,7 +311,7 @@ export function ServicesPanel({ site, now }: { site: Site; now: number }) {
         <div className="hidden @xl:block">
           <Table>
             <caption className="sr-only">The services of {site.slug}, the main one first.</caption>
-            <TableHeader className="bg-muted">
+            <TableHeader className="bg-cell">
               <TableRow className="hover:bg-transparent">
                 <TableHead className={cn(SERVICES_HEAD, "pl-4")}>Service</TableHead>
                 <TableHead className={SERVICES_HEAD}>{reachHeading(rows)}</TableHead>
@@ -379,11 +385,13 @@ export function AddressesPanel({ site }: { site: Site }) {
           >
             <div className="grid min-w-0 justify-items-start gap-0.5">
               {line.href === null ? (
-                <span className="wrap-anywhere" title="Doesn't answer yet">
+                <span className="font-mono text-[0.8125rem] wrap-anywhere" title="Doesn't answer yet">
                   {line.name}
                 </span>
               ) : (
-                <ExternalLink href={line.href}>{line.name}</ExternalLink>
+                <ExternalLink href={line.href} className="font-mono text-[0.8125rem]">
+                  {line.name}
+                </ExternalLink>
               )}
               {line.detail !== null && <span className="text-xs text-muted-foreground">{line.detail}</span>}
             </div>
@@ -403,8 +411,8 @@ export function AddressesPanel({ site }: { site: Site }) {
 
 const ACCESS_ICONS: Record<"code" | "portal" | "open" | "mismatch", LucideIcon> = {
   code: KeyRound,
-  portal: ShieldCheck,
-  open: ShieldOff,
+  portal: Lock,
+  open: Globe,
   mismatch: ShieldX,
 }
 
@@ -454,7 +462,7 @@ export function AccessPanel({ site, actions, plain = false }: { site: Site; acti
               <ul className="flex flex-wrap gap-1.5">
                 {access.exemptions.map((path) => (
                   <li key={path}>
-                    <code className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs">{path}</code>
+                    <code className="rounded-sm border bg-cell px-1.5 py-px font-mono text-xs">{path}</code>
                   </li>
                 ))}
               </ul>
@@ -466,15 +474,15 @@ export function AccessPanel({ site, actions, plain = false }: { site: Site; acti
       {reading.checks.length > 0 && (
         <table className="w-full border-t text-sm">
           <caption className="sr-only">Each setting, as sitesolide.json asks and as the server applies it</caption>
-          <thead className="bg-muted text-xs text-muted-foreground">
+          <thead className="bg-cell mono-label">
             <tr>
-              <th scope="col" className="h-8 py-0 pr-3 pl-4 text-left font-medium">
+              <th scope="col" className="h-8 py-0 pr-3 pl-4 text-left">
                 Setting
               </th>
-              <th scope="col" className="h-8 px-3 py-0 text-left font-medium">
+              <th scope="col" className="h-8 px-3 py-0 text-left tracking-normal normal-case">
                 sitesolide.json
               </th>
-              <th scope="col" className="h-8 py-0 pr-4 pl-3 text-left font-medium">
+              <th scope="col" className="h-8 py-0 pr-4 pl-3 text-left">
                 Server
               </th>
             </tr>

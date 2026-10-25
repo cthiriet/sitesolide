@@ -59,7 +59,7 @@ export function VariablesHeader() {
   return (
     <div
       aria-hidden="true"
-      className="hidden h-8 grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto] items-center gap-x-4 border-y px-4 text-xs font-medium text-muted-foreground @xl/file:grid"
+      className="hidden h-8 grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto] items-center gap-x-4 border-y bg-cell px-4 mono-label @xl/file:grid"
     >
       <span>Name</span>
       <span>Value</span>
@@ -263,7 +263,7 @@ export function VariableRow({
           <CopyFallback text={value} onClose={closeFallback} />
         ) : value !== null ? (
           <div className="grid gap-1">
-            <code className="block max-h-24 overflow-y-auto rounded-sm bg-muted px-2 py-1 font-mono text-xs break-all select-all">
+            <code className="block max-h-24 overflow-y-auto rounded-md bg-sunk px-2 py-1 font-mono shadow-well text-xs break-all select-all">
               {value}
             </code>
             {remainingMs !== null && <span className="text-xs text-muted-foreground tabular-nums">{hideCountdown(remainingMs)}</span>}

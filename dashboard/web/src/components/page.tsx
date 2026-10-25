@@ -24,7 +24,7 @@ import { InternalLink, useNavigation } from "@/components/navigation"
 import { useTheme } from "@/components/theme"
 import { ABSENT, JUST_NOW_MS, dateTime, duration, ago } from "@/lib/format"
 import { PAGE_TITLE_ID } from "@/lib/pages"
-import { TONE_BANNER, TONE_PILL, TONE_DOT, TONE_TEXT, verdictTone, type Tone } from "@/lib/tones"
+import { TONE_BANNER, TONE_HALO, TONE_PILL, TONE_DOT, TONE_TEXT, verdictTone, type Tone } from "@/lib/tones"
 import type { Snapshot } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import type { Severity } from "@/lib/verdict"
@@ -71,12 +71,12 @@ export function Status({
       <span
         title={title}
         className={cn(
-          "inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium whitespace-nowrap",
+          "inline-flex h-6 shrink-0 items-center gap-2 rounded-md border px-2 text-xs font-medium whitespace-nowrap",
           TONE_PILL[tone],
           className,
         )}
       >
-        <span aria-hidden="true" className={cn("size-1.5 rounded-full", TONE_DOT[tone])} />
+        <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", TONE_DOT[tone], TONE_HALO[tone], "ring-2")} />
         {children}
       </span>
     )
@@ -90,7 +90,7 @@ export function Status({
         className,
       )}
     >
-      <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", TONE_DOT[tone])} />
+      <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", TONE_DOT[tone], TONE_HALO[tone])} />
       {children}
     </span>
   )
@@ -137,12 +137,12 @@ export function When({ at, serverNow }: { at: number | null; serverNow: number }
   )
 }
 
-/** The number beside a page or panel title. */
+/** The number beside a page or panel title: the landing page's mono chip. */
 export function Count({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <span
       className={cn(
-        "inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-sm bg-border px-1.5 text-xs font-medium text-secondary-foreground tabular-nums",
+        "inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-sm border bg-cell px-1.5 font-mono text-xs text-secondary-foreground tabular-nums",
         className,
       )}
     >
@@ -151,13 +151,14 @@ export function Count({ children, className }: { children: ReactNode; className?
   )
 }
 
-/** A segmented control's frame: a bordered card, on `background` in dark so that the chosen grey still shows. */
-export const SEGMENTED = "rounded-lg border bg-card p-0.5 dark:bg-background"
+/** A segmented control's frame: a well sunk below the page, the segments laid in it. */
+export const SEGMENTED = "rounded-lg bg-sunk p-0.5 shadow-well"
 
 /**
  * One segment of a segmented control, a toggle button that reads and is
- * reached on its own: the chosen one takes the grey and the `strong` text of
- * the sidebar's current page.
+ * reached on its own: the chosen one rises out of the well, on the raised
+ * surface with its hairline and its soft lift, in the `strong` text of the
+ * sidebar's current page.
  */
 export function Segment({ selected, className, ...props }: ComponentProps<"button"> & { selected: boolean }) {
   return (
@@ -166,7 +167,9 @@ export function Segment({ selected, className, ...props }: ComponentProps<"butto
       aria-pressed={selected}
       className={cn(
         "inline-flex h-9 items-center justify-center rounded-md px-2.5 text-[0.8125rem] whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-[1.875rem]",
-        selected ? "bg-muted font-medium text-strong" : "text-secondary-foreground hover:bg-muted/60 hover:text-strong",
+        selected
+          ? "bg-popover font-medium text-strong shadow-raised ring-1 ring-border"
+          : "text-secondary-foreground hover:text-strong",
         className,
       )}
       {...props}
@@ -194,9 +197,9 @@ export function PageBody({ narrow = false, className, children }: { narrow?: boo
 }
 
 /**
- * A bordered card, grouping what is read together. With a title, a
- * header row and its rule. `full` makes the content touch the edges: a table,
- * a divided list.
+ * A panel, grouping what is read together: the card's surface a step above
+ * the paper, its hairline and its soft shadow. With a title, a header row and
+ * its rule. `full` makes the content touch the edges: a table, a divided list.
  */
 export function Panel({
   title,
@@ -222,11 +225,11 @@ export function Panel({
     <section
       id={id}
       aria-labelledby={title === undefined ? undefined : titleId}
-      className={cn("min-w-0 overflow-hidden rounded-xl border bg-card text-sm text-card-foreground", className)}
+      className={cn("min-w-0 overflow-hidden rounded-xl border bg-card text-sm text-card-foreground shadow-panel", className)}
     >
       {title !== undefined && (
         <div className="flex min-h-11 flex-wrap items-center gap-x-2.5 gap-y-1 border-b px-4 py-2">
-          <h2 id={titleId} className="text-sm font-semibold">
+          <h2 id={titleId} className="text-heading">
             {title}
           </h2>
           {count !== undefined && <Count>{count}</Count>}
@@ -240,6 +243,49 @@ export function Panel({
 }
 
 // --- States ----------------------------------------------------------------------
+
+/** A feature of the landing page, in its tint and its ink: kept to what is that feature's own. */
+export type Feature = "share" | "signin" | "recover"
+
+const TILE_FEATURE: Record<Feature | "neutral", string> = {
+  neutral: "bg-tile text-secondary-foreground shadow-[inset_0_1px_0_var(--tile-hi),inset_0_0_0_1px_var(--border)]",
+  share: "bg-share-tint text-share-ink shadow-[inset_0_1px_0_var(--tile-hi),inset_0_0_0_1px_color-mix(in_srgb,var(--share-ink)_18%,transparent)]",
+  signin: "bg-signin-tint text-signin-ink shadow-[inset_0_1px_0_var(--tile-hi),inset_0_0_0_1px_color-mix(in_srgb,var(--signin-ink)_18%,transparent)]",
+  recover: "bg-recover-tint text-recover-ink shadow-[inset_0_1px_0_var(--tile-hi),inset_0_0_0_1px_color-mix(in_srgb,var(--recover-ink)_18%,transparent)]",
+}
+
+const TILE_SIZE = {
+  40: "size-10 rounded-lg [&>svg]:size-5",
+  32: "size-8 rounded-md [&>svg]:size-4",
+  24: "size-6 rounded-sm [&>svg]:size-3.5",
+} as const
+
+/**
+ * An icon on its tile, the landing page's: a square a step off its surface,
+ * ringed with the hairline, a highlight along its top. Neutral, or in a
+ * feature's tint and ink. It always labels something, the title beside or
+ * under it, and says nothing to a screen reader itself.
+ */
+export function Tile({
+  icon: Icon,
+  feature,
+  size = 40,
+  className,
+}: {
+  icon: LucideIcon
+  feature?: Feature
+  size?: keyof typeof TILE_SIZE
+  className?: string
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn("inline-grid shrink-0 place-items-center", TILE_SIZE[size], TILE_FEATURE[feature ?? "neutral"], className)}
+    >
+      <Icon strokeWidth={1.75} />
+    </span>
+  )
+}
 
 /** Nothing to show: the state as the title, and what to do below it. */
 export function EmptyState({
@@ -257,7 +303,7 @@ export function EmptyState({
 }) {
   return (
     <div className={cn("grid justify-items-center gap-1 px-4 text-center", compact ? "py-6" : "py-12")}>
-      {Icon !== undefined && <Icon aria-hidden="true" className="mb-2 size-5 text-muted-foreground" />}
+      {Icon !== undefined && <Tile icon={Icon} className="mb-2" />}
       <p className="max-w-full font-medium text-balance wrap-anywhere">{title}</p>
       {children !== undefined && <div className="max-w-md text-sm text-pretty text-muted-foreground">{children}</div>}
       {action !== undefined && <div className="mt-3">{action}</div>}
@@ -373,7 +419,7 @@ export function RowsSkeleton({ lines = 4, className }: { lines?: number; classNa
 /** A loading panel. */
 export function PanelSkeleton({ lines = 4, title = true, className }: { lines?: number; title?: boolean; className?: string }) {
   return (
-    <div aria-busy="true" aria-label="Loading" className={cn("overflow-hidden rounded-xl border bg-card", className)}>
+    <div aria-busy="true" aria-label="Loading" className={cn("overflow-hidden rounded-xl border bg-card shadow-panel", className)}>
       {title && (
         <div className="flex h-11 items-center border-b px-4">
           <Skeleton className="h-3.5 w-24" />
@@ -396,7 +442,7 @@ export function HeaderSkeleton({ title }: { title: string | null }) {
         {title === null ? (
           <Skeleton className="h-6 w-32" />
         ) : (
-          <p className="text-xl font-semibold tracking-title">{title}</p>
+          <p className="text-title">{title}</p>
         )}
         <Skeleton className="ml-auto hidden h-6 w-40 md:block" />
         <Skeleton className="ml-auto size-9 md:hidden" />
@@ -564,7 +610,7 @@ export function PageHeader({
                 <h1
                   id={PAGE_TITLE_ID}
                   tabIndex={-1}
-                  className="truncate text-xl font-semibold tracking-title outline-none"
+                  className="truncate text-title outline-none"
                 >
                   {title}
                 </h1>
@@ -651,7 +697,7 @@ export function UnreachableScreen({ onRetry }: { onRetry: () => void }) {
     <main className="grid min-h-svh place-items-center bg-background p-6">
       <div className="grid max-w-xs justify-items-center gap-2 text-center">
         <Logo className="mb-3 size-10" />
-        <h1 className="text-lg font-semibold tracking-title">Can't reach the dashboard.</h1>
+        <h1 className="text-title">Can't reach the dashboard.</h1>
         <p className="text-sm text-muted-foreground">
           The server didn't answer. The page tries again every few seconds; check your connection if it lasts.
         </p>

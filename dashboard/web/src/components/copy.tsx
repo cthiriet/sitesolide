@@ -109,7 +109,7 @@ export function CopyFallback({ text, lines = 1, onClose }: { text: string; lines
         onKeyDown={(event) => {
           if (event.key === "Escape") onClose()
         }}
-        className="w-full min-w-0 resize-none rounded-lg border border-input bg-background px-2 py-1 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+        className="w-full min-w-0 resize-none rounded-lg border border-input bg-sunk px-2 py-1 font-mono text-xs shadow-well outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/25"
       />
       <span className="text-xs text-muted-foreground">Press {shortcut} to copy.</span>
     </div>
@@ -121,7 +121,7 @@ export function Command({ text, label = "Copy command" }: { text: string; label?
   const { state, copy, reset } = useCopy("Command copied")
   if (state === "failure") return <CopyFallback text={text} onClose={reset} />
   return (
-    <div className="flex min-w-0 items-center gap-1 rounded-lg bg-muted py-1 pr-1 pl-3">
+    <div className="flex min-w-0 items-center gap-1 rounded-lg bg-sunk py-1 pr-1 pl-3 shadow-well">
       <code className="min-w-0 flex-1 font-mono text-xs break-all">{text}</code>
       <Button
         variant="ghost"

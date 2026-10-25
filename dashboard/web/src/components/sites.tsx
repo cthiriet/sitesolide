@@ -4,7 +4,7 @@ import { MemoryBar } from "@/components/gauge"
 import { ExternalLink } from "@/components/link"
 import { InternalLink, useNavigation } from "@/components/navigation"
 import { SeverityIcon, Panel, Status } from "@/components/page"
-import { AccessWord } from "@/components/access-word"
+import { AccessWord, CHIP, RoleBars } from "@/components/access-word"
 import { useData } from "@/components/data"
 import { roleLabel } from "@/lib/access"
 import { roleOn } from "@/lib/identity"
@@ -59,16 +59,14 @@ function SiteName({ slug }: { slug: string }) {
   )
 }
 
-/** A small tag beside a site's name. */
-const TAG = "inline-flex h-5 shrink-0 items-center rounded-md bg-secondary px-1.5 text-xs"
-
 /** A person's role on the site, beside its name: what they may do there, read at a glance. The owner sees none. */
 function RoleTag({ slug }: { slug: string }) {
   const { identity } = useData()
   const role = roleOn(identity, slug)
   if (role === null) return null
   return (
-    <span title="Your role" className={cn(TAG, "font-medium text-secondary-foreground")}>
+    <span title="Your role" className={cn(CHIP, "text-secondary-foreground")}>
+      <RoleBars role={role} />
       <span className="sr-only">Your role: </span>
       {roleLabel(role)}
     </span>
@@ -83,7 +81,7 @@ function RoleTag({ slug }: { slug: string }) {
 function PlatformTag({ site }: { site: Pick<Site, "platform"> }) {
   if (!site.platform) return null
   return (
-    <span title="Part of the platform" className={cn(TAG, "text-muted-foreground")}>
+    <span title="Part of the platform" className={cn(CHIP, "font-normal text-muted-foreground")}>
       {PLATFORM_TAG}
     </span>
   )
@@ -110,7 +108,9 @@ function Gutter({ severity }: { severity: Severity | null }) {
 function AddressCell({ address }: { address: Address }) {
   return (
     <div className="grid justify-items-start gap-0.5">
-      <ExternalLink href={address.href}>{address.text}</ExternalLink>
+      <ExternalLink href={address.href} className="font-mono text-[0.8125rem]">
+        {address.text}
+      </ExternalLink>
       {address.note !== null && (
         <span
           className={cn("text-xs wrap-anywhere", address.note.warn ? "text-attention-text" : "text-muted-foreground")}
@@ -162,7 +162,7 @@ function ServiceCell({ site, now }: { site: Site; now: number }) {
   )
 }
 
-const HEAD = "h-10 px-3 text-xs font-medium text-muted-foreground"
+const HEAD = "h-10 px-3 mono-label"
 const CELL = "px-3 py-3 align-top whitespace-normal"
 
 type RowProps = { site: SiteWithSecrets; severity: Severity | null; now: number }
@@ -296,7 +296,7 @@ export function SiteList({
       <div className="@container">
         <Table className="hidden table-fixed @4xl:table">
           <caption className="sr-only">{caption}</caption>
-          <TableHeader className="bg-muted">
+          <TableHeader className="bg-cell">
             <TableRow className="hover:bg-transparent">
               <TableHead className={cn(HEAD, "w-[24%] pl-4")}>
                 <span className="pl-6.5">Site</span>

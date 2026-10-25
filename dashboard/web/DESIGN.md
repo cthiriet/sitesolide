@@ -17,22 +17,26 @@ during the day and dark in the evening. The page answers one question first:
 **is the machine all right, and if not, which site should I look at?** Then,
 once inside a site: **what makes it run, who gets in, and what needs changing?**
 
-The look is **Graphite**: neutral greys, one family, Geist, and one colour
-family, petrol, which is the brand's: the logo is a petrol gradient around the
-accent, and the accent marks what is current or in focus. Red is the error
-colour, not the brand's, and it only says error. The only remarkable piece is
-**the machine plate** at the top of the home page, where the 70 and 90 %
-thresholds are ticked on each gauge. Everything else is calm, dense and
-aligned.
+The look is **Ledger**, the landing page's, so that someone who has just left
+it recognises the same product: a mineral paper leaning to the teal, panels a
+step above it ringed with a hairline and lifted by a soft shadow, wells sunk
+below their surface, Hanken Grotesk for the words and IBM Plex Mono for the
+machine's, and one accent, a deep teal, which is the brand's: the logo is a
+teal gradient, and the accent marks what is current or in focus and the one
+primary action, pressable like a key. Red is the error colour, not the
+brand's, and it only says error. The only remarkable piece is **the machine
+plate** at the top of the home page, where the 70 and 90 % thresholds are
+ticked on each gauge. Everything else is calm, dense and aligned.
 
 1. **The verdict first.** Every page carries, in the same place, the machine's
    verdict and the age of the data. A stale snapshot never says "All clear".
 2. **Red means error, and nothing else.** Neither a link, nor the current page,
-   nor a focus ring is red. **Petrol means "here"**: the current page, the
+   nor a focus ring is red. **Teal means "here"**: the current page, the
    focused element, a gauge's fill, the primary button; never a state.
-3. **Structure carries information.** A rule separates the rows of a list, a
-   bordered card groups what is read together, a tick on a gauge marks a
-   threshold. No decorative frames, numbers or labels.
+3. **Structure carries information.** A hairline separates the rows of a
+   list, a panel groups what is read together, a tick on a gauge marks a
+   threshold, a tile labels what it sits beside. No decorative frames, numbers
+   or labels.
 4. **Panels, not stacked cards.** One panel per readable set, divided lists
    inside.
 5. **Dense without being cramped.** Rows of 40 to 44 px on a computer, 40 to
@@ -45,123 +49,181 @@ aligned.
 
 All in `src/styles/global.css`, under `:root` (light) and `.dark`. A component
 **never** writes a hex value or a Tailwind palette colour (`amber-500`,
-`emerald-700`): it names a token.
+`emerald-700`): it names a token. The values are the landing page's own, its
+system's `--bg`, `--card`, `--raised`, `--bg-sunk`, `--line`, `--ink` and the
+rest, under the names shadcn's components read.
 
 ### 2.1 Colours
 
 | Token (class) | Light | Dark | Role |
 |---|---|---|---|
-| `background` | `#f7f8fa` | `#0a0b0d` | page and sidebar background |
-| `foreground` | `#16181d` | `#e7e9ec` | text |
-| `strong` | `#0a0b0d` | `#ffffff` | what is current or chosen: the sidebar's page, a selected filter, a site's name |
-| `secondary-foreground` | `#3a404a` | `#c9cdd3` | text a step below the body: navigation, the filters not chosen, a counter |
-| `muted-foreground` | `#5f6672` | `#8b9098` | meta, help text, column headers |
-| `card`, `popover` | `#ffffff` | `#111316`, `#16181c` | panels; menus and dialogs |
-| `muted`, `secondary`, `accent` | `#eceef2` | `#16181c` | hover, table header, a selected segment, the neutral pill |
-| `border` | `#e3e6eb` | `#1f2227` | a panel's frame, a header's rule, a counter's fill |
-| `divider` | `#edeff2` | `#1a1c20` | the rule between two rows of a list or a table |
-| `input` | `#d9dde3` | `#23262c` | field edges |
-| `primary`, `ring` | `#0b6e79` | `#4cb8c4` | petrol: the primary button, the focus ring, the sidebar's marker, a gauge's fill |
-| `primary-foreground` | `#ffffff` | `#0a0b0d` | text on the primary button |
-| `highlight` | `#e7f3f4` | `#0e2427` | the accent's palest tint: the current page in the sidebar |
-| `mark-face`, `mark-line`, `mark-shadow` | `#0b6e79`, `#12211f`, `#12211f` | `#0c6870`, `#cfe3dc`, `#4f7a70` | the logo: its face, the line around it, its offset shadow |
-| `track`, `tick` | `#e3e6eb`, `#8e95a1` | `#1f2227`, `#5e6572` | a gauge's empty bar, its threshold ticks |
-| `destructive` | `#b3253f` | `#f36f84` | errors, and only errors |
-| `sidebar-accent`, `sidebar-primary` | as `muted`, `primary` | as `muted`, `primary` | a hover in the sidebar, and the current page's marker |
+| `background` | `#f4f5f1` | `#0d1211` | the paper: the page, the sidebar, the sticky header |
+| `card` | `#fbfbf9` | `#141a19` | a panel, a step above the paper |
+| `popover` | `#ffffff` | `#1c2422` | the raised surface: a menu, a dialog, a tooltip's, a chosen segment, the top of a secondary button |
+| `sunk` | `#eceee8` | `#0c1110` | a well below its surface: a field, a command, a code, a segmented control's frame |
+| `cell` | `#f7f8f4` | `#111716` | a band or a chip: a table's head, a dialog's foot, a counter, a tag, inline code |
+| `tile` | `#eceee8` | `#151c1a` | an icon's tile |
+| `foreground` | `#141816` | `#e8edea` | text |
+| `strong` | `#0b0e0d` | `#f7f9f8` | what is current or chosen: the sidebar's page, a selected filter, a site's name |
+| `secondary-foreground` | `#3a413d` | `#c4ccc7` | text a step below the body: navigation, the filters not chosen, a counter |
+| `muted-foreground` | `#636862` | `#949e99` | meta, help text, a mono label |
+| `faint` | `#9ea39c` | `#5f6964` | a neutral dot, a role's unlit bars |
+| `muted`, `secondary`, `accent` | `#e7e9e2` | `#222b29`, `#222b29`, `#252f2c` | a hover, the neutral pill, a skeleton; a step past `sunk` and `popover`, so that a hover shows inside a well and in a dialog; `accent` a menu item's highlight |
+| `border` | `#e2e3dc` | `#232c2a` | the hairline: a panel's frame, a header's rule, a chip's edge |
+| `divider` | `#e9eae4` | `#1c2422` | the rule between two rows of a list or a table |
+| `input` | `#d3d6ce` | `#303b38` | a field's edge, a secondary button's |
+| `primary`, `ring` | `#0b6e79` | `#3fa6ae` | the accent: the focus ring, the current page's icon, a gauge's fill |
+| `primary-hi`, `primary-lo`, `primary-edge` | `#12838f`, `#0a616b`, `#07484f` | `#148e9a`, `#0b6670`, `#04363b` | the primary button: its gradient, top to bottom, and its edge |
+| `primary-foreground` | `#ffffff` | `#ffffff` | the primary button's label |
+| `link` | `#0a6570` | `#74c6c6` | the accent as text |
+| `highlight`, `highlight-line` | `#e3edeb`, `#c2d7d4` | `#112828`, `#1e4647` | the accent's palest tint and its hairline: the current page, the chosen way a site opens, a ticked choice |
+| `mark-hi`, `mark-lo` | `#14899a`, `#0a5560` | the same | the logo's gradient |
+| `track`, `tick` | `#e2e3dc`, `#8b9089` | `#0c1110`, `#66706b` | a gauge's empty bar, its threshold ticks |
+| `destructive` | `#ae4029` | `#f0896d` | errors, and only errors |
+| `share-tint`, `share-ink` | `#e9e4f2`, `#654e99` | `#211c33`, `#b9a6ea` | the share feature: a role's bars |
+| `signin-tint`, `signin-ink` | `#e0e8f3`, `#2d5a96` | `#15233a`, `#91b4ea` | the sign-in feature: the provider's button |
+| `recover-tint`, `recover-ink` | `#deede2`, `#2c7247` | `#13291d`, `#7fc99c` | the recover feature, for a tile of the backups' own |
+| `sidebar-accent`, `sidebar-primary` | as `muted`, `primary` | as `muted`, `primary` | a hover in the sidebar, and the current page's icon |
 
-**The brand is one petrol hue** (185 to 188 degrees): `highlight`, the
-palest, for a surface that says "here", and `primary`, the accent. Dark lifts
-the accent and turns the tint into a deep petrol surface.
+**The brand is one teal**: `highlight`, the palest, for a surface that says
+"here", `primary` the accent, and its three steps for the button that is
+pressed. Dark lifts the accent and turns the tint into a deep teal surface.
 
-**The logo is the landing page's**, drawn as it is in that page's header: the
-block laid twice, a hard shadow offset down and to the right, then
-a petrol face ringed with a line. Its three tokens are the landing page's own
-values rather than the dashboard's greys, so the mark is the same on both
-sites; in light, its face is the accent itself. The portal's page and
-`docs/assets` repeat the hex values, which cannot read a token, and change with
-them. The favicon keeps a petrol gradient, `#138896` to `#0a5560` in light and
-`#5cc8d3` to `#2c98a4` in dark, as the landing page's favicon does.
+**The landing page's features**, a tint and its ink each, come in three, and
+only for what is that feature's own and no larger than a chip or a 40 px
+tile: share, the violet of a role's bars; sign-in, the blue of the provider's
+button; recover, the green of a backup. Its two others stay out of the page:
+its coral, monitor, would read as an error, and its amber, run, as a warning,
+and here red means error and amber attention, nothing else.
+
+**The logo is the landing page's**, drawn as its header draws it: the block
+filling its square, a gradient from `mark-hi` at its top left corner to
+`mark-lo` at its bottom right, the same in both themes. The favicon is the
+same block, with a lighter gradient in a dark browser, `#5cc8d3` to `#2c98a4`,
+since the deep end would sink into a dark tab strip.
 
 Measured contrasts (WCAG), to check again after any change. Light:
-`foreground` 17.8:1 on `card`; `secondary-foreground` 10.4:1 on `card`;
-`muted-foreground` 5.8:1 on `card`, 5.4:1 on `background` and 5.0:1 on `muted`;
-white on `primary` 6.0:1; `primary` as a ring, a marker or a fill 6.0:1 on
-`card`, 5.1:1 on `muted` and 4.8:1 on the track; `destructive` 6.5:1 on `card`;
-a tick 3.0:1 on `card`. Dark: `foreground` 15.3:1 on `card`;
-`muted-foreground` 5.8:1 on `card`; near black on `primary` 8.4:1; `primary`
-7.9:1 on `card`; `destructive` 6.6:1 on `card`; a tick 3.2:1 on `card` and
-3.0:1 on `popover`. On `highlight`: `strong` 17.4:1 in light and 16.2:1 in
-dark, `muted-foreground` 5.1 and 5.0:1, the `primary` marker 5.3 and 6.9:1,
-an error count 4.9 and 5.0:1 on its pill. The logo, as a graphic, outlined
-by `mark-line`: 15.6:1 on `background` in light, 14.7:1 in dark. The full
-list is in the comment of `styles/global.css`.
+`foreground` 17.3:1 on `card`; `secondary-foreground` 10.1:1 on `card`;
+`muted-foreground` 5.5:1 on `card`, 5.2:1 on `background`, 4.6:1 on `muted`
+and 4.8:1 on `highlight`; white on `primary` 6.0:1 and on the button's
+gradient 4.5 to 7.2:1; `primary` as a ring, a marker or a fill 5.8:1 on
+`card`, 4.9:1 on `muted` and 4.6:1 on the track; `link` 6.5:1 on `card`;
+`destructive` 5.7:1 on `card`; a tick 3.1:1 on `card`. Dark: `foreground`
+14.9:1 on `card`; `muted-foreground` 6.4:1 on `card` and 5.7:1 on `popover`;
+white on the button's gradient 3.9 to 6.7:1; `primary` 6.1:1 on `card` and
+6.6:1 on the track; `destructive` 7.1:1 on `card`; a tick 3.4:1 on `card`
+and 3.1:1 on `popover`. On `highlight`: `strong` 16.2:1 in light and 14.6:1
+in dark, `primary` 5.0 and 5.4:1. The full list is in the comment of
+`styles/global.css`.
 
-One pair stays short, in a passing state: the primary button's hover,
-`primary/80` from the generated `button`, puts white at 3.95:1 in light. A
-generated component is not edited, and petrol dark enough to hold 4.5:1 there
-would no longer be the chosen petrol.
+Four values move from the landing page to clear those floors: its muted
+`#6a6f69` (4.2:1 on `muted`) became `#636862`, its down red `#c24e33` (4.3:1
+on its pill) became `#ae4029`, and the ticks, which the landing page has
+none of, took `#8b9089` and `#66706b`. One pair stays short, at the top of a
+gradient: white on `primary-hi` in dark, 3.9:1, where the label sits on the
+gradient's middle, 5.0:1.
 
 ### 2.2 Status tones
 
 Four tones, not one more, from the `Tone` type in `lib/tones.ts`. Their classes
-are spelled out there (`TONE_DOT`, `TONE_TEXT`, `TONE_PILL`, `TONE_BANNER`),
-and `tests/tones.test.ts` checks that they only name tokens.
+are spelled out there (`TONE_DOT`, `TONE_HALO`, `TONE_TEXT`, `TONE_PILL`,
+`TONE_BADGE`, `TONE_BANNER`), and `tests/tones.test.ts` checks that they only
+name tokens.
 
 | Tone | Dot (solid) | Text | Light, dot and text | Dark, dot and text | Meaning |
 |---|---|---|---|---|---|
-| `ok` | `bg-ok` | `text-ok-text` | `#22a05a`, `#1e7a43` | `#3fb950`, `#7ee2a0` | running, up to date |
-| `attention` | `bg-attention` | `text-attention-text` | `#b0790a`, `#8a5a00` | `#e3b341`, `#f2c55c` | worth a look: 70 % threshold, restart pending, expiry near |
-| `error` | `bg-destructive` | `text-destructive` | `#b3253f` | `#f36f84` | to deal with: service not running, general access in disagreement, 90 % threshold |
-| `neutral` | `bg-muted-foreground` | `text-muted-foreground` | `#5f6672` | `#8b9098` | information, without judgement |
+| `ok` | `bg-ok` | `text-ok-text` | `#2c8a57`, `#2c7247` | `#6cc98f`, `#7fc99c` | running, up to date |
+| `attention` | `bg-attention` | `text-attention-text` | `#b26a0c`, `#8c580b` | `#e5ae64` | worth a look: 70 % threshold, restart pending, expiry near |
+| `error` | `bg-destructive` | `text-destructive` | `#ae4029` | `#f0896d` | to deal with: service not running, general access in disagreement, 90 % threshold |
+| `neutral` | `bg-faint` | `text-muted-foreground` | `#9ea39c`, `#636862` | `#5f6964`, `#949e99` | information, without judgement |
+
+A status is the landing page's: an 8 px dot ringed by a halo of its own
+colour at about a sixth (`TONE_HALO`), then its word; a pill, for what has to
+be seen from afar, is a 24 px chip with its tone's hairline and tint. A count
+over an icon or beside a navigation entry sits on a solid badge
+(`TONE_BADGE`), the text tone's fill under the card's colour, which reads
+whatever lies below it, the current page's tint included.
 
 Each tone's text clears 4.5:1 on its tinted pill, in both themes: in light
-`ok-text` 4.8:1, `attention-text` 5.2:1 and `destructive` 5.5:1 over `card`,
-the tightest being `ok-text` at 4.5:1 over `background`; in dark beyond 5.8:1.
-Every dot clears 3:1 on `card` and on `background`, and the attention fill 3:1
-on the track: the mockup's amber, `#c98a0b`, did not (2.4:1 on the track), so
-it moved to `#b0790a`. Colour never carries meaning alone: a dot comes with a
-word, a severity icon with text for screen readers. `severityTone` gives a
+`ok-text` 4.7:1, `attention-text` 4.7:1 and `destructive` 4.8:1 over
+`background` (5.0, 5.0 and 5.1:1 over `card`); in dark beyond 5.9:1. A count
+on its badge clears 5.6:1 in light and 7.1:1 in dark. Every dot but the
+neutral one clears 3:1 on `card` and on `background`, and the attention fill
+3:1 on the track; the neutral dot is faint on purpose, its word saying all
+there is. Colour never carries meaning alone: a dot comes with a word, a
+severity icon with text for screen readers. `severityTone` gives a
 discrepancy's tone, `verdictTone` the verdict's (a stale snapshot is an
 error).
 
 ### 2.3 Typography
 
-One family, **Geist Variable**, for everything, titles included, served from
-`_assets/` with no third-party request (`@fontsource-variable/geist`). **Geist
-Mono** (`@fontsource-variable/geist-mono`) **only for what is typed into a
-terminal**: file name, variable name, lock code, path, unit, command. A slug,
-an address or a number is not monospace, nor is a key in a `kbd`.
+**Hanken Grotesk** (`@fontsource-variable/hanken-grotesk`) for every word,
+titles included, and **IBM Plex Mono** (`@fontsource/ibm-plex-mono`, 400 and
+500) **for every machine string**: an address, a port, a version, a path, a
+unit, a variable or file name, a lock code, a command, a dotted action, an
+audit's raw fields; and for the labels. Both are served from `_assets/`, with
+no third-party request. A slug is a name and stays in Hanken, as are an email
+and a number; a key in a `kbd` is not monospace either. Hanken's figures are
+tabular by default, so numbers that get compared line up.
 
 | Role | Classes |
 |---|---|
-| Page title (`h1`) | `text-xl font-semibold tracking-title` (20/28 px, -0.02 em) |
-| Gauge figure | `text-2xl leading-7 font-semibold tracking-title tabular-nums` (24/28 px) |
-| Panel title (`h2`) | `text-sm font-semibold` |
+| Page title (`h1`) | `text-title` (22/28 px, 500, -0.025 em) |
+| Gauge figure, audience figure | `text-figure` (26/32 px, 500, -0.03 em) |
+| Panel title (`h2`) | `text-heading` (15/20 px, 600, -0.01 em) |
+| Dialog title | `text-[1.0625rem] leading-6 font-semibold tracking-[-0.01em]` (17/24 px, the landing page's card titles) |
 | Body text, cells | `text-sm` (14/20 px) |
-| Meta, column headers, help, a gauge's heading | `text-xs text-muted-foreground` (12 px) |
-| Wordmark in the sidebar | `text-sm font-semibold tracking-[-0.01em]`, the zone below in `text-xs text-muted-foreground` |
+| Meta, help | `text-xs text-muted-foreground` (12 px) |
+| Label: a column head, a gauge's heading, a panel's unit, a menu's group | `mono-label` (Plex Mono 11/16 px, 500, capitals, +0.12 em, `muted-foreground`; 12 px on a phone) |
+| An address | `font-mono text-[0.8125rem]` (13 px) |
+| A name, a path, a unit in a row | `font-mono text-xs` (12 px) |
+| Wordmark in the sidebar | `text-[0.9375rem] font-semibold tracking-[-0.02em]`, the zone below in `font-mono text-xs text-muted-foreground` |
 
-`tracking-title` is a theme token in `styles/global.css`. No label capitals,
-no letter spacing (except a lock code), no single word in a different colour
-inside a title. Every number that gets compared is `tabular-nums`.
+`text-title`, `text-figure` and `text-heading` are theme tokens, and
+`mono-label` a utility, in `styles/global.css`. Capitals and letter spacing
+only in a `mono-label` and a lock code, no single word in a different colour
+inside a title, nothing below 11 px, and nothing that carries meaning below
+12 px on a phone.
 
-### 2.4 Spacing, widths, radii
+### 2.4 Spacing, widths, radii, surfaces
 
 - 4 px base. Page gutter `px-4`, then `md:px-8`.
 - Content in `max-w-6xl` (1152 px), centred to the right of the sidebar.
 - Between two blocks of a page, `gap-6`. Inside a panel, rows `px-4 py-2.5`
   (dense list) or `py-3` (two-level row, and every table row).
 - Bottom padding `pb-28` on a phone, to clear the tabs.
-- Radii in whole pixels, the more containing the object, the more containing
-  its radius: plate, panel, table and dialog `rounded-xl` (12 px), a control
-  and a banner `rounded-lg` (8 px), a pill, a badge and a filter segment
-  `rounded-md` (6 px), a counter, a `kbd` and inline code `rounded-sm` (4 px),
-  a dot `rounded-full`. **A control keeps its shadcn component's radius** (8 px
-  at default size, 6 px in `sm`), with no override; a hand-drawn control takes
-  a field's. A shadcn `Badge` is a pill: it takes `rounded-md` through its
-  `className`.
-- One pixel borders, no shadow on a page surface: they separate by a rule.
-  Only menus, tooltips and dialogs have a shadow.
+- Radii in whole pixels, concentric: the more containing the object, the
+  larger its radius. Plate, panel, table, menu and dialog `rounded-xl`
+  (14 px), a control, a banner and a well `rounded-lg` (10 px), a chip, a
+  pill, a badge, a segment and a menu item `rounded-md` (8 px), a counter, a
+  `kbd`, inline code and a 24 px tile `rounded-sm` (6 px), a dot
+  `rounded-full`. A menu is padded by 6 px, so its items' 8 px meet its
+  14 px; a segmented control by 2 px, so its segments' 8 px meet its 10 px.
+  **A control keeps its component's radius**, with no override; a hand-drawn
+  control takes a field's.
+- Surfaces, the landing page's tiers, never a hard offset shadow:
+  - a **panel**: `card`, a `border` hairline, `shadow-panel`, the soft
+    layered shadow of the landing page's cards with the highlight along its
+    top edge;
+  - a **raised** object, `popover` with `shadow-raised`: a chosen segment,
+    the site switcher's card in the sidebar;
+  - a **float**, `popover` ringed by the hairline with `shadow-float`: a
+    menu, a select's list, a dialog, a tooltip;
+  - a **well**, `sunk` with `shadow-well`, an inset shadow: a field, a
+    select, a command, a code block, a gauge's track, a segmented control's
+    frame;
+  - a **chip**, `cell` with the hairline and no shadow: a counter, a tag, an
+    access, a role, inline code;
+  - a **tile**, `Tile` in `page.tsx`: 40, 32 or 24 px, `tile` ringed by the
+    hairline, a highlight along its top, neutral or in a feature's tint; it
+    always labels something, an empty state's title above all.
+- The primary button is pressable: the gradient from `primary-hi` to
+  `primary-lo`, its `primary-edge`, `shadow-btn` (a highlight along its top,
+  a shade along its bottom, soft drops), its label pressed in with a shade;
+  a hover brightens it by 6 %, a press sinks it a pixel into
+  `shadow-btn-press`. The secondary, `outline`, is raised: `popover` fading
+  into `card`, the `input` edge, `shadow-btn-2`, a press into
+  `shadow-btn-2-press`.
 
 ## 3. Layout
 
@@ -202,15 +264,18 @@ An entry is 36 px tall, its stroke icon 16 px, in `secondary-foreground`.
 Collapsed with `Cmd+B`, `Ctrl+B` or its button: icons only, 48 px, a tooltip, a
 tone dot on the icon when the indicator is `attention` or `error`. The state
 lives in `localStorage["sidebar-collapsed"]`, read back before the first render
-by an inline script. The current page takes the `highlight` tint, `strong`
-text and a 2 px petrol bar on its left edge, where a hover only takes the
-`muted` grey; on a phone, a 2 px petrol rule above the tab. The sidebar's own
-controls (theme, sign out, collapse) sit at its foot in `muted-foreground`.
+by an inline script. The sidebar lies on the paper, ruled from the page by a
+hairline. The current page takes the `highlight` tint ringed by
+`highlight-line`, `strong` text and its icon in the accent, where a hover only
+takes the `muted` grey; on a phone, a 2 px teal rule above the tab. A count
+beside an entry sits on its tone's solid badge. The sidebar's own controls
+(theme, sign out, collapse) sit at its foot in `muted-foreground`, the release
+below them in mono.
 
 **Two levels.** On the machine's pages (Sites, Activity, People, Tokens,
 Connectors), the sidebar carries them. Inside a site it becomes that site's: the *All sites*
-return, the current site on a bordered card (initial, name, state in one
-sentence, tone dot), which opens the site switcher, then its five sections,
+return, the current site on a raised card (its initial on a tile, name, state
+in one sentence, tone dot), which opens the site switcher, then its five sections,
 Overview, Audience, Secrets, Access and Backups. Collapsed, the site is just
 its initial and its dot. On a phone the tabs follow the level: five for the
 machine, five for a site, on one row.
@@ -319,9 +384,10 @@ afterwards. A page never reads `window.location` itself.
 |---|---|
 | `PageBody` | the content container, and the `body` query container |
 | `SitePage` | a site's section: header with breadcrumb and switcher, body, "No site named x" for an unknown slug, "No project named x that you have a role on" for a person, with whom to ask |
-| `Panel` | a bordered card, `rounded-xl`; with `title`, a 44 px header row; `full` for a table or list that touches the edges |
+| `Panel` | a panel, `rounded-xl`, its hairline and `shadow-panel`; with `title`, a 44 px header row; `full` for a table or list that touches the edges |
 | `WithSnapshot` | loading, dashboard unreachable, snapshot incomplete, rendered the same everywhere |
-| `EmptyState` | nothing to show: the title states the state, the text says what to do |
+| `EmptyState` | nothing to show: its icon on a tile, the title states the state, the text says what to do |
+| `Tile` | an icon on its tile, 40, 32 or 24 px, neutral or in a feature's tint and ink; it labels the title beside or under it |
 | `ErrorState` | a page-specific read failed and there is nothing else: a title naming what did not answer, advice and a command, *Retry* |
 | `Banner` | a problem that does not stop you reading: kept data, a site's discrepancy, a refused removal |
 | `RowsSkeleton`, `PanelSkeleton` | a load, shaped like what it replaces, `aria-busy` on its container |
@@ -333,11 +399,13 @@ on screen.
 
 | Name | Rule |
 |---|---|
-| `Status` | a dot and a word. `point` in lists and tables, `pill` for what has to be seen from afar |
+| `Status` | a dot with its halo and a word. `point` in lists and tables, `pill` for what has to be seen from afar |
 | `SeverityIcon` | crossed circle (error) or triangle (warning) before a discrepancy, with hidden text |
-| `Count` | the number beside a title, `secondary-foreground` on the `border` grey |
-| `ExternalLink` | a site address, underlined at rest, in a new tab |
-| `MachinePlate`, `Track` | the plate, reserved for the home page: one bordered panel, the server (its zone, cores, memory and disk) then load, memory and disk; `Track` is a 6 px bar with a 1 px tick across it at each threshold, reused for a service's memory |
+| `Count` | the number beside a title, the landing page's mono chip: `cell`, the hairline, Plex Mono |
+| `CHIP`, `AccessWord` | a 20 or 24 px chip; a site's general access as the landing page's badges, *Restricted* with a lock, *Public* with a globe and quieter, *Anyone with the code* with a key over the code in its well |
+| `RoleBars` | a role as four rising bars, as many lit in `share-ink` as the role has rungs, before its word: beside a site's name, in a role's menu, in what each role can do |
+| `ExternalLink` | a site address, underlined at rest, in a new tab; the address in mono |
+| `MachinePlate`, `Track` | the plate, reserved for the home page: one panel, the server (its zone, cores, memory and disk) then load, memory and disk, each under its mono label; `Track` is a 6 px groove with a 1 px tick across it at each threshold, reused for a service's memory |
 | `Track` (dialogs) | waiting for a long answer: the time actually elapsed on its scale, the usual duration ticked when known, never an invented progress bar |
 | `Command` | a command to type in a terminal, copyable |
 | `serviceWord` | the word and tone of a systemd unit, the same on the home page, the Overview and Secrets; *Scheduled* for the anchor of a project whose every service is scheduled, `active (exited)` |
@@ -346,14 +414,19 @@ on screen.
 shadcn components available in `src/components/ui/`: `alert-dialog`, `badge`,
 `button`, `card`, `dialog`, `dropdown-menu`, `input`, `label`, `progress`,
 `separator`, `sheet`, `sidebar`, `skeleton`, `table`, `tooltip`.
-Add with `bunx --bun shadcn@latest add <name>`; a generated component is not
-edited, it is varied through `data-slot` or wrapped.
+Add with `bunx --bun shadcn@latest add <name>`. The Ledger look lives in their
+own class strings, which were edited for it (the pressable and raised
+buttons, the sunk fields and selects, the floating menus and dialogs, the
+mono column heads, the chips): a component added again over one of these
+overwrites that look, so the new file is compared with the one it replaces
+before it is kept. Beyond the look, a component is varied through `data-slot`
+or wrapped.
 
 ## 5. Content rules
 
 **Tables and lists.** A table lives in a `Panel full` and becomes a divided
-list below the width it needs (3.2). Header
-`h-10 bg-muted text-xs font-medium text-muted-foreground`, ruled in `border`;
+list below the width it needs (3.2). Header `h-10 bg-cell mono-label`, the
+column heads in mono capitals on the cell's band, ruled in `border`;
 cells `px-3 py-3`, which makes 44 px rows, ruled in `divider`; first column
 `pl-4`, last `pr-4`, numbers right-aligned. A divided list rules its rows in
 `divider` too (`divide-y divide-divider`), a panel's own frame and header stay
@@ -370,7 +443,8 @@ people with access of a site nobody else has access to say who opens it and
 how to add someone, Secrets of a site with no file says to declare `secrets`
 in `sitesolide.json` and then run `sitesolide deploy`.
 
-**Buttons.** One primary per view, in petrol. `destructive` is used only for a
+**Buttons.** One primary per view, the pressable teal; the others raised
+(`outline`) or quiet (`ghost`). `destructive` is used only for a
 confirmation's action. A button in progress says what it is doing:
 *Revoking...*, *Saving...*.
 
@@ -386,9 +460,9 @@ sitesolide status." Under the offending field (`role="alert"`), in a `Banner`
 when the page stays readable, in an `ErrorState` when there is nothing to show.
 
 **Search and filters.** In a toolbar under the header, on the left: the search
-field, with a `/` key hint, then the filters as a segmented control, a bordered
-card whose chosen segment takes the `muted` grey and `strong` text (in dark, the
-control sits on `background` so that the grey still shows). `/` focuses the
+field, with a `/` key hint, then the filters as a segmented control, a well
+sunk below the paper whose chosen segment rises out of it, raised with its
+hairline, in `strong` text. `/` focuses the
 site search, Escape clears it then returns focus. The count and the order on
 the right: "3 of 13 sites, issues first". The count is of what All lists
 before the search, and the page header's agrees with it.
@@ -411,11 +485,13 @@ changed. A password variable offers only *Change password*. A drawn password is 
 with its copy button; closing its dialog without having copied it takes two
 gestures, the first one warning.
 
-**Keyboard and announcements.** Every focus ring is petrol. A hand-drawn
-element takes `focus-visible:ring-2 focus-visible:ring-ring`, solid, 6.0:1 on
-`card` in light; a field, generated or hand-drawn, keeps shadcn's
-`focus-visible:border-ring` (solid, the same contrast) inside a
-`ring-3 ring-ring/50` halo, the halo alone being too pale to count.
+**Keyboard and announcements.** Every focus ring is teal. A hand-drawn
+element takes `focus-visible:ring-2 focus-visible:ring-ring`, solid, 5.8:1 on
+`card` in light; a button, the landing page's 2 px teal outline, 2 px off
+its edge; a field, generated or hand-drawn, `focus-visible:border-ring`
+(solid, the same contrast) inside a `ring-3 ring-ring/25` halo, the halo alone
+being too pale to count, its well lightening to `popover` in light while it
+has the focus.
 After a navigation: scroll to top (except on back), focus on the `h1`, title
 announced, tab title updated. One `aria-live` region, through which a password
 or a value never passes. Under the sign-in of an expired session, the page is
@@ -828,17 +904,20 @@ change it.
 
 1. **Four "big number, small label" tiles** at the top: replaced by one plate
    where the thresholds are read on the gauges.
-2. **A red brand**: the logo was a red seal, and beside a petrol accent the
-   two clashed; in a tool where red means error, it also said error at the top
-   of every page. The logo moved into the accent's family, and red kept one
+2. **A red brand**: the logo was a red seal, and beside a teal accent the two
+   clashed; in a tool where red means error, it also said error at the top of
+   every page. The logo moved into the accent's family, and red kept one
    meaning.
 3. **A summary in three side-by-side cards**: what it said lives in the sites'
    rows.
-4. **Every identifier in monospace**: it is kept for what is typed in a
-   terminal.
-5. **Inter**, shadcn's font, then **widened Archivo** for titles, the landing
-   page's: one family, Geist, holds a dense page better, and Geist Mono gives
-   what is typed in a terminal a matching voice.
+4. **Monospace for what is typed in a terminal alone**, Graphite's rule: an
+   address, a port or a version read as prose beside the landing page, which
+   sets every machine string in Plex Mono. They are mono now, a slug, an email
+   and a number staying in Hanken.
+5. **Inter**, shadcn's font, then **widened Archivo** for titles, then
+   **Geist** and Geist Mono for everything: the landing page moved to Hanken
+   Grotesk and Plex Mono, and the dashboard follows it so that both read as
+   one product.
 6. **Tinted backgrounds on rows in discrepancy**: the icon already says it.
 7. **Screen breakpoints**: the sidebar made any `lg:` rule wrong by one sidebar
    width (3.2).
@@ -847,10 +926,10 @@ change it.
 9. **A ticked step bar while waiting for the gatekeeper**: the page does not
    know where it is, so it shows the elapsed time, ticking nothing.
 10. **The plate dark in both themes**, the landing page's deep section carried
-    into the page: in light it was the one dark object on the screen. A
-    bordered panel that follows the theme reads as one with the rest, and its
-    ticks keep it remarkable.
-11. **An ink primary, midnight blue on cold glass**: petrol gives "here" a
+    into the page: in light it was the one dark object on the screen. A panel
+    that follows the theme reads as one with the rest, and its ticks keep it
+    remarkable.
+11. **An ink primary, midnight blue on cold glass**: teal gives "here" a
     single colour, from the primary button to the focus ring and the
     sidebar's marker, and stays clear of the error red and of the three tones.
 12. **Four sections for one question**: who opens a site, who signs in to it
@@ -860,6 +939,18 @@ change it.
     words. One *Access* section per site, read like a "Share" dialog, *People*
     across projects and *Tokens* answer it once each, in the words of one
     ladder of roles.
+13. **Graphite**, the look before Ledger: neutral greys, white panels ruled by
+    a pixel and no shadow on a page surface, Geist, the logo a petrol block
+    with a hard offset shadow. Beside the landing page in Ledger it read as
+    another product. The paper, the soft tiers, the pressable teal and the
+    two faces are the landing page's own, held to this page's density.
+14. **The landing page's six feature colours everywhere**: its coral and its
+    amber would say error and attention in a page where those colours mean
+    nothing else, and a feature colour on a surface larger than a chip turns
+    a signal into a decoration. Three stay, for what is theirs.
+15. **The landing page's 24 px panels and 44 px buttons**: drawn for a page you
+    read once; at the dashboard's density they would cost a row in four. The
+    panels take its cards' 14 px, the buttons its small sizes, 32 and 36 px.
 
 ## 9. Seeing the page, and looking at it
 

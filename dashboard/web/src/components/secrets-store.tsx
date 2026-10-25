@@ -61,7 +61,7 @@ function Mono({ children }: { children: ReactNode }) {
 
 /** A name from sitesolide.json in a sentence, as it is written there. */
 export function Code({ children }: { children: string }) {
-  return <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-xs whitespace-nowrap">{children}</code>
+  return <code className="rounded-sm border bg-cell px-1 py-px font-mono text-xs whitespace-nowrap">{children}</code>
 }
 
 const ICON_BUTTON = "text-muted-foreground hover:text-foreground max-md:size-11"
@@ -112,7 +112,7 @@ function StoreVariableRow({
           <CopyFallback text={value} onClose={closeFallback} />
         ) : value !== null ? (
           <div className="grid w-full gap-1">
-            <code className="block max-h-24 overflow-y-auto rounded-sm bg-muted px-2 py-1 font-mono text-xs break-all text-foreground select-all">
+            <code className="block max-h-24 overflow-y-auto rounded-md bg-sunk px-2 py-1 font-mono shadow-well text-xs break-all text-foreground select-all">
               {value}
             </code>
             {remainingMs !== null && <span className="tabular-nums">{hideCountdown(remainingMs)}</span>}
@@ -238,7 +238,7 @@ function MissingBlock({
       </p>
       <ul aria-label={`Not set for ${slug}`} className="divide-y divide-divider">
         {variables.map((name) => (
-          <li key={`variable-${name}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 pr-2 pl-4">
+          <li key={`variable-${name}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2">
             <Mono>{name}</Mono>
             {write && (
               <div className="ml-auto flex items-center gap-1">
@@ -255,7 +255,7 @@ function MissingBlock({
           </li>
         ))}
         {files.map((name) => (
-          <li key={`file-${name}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 pr-2 pl-4">
+          <li key={`file-${name}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2">
             <FileKey aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
             <Mono>{name}</Mono>
             {write && (

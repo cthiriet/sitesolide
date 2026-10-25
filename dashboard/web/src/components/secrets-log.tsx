@@ -91,7 +91,7 @@ export function SecretsLog({ slug }: { slug: string }) {
           <table className="hidden w-full text-sm @2xl:table">
             <caption className="sr-only">{caption}</caption>
             <thead>
-              <tr className="h-10 border-b bg-muted text-left text-xs font-medium text-muted-foreground">
+              <tr className="h-10 border-b bg-cell text-left mono-label">
                 <th scope="col" className="px-3 pl-4 font-medium">
                   Operation
                 </th>

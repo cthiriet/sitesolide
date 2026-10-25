@@ -401,7 +401,7 @@ function ConnectorsPanel({
                     </Status>
                   </div>
                   <p className="text-xs text-muted-foreground wrap-anywhere">
-                    {connector.baseUrl}, header <code className="font-mono">{connector.header}</code>,{" "}
+                    <code className="font-mono">{connector.baseUrl}</code>, header <code className="font-mono">{connector.header}</code>,{" "}
                     {grants === 0 ? "granted to no project" : `granted to ${grants} project${grants === 1 ? "" : "s"}`}
                     {Number.isNaN(changed) ? "" : `, changed ${ago(serverNow - changed)}`}
                   </p>
@@ -489,7 +489,7 @@ function GrantsPanel({
           <table className="hidden w-full text-sm @2xl:table">
             <caption className="sr-only">{caption}</caption>
             <thead>
-              <tr className="h-10 border-b bg-muted text-left text-xs font-medium text-muted-foreground">
+              <tr className="h-10 border-b bg-cell text-left mono-label">
                 <th scope="col" className="px-3 pl-4 font-medium">
                   Site
                 </th>
@@ -593,7 +593,7 @@ function ActivityPanel({
           <table className="hidden w-full text-sm @2xl:table">
             <caption className="sr-only">{caption}</caption>
             <thead>
-              <tr className="h-10 border-b bg-muted text-left text-xs font-medium text-muted-foreground">
+              <tr className="h-10 border-b bg-cell text-left mono-label">
                 <th scope="col" className="px-3 pl-4 font-medium">
                   What
                 </th>

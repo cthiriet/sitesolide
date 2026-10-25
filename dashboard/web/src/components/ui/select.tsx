@@ -18,7 +18,7 @@ function SelectTrigger({ className, children, ...props }: SelectPrimitive.Trigge
     <SelectPrimitive.Trigger
       data-slot="select-trigger"
       className={cn(
-        "flex h-10 w-full min-w-0 items-center justify-between gap-2 rounded-lg border border-input bg-transparent px-2.5 text-left text-base transition-colors outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-60 data-popup-open:border-ring sm:h-9 sm:text-sm dark:bg-input/30",
+        "flex h-10 w-full min-w-0 items-center justify-between gap-2 rounded-lg border border-input bg-sunk px-2.5 text-left text-base shadow-well transition-[color,background-color,border-color,box-shadow] outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/25 disabled:cursor-default disabled:opacity-60 data-popup-open:border-ring sm:h-9 sm:text-sm",
         className,
       )}
       {...props}
@@ -40,7 +40,7 @@ function SelectContent({ className, children, ...props }: SelectPrimitive.Popup.
         <SelectPrimitive.Popup
           data-slot="select-content"
           className={cn(
-            "z-50 max-h-(--available-height) w-(--anchor-width) min-w-48 origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+            "z-50 max-h-(--available-height) w-(--anchor-width) min-w-48 origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-xl bg-popover p-1.5 text-popover-foreground shadow-float ring-1 ring-border duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
             className,
           )}
           {...props}
@@ -79,7 +79,7 @@ function SelectGroup({ ...props }: SelectPrimitive.Group.Props) {
 }
 
 function SelectGroupLabel({ className, ...props }: SelectPrimitive.GroupLabel.Props) {
-  return <SelectPrimitive.GroupLabel data-slot="select-group-label" className={cn("px-2 py-1 text-xs font-medium text-muted-foreground", className)} {...props} />
+  return <SelectPrimitive.GroupLabel data-slot="select-group-label" className={cn("px-2 py-1 mono-label", className)} {...props} />
 }
 
 function SelectSeparator({ className, ...props }: SelectPrimitive.Separator.Props) {

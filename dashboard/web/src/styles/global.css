@@ -1,22 +1,49 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
-@import "@fontsource-variable/geist-mono";
+@import "@fontsource-variable/hanken-grotesk";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-    --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+    --font-sans: 'Hanken Grotesk Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
     --font-heading: var(--font-sans);
-    --font-mono: 'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    /* Page titles and gauge figures: Geist set a little tighter. */
-    --tracking-title: -0.02em;
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    /*
+      The type roles beyond Tailwind's sizes, each with its line, its
+      tracking and its weight: a page's title, a gauge's figure and a panel's
+      title. Hanken Grotesk is drawn at 500 and tighter as it grows, the
+      landing page's headings at app scale.
+    */
+    --tracking-title: -0.025em;
+    --text-title: 1.375rem;
+    --text-title--line-height: 1.75rem;
+    --text-title--letter-spacing: -0.025em;
+    --text-title--font-weight: 500;
+    --text-figure: 1.625rem;
+    --text-figure--line-height: 2rem;
+    --text-figure--letter-spacing: -0.03em;
+    --text-figure--font-weight: 500;
+    --text-heading: 0.9375rem;
+    --text-heading--line-height: 1.25rem;
+    --text-heading--letter-spacing: -0.01em;
+    --text-heading--font-weight: 600;
     --color-strong: var(--strong);
+    --color-sunk: var(--sunk);
+    --color-cell: var(--cell);
+    --color-tile: var(--tile);
+    --color-tile-hi: var(--tile-hi);
+    --color-faint: var(--faint);
+    --color-link: var(--link);
     --color-highlight: var(--highlight);
-    --color-mark-face: var(--mark-face);
-    --color-mark-line: var(--mark-line);
-    --color-mark-shadow: var(--mark-shadow);
+    --color-highlight-line: var(--highlight-line);
+    --color-primary-hi: var(--primary-hi);
+    --color-primary-lo: var(--primary-lo);
+    --color-primary-edge: var(--primary-edge);
+    --color-mark-hi: var(--mark-hi);
+    --color-mark-lo: var(--mark-lo);
     --color-divider: var(--divider);
     --color-track: var(--track);
     --color-tick: var(--tick);
@@ -24,6 +51,12 @@
     --color-ok-text: var(--ok-text);
     --color-attention: var(--attention);
     --color-attention-text: var(--attention-text);
+    --color-share-tint: var(--share-tint);
+    --color-share-ink: var(--share-ink);
+    --color-signin-tint: var(--signin-tint);
+    --color-signin-ink: var(--signin-ink);
+    --color-recover-tint: var(--recover-tint);
+    --color-recover-ink: var(--recover-ink);
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -56,116 +89,162 @@
     --color-foreground: var(--foreground);
     --color-background: var(--background);
     /*
-      Whole pixels, from the smallest object to the most containing: a kbd or
-      a counter 4, a pill 6, a control 8, a panel, the plate or a dialog 12.
+      Ledger's soft tiers, never a hard offset: a panel on the paper, a
+      raised control or chip, a float over the page (menus, dialogs,
+      tooltips), a well sunk below its surface, and the two pressable
+      buttons with their pressed state. Each one's value follows the theme.
     */
-    --radius-sm: 0.25rem;
-    --radius-md: 0.375rem;
+    --shadow-panel: var(--elevation-panel);
+    --shadow-raised: var(--elevation-raised);
+    --shadow-float: var(--elevation-float);
+    --shadow-well: var(--elevation-well);
+    --shadow-btn: var(--elevation-btn);
+    --shadow-btn-press: var(--elevation-btn-press);
+    --shadow-btn-2: var(--elevation-btn-2);
+    --shadow-btn-2-press: var(--elevation-btn-2-press);
+    /*
+      Whole pixels, concentric: the more containing the object, the larger
+      its radius. A kbd, a counter or a 24 px tile 6, a chip, a pill or a
+      segment 8, a control, a banner or a well 10, a panel, the plate, a
+      table, a menu or a dialog 14.
+    */
+    --radius-sm: 0.375rem;
+    --radius-md: 0.5rem;
     --radius-lg: var(--radius);
-    --radius-xl: 0.75rem;
-    --radius-2xl: calc(var(--radius) * 1.8);
-    --radius-3xl: calc(var(--radius) * 2.2);
-    --radius-4xl: calc(var(--radius) * 2.6);
+    --radius-xl: 0.875rem;
+    --radius-2xl: 1.25rem;
+    --radius-3xl: 1.5rem;
+    --radius-4xl: 2rem;
 }
 
 /*
-  Graphite: neutral greys and one colour family, petrol, which is also the
-  brand's. Two steps of it, one hue: `primary`, the accent, for what is
-  current or in focus (the sidebar's marker, a gauge's fill, the focus ring,
-  the primary button); `highlight`, its palest tint, the surface of the current
-  page in the sidebar. The logo's three, `mark-face`, `mark-line` and
-  `mark-shadow`, are the landing page's petrol, line and shadow, carried over
-  as they are so that the mark is the same wherever it appears; in light, its
-  face is the accent itself. The red, `destructive`, is the error colour and
-  nothing else: it is not the brand's. See web/DESIGN.md, which also gives
-  each token's role.
+  Ledger, the landing page's look carried into the dashboard: a mineral
+  paper leaning to the teal, panels a step above it ringed with a hairline
+  and lifted by a soft shadow, wells sunk below their surface, and one accent,
+  a deep teal, for what is current or in focus and for the one primary action.
+  The values are the landing page's own (its system's `--bg`, `--card`,
+  `--raised`, `--bg-sunk`, `--line`, `--ink`, `--muted` and the rest), so the
+  dashboard reads as the same product. See web/DESIGN.md, which gives each
+  token's role.
 
-  In light, the page and the sidebar are a cool off-white, the content surfaces
-  white, separated by a one pixel rule and never a shadow. In dark, the page is
-  near black and the surfaces one step lighter.
+  `background` is the paper, and the sidebar's; `card` a panel on it;
+  `popover` the raised surface of what floats, a menu or a dialog, and of a
+  segmented control's chosen segment; `sunk` a well below its surface: a
+  field, a command, a gauge's track in dark. `primary`, the accent, with its
+  three steps for the pressable button (`primary-hi`, `primary-lo` and its
+  edge, `primary-edge`); `highlight`, its palest tint, for the current page,
+  ringed by `highlight-line`; `link`, the accent as text. The mark's
+  gradient, `mark-hi` to `mark-lo`, is the landing page's. Three feature
+  pairs of the landing page, a tint and its ink, mark what is theirs and
+  nothing larger than a chip: `share` the roles, `signin` signing in,
+  `recover` a snapshot. Its coral and amber features stay out: in this page
+  red means error and amber attention, and nothing else.
 
-  `strong` is the darkest text, for what is current or chosen; `secondary-
-  foreground` the text a step below the body, for navigation and table cells;
-  `divider` the rule between the rows of a list, lighter than `border`, which
-  frames a panel; `track` and `tick` a gauge's empty bar and its threshold
-  marks.
+  `strong` is the darkest text, for what is current or chosen;
+  `secondary-foreground` the text a step below the body; `divider` the rule
+  between the rows of a list, lighter than `border`, which frames a panel;
+  `track` and `tick` a gauge's empty bar and its threshold marks.
 
   Measured contrasts (WCAG), to check again after any change.
-  Light: foreground 17.8:1 on card and 16.7:1 on background; secondary-
-  foreground 10.4:1 on card and 9.0:1 on muted; muted-foreground 5.8:1 on card,
-  5.4:1 on background and 5.0:1 on muted (a table header, a neutral pill);
-  white on primary 6.0:1; primary as ring, marker or fill 6.0:1 on card, 5.6:1
-  on background, 5.1:1 on muted and 4.8:1 on the track; ok-text 4.8:1,
-  attention-text 5.2:1 and destructive 5.5:1 on their pill over card (4.5,
-  4.9 and 5.2:1 over background); the ok, attention and destructive dots 3.4,
-  3.8 and 6.5:1 on card, the attention fill 3.0:1 on the track; a tick 3.0:1
-  on card and on popover; a tab's count 5.3:1 on the ok dot and 4.7:1 on the
-  attention dot in foreground, 6.5:1 on the destructive dot in white; a
-  counter, secondary-foreground on border, 8.3:1. On highlight, the current
-  page: strong 17.4:1, secondary-foreground 9.2:1, muted-foreground 5.1:1, the
-  primary marker 5.3:1, the destructive and attention counts 4.9 and 4.6:1 on
-  their pill. The logo, outlined by its line: mark-line 15.6:1 on background
-  and 16.6:1 on card, mark-face 5.6 and 6.0:1.
-  Dark: foreground 15.3:1 on card; secondary-foreground 11.7:1 on card;
-  muted-foreground 5.8:1 on card and 5.5:1 on muted; near black on primary
-  8.4:1; primary 7.9:1 on card and 6.8:1 on the track; ok-text 10.2:1,
-  attention-text 9.3:1 and destructive 5.8:1 on their pill over card; every
-  dot beyond 6.5:1 on card; a tick 3.2:1 on card and 3.0:1 on popover; a
-  tab's count beyond 6.5:1 on its dot; a counter, secondary-foreground on
-  border, 10.0:1. On highlight: strong 16.2:1, foreground 13.3:1,
-  muted-foreground 5.0:1, the primary marker 6.9:1, the destructive count
-  5.0:1 on its pill. The logo: mark-line 14.7:1 on background and 13.9:1
-  on card, 4.9:1 on mark-face, mark-shadow 4.1:1 on background.
+  Light: foreground 17.3:1 on card and 16.4:1 on background;
+  secondary-foreground 10.1:1 on card and 8.6:1 on muted; muted-foreground
+  5.5:1 on card, 5.2:1 on background, 4.6:1 on muted (a neutral pill) and
+  4.8:1 on highlight; white on primary 6.0:1, on the button's gradient 4.5
+  to 7.2:1; primary as ring, marker or fill 5.8:1 on card, 4.9:1 on muted
+  and 4.6:1 on the track; link 6.5:1 on card; ok-text 4.7:1, attention-text
+  4.7:1 and destructive 4.8:1 on their pill over background (5.0, 5.0 and
+  5.1:1 over card); the ok, attention and destructive dots 4.2, 4.1 and
+  5.7:1 on card, the attention fill 3.3:1 on the track; a tick 3.1:1 on card
+  and 3.3:1 on popover; a count on its solid badge, card on ok-text,
+  attention-text and destructive, 5.6, 5.8 and 5.7:1. On highlight: strong
+  16.2:1, secondary-foreground 8.8:1, primary 5.0:1.
+  Dark: foreground 14.9:1 on card; secondary-foreground 10.8:1 on card;
+  muted-foreground 6.4:1 on card and 5.7:1 on popover and 5.3:1 on muted; white on the
+  button's gradient 3.9 to 6.7:1; primary 6.1:1 on card and 6.6:1 on the
+  track; link 8.9:1 on card; ok-text 7.2:1, attention-text 7.1:1 and
+  destructive 5.9:1 on their pill over card; every dot beyond 7:1 on card;
+  a tick 3.4:1 on card and 3.1:1 on popover; a count on its solid badge, card
+  on its fill, beyond 7:1. On highlight: white 15.5:1, muted-foreground
+  5.6:1, primary 5.4:1.
 
-  Three values move from the mockup to clear those floors: attention #c98a0b
-  became #b0790a (2.4:1 on the track before), the ticks #a3a9b3 and #3a3e46
-  became #8e95a1 and #5e6572 (2.4 and 1.7:1 on card before).
+  Four values move from the landing page to clear those floors, which a
+  page you read in a hurry cannot drop: muted-foreground #6a6f69 became
+  #636862 (4.2:1 on muted before), the down red #c24e33 became the
+  destructive #ae4029 (4.3:1 on its pill before), and the ticks, which the
+  landing page has none of, take #8b9089 and #66706b. `muted`, the hover,
+  is the dashboard's own, a step past `sunk` and `popover` so that a hover
+  still shows inside a well or a dialog.
 */
 :root {
-    --background: #f7f8fa;
-    --foreground: #16181d;
-    --strong: #0a0b0d;
-    --card: #ffffff;
-    --card-foreground: #16181d;
+    --background: #f4f5f1;
+    --foreground: #141816;
+    --strong: #0b0e0d;
+    --card: #fbfbf9;
+    --card-foreground: #141816;
     --popover: #ffffff;
-    --popover-foreground: #16181d;
+    --popover-foreground: #141816;
+    --sunk: #eceee8;
+    --cell: #f7f8f4;
+    --tile: #eceee8;
+    --tile-hi: rgba(255, 255, 255, 0.55);
     --primary: #0b6e79;
+    --primary-hi: #12838f;
+    --primary-lo: #0a616b;
+    --primary-edge: #07484f;
     --primary-foreground: #ffffff;
-    --highlight: #e7f3f4;
-    --mark-face: #0b6e79;
-    --mark-line: #12211f;
-    --mark-shadow: #12211f;
-    --secondary: #eceef2;
-    --secondary-foreground: #3a404a;
-    --muted: #eceef2;
-    --muted-foreground: #5f6672;
-    --accent: #eceef2;
-    --accent-foreground: #0a0b0d;
-    --destructive: #b3253f;
-    --border: #e3e6eb;
-    --divider: #edeff2;
-    --input: #d9dde3;
+    --link: #0a6570;
+    --highlight: #e3edeb;
+    --highlight-line: #c2d7d4;
+    --mark-hi: #14899a;
+    --mark-lo: #0a5560;
+    --secondary: #e7e9e2;
+    --secondary-foreground: #3a413d;
+    --muted: #e7e9e2;
+    --muted-foreground: #636862;
+    --faint: #9ea39c;
+    --accent: #e7e9e2;
+    --accent-foreground: #0b0e0d;
+    --destructive: #ae4029;
+    --border: #e2e3dc;
+    --divider: #e9eae4;
+    --input: #d3d6ce;
     --ring: #0b6e79;
-    --track: #e3e6eb;
-    --tick: #8e95a1;
-    --ok: #22a05a;
-    --ok-text: #1e7a43;
-    --attention: #b0790a;
-    --attention-text: #8a5a00;
+    --track: #e2e3dc;
+    --tick: #8b9089;
+    --ok: #2c8a57;
+    --ok-text: #2c7247;
+    --attention: #b26a0c;
+    --attention-text: #8c580b;
+    --share-tint: #e9e4f2;
+    --share-ink: #654e99;
+    --signin-tint: #e0e8f3;
+    --signin-ink: #2d5a96;
+    --recover-tint: #deede2;
+    --recover-ink: #2c7247;
     --chart-1: #0b6e79;
-    --chart-2: #2b8c96;
-    --chart-3: #5fadb5;
-    --chart-4: #9ccdd2;
-    --chart-5: #d3e9ec;
-    --radius: 0.5rem;
-    --sidebar: #f7f8fa;
-    --sidebar-foreground: #16181d;
+    --chart-2: #2f8c94;
+    --chart-3: #5fa9ae;
+    --chart-4: #9cc9cb;
+    --chart-5: #d4e6e5;
+    --radius: 0.625rem;
+    --sidebar: #f4f5f1;
+    --sidebar-foreground: #141816;
     --sidebar-primary: #0b6e79;
     --sidebar-primary-foreground: #ffffff;
-    --sidebar-accent: #eceef2;
-    --sidebar-accent-foreground: #0a0b0d;
-    --sidebar-border: #e3e6eb;
+    --sidebar-accent: #e7e9e2;
+    --sidebar-accent-foreground: #0b0e0d;
+    --sidebar-border: #e2e3dc;
     --sidebar-ring: #0b6e79;
+    --elevation-panel: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 1px 1px rgba(22, 32, 28, 0.03), 0 2px 4px rgba(22, 32, 28, 0.03), 0 10px 20px -8px rgba(22, 32, 28, 0.07), 0 30px 60px -28px rgba(22, 32, 28, 0.16);
+    --elevation-raised: inset 0 1px 0 rgba(255, 255, 255, 0.95), 0 1px 1px rgba(22, 32, 28, 0.05), 0 2px 5px -1px rgba(22, 32, 28, 0.06), 0 8px 16px -10px rgba(22, 32, 28, 0.1);
+    --elevation-float: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 2px rgba(22, 32, 28, 0.06), 0 6px 14px -4px rgba(22, 32, 28, 0.1), 0 22px 44px -14px rgba(22, 32, 28, 0.24);
+    --elevation-well: inset 0 1px 2px rgba(22, 32, 28, 0.07), inset 0 0 0 1px rgba(22, 32, 28, 0.025);
+    --elevation-btn: inset 0 1px 0 rgba(255, 255, 255, 0.26), inset 0 -1px 1px rgba(0, 0, 0, 0.18), 0 1px 2px rgba(7, 52, 58, 0.3), 0 3px 5px -1px rgba(7, 52, 58, 0.16), 0 9px 16px -8px rgba(7, 52, 58, 0.3);
+    --elevation-btn-press: inset 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 1px rgba(7, 52, 58, 0.16);
+    --elevation-btn-2: inset 0 1px 0 #ffffff, 0 1px 2px rgba(22, 32, 28, 0.07), 0 3px 6px -2px rgba(22, 32, 28, 0.08);
+    --elevation-btn-2-press: inset 0 1px 2px rgba(22, 32, 28, 0.12);
+    /* The shade under the primary button's label, pressed into the teal. */
+    --btn-shade: rgba(0, 0, 0, 0.18);
     /*
       The sidebar's column before React mounts it: SIDEBAR_WIDTH from
       lib/sidebar.ts, or the collapsed width below, which main.astro chooses.
@@ -174,54 +253,97 @@
 }
 
 .dark {
-    --background: #0a0b0d;
-    --foreground: #e7e9ec;
-    --strong: #ffffff;
-    --card: #111316;
-    --card-foreground: #e7e9ec;
-    --popover: #16181c;
-    --popover-foreground: #e7e9ec;
-    --primary: #4cb8c4;
-    --primary-foreground: #0a0b0d;
-    --highlight: #0e2427;
-    --mark-face: #0c6870;
-    --mark-line: #cfe3dc;
-    --mark-shadow: #4f7a70;
-    --secondary: #16181c;
-    --secondary-foreground: #c9cdd3;
-    --muted: #16181c;
-    --muted-foreground: #8b9098;
-    --accent: #16181c;
-    --accent-foreground: #ffffff;
-    --destructive: #f36f84;
-    --border: #1f2227;
-    --divider: #1a1c20;
-    --input: #23262c;
-    --ring: #4cb8c4;
-    --track: #1f2227;
-    --tick: #5e6572;
-    --ok: #3fb950;
-    --ok-text: #7ee2a0;
-    --attention: #e3b341;
-    --attention-text: #f2c55c;
-    --chart-1: #4cb8c4;
-    --chart-2: #3a9aa5;
-    --chart-3: #2b7c86;
-    --chart-4: #1e5e66;
-    --chart-5: #134148;
-    --sidebar: #0a0b0d;
-    --sidebar-foreground: #e7e9ec;
-    --sidebar-primary: #4cb8c4;
-    --sidebar-primary-foreground: #0a0b0d;
-    --sidebar-accent: #16181c;
-    --sidebar-accent-foreground: #ffffff;
-    --sidebar-border: #1f2227;
-    --sidebar-ring: #4cb8c4;
+    --background: #0d1211;
+    --foreground: #e8edea;
+    --strong: #f7f9f8;
+    --card: #141a19;
+    --card-foreground: #e8edea;
+    --popover: #1c2422;
+    --popover-foreground: #e8edea;
+    --sunk: #0c1110;
+    --cell: #111716;
+    --tile: #151c1a;
+    --tile-hi: rgba(255, 255, 255, 0.04);
+    --primary: #3fa6ae;
+    --primary-hi: #148e9a;
+    --primary-lo: #0b6670;
+    --primary-edge: #04363b;
+    --primary-foreground: #ffffff;
+    --link: #74c6c6;
+    --highlight: #112828;
+    --highlight-line: #1e4647;
+    --mark-hi: #14899a;
+    --mark-lo: #0a5560;
+    --secondary: #222b29;
+    --secondary-foreground: #c4ccc7;
+    --muted: #222b29;
+    --muted-foreground: #949e99;
+    --faint: #5f6964;
+    --accent: #252f2c;
+    --accent-foreground: #f7f9f8;
+    --destructive: #f0896d;
+    --border: #232c2a;
+    --divider: #1c2422;
+    --input: #303b38;
+    --ring: #3fa6ae;
+    --track: #0c1110;
+    --tick: #66706b;
+    --ok: #6cc98f;
+    --ok-text: #7fc99c;
+    --attention: #e5ae64;
+    --attention-text: #e5ae64;
+    --share-tint: #211c33;
+    --share-ink: #b9a6ea;
+    --signin-tint: #15233a;
+    --signin-ink: #91b4ea;
+    --recover-tint: #13291d;
+    --recover-ink: #7fc99c;
+    --chart-1: #3fa6ae;
+    --chart-2: #33939b;
+    --chart-3: #287b83;
+    --chart-4: #1d5f66;
+    --chart-5: #134247;
+    --sidebar: #0d1211;
+    --sidebar-foreground: #e8edea;
+    --sidebar-primary: #3fa6ae;
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-accent: #1c2422;
+    --sidebar-accent-foreground: #f7f9f8;
+    --sidebar-border: #232c2a;
+    --sidebar-ring: #3fa6ae;
+    --elevation-panel: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 1px 1px rgba(0, 0, 0, 0.32), 0 2px 4px rgba(0, 0, 0, 0.26), 0 12px 24px -10px rgba(0, 0, 0, 0.5), 0 32px 64px -28px rgba(0, 0, 0, 0.65);
+    --elevation-raised: inset 0 1px 0 rgba(255, 255, 255, 0.065), 0 1px 1px rgba(0, 0, 0, 0.4), 0 3px 8px -2px rgba(0, 0, 0, 0.42);
+    --elevation-float: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 2px 4px rgba(0, 0, 0, 0.45), 0 24px 48px -14px rgba(0, 0, 0, 0.75);
+    --elevation-well: inset 0 1px 3px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+    --elevation-btn: inset 0 1px 0 rgba(255, 255, 255, 0.24), inset 0 -1px 1px rgba(0, 0, 0, 0.28), 0 1px 2px rgba(0, 0, 0, 0.55), 0 4px 10px -2px rgba(0, 0, 0, 0.5);
+    --elevation-btn-press: inset 0 1px 3px rgba(0, 0, 0, 0.45);
+    --elevation-btn-2: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.45), 0 3px 8px -2px rgba(0, 0, 0, 0.4);
+    --elevation-btn-2-press: inset 0 1px 3px rgba(0, 0, 0, 0.5);
+    --btn-shade: rgba(0, 0, 0, 0.28);
 }
 
 /* The collapsed sidebar's width, read before the first render: see main.astro. */
 :root[data-sidebar-collapsed="1"] {
     --pending-sidebar-width: 3rem;
+}
+
+/*
+  The landing page's label: IBM Plex Mono in capitals, tracked, quiet. A
+  table's column heads, a gauge's heading, a panel's unit. Twelve pixels on a
+  phone, where text that carries meaning never goes below.
+*/
+@utility mono-label {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    line-height: 1rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+    @media (width < 48rem) {
+        font-size: 0.75rem;
+        letter-spacing: 0.1em;
+    }
 }
 
 @layer base {
@@ -238,6 +360,9 @@
   html {
     @apply font-sans;
     }
+  ::selection {
+    @apply bg-highlight text-strong;
+    }
   /* Native controls, a select's menu and the scrollbars follow the theme. */
   :root {
     color-scheme: light;
@@ -247,7 +372,7 @@
     }
   /*
     Nothing moves for whoever has asked for that: neither the sidebar's
-    collapse, nor the dialogs, nor the spinning icons.
+    collapse, nor the dialogs, nor the spinning icons, nor a pressed button.
   */
   @media (prefers-reduced-motion: reduce) {
     *,

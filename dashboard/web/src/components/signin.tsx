@@ -119,15 +119,15 @@ export function SignIn({
       <div className="flex items-center gap-3">
         <Logo className="size-9" />
         {overlay ? (
-          <p className="text-xl font-semibold tracking-title">sitesolide</p>
+          <p className="text-title font-semibold">sitesolide</p>
         ) : (
-          <h1 className="text-xl font-semibold tracking-title">sitesolide</h1>
+          <h1 className="text-title font-semibold">sitesolide</h1>
         )}
       </div>
 
-      <Card className="w-full rounded-xl py-5 shadow-none ring-border">
+      <Card className="w-full rounded-xl py-6 [--card-spacing:--spacing(6)]">
         <CardHeader>
-          <CardTitle id={titleId} className="text-lg font-semibold tracking-title">
+          <CardTitle id={titleId} className="text-[1.0625rem] leading-6 font-semibold tracking-[-0.01em]">
             Sign in
           </CardTitle>
           <CardDescription>{message !== "" ? message : "Server dashboard"}</CardDescription>
@@ -140,7 +140,7 @@ export function SignIn({
           )}
           {sso.offered && (
             <>
-              <a href={signInUrl(currentReturn())} className={cn(buttonVariants({ variant: "outline" }), "h-10 w-full")}>
+              <a href={signInUrl(currentReturn())} className={cn(buttonVariants({ variant: "outline" }), "h-10 w-full [&_svg]:text-signin-ink")}>
                 <LogIn />
                 Sign in with {sso.providerName ?? "your company account"}
               </a>

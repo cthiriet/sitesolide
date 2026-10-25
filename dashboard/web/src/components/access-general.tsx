@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type SyntheticEvent } from "react"
-import { Check, CircleCheck, CircleX, Globe, Info, KeyRound, RefreshCw, ShieldCheck, type LucideIcon } from "lucide-react"
+import { Check, CircleCheck, CircleX, Globe, Info, KeyRound, Lock, RefreshCw, type LucideIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -39,7 +39,7 @@ import { cn } from "@/lib/utils"
 
 // --- The panel ---------------------------------------------------------------------
 
-const ICONS: Record<GeneralAccess, LucideIcon> = { public: Globe, restricted: ShieldCheck, code: KeyRound }
+const ICONS: Record<GeneralAccess, LucideIcon> = { public: Globe, restricted: Lock, code: KeyRound }
 
 /** The paths a restricted site leaves to the app alone, in the words used everywhere. */
 function Exemptions({ paths }: { paths: readonly string[] }) {
@@ -49,7 +49,7 @@ function Exemptions({ paths }: { paths: readonly string[] }) {
       {paths.map((path, index) => (
         <span key={path}>
           {index > 0 && " "}
-          <code className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs">{path}</code>
+          <code className="rounded-sm border bg-cell px-1.5 py-px font-mono text-xs">{path}</code>
         </span>
       ))}
     </p>
@@ -128,9 +128,9 @@ export function GeneralAccessPanel({
             <li
               key={option.access}
               aria-current={option.current ? "true" : undefined}
-              className={cn("flex flex-wrap items-start gap-x-3 gap-y-2 px-4 py-3", option.current && "shadow-[inset_2px_0_0_var(--primary)]")}
+              className={cn("flex flex-wrap items-start gap-x-3 gap-y-2 px-4 py-3", option.current && "bg-highlight")}
             >
-              <Icon aria-hidden="true" className={cn("mt-0.5 size-4 shrink-0", option.current ? "text-strong" : "text-muted-foreground")} />
+              <Icon aria-hidden="true" className={cn("mt-0.5 size-4 shrink-0", option.current ? "text-primary" : "text-muted-foreground")} />
               <div className="grid min-w-0 flex-1 basis-56 gap-0.5">
                 <p className={cn("flex flex-wrap items-center gap-x-2", option.current ? "font-semibold text-strong" : "font-medium")}>
                   {option.title}

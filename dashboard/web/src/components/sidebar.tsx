@@ -20,7 +20,7 @@ import { useTheme } from "@/components/theme"
 import { isPerson } from "@/lib/identity"
 import { machineIndicators, siteIndicators, sidebarShortcut, type Indicator } from "@/lib/sidebar"
 import { ariaCurrent, machinePagesFor, pageUrl, sectionsFor, type MachinePage, type Page, type Section } from "@/lib/pages"
-import { TONE_PILL, TONE_DOT, type Tone } from "@/lib/tones"
+import { TONE_BADGE, TONE_DOT } from "@/lib/tones"
 import { cn } from "@/lib/utils"
 import { VERSION } from "@/lib/version"
 
@@ -87,12 +87,12 @@ function HiddenIndicator({ indicator }: { indicator: Indicator | null }) {
 
 /**
  * A navigation entry: 36 px, its icon at 16 px. The current page takes the
- * accent's palest tint, `highlight`, and on its left edge a two pixel bar of
- * the accent itself: petrol is the one colour the page gives to "you are
+ * accent's palest tint, `highlight`, ringed by its hairline, and its icon
+ * the accent itself: teal is the one colour the page gives to "you are
  * here", and a hover keeps the grey, so the two never look alike.
  */
 const SIDEBAR_BUTTON =
-  "h-9 gap-2.5 rounded-lg px-2.5 text-secondary-foreground hover:bg-sidebar-accent hover:text-strong data-active:bg-highlight data-active:font-medium data-active:text-strong data-active:shadow-[inset_2px_0_0_var(--sidebar-primary)]"
+  "h-9 gap-2.5 rounded-lg px-2.5 text-secondary-foreground hover:bg-sidebar-accent hover:text-strong data-active:bg-highlight data-active:font-medium data-active:text-strong data-active:shadow-[inset_0_0_0_1px_var(--highlight-line)] data-active:[&_svg]:text-sidebar-primary"
 
 /** The sidebar's own controls, below the pages: quieter than them. */
 const SIDEBAR_CONTROL = "h-9 gap-2.5 rounded-lg px-2.5 text-muted-foreground hover:bg-sidebar-accent hover:text-strong"
@@ -133,7 +133,13 @@ function SidebarEntries({ entries, label }: { entries: NavEntry[]; label: string
                   aria-hidden="true"
                   className={cn(
                     "top-2 right-2 rounded-sm px-1.5",
-                    signal.tone === "neutral" ? "text-muted-foreground" : cn("font-semibold", TONE_PILL[signal.tone]),
+                    signal.tone === "neutral"
+                      ? "text-muted-foreground"
+                      : cn(
+                          "font-semibold",
+                          TONE_BADGE[signal.tone],
+                          "peer-hover/menu-button:text-card peer-data-active/menu-button:text-card",
+                        ),
                   )}
                 >
                   {signal.count}
@@ -171,10 +177,10 @@ export function AppSidebar() {
         >
           <Logo className="size-6 shrink-0" />
           <span className="grid min-w-0 group-data-[collapsible=icon]:hidden">
-            <span className="text-sm font-semibold tracking-[-0.01em]">sitesolide</span>
+            <span className="text-[0.9375rem] leading-5 font-semibold tracking-[-0.02em]">sitesolide</span>
             {/* The zone this server serves, once the first snapshot has said it. */}
             {snapshot !== null && snapshot.zone !== "" && (
-              <span className="truncate text-xs text-muted-foreground">{snapshot.zone}</span>
+              <span className="truncate font-mono text-xs text-muted-foreground">{snapshot.zone}</span>
             )}
           </span>
         </InternalLink>
@@ -262,17 +268,6 @@ export function AppSidebar() {
 }
 
 /**
- * A count on a tone's solid dot, beside the tab's icon. Near black on green and
- * amber, in both themes; on the error red, the card's colour, white in light
- * and near black in dark. The contrasts are in styles/global.css.
- */
-const TAB_BADGE_TEXT: Record<Exclude<Tone, "neutral">, string> = {
-  ok: "text-foreground dark:text-background",
-  attention: "text-foreground dark:text-background",
-  error: "text-card",
-}
-
-/**
  * One row of tabs whatever their number, spelled out for Tailwind, which only
  * generates the classes it finds written whole. A count missing here wrapped
  * the tabs onto rows of two, three rows tall once a site had six sections.
@@ -322,7 +317,7 @@ export function MobileTabs() {
                       aria-hidden="true"
                       className={cn(
                         "absolute -top-1.5 left-3 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[0.625rem] leading-none font-semibold ring-2 ring-background tabular-nums",
-                        signal.tone === "neutral" ? "bg-muted text-muted-foreground" : cn(TAB_BADGE_TEXT[signal.tone], TONE_DOT[signal.tone]),
+                        TONE_BADGE[signal.tone],
                       )}
                     >
                       {signal.count}

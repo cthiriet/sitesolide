@@ -100,7 +100,11 @@ function PersonRow({
           <Who value={person.who} />
         </span>
         <Roles person={person} now={now} />
-        {person.admin && <span className="text-xs text-muted-foreground">Every site, as admin: set on the server in OIDC_ADMIN_EMAILS.</span>}
+        {person.admin && (
+          <span className="text-xs text-muted-foreground">
+            Every site, as admin: set on the server in <code className="font-mono text-[0.6875rem]">OIDC_ADMIN_EMAILS</code>.
+          </span>
+        )}
       </div>
       <div className="flex items-center @max-2xl:col-start-1 @max-2xl:row-start-2 @2xl:justify-center">
         {offered ? (
@@ -341,7 +345,7 @@ export function PeoplePage() {
               </EmptyState>
             ) : (
               <div className="@container">
-                <div aria-hidden="true" className={cn(ROW, "hidden h-10 border-b bg-muted text-xs font-medium text-muted-foreground @2xl:grid")}>
+                <div aria-hidden="true" className={cn(ROW, "hidden h-10 border-b bg-cell mono-label @2xl:grid")}>
                   <span>Person, and their role on each project</span>
                   <span className="text-center">May create projects</span>
                   <span />

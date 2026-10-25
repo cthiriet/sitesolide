@@ -23,7 +23,7 @@ function Summary({ site, discrepancies }: { site: Site; discrepancies: readonly 
       <SiteState site={site} discrepancies={discrepancies} />
       {site.description !== null && <span lang="fr">{site.description}</span>}
       <span className="flex flex-wrap items-baseline gap-x-2">
-        <ExternalLink href={address.href} className="text-foreground">
+        <ExternalLink href={address.href} className="font-mono text-[0.8125rem] text-foreground">
           {address.text}
         </ExternalLink>
         {site.headless && <span className="text-xs text-muted-foreground">{HEADLESS_NOTE}</span>}

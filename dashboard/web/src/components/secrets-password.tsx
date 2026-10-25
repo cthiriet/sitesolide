@@ -352,7 +352,7 @@ function PasswordForm({
           ).map(([value, text]) => (
             <label
               key={value}
-              className="flex h-10 cursor-pointer items-center justify-center rounded-lg border border-input px-2 text-center text-sm transition-colors select-none hover:bg-muted has-checked:border-foreground has-checked:bg-muted has-checked:font-medium has-checked:ring-1 has-checked:ring-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring sm:h-9"
+              className="flex h-10 cursor-pointer items-center justify-center rounded-lg border border-input px-2 text-center text-sm transition-colors select-none hover:bg-muted has-checked:border-primary has-checked:bg-highlight has-checked:font-medium has-checked:text-strong has-checked:ring-1 has-checked:ring-primary has-focus-visible:ring-2 has-focus-visible:ring-ring sm:h-9"
             >
               <input
                 type="radio"
@@ -472,7 +472,7 @@ function GeneratedPasswordScreen({
         </DialogDescription>
       </DialogHeader>
 
-      <div className="flex min-w-0 items-center justify-between gap-2 rounded-lg border bg-muted/40 py-1.5 pr-1.5 pl-3">
+      <div className="flex min-w-0 items-center justify-between gap-2 rounded-lg bg-sunk py-1.5 pr-1.5 pl-3 shadow-well">
         <code ref={code} className="min-w-0 font-mono text-base font-semibold tracking-wide select-all wrap-anywhere">
           {password}
         </code>

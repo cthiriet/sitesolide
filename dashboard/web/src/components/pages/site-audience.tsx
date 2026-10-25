@@ -151,9 +151,9 @@ function Curve({ days }: { days: readonly DayCount[] }) {
 /** One of the banner's figures: the label, the value, what it counts. */
 function Figure({ heading, value, detail }: { heading: string; value: string; detail: string }) {
   return (
-    <div className="grid content-start gap-1 rounded-xl border bg-card px-4 py-3">
-      <p className="text-xs text-muted-foreground">{heading}</p>
-      <p className="text-2xl leading-7 font-semibold tracking-title tabular-nums">{value}</p>
+    <div className="grid content-start gap-1.5 rounded-xl border bg-card px-4 py-3.5 shadow-panel">
+      <p className="mono-label">{heading}</p>
+      <p className="text-figure tabular-nums">{value}</p>
       <p className="text-xs text-muted-foreground">{detail}</p>
     </div>
   )
@@ -169,7 +169,7 @@ function Figure({ heading, value, detail }: { heading: string; value: string; de
 function Ranking({ key, title, unit, lines }: { key: string; title: string; unit: string; lines: readonly { value: string; total: number }[] }) {
   const first = lines[0]?.total ?? 0
   return (
-    <Panel title={title} actions={<span className="text-xs text-muted-foreground uppercase">{unit}</span>} full>
+    <Panel title={title} actions={<span className="mono-label">{unit}</span>} full>
       <ul className="divide-y divide-divider">
         {lines.map((line) => (
           <li key={line.value} className="px-4 py-2">
@@ -212,7 +212,7 @@ function NoVisits({ slug, zone }: { slug: string; zone: string }) {
             The host is on the allow list, so the service would accept its views. Nothing has arrived: the tag is
             probably not on the pages yet.
           </span>
-          <code className="block overflow-x-auto rounded-md bg-muted px-3 py-2 text-left font-mono text-xs">
+          <code className="block overflow-x-auto rounded-lg bg-sunk px-3 py-2 text-left font-mono text-xs shadow-well">
             {tag(zone)}
           </code>
           <span>Paste it before &lt;/head&gt; on every page, then deploy the site.</span>

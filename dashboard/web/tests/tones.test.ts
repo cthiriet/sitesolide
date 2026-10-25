@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { TONE_BANNER, TONE_PILL, TONE_DOT, TONE_TEXT, severityTone, verdictTone } from "../src/lib/tones"
+import { TONE_BADGE, TONE_BANNER, TONE_HALO, TONE_PILL, TONE_DOT, TONE_TEXT, severityTone, verdictTone } from "../src/lib/tones"
 import { NO_DATA, verdict } from "../src/lib/verdict"
 import { discrepancy } from "./factory"
 
@@ -26,7 +26,7 @@ describe("tones", () => {
   test("every class is spelled out in full, and only names tokens", async () => {
     const source = await Bun.file(new URL("../src/lib/tones.ts", import.meta.url)).text()
     const css = await Bun.file(new URL("../src/styles/global.css", import.meta.url)).text()
-    for (const table of [TONE_DOT, TONE_TEXT, TONE_PILL, TONE_BANNER]) {
+    for (const table of [TONE_DOT, TONE_HALO, TONE_TEXT, TONE_PILL, TONE_BADGE, TONE_BANNER]) {
       for (const classes of Object.values(table)) {
         expect(source).toContain(`"${classes}"`)
         expect(classes).not.toMatch(/amber|emerald|red-|green-|yellow-/)

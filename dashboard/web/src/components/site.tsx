@@ -108,13 +108,13 @@ export function SidebarSitePicker({ slug, section }: { slug: string; section: Se
           <SidebarMenuButton
             size="lg"
             tooltip={`${slug}, switch site`}
-            className="h-auto min-h-12 gap-2.5 rounded-lg border bg-card py-2 hover:bg-card data-popup-open:bg-card group-data-[collapsible=icon]:min-h-8 group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent"
+            className="h-auto min-h-12 gap-2.5 rounded-lg border bg-card py-2 shadow-raised hover:bg-card data-popup-open:bg-card group-data-[collapsible=icon]:min-h-8 group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:bg-transparent group-data-[collapsible=icon]:shadow-none"
           />
         }
       >
         <span
           aria-hidden="true"
-          className="relative flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-sm font-semibold uppercase"
+          className="relative flex size-8 shrink-0 items-center justify-center rounded-md bg-tile text-sm font-semibold text-secondary-foreground uppercase shadow-[inset_0_1px_0_var(--tile-hi),inset_0_0_0_1px_var(--border)]"
         >
           {slug.charAt(0)}
           {state !== null && (

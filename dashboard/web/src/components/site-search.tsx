@@ -80,13 +80,13 @@ export function SearchField({
         spellCheck={false}
         enterKeyHint="search"
         aria-keyshortcuts="/"
-        className="peer h-10 bg-card pr-9 pl-8 md:h-9 dark:bg-background [&::-webkit-search-cancel-button]:appearance-none"
+        className="peer h-10 pr-9 pl-8 md:h-9 [&::-webkit-search-cancel-button]:appearance-none"
       />
       {value === "" ? (
         // A reminder for the mouse and the physical keyboard: not on a narrow screen, nor on a touch screen.
         <kbd
           aria-hidden="true"
-          className="pointer-events-none absolute top-1/2 right-2 hidden h-5 min-w-5 -translate-y-1/2 items-center justify-center rounded-sm border border-input px-1.5 font-sans text-[0.6875rem] text-muted-foreground peer-focus:opacity-0 sm:pointer-fine:inline-flex"
+          className="pointer-events-none absolute top-1/2 right-2 hidden h-5 min-w-5 -translate-y-1/2 items-center justify-center rounded-sm border border-input bg-card px-1.5 font-mono text-[0.6875rem] text-muted-foreground peer-focus:opacity-0 sm:pointer-fine:inline-flex"
         >
           /
         </kbd>

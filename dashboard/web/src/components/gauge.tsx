@@ -45,7 +45,7 @@ export function Track({
     <div className="relative py-[3px]" title={title}>
       {/* The bar is capped at one hundred, the figure is not: a load of six on four cores reads 150 %. */}
       {tile.percent === null ? (
-        <div className="h-1.5 w-full rounded-full bg-track" />
+        <div className="h-1.5 w-full rounded-full bg-track shadow-well" />
       ) : (
         <Progress
           value={Math.min(tile.percent, 100)}
@@ -88,8 +88,8 @@ function Gauge({ tile }: { tile: Tile }) {
   return (
     <div className="grid content-start gap-2.5 px-5 py-4 @2xl:py-5">
       <div className="flex items-baseline justify-between gap-3">
-        <p className="text-xs text-muted-foreground">{tile.heading}</p>
-        <p className={cn("text-2xl leading-7 font-semibold tracking-title tabular-nums", LEVEL_TEXT[tile.level])}>
+        <p className="mono-label">{tile.heading}</p>
+        <p className={cn("text-figure tabular-nums", LEVEL_TEXT[tile.level])}>
           {tile.value}
         </p>
       </div>
@@ -119,13 +119,13 @@ export function MachinePlate({ snapshot }: { snapshot: Snapshot }) {
   const { machine } = snapshot
   const cores = machine?.cores ?? null
   return (
-    <section aria-labelledby={titleId} className="@container overflow-hidden rounded-xl border bg-card text-card-foreground">
+    <section aria-labelledby={titleId} className="@container overflow-hidden rounded-xl border bg-card text-card-foreground shadow-panel">
       <div className={PLATE_GRID}>
         <div className="grid content-start gap-1 px-5 py-4 @2xl:py-5">
-          <h2 id={titleId} className="text-xs text-muted-foreground">
+          <h2 id={titleId} className="mono-label">
             Server
           </h2>
-          {snapshot.zone !== "" && <p className="text-base font-semibold wrap-anywhere">{snapshot.zone}</p>}
+          {snapshot.zone !== "" && <p className="font-mono text-[0.9375rem] leading-6 font-medium text-strong wrap-anywhere">{snapshot.zone}</p>}
           <ul className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground tabular-nums">
             <li>{cores === null ? `${ABSENT} cores` : `${cores} ${cores === 1 ? "core" : "cores"}`}</li>
             <li>{spec(machine?.memoryTotal ?? null, "memory")}</li>
@@ -143,7 +143,7 @@ export function MachinePlate({ snapshot }: { snapshot: Snapshot }) {
 export function PlateSkeleton() {
   return (
     <div aria-hidden="true" className="@container">
-      <div className={cn(PLATE_GRID, "rounded-xl border bg-card @2xl:h-[7.75rem]")}>
+      <div className={cn(PLATE_GRID, "rounded-xl border bg-card shadow-panel @2xl:h-[7.75rem]")}>
         {Array.from({ length: 4 }, (_, index) => (
           <div key={index} className="grid content-start gap-3 px-5 py-4 @2xl:py-5">
             <Skeleton className="h-3 w-16" />

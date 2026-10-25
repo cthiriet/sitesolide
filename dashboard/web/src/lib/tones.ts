@@ -19,7 +19,18 @@ export const TONE_DOT: Record<Tone, string> = {
   ok: "bg-ok",
   attention: "bg-attention",
   error: "bg-destructive",
-  neutral: "bg-muted-foreground",
+  neutral: "bg-faint",
+}
+
+/**
+ * The soft halo around a status dot, the landing page's: the dot's own colour
+ * at about a sixth, three pixels wide. Added to a dot, never to a bar.
+ */
+export const TONE_HALO: Record<Tone, string> = {
+  ok: "ring-3 ring-ok/16",
+  attention: "ring-3 ring-attention/18",
+  error: "ring-3 ring-destructive/16",
+  neutral: "ring-3 ring-faint/20",
 }
 
 /** A word on its own, with no fill. */
@@ -30,11 +41,26 @@ export const TONE_TEXT: Record<Tone, string> = {
   neutral: "text-muted-foreground",
 }
 
-/** A pill: the tinted fill and its text, contrasts measured in global.css. */
+/**
+ * A pill: its hairline, its tinted fill and its text, contrasts measured in
+ * global.css. The hairline only shows on a pill that draws a border.
+ */
 export const TONE_PILL: Record<Tone, string> = {
-  ok: "bg-ok/10 text-ok-text",
-  attention: "bg-attention/12 text-attention-text",
-  error: "bg-destructive/10 text-destructive",
+  ok: "border-ok/25 bg-ok/10 text-ok-text",
+  attention: "border-attention/30 bg-attention/12 text-attention-text",
+  error: "border-destructive/25 bg-destructive/8 text-destructive",
+  neutral: "border-border bg-muted text-muted-foreground",
+}
+
+/**
+ * A count on a solid badge, over an icon or beside a navigation entry: a fill
+ * dark enough in light, and light enough in dark, for the card's colour to
+ * read on it at 4.5:1 whatever lies below. The contrasts are in global.css.
+ */
+export const TONE_BADGE: Record<Tone, string> = {
+  ok: "bg-ok-text text-card",
+  attention: "bg-attention-text text-card",
+  error: "bg-destructive text-card",
   neutral: "bg-muted text-muted-foreground",
 }
 

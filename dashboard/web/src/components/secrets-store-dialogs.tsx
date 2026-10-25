@@ -565,7 +565,7 @@ function FileForm({
 
       <p id={helpId} className="text-xs text-pretty text-muted-foreground">
         {target.slug} reads it at{" "}
-        <code className="rounded-sm bg-muted px-1 py-0.5 font-mono break-all">{credentialPath(name === "" ? "<name>" : name)}</code>
+        <code className="rounded-sm border bg-cell px-1 py-px font-mono break-all">{credentialPath(name === "" ? "<name>" : name)}</code>
         : systemd adds the <Mono>files_</Mono> prefix, and the copy it hands the service is readable by the service alone.
       </p>
 

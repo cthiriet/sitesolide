@@ -86,7 +86,7 @@ function FileBlock({ slug, file }: { slug: string; file: FileView }) {
 
   return (
     <section aria-label={file.name} className="@container/file overflow-hidden rounded-lg border">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 bg-muted/60 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 bg-cell px-4 py-3">
         <div className="flex min-w-0 flex-1 basis-56 flex-wrap items-center gap-x-2.5 gap-y-1">
           <FileText aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
           <h3 className="font-mono text-[0.8125rem] font-semibold wrap-anywhere">{file.name}</h3>

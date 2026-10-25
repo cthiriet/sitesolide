@@ -13,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { Who } from "@/components/access-word"
+import { RoleBars, Who } from "@/components/access-word"
 import { CopyFallback, useAnnounce, useCopy } from "@/components/copy"
 import { Banner, EmptyState, INPUT_DIALOG, Panel } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
@@ -65,7 +65,7 @@ import { cn } from "@/lib/utils"
 
 /** The native select the page styles, a field's look: see DESIGN.md, "a hand-drawn control takes a field's". */
 const SELECT =
-  "h-10 w-full min-w-0 appearance-none rounded-lg border border-input bg-transparent pr-8 pl-2.5 text-base transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-60 sm:h-9 sm:text-sm dark:bg-input/30"
+  "h-10 w-full min-w-0 appearance-none rounded-lg border border-input bg-sunk pr-8 pl-2.5 text-base shadow-well transition-[color,background-color,border-color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/25 disabled:cursor-default disabled:opacity-60 sm:h-9 sm:text-sm"
 
 const CHEVRON = "pointer-events-none absolute top-1/2 right-2.5 size-4 -translate-y-1/2 text-muted-foreground"
 
@@ -74,6 +74,7 @@ function Select({
   value,
   onChange,
   disabled,
+  role,
   className,
   children,
 }: {
@@ -81,12 +82,21 @@ function Select({
   value: string
   onChange: (value: string) => void
   disabled?: boolean
+  /** A menu of roles shows the chosen one's bars before its word. */
+  role?: AccessRole
   className?: string
   children: React.ReactNode
 }) {
   return (
     <div className={cn("relative", className)}>
-      <select aria-label={label} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className={SELECT}>
+      {role !== undefined && <RoleBars role={role} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2" />}
+      <select
+        aria-label={label}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        className={cn(SELECT, role !== undefined && "pl-8")}
+      >
         {children}
       </select>
       <ChevronDown aria-hidden="true" className={CHEVRON} />
@@ -100,7 +110,7 @@ function Select({
  * menu narrows.
  */
 const LINE = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-2.5"
-const ROLE_WIDTH = "w-[7.75rem] shrink-0 md:w-36"
+const ROLE_WIDTH = "w-[8.75rem] shrink-0 md:w-36"
 
 const NONE = "none"
 const toChoice = (seconds: number | null) => (seconds === null ? NONE : String(seconds))
@@ -149,7 +159,7 @@ const ROLE_KEYS = Object.keys(ROLE_TEXTS) as AccessRole[]
 function SendNotice({ notice, slug, onClose }: { notice: Notice; slug: string; onClose: () => void }) {
   const { state, copy, reset } = useCopy("Message copied")
   return (
-    <div role="status" className="grid gap-2 border-b bg-muted/40 px-4 py-3">
+    <div role="status" className="grid gap-2 border-b bg-cell px-4 py-3">
       <div className="flex items-start gap-2">
         <Check aria-hidden="true" className={cn("mt-0.5 size-4 shrink-0", TONE_TEXT.ok)} />
         <p className="min-w-0 flex-1 text-pretty wrap-break-word">
@@ -191,8 +201,9 @@ function RolesDisclosure({ yours }: { yours: AccessRole | null }) {
       </summary>
       <dl className="mt-2 grid gap-1.5 border-l pl-3">
         {ROLE_KEYS.map((role) => (
-          <div key={role} className="grid gap-0.5 @xl:grid-cols-[6.5rem_minmax(0,1fr)] @xl:gap-3">
-            <dt className="font-medium text-foreground">
+          <div key={role} className="grid gap-0.5 @xl:grid-cols-[7.5rem_minmax(0,1fr)] @xl:gap-3">
+            <dt className="flex items-center gap-2 font-medium text-foreground">
+              <RoleBars role={role} />
               {ROLE_TEXTS[role].label}
               {role === yours && <span className="font-normal text-muted-foreground"> (your role)</span>}
             </dt>
@@ -311,11 +322,12 @@ function AddPeople({
           className="h-10 min-w-0 flex-1 basis-60 sm:h-9"
         />
         {onlyOpen ? (
-          <span className="flex h-10 w-36 shrink-0 items-center rounded-lg border border-transparent px-2.5 text-sm text-secondary-foreground sm:h-9">
+          <span className="flex h-10 w-36 shrink-0 items-center gap-2 rounded-lg border border-transparent px-2.5 text-sm text-secondary-foreground sm:h-9">
+            <RoleBars role="visitor" />
             {roleLabel("visitor")}
           </span>
         ) : (
-          <Select label="Role" value={chosen} onChange={(value) => setRole(value as AccessRole)} className="w-36 shrink-0">
+          <Select label="Role" value={chosen} role={chosen} onChange={(value) => setRole(value as AccessRole)} className="w-36 shrink-0">
             {page.grantable.map((option) => (
               <option key={option} value={option} disabled={plan.state === "ready" && !plan.roles.includes(option)} className="text-foreground">
                 {roleLabel(option)}
@@ -394,9 +406,19 @@ function EntryLine({
       </div>
       <div className="flex items-center gap-1">
         {row.roles === null ? (
-          <span className={cn(ROLE_WIDTH, "px-2.5 text-sm", row.muted ? "text-muted-foreground" : "text-secondary-foreground")}>{row.word}</span>
+          <span className={cn(ROLE_WIDTH, "flex items-center gap-2 px-2.5 text-sm", row.muted ? "text-muted-foreground" : "text-secondary-foreground")}>
+            <RoleBars role={entry.role} muted={row.muted} />
+            {row.word}
+          </span>
         ) : (
-          <Select label={`Role of ${entry.who} on ${slug}`} value={entry.role} disabled={busy} onChange={(value) => onRole(value as AccessRole)} className={ROLE_WIDTH}>
+          <Select
+            label={`Role of ${entry.who} on ${slug}`}
+            value={entry.role}
+            disabled={busy}
+            role={entry.role}
+            onChange={(value) => onRole(value as AccessRole)}
+            className={ROLE_WIDTH}
+          >
             {row.roles.map((option) => (
               <option key={option} value={option} className="text-foreground">
                 {roleLabel(option)}
@@ -475,7 +497,7 @@ function PasswordDialog({ created, url, onClose }: { created: Created | null; ur
               </DialogDescription>
             </DialogHeader>
 
-            <dl className="divide-y divide-divider rounded-lg border bg-muted/40 text-sm">
+            <dl className="divide-y divide-divider rounded-lg border bg-cell text-sm">
               <div className="grid gap-0.5 px-3 py-2.5 sm:grid-cols-[6rem_minmax(0,1fr)] sm:items-center sm:gap-3">
                 <dt className="text-xs text-muted-foreground">Address</dt>
                 <dd className="wrap-anywhere">{url}</dd>

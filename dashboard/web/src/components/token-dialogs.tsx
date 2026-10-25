@@ -120,7 +120,7 @@ function Choice({
         onChange={(event) => {
           if (!locked) onChange(event.target.checked)
         }}
-        className="mt-0.5 size-4 shrink-0 accent-foreground"
+        className="mt-0.5 size-4 shrink-0 accent-primary"
       />
       <span className="grid min-w-0 flex-1 gap-0.5">
         <span className="flex items-baseline gap-2">
@@ -424,7 +424,7 @@ export function CreateTokenDialog({
                 {EXPIRY_CHOICES.map((choice) => (
                   <label
                     key={choice.label}
-                    className="flex h-10 cursor-pointer items-center justify-center rounded-lg border border-input px-2 text-sm whitespace-nowrap transition-colors select-none hover:bg-muted has-checked:border-foreground has-checked:bg-muted has-checked:font-medium has-checked:ring-1 has-checked:ring-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring sm:h-9"
+                    className="flex h-10 cursor-pointer items-center justify-center rounded-lg border border-input px-2 text-sm whitespace-nowrap transition-colors select-none hover:bg-muted has-checked:border-primary has-checked:bg-highlight has-checked:font-medium has-checked:text-strong has-checked:ring-1 has-checked:ring-primary has-focus-visible:ring-2 has-focus-visible:ring-ring sm:h-9"
                   >
                     <input type="radio" name={expiryId} checked={expiry === choice.days} onChange={() => setExpiry(choice.days)} className="sr-only" />
                     {choice.label}
@@ -483,7 +483,7 @@ function TokenScreen({ created, origin, warned, onCopied, onDone }: { created: C
         </DialogDescription>
       </DialogHeader>
 
-      <div className="flex min-w-0 items-center justify-between gap-2 rounded-lg border bg-muted/40 py-1.5 pr-1.5 pl-3">
+      <div className="flex min-w-0 items-center justify-between gap-2 rounded-lg bg-sunk py-1.5 pr-1.5 pl-3 shadow-well">
         <code ref={code} className="min-w-0 font-mono text-sm font-semibold select-all wrap-anywhere">
           {created.secret}
         </code>
