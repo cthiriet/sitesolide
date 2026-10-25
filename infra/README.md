@@ -16,6 +16,7 @@ others. The architecture they carry is described in
 | `backup/` | the hourly snapshot of every project's data | `bin/deploy-backup.sh` |
 | `installer/` | what installs a project for a team token | `bin/deploy-installer.sh` |
 | `egress/` | the proxy that lets a project reach only the hosts it lists | `bin/deploy-egress.sh` |
+| `tunnel/` | on a machine served through a Cloudflare Tunnel, the connector's unit and Caddy's options for it | `sitesolide setup --tunnel`, `sitesolide upgrade` |
 
 The machine itself is no longer described here. `sitesolide machine create`
 orders one from a cloud provider's API ([docs/machine.md](../docs/machine.md)),

@@ -57,11 +57,14 @@ export function createLimiter(clock: () => number = Date.now, max = MAX_ADDRESSE
  * through a `reverse_proxy`: with no `trusted_proxies`, the dashboard receives
  * the peer's address alone, the client's value discarded; with
  * `trusted_proxies` covering the peer, it receives `192.0.2.1, <peer>`, the
- * client's value kept in front. The generated dashboard block and the
- * Caddyfile configure no `trusted_proxies` today, so the first value and the
- * last are the same. The last is read all the same: it is the one Caddy
- * itself appends in both configurations, and the first would let anyone
- * choose their address, and someone else's wait, the day a proxy is trusted.
+ * client's value kept in front. Every generated block now sets the header to
+ * Caddy's `{client_ip}`, one value (FORWARD_GENERATIONS in
+ * bin/cli/fragment.ts): the peer's on a machine served directly, and behind a
+ * Cloudflare Tunnel, whose peer is always the loopback, the address the edge
+ * read, which infra/tunnel/tunnel.caddy trusts from the loopback alone. The
+ * last value is read all the same: it is the one Caddy writes in every
+ * configuration, a block of an earlier generation included, and the first
+ * would let anyone choose their address, and someone else's wait.
  */
 export function clientAddress(req: Request): string {
   const forwarded = req.headers.get("x-forwarded-for");

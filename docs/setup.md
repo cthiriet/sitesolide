@@ -93,6 +93,10 @@ would change, and changes it only on a yes.
 - **Your SSH key loaded** in the agent: setup never prompts, and accepts the
   machine's host key on first contact only.
 
+A machine with no public address, at home behind a NAT or in a VM on a
+machine that serves something else, is installed through a Cloudflare
+Tunnel: `--tunnel`, see [tunnel.md](tunnel.md).
+
 ## The steps
 
 Each step is a check that only reads, and a run that does what the check found

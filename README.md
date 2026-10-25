@@ -104,6 +104,7 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
 - [Install](docs/install.md): from nothing to a first deployment
 - [Setup](docs/setup.md): what `sitesolide setup` checks and changes, step by step
 - [A machine](docs/machine.md): a VM ordered from a cloud, and the credentials it needs; [each cloud](docs/providers/)
+- [Behind a tunnel](docs/tunnel.md): a machine with no public address, at home or in a VM, served through a Cloudflare Tunnel
 - [How it works](docs/concepts.md): the parts, and who may touch what
 - [The manifest](docs/manifest.md): every key of `sitesolide.json`
 - [Commands](docs/commands.md): everything the CLI does

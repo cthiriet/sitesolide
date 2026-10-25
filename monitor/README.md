@@ -30,6 +30,7 @@ did before, and no worse.
 | a scheduled service's last run | the same listing, a `<slug>.<name>.service` that a loaded `<slug>.<name>.timer` starts | warning | `failed`: its last run failed, until a run succeeds; `inactive` between two runs is its rest |
 | a project's timers | the same listing, every `<slug>.<name>.timer` | critical | anything but `active`: the schedule stopped, nothing will run |
 | the platform's units | every other `sitesolide-*.service` | warning | failed or crashing in a loop |
+| the Cloudflare Tunnel | on a machine served through one ([docs/tunnel.md](../docs/tunnel.md)): `sitesolide-tunnel.service` in the same listing, and `GET http://127.0.0.1:20240/ready`, cloudflared's | critical, and fails the heartbeat | the unit not `active`, or `/ready` anything but 200: the connector reaches no edge, and no visitor reaches the machine |
 | disk | `statfs` on `/`, `/srv` and `/var`, merged by device | critical | 90 % used, cleared below 85 % |
 | memory | `MemAvailable` in `/proc/meminfo` | warning | less than 10 % available, cleared at 15 % |
 | backups | `/var/lib/sitesolide-backup/last-run.json`, when it exists | warning | the last run failed, a project failed, or it finished more than 26 hours ago; a repository's daily check failed, or none came for 72 hours, counted from the last check or, before the first, from when checks were first due |
@@ -283,6 +284,7 @@ unit, Caddy included, on any pass. Everything it reads is open to any account:
 | `/etc/caddy/domaines.map`, 0644 | the customer domains |
 | `/proc/meminfo`, `statfs` | memory and disk |
 | `127.0.0.1:443` | Caddy, over HTTPS, like a visitor; never the admin API on 2019, which the loopback rule closes to it anyway |
+| `127.0.0.1:20240/ready` | behind a Cloudflare Tunnel alone, whether its connector reaches the edge |
 | `/var/lib/sitesolide-backup/last-run.json` | the backup status, if the backup job leaves it readable by every account (it carries no secret) |
 
 It holds its state in `/var/lib/sitesolide-monitor/`, a directory of the

@@ -81,18 +81,18 @@ export function computeFingerprint(salt: string, host: string, ip: string, agent
  * visitors, or worse, take someone else's fingerprint by guessing theirs.
  *
  * The last value is the one the last proxy placed, and that last proxy is
- * Caddy, on the same machine. There is no proxy after it.
+ * Caddy, on the same machine. There is no proxy after it. Every generated
+ * block sets it to Caddy's `{client_ip}`, one value (FORWARD_GENERATIONS in
+ * bin/cli/fragment.ts).
  *
- * **A site put behind Cloudflare's proxy would be the exception**, and there is
- * none today: the zone is `proxied = false`, and customers' own domains go
- * through a certificate issued on demand, which presupposes that DNS points at
- * the machine. If one of them switched, the last value would become the address
- * of a Cloudflare node and all its visitors would carry the same fingerprint,
- * so a single visit per day. The symptom shows in the dashboard, many page
- * views for one visit, and the fix is not to trust `CF-Connecting-IP`: that
- * header is forged in one line of `curl` as long as nothing checks that the
- * request really comes from Cloudflare, and trusting it would make anyone's
- * fingerprint choosable.
+ * **Behind Cloudflare's proxy**, Caddy's peer is a Cloudflare node, and all of
+ * a site's visitors would carry its address, so one visit per day: the
+ * symptom shows in the dashboard, many page views for one visit. That is a
+ * machine served through a Cloudflare Tunnel, whose peer is cloudflared on the
+ * loopback: infra/tunnel/tunnel.caddy has Caddy take the visitor's address
+ * from `Cf-Connecting-Ip` there, and there alone. Trusted from anywhere else,
+ * that header is forged in one line of `curl`, and anyone's fingerprint would
+ * be choosable; this module never reads it.
  */
 export function clientAddress(xffHeader: string | null, fallback: string): string {
   if (xffHeader === null) return fallback;
