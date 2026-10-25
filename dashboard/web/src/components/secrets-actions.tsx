@@ -640,7 +640,9 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
       rememberOrigin()
       return open()
     }
-    require(open)
+    // The unlock's title names what waits: "Unlock to make cms public".
+    const purpose = target === "public" ? `make ${slug} public` : target === "code" ? `open ${slug} with a code` : `replace ${slug}'s code`
+    require(open, target === "renew" ? { purpose, resume: "New code" } : { purpose })
   }
 
   function onAccessChanged() {

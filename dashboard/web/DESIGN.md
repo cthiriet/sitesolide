@@ -372,7 +372,6 @@ gutters, bottom margin, touch target size.
 | Audience's rankings | `@2xl/body:`, `@5xl/body:` (42, 64 rem) | two panels a row, then three; one below; the chart's four figures a row from `@2xl/body:`, two by two below |
 | Activity's tables, one per day | `narrowBelow` 48 rem | five columns, otherwise two lines |
 | `@container/strip`, the machine strip | `@lg/strip:` (32 rem) | each gauge's caption beside its label, otherwise the label and the figure alone |
-| `@container/file` | `@xl/file:` (36 rem) | Name, Value and action columns |
 | `@container/facts`, a site's Overview panels | `@sm/facts:` (24 rem) | a 6.5 rem label column and a 120 px memory track, otherwise 5.5 rem and 64 px |
 | `@container/people`, a site's people with access | `@xl/people:` (36 rem) | what a row is beside its name, otherwise under it |
 

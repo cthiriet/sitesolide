@@ -11,7 +11,7 @@
  * the listing carries names and states only, and a revealed value lives in the
  * row that shows it.
  */
-import { ago, plural, size } from "./format"
+import { ago, size } from "./format"
 import type { Tone } from "./tones"
 import type { GenerateFormat, ProjectView, StoreChangeResponse, StoreFileView, StoreRestoreResponse, StoreVariableView, StoreView } from "./types"
 
@@ -115,40 +115,6 @@ export function missingLabel(store: Pick<StoreView, "missing" | "files">): strin
   const { variables, files } = storeMissing(store)
   const count = variables.length + files.length
   return count === 0 ? null : `${count} not set`
-}
-
-// --- The Overview -----------------------------------------------------------------
-
-export type OverviewRow = { label: string; detail: string; state: Badge | null }
-
-/**
- * A store in a few rows, for a site's Overview: its variables counted by
- * whether they hold a value, its files by name. Names of files only, never of variables: the inventory belongs to the Secrets
- * section. Nothing at all for a store with nothing in it and nothing declared.
- */
-export function storeOverview(store: StoreView): OverviewRow[] {
-  const rows: OverviewRow[] = []
-  const { variables: missingNames, files: missingFiles } = storeMissing(store)
-  const set = store.variables.filter((variable) => variable.source !== "none").length
-  if (store.variables.length > 0) {
-    const pieces = [set > 0 ? `${set} set` : null, missingNames.length > 0 ? `${missingNames.length} not set` : null].filter(
-      (piece): piece is string => piece !== null,
-    )
-    rows.push({
-      label: plural(store.variables.length, "variable"),
-      detail: missingNames.length === 0 ? "All set" : pieces.join(", "),
-      state: missingNames.length > 0 ? { text: "Missing", tone: "error" } : null,
-    })
-  }
-  if (store.files.length > 0) {
-    rows.push({
-      label: plural(store.files.length, "file"),
-      detail: store.files.map((file) => file.name).join(", "),
-      state: missingFiles.length > 0 ? { text: "Missing", tone: "error" } : store.files.some((file) => file.state === "unmanaged") ? { text: "Unmanaged", tone: "attention" } : null,
-    })
-  }
-  if (store.state === "unmanaged") rows.push({ label: "The store", detail: "The server refuses every change to it", state: { text: "Unmanaged", tone: "attention" } })
-  return rows
 }
 
 // --- A file -----------------------------------------------------------------------

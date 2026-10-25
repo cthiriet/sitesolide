@@ -616,7 +616,7 @@ export function TokensPage() {
         now={serverNow}
         onClose={() => setCreating((previous) => ({ ...previous, open: false }))}
         onCreated={() => void reload()}
-        onLocked={() => actions.unlock()}
+        onLocked={() => actions.unlock({ purpose: "create a token" })}
         onSessionExpired={sessionExpired}
       />
       <RevokeTokenDialog

@@ -24,7 +24,6 @@ import {
   storeFileState,
   storeFileSummary,
   storeMissing,
-  storeOverview,
   storePending,
   storeVariableOffer,
   withStore,
@@ -269,24 +268,6 @@ describe("the sites table", () => {
   test("knows a platform file's variable names too, once each", () => {
     const portal = secretProject({ files: [secretFile({ variables: ["OIDC_CLIENT_SECRET", "OIDC_CLIENT_SECRET"] })] })
     expect(secretsBySite([portal]).get("portal")).toEqual({ variables: ["OIDC_CLIENT_SECRET"], restartPending: false })
-  })
-})
-
-describe("the Overview's rows", () => {
-  test("variables counted by whether they hold a value, files by name; no variable name", () => {
-    const store = storeView({
-      variables: [storeVariable({ name: "A" }), storeVariable({ name: "B" }), storeVariable({ name: "C", source: "none" })],
-      missing: ["C"],
-      files: [storeFile({ name: "gcp.json" }), storeFile({ name: "tls.key", state: "missing" })],
-    })
-    const rows = storeOverview(store)
-    expect(rows).toEqual([
-      { label: "3 variables", detail: "2 set, 1 not set", state: { text: "Missing", tone: "error" } },
-      { label: "2 files", detail: "gcp.json, tls.key", state: { text: "Missing", tone: "error" } },
-    ])
-    expect(JSON.stringify(rows)).not.toContain('"A"')
-    expect(storeOverview(storeView({ variables: [storeVariable()] }))).toEqual([{ label: "1 variable", detail: "All set", state: null }])
-    expect(storeOverview(storeView())).toEqual([])
   })
 })
 

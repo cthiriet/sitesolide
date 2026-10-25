@@ -774,7 +774,7 @@ export function BackupsSection({ slug }: { slug: string }) {
         onLocked={() => {
           setOpening((before) => before && { ...before, open: false })
           secrets.setUnlockedUntil(null)
-          actions.unlock()
+          actions.unlock({ purpose: `restore ${slug}` })
         }}
         onOver={onOver}
       />
