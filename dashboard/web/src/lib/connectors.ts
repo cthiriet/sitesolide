@@ -96,7 +96,7 @@ export function grantWords(row: GrantRow): GrantWords {
     case "unasked":
       return { word: "Not asked for", tone: "neutral", help: `Lends nothing until ${row.slug}'s sitesolide.json asks for ${row.connector}.`, action: "withdraw" }
     case "gone":
-      return { word: "Site removed", tone: "error", help: `${row.slug} is no longer deployed. Withdraw it before the name is reused.`, action: "withdraw" }
+      return { word: "Site removed", tone: "attention", help: `${row.slug} is no longer deployed. Withdraw it before the name is reused.`, action: "withdraw" }
   }
 }
 
@@ -111,9 +111,13 @@ export function requestRows(view: Pick<ConnectorsView, "connectors" | "grants" |
   return grantRows(view).filter((row) => DECISIONS.has(row.state))
 }
 
-/** A request's mark in the gutter: a grant left to a removed site is an error, a request waiting a warning. */
-export function grantSeverity(state: GrantState): "error" | "warning" | null {
-  if (state === "gone") return "error"
+/**
+ * A request's mark in the gutter: a warning, each of them. A grant left to a
+ * removed site lends nothing until a project of that name asks for it again,
+ * a leftover like a Caddy fragment with no folder, which the server also
+ * calls a warning: red stays for what has failed.
+ */
+export function grantSeverity(state: GrantState): "warning" | null {
   return DECISIONS.has(state) ? "warning" : null
 }
 

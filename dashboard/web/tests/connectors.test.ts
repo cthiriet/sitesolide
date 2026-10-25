@@ -44,7 +44,7 @@ describe("the grants", () => {
     expect(words.asked).toMatchObject({ word: "Asked, not granted", tone: "attention", action: "grant" })
     expect(words.missing).toMatchObject({ word: "No such connector", action: null })
     expect(words.unasked).toMatchObject({ tone: "neutral", action: "withdraw" })
-    expect(words.gone).toMatchObject({ word: "Site removed", tone: "error", action: "withdraw" })
+    expect(words.gone).toMatchObject({ word: "Site removed", tone: "attention", action: "withdraw" })
     expect(words.gone!.help).toContain("before the name is reused")
   })
 
@@ -64,8 +64,8 @@ describe("the page: Requests, then the connectors", () => {
     expect(requestRows({ ...VIEW, grants: [grant("shop", "chat"), grant("shop", "code")], requests: [{ slug: "shop", connectors: ["chat", "code"] }] })).toEqual([])
   })
 
-  test("a request's mark: a removed site is an error, a request waiting a warning, a granted pair nothing", () => {
-    expect(grantSeverity("gone")).toBe("error")
+  test("a request's mark: a warning for each, a removed site's leftover grant included, a granted pair nothing", () => {
+    expect(grantSeverity("gone")).toBe("warning")
     expect(grantSeverity("asked")).toBe("warning")
     expect(grantSeverity("missing")).toBe("warning")
     expect(grantSeverity("granted")).toBeNull()

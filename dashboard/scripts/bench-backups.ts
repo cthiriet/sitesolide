@@ -4,7 +4,9 @@
  * and the troubles the page must know how to say:
  *
  * - `photos` is a static site, `example.com` the landing with no manifest;
- * - `builder`'s last run failed, the disk being too full;
+ * - `builder`'s last run failed, the disk being too full, as the monitor's
+ *   backup check says in scripts/page-bench.ts; healed in the showcase,
+ *   whose monitor has nothing to say;
  * - `library` carries the leftovers of an interrupted restore: no restore offered;
  * - a restore of `roster` fails, the service not coming back, and the previous
  *   data is put back; every other restore succeeds, in about nine seconds,
@@ -39,6 +41,8 @@ export function benchBackupRoutes(options: { start: number; folders: Folder[]; i
   const { start, folders } = options;
   const installed = process.env.BENCH_NO_BACKUPS !== "1";
   const outdated = process.env.BENCH_OLD_STEWARD === "1";
+  // The showcase's fleet is healed: no run fails there, or Activity and builder's Backups would say red under "All clear".
+  const failing = process.env.BENCH_SHOWCASE === "1" ? null : "builder";
   const lastHour = Math.floor(start / HOUR) * HOUR;
 
   const snapshots = new Map<string, SnapshotView[]>();
@@ -77,7 +81,7 @@ export function benchBackupRoutes(options: { start: number; folders: Folder[]; i
     record({ at: new Date(takenAt + 9000).toISOString(), actor: "owner", action: "backup.restore", target: "cms", detail: { result: "ok", snapshot: cms[cms.length - 1]!.name } });
   }
   for (let i = 5; i >= 0; i--) {
-    const failed = i === 0 ? ["builder"] : [];
+    const failed = i === 0 && failing !== null ? [failing] : [];
     record({ at: new Date(lastHour - i * HOUR + 3 * 60_000).toISOString(), actor: "system", action: "backup.run", target: null, detail: { ok: failed.length === 0, snapshots: 9, forgotten: 1, failed } });
   }
 
@@ -86,7 +90,7 @@ export function benchBackupRoutes(options: { start: number; folders: Folder[]; i
     const list = snapshots.get(slug) ?? [];
     const restore = restores.get(slug) ?? null;
     const excluded = folder.manifest?.backup === false ? "opted out by its sitesolide.json" : isApp(folder) ? null : "a static site has no data folder";
-    const failedRun = slug === "builder";
+    const failedRun = slug === failing;
     let reason: string | null = null;
     if (!installed) reason = NOT_INSTALLED_REASON;
     else if (slug === "dashboard") reason = DASHBOARD_REFUSAL;

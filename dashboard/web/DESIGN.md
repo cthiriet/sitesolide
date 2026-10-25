@@ -759,7 +759,7 @@ deployments.
 
 ```
 | LOAD 1.3 on 6 cores        22% | MEMORY 5.7 of 12 GB   49% | DISK 49 of 120 GB   41% |   64 px strip
-[!] Server  The last backup run failed for photos, 5 h ago                           banners, 2 then "Show 3 more"
+[!] Server  The last backup run failed for builder, 52 min ago                       banners, 2 then "Show 3 more"
 [Search sites /] [Access v] [Kind v]                              3 of 16  [Issues first v]
 | x | [app] roster  Access mismatch +2 | roster.example.com | [shield] | 25m ago | ... |  44 px
 |   | [files] wheels                   | riverside-cycles.ex| [globe]  | 26d ago | ... |
@@ -984,8 +984,11 @@ and that a project gets one when its sitesolide.json asks for it under
 connectors and the owner grants it here, either alone lending nothing. *Add
 connector*, the header's primary action, asks for the unlock first;
 *History* opens Activity on the egress proxy's audit. First **Requests**,
-only while something waits, its count its rows': a grant left to a site
-that is gone, in error, with *Withdraw*; a project that asks for a connector
+only while something waits, its count its rows', each a warning in the
+gutter: a grant left to a site that is gone, *Site removed* in attention,
+with *Withdraw* (a leftover that lends nothing until a project of that name
+asks again, as the server calls a Caddy fragment with no folder a warning);
+a project that asks for a connector
 not granted, *Asked, not granted* in attention, with *Grant*; one that asks
 for a connector the server lacks, *No such connector* in attention, with
 *Add connector*, its name filled in. Then the connectors, one 44 px row

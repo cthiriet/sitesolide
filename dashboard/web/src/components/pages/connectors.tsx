@@ -416,7 +416,7 @@ function RequestsPanel({
     },
     {
       key: "site",
-      head: "Site",
+      head: "Project",
       width: "minmax(140px,1fr)",
       slot: "meta",
       cell: (row) => <SiteLink slug={row.slug} known={known} />,
@@ -494,14 +494,16 @@ function GrantAction({
   }
   if (words.action === null) return null
   const busy = inFlight === `${row.slug}/${row.connector}`
+  // A request's answer is a button; withdrawing a grant in service, in a sheet, a quiet one.
+  const quiet = row.state === "granted" || row.state === "unasked"
   return (
     <WriteButton
-      variant={words.action === "grant" ? "outline" : "ghost"}
+      variant={quiet ? "ghost" : "outline"}
       size="sm"
       disabled={inFlight !== null}
       onPress={() => onToggle(row)}
       purpose={words.action === "grant" ? `grant ${row.connector} to ${row.slug}` : `withdraw ${row.connector} from ${row.slug}`}
-      className={cn("max-md:h-9", words.action === "withdraw" && "text-muted-foreground hover:text-foreground")}
+      className={cn("max-md:h-9", quiet && "text-muted-foreground hover:text-foreground")}
     >
       {words.action === "grant" ? (busy ? "Granting…" : "Grant") : busy ? "Withdrawing…" : "Withdraw"}
     </WriteButton>

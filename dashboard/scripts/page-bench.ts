@@ -25,8 +25,8 @@
  *   out of management and one pending restart, `dashboard.env` and
  *   `portal.env` which carry nothing but their `PASSWORD_HASH`, which changes
  *   only through `/password` and is never restored, one log per site, lines
- *   written by tokens through the control API among them, for the Tokens
- *   page's Token activity, and an unlocking by the same password; each app's
+ *   written by tokens through the control API among them, for a token's
+ *   sheet and Activity, and an unlocking by the same password; each app's
  *   store, listed by the real `storeView` from its manifest: every declared
  *   name set but the last, which shows as missing, one the manifest no
  *   longer declares, and builder's declared file present (`storeOf`). The
@@ -75,7 +75,7 @@
  *   BENCH_NO_PORTAL=1     no portal: the sign-in page offers no provider, Activity can't read it
  *   BENCH_NO_SSO=1        a portal with passwords only: everyone outside gets password access
  *   BENCH_OLD_PORTAL=1    a portal that still reads its own lists: Access says changes don't reach it
- *   BENCH_NO_EGRESS=1     no egress proxy: the Connectors page's activity says so, and Activity
+ *   BENCH_NO_EGRESS=1     no egress proxy: the Connectors page says so, and Activity
  *   BENCH_EMPTY=1             no snapshot at all: the "No snapshot" state
  *   BENCH_FRESH=1             a fresh machine: the platform's own projects alone, all well
  *   BENCH_PLATFORM_DOWN=1     the portal's unit failed: it shows under All and Issues
@@ -123,8 +123,10 @@ const PASSWORD = "demo";
 /**
  * The bench's purpose is every trouble the page must know how to say. Asked
  * for a showcase, it heals the fleet instead: every service runs, every domain
- * is routed, every file is in order, the activity holds no failure. The README
- * shows this state, taken from the real page rather than drawn.
+ * is routed, every file and every declared variable is set, no backup run or
+ * deployment failed, so that nothing on any page says red under "All clear";
+ * Activity keeps the egress proxy's refusals, the proxy doing its job. The
+ * README shows this state, taken from the real page rather than drawn.
  */
 const SHOWCASE = process.env.BENCH_SHOWCASE === "1";
 /**
@@ -486,11 +488,16 @@ function counters(unit: FakeUnit): { before: number; now: number } {
 /**
  * The status the monitor would leave, copied by the collector
  * (monitor/src/status.ts): a customer domain whose certificate no longer
- * matches, a certificate renewal running late, a failed backup. Healed in the
- * showcase, where the monitor has nothing to say.
+ * matches, a certificate renewal running late, a failed backup, `builder`'s
+ * in the last hourly run, as scripts/bench-backups.ts tells it, in the
+ * monitor's words (`judgeBackup`). Healed in the showcase, where the monitor
+ * has nothing to say.
  */
 function monitorStatus(generatedAt: number): string {
   const ago = (minutes: number) => generatedAt - minutes * MINUTE;
+  const runEnded = Math.floor(start / HOUR) * HOUR + 3 * MINUTE;
+  const runAge = Math.max(0, generatedAt - runEnded);
+  const runAgo = runAge < MINUTE ? "less than a minute" : runAge < HOUR ? `${Math.floor(runAge / MINUTE)} min` : `${Math.floor(runAge / HOUR)} h`;
   const down = SHOWCASE || FRESH
     ? []
     : [
@@ -518,8 +525,8 @@ function monitorStatus(generatedAt: number): string {
           label: "backups",
           severity: "warning",
           slug: null,
-          summary: "The last backup run failed for photos, 5 h ago",
-          since: ago(5 * 60),
+          summary: `The last backup run failed for builder, ${runAgo} ago`,
+          since: runEnded,
         },
       ];
   return JSON.stringify({
@@ -912,7 +919,7 @@ const log: LogRow[] = [
   { a: start - 24 * MINUTE, operation: "set", result: "rejects", slug: "roster", file: "store", variable: null, detail: "invalid" },
   // The action whose backup remained on `library`: the gatekeeper wrote nothing of its result.
   { a: start - 3 * HOUR, operation: "portal", result: "failure", slug: "library", file: null, variable: null, detail: "off, failed" },
-  // What tokens did through the control API, for the Tokens page's Token activity: the
+  // What tokens did through the control API, for a token's sheet and Activity: the
   // owner's Release agent, which may manage secrets, set a variable of calendar's store and
   // restarted calendar; alice-ci, which may not, was refused on cms.
   { a: start - 2 * HOUR, operation: "set", result: "ok", actor: "token:0f1e2d3c4b5a", member: null, slug: "calendar", file: "store", variable: "API_KEY", detail: null },
@@ -983,15 +990,17 @@ function generalView(folder: FakeFolder): GeneralView {
 
 /**
  * An app's store as the real steward lists it to the owner: every name its
- * manifest declares set but the last, which the page shows as missing, a name
- * the manifest no longer declares, and every declared file present. Null for
- * a static site, the dashboard and the portal.
+ * manifest declares set but the last, which the page shows as missing (every
+ * one set in the showcase, healed), a name the manifest no longer declares,
+ * and every declared file present. Null for a static site, the dashboard and
+ * the portal.
  */
 function storeOf(p: FakeProject) {
   const manifest = (FOLDERS.find((folder) => folder.slug === p.slug)?.manifest ?? null) as Manifest | null;
   if (manifest === null || manifest.slug !== p.slug || !hasStore(manifest)) return null;
   const { runtime, files } = secretsOf(manifest);
-  const values = new Map([...runtime.slice(0, -1), "OLD_WEBHOOK_SECRET"].map((name) => [name, "bench"]));
+  const set = SHOWCASE ? runtime : runtime.slice(0, -1);
+  const values = new Map([...set, "OLD_WEBHOOK_SECRET"].map((name) => [name, "bench"]));
   // Healed, the stores changed before any service last started: no restart pending.
   const changed = start - (SHOWCASE ? 60 : 3) * DAY;
   return storeView({
@@ -1141,7 +1150,9 @@ Bun.spawnSync(
      const start = ${start};
      const rows = [
        ["0123456789abcdef00000001", "a1b2c3d4e5f6", "alice@example.com", "notes", "succeeded", 1, start - 3 * 3600000, null],
-       ["0123456789abcdef00000002", "0f1e2d3c4b5a", "agent@example.com", "calendar", "failed", 0, start - 26 * 3600000, "install-failed: bun install --production failed (exit 1): nothing served was changed"],
+       ${SHOWCASE
+         ? `["0123456789abcdef00000002", "0f1e2d3c4b5a", "agent@example.com", "calendar", "succeeded", 0, start - 26 * 3600000, null],`
+         : `["0123456789abcdef00000002", "0f1e2d3c4b5a", "agent@example.com", "calendar", "failed", 0, start - 26 * 3600000, "install-failed: bun install --production failed (exit 1): nothing served was changed"],`}
        ["0123456789abcdef00000003", "a1b2c3d4e5f6", "alice@example.com", "cms", "succeeded", 0, start - 50 * 3600000, null],
      ];
      const audit = [
