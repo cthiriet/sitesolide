@@ -106,7 +106,10 @@ CADDY_UID="$(ssh "$SITESOLIDE_SERVER" 'id -u caddy')"
 # where it creates and revokes the guest accesses. Missing, id fails and the
 # script stops before having set anything.
 DASHBOARD_UID="$(ssh "$SITESOLIDE_SERVER" 'id -u site-dashboard')"
-PORTAL_PORT="$(cd "$REPO_ROOT" && bun -e 'import { PORTAL_PORT } from "./bin/cli/portal"; console.log(PORTAL_PORT)')"
+# String(), never the number itself: console.log colours a number when the
+# terminal forces colour (FORCE_COLOR), and the port came back wrapped in
+# escape codes, which made every probe below ask a URL curl cannot read.
+PORTAL_PORT="$(cd "$REPO_ROOT" && bun -e 'import { PORTAL_PORT } from "./bin/cli/portal"; console.log(String(PORTAL_PORT))')"
 
 # Behind a Cloudflare Tunnel, the connector's uid, the one account that may
 # speak from ::1, where Caddy believes the visitor's address in
@@ -133,7 +136,7 @@ if ssh -n "$SITESOLIDE_SERVER" "test -f $TUNNEL_CADDY"; then
     exit 1
   fi
 fi
-ADMIN_PORT="$(cd "$REPO_ROOT" && bun -e 'import { CADDY_ADMIN_PORT } from "./bin/cli/loopback"; console.log(CADDY_ADMIN_PORT)')"
+ADMIN_PORT="$(cd "$REPO_ROOT" && bun -e 'import { CADDY_ADMIN_PORT } from "./bin/cli/loopback"; console.log(String(CADDY_ADMIN_PORT))')"
 WORK="$(mktemp -d)"
 WORK_VM=""
 on_exit() {

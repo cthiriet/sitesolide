@@ -622,3 +622,18 @@ describe("the project set", () => {
     expect(reachesOwnPorts(SEVERAL)).toBe(true);
   });
 });
+
+describe("what the script reads from the CLI", () => {
+  test("its ports come back as digits alone, in a terminal that forces colour too", () => {
+    // A port printed by console.log came back as \e[33m2019\e[0m under
+    // FORCE_COLOR=1, and every probe of the script asked a URL curl could
+    // not read: setup failed at the loopback rule from such a terminal.
+    const script = readFileSync(join(REPO_ROOT, "bin", "deploy-loopback.sh"), "utf8");
+    const commands = [...script.matchAll(/^(PORTAL_PORT|ADMIN_PORT)="\$\(cd "\$REPO_ROOT" && bun -e '([^']+)'\)"$/gm)];
+    expect(commands.map((match) => match[1])).toEqual(["PORTAL_PORT", "ADMIN_PORT"]);
+    for (const [, name, code] of commands) {
+      const run = Bun.spawnSync(["bun", "-e", code!], { cwd: REPO_ROOT, env: { ...process.env, FORCE_COLOR: "1" }, stdout: "pipe" });
+      expect({ name, printed: run.stdout.toString() }).toEqual({ name, printed: expect.stringMatching(/^\d+\n$/) });
+    }
+  });
+});
