@@ -1,52 +1,75 @@
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type SyntheticEvent } from "react"
-import { ArchiveRestore, CircleCheck, CircleX, CloudOff, DatabaseBackup, History, Info, TriangleAlert } from "lucide-react"
+import { useCallback, useEffect, useId, useRef, useState, type SyntheticEvent } from "react"
+import { ArchiveRestore, ChevronDown, CircleCheck, CircleX, Cloud, CloudOff, DatabaseBackup, Info, Server, TriangleAlert, type LucideIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { CHIP } from "@/components/access-word"
 import { Command, useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
-import { Banner, EmptyState, ErrorState, FormError, INPUT_DIALOG, Panel, PanelSkeleton, RowsSkeleton, Status, useRetry } from "@/components/page"
-import { WriteButton } from "@/components/unlock"
+import { DataTable, RowMenu, type Column } from "@/components/data-table"
+import { SheetFacts, type Fact } from "@/components/detail-sheet"
+import {
+  Banner,
+  EmptyState,
+  ErrorState,
+  FormError,
+  INPUT_DIALOG,
+  InlineEmpty,
+  Panel,
+  PanelSkeleton,
+  SeverityIcon,
+  Tile,
+  useRetry,
+} from "@/components/page"
+import { WriteButton, WriteMenuItem } from "@/components/unlock"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { Track, useClock } from "@/components/secrets-dialogs"
+import { ON_HOVER } from "@/components/secrets-variables"
 import { SitePage } from "@/components/site"
-import { readBackupAudit, readBackups, restoreBackup } from "@/lib/api"
+import { readBackups, restoreBackup } from "@/lib/api"
 import { confirmationValid, removalConfirmation } from "@/lib/access"
 import {
   BACKUPS_REFRESH_MS,
   OUTDATED_STEWARD,
   RESTORE_POLL_MS,
-  auditLine,
-  freshness,
-  kindLabel,
+  addedText,
+  backupStatus,
   checkReading,
+  clockTime,
+  kindLabel,
   offsiteReading,
+  restoreAct,
   restoreOutcome,
   restoreOver,
   restoreProgress,
   restoreSteps,
   retentionText,
+  snapshotMoment,
   snapshotSize,
+  snapshotsByDay,
+  takenLabel,
   whereLabel,
-  type Reading as ScheduleReading,
+  type Reading,
 } from "@/lib/backups"
-import { ago, capitalise, dateTime } from "@/lib/format"
+import { ago, capitalise, dateTime, plural, size } from "@/lib/format"
 import { UNREACHABLE, refusalOf, succeeded } from "@/lib/secrets"
 import { TONE_TEXT } from "@/lib/tones"
-import type { BackupAuditEntry, BackupsView, RestoreView, SnapshotView } from "@/lib/types"
+import type { BackupsView, RestoreView, SnapshotView } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /*
- * A site's backups: when its data folder was last saved, what is kept and
- * where, every snapshot, and the restore of one of them. The steward reads
- * them as root and decides what may be restored; the page shows its reasons.
+ * A site's backups: one status row, how fresh its last snapshot is and
+ * whether the copies are sound, with the rest behind *Details*; then its
+ * snapshots, the newest twelve, each restored from its row. The steward
+ * reads them as root and decides what may be restored; the page shows its
+ * reasons. Their history, the runs and the restores, is in Activity, behind
+ * the header's *History*.
  */
 
-type Load =
-  | { state: "loading" }
-  | { state: "error"; message: string; outdated: boolean }
-  | { state: "ready"; view: BackupsView; audit: BackupAuditEntry[] | null }
+type Load = { state: "loading" } | { state: "error"; message: string; outdated: boolean } | { state: "ready"; view: BackupsView }
 
 /**
  * The backups, read on opening, with every snapshot of the machine (every
@@ -59,10 +82,9 @@ function useBackups(slug: string) {
   const [following, setFollowing] = useState(false)
 
   const reload = useCallback(async () => {
-    const [{ status, body }, audit] = await Promise.all([readBackups(slug), readBackupAudit(slug)])
+    const { status, body } = await readBackups(slug)
     if (status === 200 && body !== null && typeof body.backups === "object" && body.backups !== null) {
-      const entries = audit.status === 200 && audit.body !== null && Array.isArray(audit.body.entries) ? audit.body.entries : null
-      setLoad({ state: "ready", view: body.backups, audit: entries })
+      setLoad({ state: "ready", view: body.backups })
       return body.backups
     }
     if (status === 401) {
@@ -98,74 +120,115 @@ function useBackups(slug: string) {
   return { load, reload, setFollowing }
 }
 
-// --- The schedule --------------------------------------------------------------------
+// --- The status row --------------------------------------------------------------------
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
+/** A reading in the Details: its words, in its tone when it is wrong and with no dot, the detail muted under it. */
+function ReadingValue({ reading }: { reading: Reading }) {
+  const trouble = reading.tone === "error" || reading.tone === "attention"
   return (
-    <tr>
-      <th scope="row" className="w-36 py-2.5 pr-3 pl-4 text-left align-top font-normal text-muted-foreground sm:w-44">
-        {label}
-      </th>
-      <td className="py-2.5 pr-4 pl-3 align-top">{children}</td>
-    </tr>
-  )
-}
-
-function Reading({ reading }: { reading: ScheduleReading }) {
-  return (
-    <div className="grid gap-0.5">
-      <Status tone={reading.tone} className={cn("whitespace-normal", reading.tone === "neutral" && "text-foreground")}>
-        {reading.label}
-      </Status>
+    <span className="grid gap-0.5">
+      <span className={cn(trouble && cn("font-medium", TONE_TEXT[reading.tone]))}>{reading.label}</span>
       {reading.detail !== null && <span className="text-xs text-pretty text-muted-foreground wrap-anywhere">{reading.detail}</span>}
-    </div>
+    </span>
   )
 }
 
-function SchedulePanel({ view, serverNow }: { view: BackupsView; serverNow: number }) {
+/**
+ * The backups in one row: the last snapshot's age, then the schedule, the
+ * offsite copy and the last check, each in its tone when it is wrong; the
+ * severity icon in place of the backups' tile when something is. *Details*
+ * opens what is kept, where the offsite copy goes, what the check measured
+ * and the last restore.
+ */
+function StatusPanel({ view, serverNow }: { view: BackupsView; serverNow: number }) {
+  const [open, setOpen] = useState(false)
+  const detailsId = useId()
+  const status = backupStatus(view, serverNow)
+  const trouble = status.tone === "error" || status.tone === "attention"
   const restore = view.restore
+  const facts: Fact[] = [
+    { label: "Schedule", value: view.excluded === null ? "Every hour" : capitalise(view.excluded) },
+    { label: "Keeps", value: retentionText(view.retention) },
+    { label: "Offsite copy", value: <ReadingValue reading={offsiteReading(view.offsite)} /> },
+    { label: "Last check", value: <ReadingValue reading={checkReading(view.checks, view.repository, serverNow)} /> },
+  ]
+  if (restore !== null && restore.state !== "running" && restore.at !== null) {
+    const outcome = restoreOutcome(restore, view.slug)
+    facts.push({
+      label: "Last restore",
+      value: <ReadingValue reading={{ tone: outcome.tone, label: `${outcome.title}, ${ago(serverNow - restore.at)}`, detail: restore.message }} />,
+    })
+  }
+
   return (
-    <Panel title="Schedule" full>
-      <table className="w-full text-sm">
-        <caption className="sr-only">How this site's data is saved</caption>
-        <tbody className="divide-y divide-divider">
-          <Row label="This site">
-            <Reading reading={freshness(view, serverNow)} />
-          </Row>
-          <Row label="Every hour, keeps">{retentionText(view.retention)}</Row>
-          <Row label="Offsite copy">
-            <Reading reading={offsiteReading(view.offsite)} />
-          </Row>
-          <Row label="Last check">
-            <Reading reading={checkReading(view.checks, view.repository, serverNow)} />
-          </Row>
-          {restore !== null && restore.state !== "running" && restore.at !== null && (
-            <Row label="Last restore">
-              <Reading
-                reading={{
-                  tone: restoreOutcome(restore, view.slug).tone,
-                  label: `${restoreOutcome(restore, view.slug).title}, ${ago(serverNow - restore.at)}`,
-                  detail: restore.message,
-                }}
-              />
-            </Row>
-          )}
-        </tbody>
-      </table>
+    <Panel full>
+      <div className="flex min-h-16 items-center gap-3 py-3 pr-2 pl-4">
+        {trouble ? (
+          <span className="inline-grid size-8 shrink-0 place-items-center">
+            <SeverityIcon severity={status.tone === "error" ? "error" : "warning"} label className="size-5" />
+          </span>
+        ) : (
+          <Tile icon={DatabaseBackup} feature="recover" size={32} />
+        )}
+        <div className="grid min-w-0 flex-1 gap-0.5">
+          <p className={cn("text-sm font-medium text-pretty", trouble ? TONE_TEXT[status.tone] : "text-strong")}>{status.label}</p>
+          {status.detail !== null && <p className="text-xs text-pretty text-secondary-foreground wrap-anywhere">{capitalise(status.detail)}</p>}
+          <p className="text-xs text-pretty text-muted-foreground">
+            {status.facts.map((fact, index) => (
+              <span key={fact.text}>
+                {index > 0 && <span aria-hidden="true" className="px-1.5 text-faint">·</span>}
+                {/* A fact breaks at its separator, never inside: "Offsite copy" stays on one line. */}
+                <span className={cn("whitespace-nowrap", fact.tone === "error" && "font-medium text-destructive")}>{fact.text}</span>
+                {index < status.facts.length - 1 && <span className="sr-only">, </span>}
+              </span>
+            ))}
+          </p>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-expanded={open}
+          aria-controls={detailsId}
+          onClick={() => setOpen((before) => !before)}
+          className="shrink-0 text-muted-foreground hover:text-foreground max-md:h-10"
+        >
+          Details
+          <ChevronDown aria-hidden="true" className={cn("transition-transform motion-reduce:transition-none", open && "rotate-180")} />
+        </Button>
+      </div>
+      <div id={detailsId} hidden={!open} className="border-t px-4 py-1">
+        <SheetFacts facts={facts} />
+      </div>
     </Panel>
   )
 }
 
-// --- The snapshots --------------------------------------------------------------------
+// --- The snapshots ---------------------------------------------------------------------
 
-/** When a snapshot was taken: its date and time, how long ago under it. */
-function Taken({ at, serverNow }: { at: number; serverNow: number }) {
+/** The snapshots listed before "Show all": the last twelve hours cover what is usually restored. */
+const SHOWN_SNAPSHOTS = 12
+
+/** A line of the table: a snapshot, or, once every snapshot is shown, the day the next ones were taken. */
+type Line = { kind: "day"; day: string; count: number } | { kind: "snapshot"; snapshot: SnapshotView; grouped: boolean }
+
+/** One of the two places a snapshot lives, as an icon with its words; an empty place keeps its room, so the icons align. */
+function Place({ icon: Icon, present, label }: { icon: LucideIcon; present: boolean; label: string }) {
+  if (!present) return <span aria-hidden="true" className="size-4 shrink-0" />
   return (
-    <span className="grid">
-      <time dateTime={new Date(at).toISOString()} className="tabular-nums">
-        {dateTime(at)}
-      </time>
-      <span className="text-xs text-muted-foreground">{ago(serverNow - at)}</span>
+    <Tooltip>
+      <TooltipTrigger render={<span role="img" aria-label={label} className="inline-flex shrink-0 text-muted-foreground" />}>
+        <Icon aria-hidden="true" className="size-4" />
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+function Where({ snapshot }: { snapshot: SnapshotView }) {
+  return (
+    <span className="inline-flex items-center gap-2">
+      <Place icon={Server} present={snapshot.local} label="On this server" />
+      <Place icon={Cloud} present={snapshot.offsite} label="In the offsite copy, encrypted" />
     </span>
   )
 }
@@ -180,153 +243,137 @@ function SnapshotsPanel({
   onRestore: (snapshot: SnapshotView) => void
 }) {
   // A day and a half of hourly snapshots, then the dailies: the newest are the
-  // ones restored, the rest one click away.
+  // ones restored, the rest one click away, under their day.
   const [all, setAll] = useState(false)
-  const shown = all ? view.snapshots : view.snapshots.slice(0, SHOWN_SNAPSHOTS)
-  const hidden = view.snapshots.length - shown.length
-  const caption = `Snapshots of ${view.slug}, newest first`
-  const restoreButton = (snapshot: SnapshotView) => (
-    <WriteButton
-      variant="outline"
-      size="sm"
-      disabled={!view.restorable}
-      onPress={() => onRestore(snapshot)}
-      purpose={`restore ${view.slug}`}
-      resume="Restore"
-      aria-label={`Restore ${view.slug} from ${dateTime(snapshot.takenAt)}`}
-      className="max-md:h-10"
-    >
-      <ArchiveRestore />
-      Restore
-    </WriteButton>
-  )
-  return (
-    <Panel
-      title="Snapshots"
-      count={view.snapshots.length}
-      description={
-        view.restorable ? (
-          "Restoring saves the current data first, so it can be undone."
-        ) : view.reason === null || view.snapshots.length === 0 ? undefined : (
-          <span className="flex gap-1.5">
-            <Info aria-hidden="true" className="mt-px size-3.5 shrink-0" />
-            <span>
-              <span className="sr-only">Why no restore is offered: </span>
-              {capitalise(view.reason)}.
-            </span>
+  const slug = view.slug
+  const more = view.snapshots.length > SHOWN_SNAPSHOTS
+  const lines: Line[] = all
+    ? snapshotsByDay(view.snapshots, serverNow).flatMap(({ day, snapshots }): Line[] => [
+        { kind: "day", day, count: snapshots.length },
+        ...snapshots.map((snapshot): Line => ({ kind: "snapshot", snapshot, grouped: true })),
+      ])
+    : view.snapshots.slice(0, SHOWN_SNAPSHOTS).map((snapshot): Line => ({ kind: "snapshot", snapshot, grouped: false }))
+
+  const columns: Column<Line>[] = [
+    {
+      key: "taken",
+      head: "Taken",
+      width: "minmax(14rem,1fr)",
+      slot: "primary",
+      cell: (line) =>
+        line.kind === "day" ? (
+          <>
+            <span className="mono-label text-secondary-foreground">{line.day}</span>
+            <span className="text-xs text-muted-foreground tabular-nums">{plural(line.count, "snapshot")}</span>
+          </>
+        ) : (
+          <>
+            <time
+              dateTime={new Date(line.snapshot.takenAt).toISOString()}
+              title={dateTime(line.snapshot.takenAt)}
+              className="font-medium whitespace-nowrap text-strong tabular-nums"
+            >
+              {line.grouped ? clockTime(line.snapshot.takenAt) : takenLabel(line.snapshot.takenAt, serverNow)}
+            </time>
+            <span className="truncate text-muted-foreground tabular-nums">{ago(serverNow - line.snapshot.takenAt)}</span>
+            {line.snapshot.kind !== "scheduled" && <span className={cn(CHIP, "font-normal text-secondary-foreground")}>{kindLabel(line.snapshot.kind)}</span>}
+          </>
+        ),
+    },
+    {
+      key: "size",
+      head: "Size",
+      width: "6.5rem",
+      align: "end",
+      slot: "meta",
+      cell: (line) =>
+        line.kind === "day" ? null : (
+          <span title={addedText(line.snapshot) ?? undefined} className="tabular-nums">
+            {size(line.snapshot.bytes)}
           </span>
-        )
-      }
-      full
-    >
-      {view.snapshots.length === 0 ? (
-        <EmptyState icon={DatabaseBackup} title={`No snapshot of ${view.slug} yet`} compact>
-          {view.excluded === null
-            ? "The first one comes with the next hourly run."
-            : `${view.slug} is not backed up: ${view.excluded}.`}
-        </EmptyState>
-      ) : (
-        <div className="@container">
-          <table className="hidden w-full text-sm @2xl:table">
-            <caption className="sr-only">{caption}</caption>
-            <thead>
-              <tr className="h-10 border-b bg-cell text-left mono-label">
-                <th scope="col" className="px-3 pl-4 font-medium">
-                  Taken
-                </th>
-                <th scope="col" className="px-3 font-medium">
-                  Kind
-                </th>
-                <th scope="col" className="px-3 text-right font-medium">
-                  Size
-                </th>
-                <th scope="col" className="px-3 font-medium">
-                  Where
-                </th>
-                <th scope="col" className="px-3 pr-4 text-right font-medium">
-                  <span className="sr-only">Action</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-divider">
-              {shown.map((snapshot) => (
-                <tr key={snapshot.name}>
-                  <td className="px-3 py-3 pl-4">
-                    <Taken at={snapshot.takenAt} serverNow={serverNow} />
-                  </td>
-                  <td className="px-3 py-3">{kindLabel(snapshot.kind)}</td>
-                  <td className="px-3 py-3 text-right tabular-nums">{snapshotSize(snapshot)}</td>
-                  <td className="px-3 py-3">{whereLabel(snapshot)}</td>
-                  <td className="px-3 py-3 pr-4 text-right">{restoreButton(snapshot)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        ),
+    },
+    {
+      key: "where",
+      head: "Where",
+      width: "5rem",
+      align: "center",
+      slot: "state",
+      cell: (line) => (line.kind === "day" ? null : <Where snapshot={line.snapshot} />),
+    },
+  ]
+  if (view.restorable) {
+    columns.push({
+      key: "restore",
+      head: "",
+      srHead: "Restore",
+      width: "7.5rem",
+      align: "end",
+      slot: "hide",
+      cell: (line) =>
+        line.kind === "day" ? null : (
+          <WriteButton
+            variant="outline"
+            size="sm"
+            onPress={() => onRestore(line.snapshot)}
+            purpose={`restore ${slug}`}
+            resume="Restore"
+            aria-label={`Restore ${slug} from ${dateTime(line.snapshot.takenAt)}`}
+            className={ON_HOVER}
+          >
+            <ArchiveRestore />
+            Restore
+          </WriteButton>
+        ),
+    })
+  }
 
-          <ol aria-label={caption} className="divide-y divide-divider @2xl:hidden">
-            {shown.map((snapshot) => (
-              <li key={snapshot.name} className="flex items-center gap-3 px-4 py-3">
-                <div className="grid min-w-0 flex-1 gap-0.5">
-                  <Taken at={snapshot.takenAt} serverNow={serverNow} />
-                  <span className="text-xs text-muted-foreground">
-                    {kindLabel(snapshot.kind)}, {snapshotSize(snapshot)}, {whereLabel(snapshot).toLowerCase()}
-                  </span>
-                </div>
-                {restoreButton(snapshot)}
-              </li>
-            ))}
-          </ol>
-
-          {hidden > 0 && (
-            <div className="border-t px-4 py-2">
-              <Button variant="ghost" size="sm" onClick={() => setAll(true)} className="-ml-2 text-muted-foreground hover:text-foreground max-md:h-10">
-                Show all {view.snapshots.length} snapshots
-              </Button>
-            </div>
-          )}
-        </div>
-      )}
-    </Panel>
-  )
-}
-
-/** The snapshots listed before "Show all": the last twelve hours cover what is usually restored. */
-const SHOWN_SNAPSHOTS = 12
-
-// --- The activity --------------------------------------------------------------------
-
-function ActivityPanel({ slug, audit, serverNow }: { slug: string; audit: BackupAuditEntry[] | null; serverNow: number }) {
   return (
-    <Panel title="Activity" description="The scheduled runs and the restores, newest first." full>
-      {audit === null && <ErrorState title="Couldn't load the backup activity." compact />}
-      {audit !== null && audit.length === 0 && (
-        <EmptyState icon={History} title="No activity yet" compact>
-          The hourly runs and the restores of {slug} show up here.
-        </EmptyState>
+    <Panel full>
+      {!view.restorable && view.reason !== null && (
+        <InlineEmpty icon={Info} className="border-b">
+          <span className="sr-only">Why no restore is offered: </span>
+          No restore: {view.reason}.
+        </InlineEmpty>
       )}
-      {audit !== null && audit.length > 0 && (
-        <ol aria-label={`Backup activity of ${slug}, most recent first`} className="divide-y divide-divider">
-          {audit.slice(0, 20).map((entry) => {
-            const line = auditLine(entry, slug)
-            return (
-              <li key={entry.id} className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 px-4 py-2.5">
-                <span className="text-sm wrap-anywhere">{line.what}</span>
-                <time dateTime={entry.at} title={Number.isFinite(line.at) ? dateTime(line.at) : undefined} className="text-xs whitespace-nowrap text-muted-foreground tabular-nums">
-                  {Number.isFinite(line.at) ? ago(serverNow - line.at) : entry.at}
-                </time>
-                <span className="col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                  {line.outcome !== null && (
-                    <Status tone={line.tone} className={cn(line.tone === "ok" && "text-foreground")}>
-                      {line.outcome}
-                    </Status>
-                  )}
-                  <span>{line.who}</span>
+      <DataTable
+        label={`Snapshots of ${slug}`}
+        caption={all ? "Every snapshot, newest first, under the day it was taken" : `The newest ${Math.min(SHOWN_SNAPSHOTS, view.snapshots.length)}, newest first`}
+        dense
+        narrowBelow="36rem"
+        rows={lines}
+        rowKey={(line) => (line.kind === "day" ? `day ${line.day}` : line.snapshot.name)}
+        columns={columns}
+        menu={(line) =>
+          line.kind === "day" ? null : (
+            <RowMenu label={`Actions for the snapshot of ${dateTime(line.snapshot.takenAt)}`}>
+              {/* What the row's tooltips say, for a phone that has none. */}
+              <div className="grid gap-0.5 px-1.5 py-1 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground tabular-nums">{dateTime(line.snapshot.takenAt)}</span>
+                <span className="tabular-nums">
+                  {snapshotSize(line.snapshot)}, {whereLabel(line.snapshot).toLowerCase()}
                 </span>
-              </li>
-            )
-          })}
-        </ol>
-      )}
+              </div>
+              {view.restorable && (
+                <>
+                  <DropdownMenuSeparator />
+                  <WriteMenuItem onPress={() => onRestore(line.snapshot)} purpose={`restore ${slug}`} resume="Restore">
+                    <ArchiveRestore />
+                    Restore this snapshot
+                  </WriteMenuItem>
+                </>
+              )}
+            </RowMenu>
+          )
+        }
+        foot={
+          more ? (
+            <Button variant="ghost" size="sm" onClick={() => setAll((before) => !before)} className="-ml-2 text-muted-foreground hover:text-foreground max-md:h-10">
+              {all ? `Show the newest ${SHOWN_SNAPSHOTS}` : `Show all ${view.snapshots.length}`}
+            </Button>
+          ) : undefined
+        }
+      />
     </Panel>
   )
 }
@@ -374,6 +421,8 @@ function RestoreFlow({
   const inputId = useId()
   const closeButton = useRef<HTMLButtonElement>(null)
   const when = dateTime(snapshot.takenAt)
+  // The day and time without the zone, which the title names.
+  const moment = snapshotMoment(snapshot.takenAt)
 
   useEffect(() => {
     busy.current = phase.phase === "in-progress"
@@ -448,17 +497,30 @@ function RestoreFlow({
   return (
     <form noValidate onSubmit={confirm} className="grid gap-5" aria-busy={inProgress || undefined}>
       <DialogHeader>
-        <DialogTitle>{inProgress ? `Restoring ${slug}…` : `Restore ${slug} from ${when}?`}</DialogTitle>
+        <DialogTitle>{inProgress ? `Restoring ${slug}…` : `Restore ${slug} to ${when}?`}</DialogTitle>
         <DialogDescription className="text-pretty">
-          {slug} stops, its data folder is replaced by the snapshot of {when}, then it starts again.
+          {slug} stops, its data folder is put back as this snapshot holds it, then it starts again.
         </DialogDescription>
       </DialogHeader>
 
       {!inProgress && (
-        <Banner tone="error">
-          <span className="font-medium">What {slug} saved since {when} is set aside.</span> It is kept as a before-restore
-          snapshot, which you can restore to undo this.
-        </Banner>
+        <dl className="grid gap-3 rounded-lg border px-3 py-2.5 text-sm">
+          <div className="grid gap-0.5">
+            <dt className="font-medium">What comes back</dt>
+            <dd className="text-pretty text-muted-foreground">
+              {snapshot.kind === "pre-restore"
+                ? `The data an earlier restore replaced, as it was at ${moment}, ${size(snapshot.bytes)}.`
+                : `${slug}'s data folder as it was at ${moment}, ${size(snapshot.bytes)}.`}
+            </dd>
+          </div>
+          <div className="grid gap-0.5">
+            <dt className="font-medium text-destructive">What is set aside</dt>
+            <dd className="text-pretty text-muted-foreground">
+              Everything {slug} saved after {moment}, kept as a before-restore snapshot: restore it to undo this. {slug} doesn't
+              answer while it restarts.
+            </dd>
+          </div>
+        </dl>
       )}
 
       <div className="grid gap-2">
@@ -503,7 +565,7 @@ function RestoreFlow({
         {/* A restore under way cannot be cancelled: the server sees it through, or puts the data back. */}
         {!inProgress && <DialogClose render={<Button type="button" variant="outline" className="max-sm:h-11" />}>Cancel</DialogClose>}
         <Button type="submit" variant="destructive" disabled={inProgress || !confirmationValid(entry, slug)} className="max-sm:h-11">
-          {inProgress ? "Restoring…" : "Restore"}
+          {inProgress ? "Restoring…" : restoreAct(slug, snapshot.takenAt)}
         </Button>
       </DialogFooter>
     </form>
@@ -564,10 +626,9 @@ function Content({ slug, backups, onRestore }: { slug: string; backups: ReturnTy
   if (load.state === "loading") {
     return (
       <div aria-busy="true" aria-label="Loading backups" className="grid gap-6">
-        <PanelSkeleton lines={3} />
-        <div className="overflow-hidden rounded-xl border bg-card">
-          <RowsSkeleton lines={4} />
-        </div>
+        {/* The status row, then the snapshots, at the heights of the real ones. */}
+        <PanelSkeleton lines={1} title={false} className="[&>div>div]:h-16" />
+        <PanelSkeleton lines={6} />
       </div>
     )
   }
@@ -591,7 +652,7 @@ function Content({ slug, backups, onRestore }: { slug: string; backups: ReturnTy
     )
   }
 
-  const { view, audit } = load
+  const { view } = load
   if (!view.installed) {
     return (
       <Panel>
@@ -647,17 +708,18 @@ function Content({ slug, backups, onRestore }: { slug: string; backups: ReturnTy
         </Banner>
       )}
 
-      <SchedulePanel view={view} serverNow={serverNow} />
-      <SnapshotsPanel view={view} serverNow={serverNow} onRestore={onRestore} />
-      <ActivityPanel slug={slug} audit={audit} serverNow={serverNow} />
+      <StatusPanel view={view} serverNow={serverNow} />
+      {/* No snapshot yet: the status row says so, and when the first one comes. */}
+      {view.snapshots.length > 0 && <SnapshotsPanel view={view} serverNow={serverNow} onRestore={onRestore} />}
     </>
   )
 }
 
 /**
- * A site's backups, under `/site/backups/?s=<slug>`: the schedule, the
- * snapshots with their restore, then the activity. A restore asks for the
- * unlock when pressed, then opens its confirmation.
+ * A site's backups, under `/site/backups/?s=<slug>`: the status row and its
+ * details, then the snapshots with their restore. No activity panel: the
+ * runs and the restores are in Activity, behind *History*. A restore asks
+ * for the unlock when pressed, then opens its confirmation.
  */
 export function BackupsSection({ slug }: { slug: string }) {
   const { secrets, refresh } = useData()

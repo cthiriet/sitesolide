@@ -29,6 +29,7 @@ import {
   storeVariableOffer,
   withStore,
   UNDECLARED,
+  UNDECLARED_HINT,
 } from "../src/lib/store"
 import {
   PENDING_LABEL,
@@ -90,8 +91,9 @@ describe("the path a service reads a file at", () => {
 })
 
 describe("a variable's row", () => {
-  test("a name sitesolide.json does not declare is said, and nothing more", () => {
-    expect(UNDECLARED).toBe("Not in sitesolide.json")
+  test("a name sitesolide.json does not declare is a muted tag, its tooltip saying where", () => {
+    expect(UNDECLARED).toBe("Not declared")
+    expect(UNDECLARED_HINT).toStartWith("Not in sitesolide.json")
   })
 
   /** I8: only the owner reads a value back. Admin and Developer write, and see no reveal. */

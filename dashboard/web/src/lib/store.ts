@@ -66,8 +66,12 @@ function list(names: readonly string[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
 }
 
-/** Said beside a name the store holds that sitesolide.json does not declare; nothing beside one it does. */
-export const UNDECLARED = "Not in sitesolide.json"
+/**
+ * Said beside a name the store holds that sitesolide.json does not declare,
+ * a muted tag; nothing beside one it does. Its tooltip says where.
+ */
+export const UNDECLARED = "Not declared"
+export const UNDECLARED_HINT = "Not in sitesolide.json: nothing names it, though the store still hands it to the services"
 
 /**
  * What a variable's row offers, from the steward's `may` and the variable's

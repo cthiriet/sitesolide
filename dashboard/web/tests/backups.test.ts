@@ -2,21 +2,28 @@ import { describe, expect, test } from "bun:test"
 import {
   RESTORE_SCALE_MS,
   STALE_SNAPSHOT_MS,
-  auditLine,
+  addedText,
+  backupStatus,
   checkReading,
+  clockTime,
   freshness,
   kindLabel,
   offsiteReading,
   restoreOutcome,
   restoreOver,
   restoreProgress,
+  restoreAct,
   restoreSteps,
   retentionText,
+  snapshotDay,
+  snapshotMoment,
   snapshotSize,
+  snapshotsByDay,
+  takenLabel,
   whereLabel,
 } from "../src/lib/backups"
 import { SECTIONS, pageFromUrl, siteUrl } from "../src/lib/pages"
-import type { AuditEntry, BackupsView, RestoreView, SnapshotView } from "../src/lib/types"
+import type { BackupsView, RestoreView, SnapshotView } from "../src/lib/types"
 
 const NOW = Date.UTC(2026, 9, 4, 13, 0, 0)
 
@@ -160,20 +167,89 @@ describe("the restore", () => {
   })
 })
 
-describe("the activity", () => {
-  const entry = (partial: Partial<AuditEntry>): AuditEntry => ({ id: 1, at: "2026-10-04T12:00:00.000Z", actor: "owner", action: "backup.restore", target: "cms", detail: null, ...partial })
+describe("the status row", () => {
+  type StatusView = Parameters<typeof backupStatus>[0]
+  const checked = { local: { at: NOW - 5 * 3_600_000, ok: true, error: null }, offsite: null }
+  const status = (partial: Partial<StatusView> = {}) =>
+    backupStatus({ lastRun: null, snapshots: [snapshot()], excluded: null, offsite: { target: "backups at fsn1.test-zone.invalid", error: null }, checks: checked, repository: null, ...partial }, NOW)
 
-  test("a restore, its result and who asked", () => {
-    expect(auditLine(entry({ detail: { result: "ok", snapshot: "cms-1.tar.gz" } }), "cms")).toMatchObject({ what: "Restore from cms-1.tar.gz", tone: "ok", outcome: "Done", who: "Dashboard" })
-    expect(auditLine(entry({ actor: "alice@test-zone.invalid", detail: { result: "failure" } }), "cms")).toMatchObject({ outcome: "Failed", who: "alice@test-zone.invalid" })
-    expect(auditLine(entry({ detail: { result: "rejects" } }), "cms")).toMatchObject({ tone: "neutral", outcome: "Refused" })
+  test("fine: the last snapshot's age, then short muted facts, and no detail", () => {
+    expect(status()).toEqual({
+      tone: "ok",
+      label: "Last snapshot 1h ago",
+      detail: null,
+      facts: [
+        { text: "Hourly", tone: "neutral" },
+        { text: "Offsite copy", tone: "neutral" },
+        { text: "Verified 5h ago", tone: "neutral" },
+      ],
+    })
   })
 
-  test("a run fails for this site, or as a whole; another site's failure is not this one's", () => {
-    const run = (detail: Record<string, unknown>) => auditLine(entry({ actor: "system", action: "backup.run", target: null, detail }), "cms")
-    expect(run({ ok: true, failed: [] })).toMatchObject({ what: "Scheduled run", outcome: "Done", who: "Timer" })
-    expect(run({ ok: false, failed: ["shop"] })).toMatchObject({ tone: "ok", outcome: "Done" })
-    expect(run({ ok: false, failed: ["cms"] })).toMatchObject({ tone: "error", outcome: "Failed for this site" })
-    expect(run({ ok: false, failed: [], error: "the run failed" })).toMatchObject({ tone: "error", outcome: "Failed" })
+  test("red on a failed run, which keeps the age of the snapshot before it", () => {
+    const failed = status({ lastRun: { startedAt: NOW, finishedAt: NOW, ok: false, snapshot: null, error: "not enough disk space" } })
+    expect(failed).toMatchObject({ tone: "error", label: "Last run failed", detail: "not enough disk space" })
+    expect(failed.facts[0]).toEqual({ text: "Last snapshot 1h ago", tone: "neutral" })
+  })
+
+  test("attention past two hours, with what restarts the timer", () => {
+    const stale = status({ snapshots: [snapshot({ takenAt: NOW - STALE_SNAPSHOT_MS - 60_000 })] })
+    expect(stale.tone).toBe("attention")
+    expect(stale.detail).toContain("sitesolide setup")
+  })
+
+  test("a misconfigured bucket or a failed check is an error, said in its fact", () => {
+    const bucket = status({ offsite: { target: null, error: "BACKUP_S3_BUCKET missing" } })
+    expect(bucket.tone).toBe("error")
+    expect(bucket.facts).toContainEqual({ text: "Offsite copy misconfigured", tone: "error" })
+    const check = status({ checks: { local: { at: NOW, ok: false, error: "x" }, offsite: null } })
+    expect(check).toMatchObject({ tone: "error", label: "Last snapshot 1h ago" })
+    expect(check.facts).toContainEqual({ text: "Server's copy failed its check", tone: "error" })
+  })
+
+  test("no offsite copy, or nothing checked yet, is information and no alarm", () => {
+    const quiet = status({ offsite: { target: null, error: null }, checks: { local: null, offsite: null } })
+    expect(quiet.tone).toBe("neutral")
+    expect(quiet.facts.map((fact) => fact.text)).toEqual(["Hourly", "No offsite copy", "Not checked yet"])
+  })
+
+  test("a site left out says why rather than a schedule it does not follow", () => {
+    const out = status({ excluded: "opted out by its sitesolide.json" })
+    expect(out.facts[0]).toEqual({ text: "No longer backed up: opted out by its sitesolide.json", tone: "neutral" })
+    expect(out.facts.map((fact) => fact.text)).not.toContain("Hourly")
+  })
+})
+
+describe("when a snapshot was taken", () => {
+  // 13:00 UTC on October 4th: 15:00 in Paris, the same day.
+  const zone = "Europe/Paris"
+  const hour = 3_600_000
+
+  test("today and yesterday by name, older days by their date", () => {
+    expect(snapshotDay(NOW - hour, NOW, zone)).toBe("Today")
+    expect(snapshotDay(NOW - 20 * hour, NOW, zone)).toBe("Yesterday")
+    expect(snapshotDay(NOW - 3 * 24 * hour, NOW, zone)).toBe("Thu, Oct 1")
+  })
+
+  test("in a row, the day and the time; in a sentence and on the button, the date and the time", () => {
+    expect(clockTime(NOW - hour, zone)).toBe("14:00")
+    expect(takenLabel(NOW - hour, NOW, zone)).toBe("Today 14:00")
+    expect(snapshotMoment(NOW - hour, zone)).toBe("Oct 4, 14:00")
+    // The confirmation's button names the act, never a bare "Restore".
+    expect(restoreAct("cms", NOW - hour, zone)).toBe("Restore cms to Oct 4, 14:00")
+  })
+
+  test("Show all groups them by day, newest first as they come", () => {
+    const days = snapshotsByDay([snapshot({ takenAt: NOW - hour }), snapshot({ takenAt: NOW - 2 * hour }), snapshot({ takenAt: NOW - 20 * hour })], NOW, zone)
+    expect(days.map((day) => [day.day, day.snapshots.length])).toEqual([
+      ["Today", 2],
+      ["Yesterday", 1],
+    ])
+  })
+
+  test("what a snapshot added, for its size's tooltip, when the steward says it", () => {
+    expect(addedText(snapshot())).toBe("512 B new")
+    expect(addedText({ added: null })).toBeNull()
+    expect(addedText({})).toBeNull()
   })
 })

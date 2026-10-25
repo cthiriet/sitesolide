@@ -11,7 +11,6 @@ import type {
   Reading,
   DashboardUnlockResponse,
   FileResponse,
-  LogResponse,
   PasswordResponse,
   RestartResponse,
   DashboardResponse,
@@ -21,7 +20,6 @@ import type {
   TeamPageResponse,
   CreatedTokenResponse,
   TokenView,
-  BackupAuditResponse,
   BackupsResponse,
   RestoreResponse,
   SessionResponse,
@@ -143,11 +141,6 @@ function sendSecrets<T>(method: "POST" | "PUT" | "DELETE", path: string, body?: 
 
 export function readSecrets() {
   return callApi<DashboardResponse & SecretsRefusal>("/api/secrets")
-}
-
-/** A site's log: the slug is a name, never a value, and may go in the address. */
-export function readSecretsLog(slug: string) {
-  return callApi<LogResponse & SecretsRefusal>(`/api/secrets/log?slug=${encodeURIComponent(slug)}`)
 }
 
 export function unlockSecrets(password: string) {
@@ -290,10 +283,6 @@ export function revokeToken(id: string) {
 
 export function readBackups(slug: string) {
   return callApi<BackupsResponse & SecretsRefusal>(`/api/backups?slug=${encodeURIComponent(slug)}`)
-}
-
-export function readBackupAudit(slug: string) {
-  return callApi<BackupAuditResponse & SecretsRefusal>(`/api/backups/audit?slug=${encodeURIComponent(slug)}`)
 }
 
 /** The slug retyped, as the steward demands: the requester is the service's to name, not the page's. */
