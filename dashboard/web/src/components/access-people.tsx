@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type SyntheticEvent } from "react"
-import { Check, ChevronDown, ChevronRight, Copy, UserRoundPlus, X } from "lucide-react"
+import { Check, ChevronDown, ChevronRight, Copy, UserRoundMinus, UserRoundPlus, UsersRound, X } from "lucide-react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -12,10 +12,19 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { RoleBars, Who } from "@/components/access-word"
 import { CopyFallback, useAnnounce, useCopy } from "@/components/copy"
-import { Banner, EmptyState, INPUT_DIALOG, Panel } from "@/components/page"
+import { Banner, INPUT_DIALOG, InlineEmpty, Panel } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { LockGlyph } from "@/components/unlock"
 import { putAccess, removeAccess } from "@/lib/api"
@@ -106,12 +115,12 @@ function Select({
 }
 
 /**
- * A row of the list: who on the left, wrapping inside its column; the role
- * and the removal on the right, on the same line even on a phone, where the
- * menu narrows.
+ * A row of the list, 44 px: who on the left, what it is muted beside them,
+ * on a second line when the list is too narrow for both; the role on the
+ * right, a menu when the viewer may change it, which also holds the removal.
  */
-const LINE = "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-2.5"
-const ROLE_WIDTH = "w-[8.75rem] shrink-0 md:w-36"
+const LINE = "grid min-h-11 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-1.5 pr-2 pl-4"
+const ROLE_WIDTH = "w-[8.75rem] shrink-0"
 
 const NONE = "none"
 const toChoice = (seconds: number | null) => (seconds === null ? NONE : String(seconds))
@@ -189,13 +198,13 @@ function SendNotice({ notice, slug, onClose }: { notice: Notice; slug: string; o
 
 /**
  * What each role can do, from Can open to Admin, each including the ones
- * below: a disclosure open from the start for everyone, the owner and the
- * Admins who give the roles first among them, closed with one click. The
- * viewer's own rung is marked.
+ * below: reference, read once, so a closed disclosure; each role's menu
+ * says the same in one line beside each choice. The viewer's own rung is
+ * marked.
  */
 function RolesDisclosure({ yours }: { yours: AccessRole | null }) {
   return (
-    <details open className="group text-xs">
+    <details className="group text-xs">
       <summary className="-mx-1 inline-flex cursor-pointer list-none items-center gap-1 rounded-sm px-1 text-muted-foreground outline-none select-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
         <ChevronRight aria-hidden="true" className="size-3.5 transition-transform group-open:rotate-90 motion-reduce:transition-none" />
         What each role can do
@@ -376,74 +385,137 @@ function AddPeople({
   )
 }
 
-/** One person, domain or password access, with its role and its removal when the viewer may change them. */
-function EntryLine({
+/**
+ * A row's role, the Google Docs way: a quiet button with the role's bars
+ * and its word, opening a menu of the roles the viewer may give, each with
+ * what it can do, the current one ticked, a raise that waits for the unlock
+ * carrying its glyph; then, under a separator, *Remove access*, which still
+ * confirms. Whoever may change nothing reads the word alone.
+ */
+function RoleMenu({
   row,
   slug,
   busy,
-  spacer,
+  locked,
   onRole,
   onRemove,
 }: {
   row: EntryRow
   slug: string
   busy: boolean
-  /** Keep the removal's place when there is none on this row, so that the roles stay aligned. */
-  spacer: boolean
+  locked: boolean
+  onRole: (role: AccessRole) => void
+  onRemove: () => void
+}) {
+  const { entry } = row
+  const trigger = useRef<HTMLButtonElement>(null)
+  const word = (
+    <>
+      <RoleBars role={entry.role} muted={row.muted} />
+      <span className={cn("min-w-0 flex-1 truncate text-left", row.muted ? "text-muted-foreground" : "text-secondary-foreground")}>{row.word}</span>
+    </>
+  )
+  if (row.roles === null && !row.removable) {
+    return <span className={cn(ROLE_WIDTH, "flex h-8 items-center gap-2 px-2.5 text-sm")}>{word}</span>
+  }
+  // Wait for the menu to close, and give focus back to its button, which a confirmation or the unlock returns to.
+  const later = (action: () => void) =>
+    window.setTimeout(() => {
+      trigger.current?.focus()
+      action()
+    }, 0)
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        disabled={busy}
+        render={
+          <Button
+            ref={trigger}
+            variant="ghost"
+            aria-label={`Role of ${entry.who} on ${slug}: ${row.word}`}
+            className={cn(ROLE_WIDTH, "justify-start gap-2 px-2.5 font-normal max-md:h-10")}
+          />
+        }
+      >
+        {word}
+        <ChevronDown aria-hidden="true" className="text-muted-foreground" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-80 max-w-[calc(100vw-2rem)]">
+        <DropdownMenuRadioGroup
+          value={entry.role}
+          onValueChange={(value: AccessRole) => {
+            if (value !== entry.role) later(() => onRole(value))
+          }}
+        >
+          {(row.roles ?? [entry.role]).map((role) => (
+            <DropdownMenuRadioItem key={role} value={role} disabled={row.roles === null} closeOnClick className="items-start gap-2.5 py-2 max-md:py-2.5">
+              <RoleBars role={role} className="mt-1" />
+              <span className="grid min-w-0 gap-0.5">
+                <span className="flex items-center gap-1.5 font-medium">
+                  {roleLabel(role)}
+                  {locked && raiseNeedsUnlock(entry.role, role) && <LockGlyph />}
+                </span>
+                <span className="text-xs text-pretty whitespace-normal text-muted-foreground">{ROLE_TEXTS[role].can}</span>
+              </span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+        {row.removable && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onClick={() => later(onRemove)} className="h-9 max-md:h-10">
+              <UserRoundMinus />
+              Remove access
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/**
+ * One person, domain or password access: who, *(you)* on one's own, what it
+ * is beside them, muted, and in attention a password access ending within a
+ * day; who added it and when, in the name's tooltip; the role on the right.
+ */
+function EntryLine({
+  row,
+  slug,
+  busy,
+  locked,
+  onRole,
+  onRemove,
+}: {
+  row: EntryRow
+  slug: string
+  busy: boolean
+  locked: boolean
   onRole: (role: AccessRole) => void
   onRemove: () => void
 }) {
   const { entry } = row
   return (
     <li className={LINE}>
-      <div className="grid min-w-0 gap-0.5">
-        <span className={cn("font-medium wrap-break-word", row.muted && "text-muted-foreground")}>
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 @xl/people:flex-nowrap">
+        <span title={row.added ?? undefined} className={cn("min-w-0 font-medium wrap-break-word @xl/people:shrink-0", row.muted ? "text-muted-foreground" : "text-strong")}>
           <Who value={entry.who} />
           {row.self && <span className="font-normal text-muted-foreground"> (you)</span>}
+          {row.added !== null && <span className="sr-only">, {row.added}</span>}
         </span>
         {row.what !== null && (
-          <span className={cn("text-xs", row.whatTone === "attention" && !row.muted ? TONE_TEXT.attention : "text-muted-foreground")}>{row.what}</span>
-        )}
-        {row.added !== null && <span className="text-xs text-muted-foreground">{row.added}</span>}
-      </div>
-      <div className="flex items-center gap-1">
-        {row.roles === null ? (
-          <span className={cn(ROLE_WIDTH, "flex items-center gap-2 px-2.5 text-sm", row.muted ? "text-muted-foreground" : "text-secondary-foreground")}>
-            <RoleBars role={entry.role} muted={row.muted} />
-            {row.word}
+          <span
+            title={row.what}
+            className={cn(
+              "min-w-0 basis-full text-xs @xl/people:basis-auto @xl/people:truncate @xl/people:text-[0.8125rem]",
+              row.whatTone === "attention" && !row.muted ? TONE_TEXT.attention : "text-muted-foreground",
+            )}
+          >
+            {row.what}
           </span>
-        ) : (
-          <Select
-            label={`Role of ${entry.who} on ${slug}`}
-            value={entry.role}
-            disabled={busy}
-            role={entry.role}
-            onChange={(value) => onRole(value as AccessRole)}
-            className={ROLE_WIDTH}
-          >
-            {row.roles.map((option) => (
-              <option key={option} value={option} className="text-foreground">
-                {roleLabel(option)}
-              </option>
-            ))}
-          </Select>
-        )}
-        {row.removable ? (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            disabled={busy}
-            title={`Remove ${entry.who}`}
-            aria-label={`Remove ${entry.who} from ${slug}`}
-            onClick={onRemove}
-            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive max-md:size-10 dark:hover:bg-destructive/15"
-          >
-            <X />
-          </Button>
-        ) : (
-          spacer && <span aria-hidden="true" className="size-8 max-md:size-10" />
         )}
       </div>
+      <RoleMenu row={row} slug={slug} busy={busy} locked={locked} onRole={onRole} onRemove={onRemove} />
     </li>
   )
 }
@@ -679,18 +751,16 @@ export function PeopleWithAccess({
       )}
 
       {count === 0 ? (
-        <EmptyState compact title={`Nobody else has access to ${page.slug} yet`}>
-          {manages ? "Add people above: they open the site when its access is restricted, and with a role they see or manage it here." : null}
-        </EmptyState>
+        <InlineEmpty icon={UsersRound}>Nobody else has access to {page.slug} yet.</InlineEmpty>
       ) : (
-        <ul className="divide-y divide-divider" aria-label={`Who has access to ${page.slug}`}>
+        <ul className="@container/people divide-y divide-divider" aria-label={`Who has access to ${page.slug}`}>
           {entries.map((entry) => (
             <EntryLine
               key={entry.who}
               row={entryRow(entry, page, now)}
               slug={page.slug}
               busy={busy === entry.who}
-              spacer={manages}
+              locked={!actions.state.open}
               onRole={(role) => void changeRole(entry, role)}
               onRemove={() => setPending({ entry, role: null, open: true, inProgress: false, error: "" })}
             />

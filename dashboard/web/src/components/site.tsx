@@ -12,7 +12,7 @@ import {
 import { SidebarMenuButton } from "@/components/ui/sidebar"
 import { useData } from "@/components/data"
 import { InternalLink } from "@/components/navigation"
-import { WithSnapshot, PageBody, EmptyState, PageHeader, Panel, Status } from "@/components/page"
+import { WithSnapshot, PageBody, EmptyState, PageHeader, Panel } from "@/components/page"
 import type { HistoryFilter } from "@/lib/history"
 import { isPerson } from "@/lib/identity"
 import { pageTitle, siteUrl, type Section } from "@/lib/pages"
@@ -193,30 +193,6 @@ function SiteBreadcrumb({ slug, section }: { slug: string; section: Section }) {
   )
 }
 
-/** A link from a panel to a section of the same site: *Manage ›*. */
-export function SectionLink({
-  slug,
-  section,
-  children = "Manage",
-}: {
-  slug: string
-  section: Section
-  children?: ReactNode
-}) {
-  return (
-    <InternalLink
-      href={siteUrl(slug, section)}
-      className={cn(
-        buttonVariants({ variant: "ghost", size: "sm" }),
-        "-mr-2 text-muted-foreground hover:text-foreground max-md:h-9",
-      )}
-    >
-      {children}
-      <ChevronRight aria-hidden="true" />
-    </InternalLink>
-  )
-}
-
 // --- The shared page ---------------------------------------------------------------
 
 /**
@@ -289,18 +265,5 @@ export function SitePage({
         </WithSnapshot>
       </PageBody>
     </>
-  )
-}
-
-/** A site's state under its title, a dot and a word: "Running, 1 warning". */
-export function SiteState({ site, discrepancies }: { site: Site; discrepancies: readonly Discrepancy[] }) {
-  const state = siteState(site, discrepancies)
-  return (
-    <Status
-      tone={state.tone}
-      className={cn(state.tone === "ok" || state.tone === "neutral" ? "text-foreground" : "font-medium")}
-    >
-      {state.label}
-    </Status>
   )
 }

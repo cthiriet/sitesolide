@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { KeyRound } from "lucide-react"
-import { GeneralAccessPanel } from "@/components/access-general"
+import { GeneralAccessLine, GeneralAccessPanel } from "@/components/access-general"
 import { PeopleWithAccess } from "@/components/access-people"
 import { useData } from "@/components/data"
 import { TEXT_LINK } from "@/components/link"
@@ -12,7 +12,6 @@ import { readAccess } from "@/lib/api"
 import {
   ACCESS_UNREACHABLE,
   emptyListWarning,
-  generalLine,
   generalOptions,
   generalState,
   isPlatform,
@@ -71,11 +70,8 @@ function useAccess(slug: string, enabled: boolean) {
  */
 function PlatformContent({ site }: { site: Site }) {
   return (
-    <Panel title="General access">
-      <div className="grid gap-1.5">
-        <p className="text-pretty">{generalLine(generalState(site), site.slug, true)}</p>
-        <p className="text-pretty text-muted-foreground">{platformText(site.slug)}</p>
-      </div>
+    <Panel title="General access" full>
+      <GeneralAccessLine slug={site.slug} state={generalState(site)} note={platformText(site.slug)} />
     </Panel>
   )
 }

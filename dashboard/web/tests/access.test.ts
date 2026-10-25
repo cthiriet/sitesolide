@@ -10,7 +10,6 @@ import {
   PASSWORD_DURATIONS,
   PLATFORM_SLUGS,
   ROLE_TEXTS,
-  accessSummary,
   accountWords,
   alsoOpens,
   askAnAdmin,
@@ -25,7 +24,8 @@ import {
   confirmationValid,
   emptyListWarning,
   entryRow,
-  generalLine,
+  listCount,
+  whoChanges,
   generalOptions,
   generalState,
   mayRenew,
@@ -216,14 +216,8 @@ describe("general access", () => {
     expect(stewardChoices(null)).toBeNull()
   })
 
-  test("whoever only reads it gets one line: how the site opens, and who changes it", () => {
-    expect(generalLine(generalState(site({ portal: { wanted: true, installed: true, exemptions: [] } })), "cms")).toBe(
-      "Restricted: only the people with access can open it, once signed in. Only an Admin of cms, or the owner, changes it.",
-    )
-    expect(generalLine(generalState(site()), "cms")).toBe("Public: anyone with the address can open the site. Only an Admin of cms, or the owner, changes it.")
-    expect(generalLine(generalState(site({ lock: { closed: true, code: "K7PX3M", url: null } })), "cms")).toStartWith("Anyone with the code: the preview code opens it.")
-    // A platform project: nobody but the owner has a say, so the line says how it opens, alone.
-    expect(generalLine(generalState(site()), "portal", true)).toBe("Public: anyone with the address can open the site.")
+  test("whoever only reads it is told who changes it; a platform project, why nobody is on it", () => {
+    expect(whoChanges("cms")).toBe("Only an Admin of cms, or the owner, changes it.")
     expect(platformText("portal")).toBe("portal is part of the platform. Only the owner opens it when restricted; no one can be given a role on it.")
   })
 
@@ -473,11 +467,11 @@ describe("the people with access", () => {
     expect(selfChangeWarning("cms")).toBe("You'll no longer manage cms. Only another Admin or the owner can give it back.")
   })
 
-  test("the Overview counts people and domains", () => {
-    expect(accessSummary([entry("a@acme.test"), entry("b@acme.test", "admin"), password("c@out.test", null), entry("@acme.test")])).toBe("3 people and 1 domain have access")
-    expect(accessSummary([entry("a@acme.test")])).toBe("1 person has access")
-    expect(accessSummary([entry("@acme.test"), entry("@acme.example")])).toBe("2 domains have access")
-    expect(accessSummary([])).toBe("Nobody is on the list yet")
+  test("the Overview counts people and domains in a few words", () => {
+    expect(listCount([entry("a@acme.test"), entry("b@acme.test", "admin"), password("c@out.test", null), entry("@acme.test")])).toBe("3 people, 1 domain")
+    expect(listCount([entry("a@acme.test")])).toBe("1 person")
+    expect(listCount([entry("@acme.test"), entry("@acme.example")])).toBe("2 domains")
+    expect(listCount([])).toBe("Nobody on the list")
   })
 })
 

@@ -1,17 +1,16 @@
 import { useId, type ReactNode } from "react"
-import { CalendarClock, Cog, FileCode2, Globe, KeyRound, Lock, ShieldX, type LucideIcon } from "lucide-react"
-import { LEVEL_TEXT, MemoryBar, Track } from "@/components/gauge"
+import { AppWindow, CalendarClock, ChevronRight, Cog, type LucideIcon } from "lucide-react"
+import { Track } from "@/components/gauge"
 import { ExternalLink } from "@/components/link"
-import { Banner, Panel, Status } from "@/components/page"
-import { Badge } from "@/components/ui/badge"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { ABSENT } from "@/lib/format"
-import { CodeChip } from "@/components/access-word"
+import { InternalLink } from "@/components/navigation"
+import { Banner, Panel, StateLabel, Status } from "@/components/page"
+import { CellText, DataTable, type Column } from "@/components/data-table"
+import { accessEntry } from "@/components/legend"
+import { accessKey } from "@/lib/legend"
 import {
   SERVICE_THRESHOLD_POSITIONS,
   SERVICE_THRESHOLDS_TITLE,
-  siteAddresses,
-  siteFolder,
+  addressSummary,
   serviceCard,
   serviceRows,
   readAccess,
@@ -21,47 +20,95 @@ import {
   type ServiceGauge,
   type ServiceRow,
 } from "@/lib/site-card"
-import { TONE_TEXT, severityTone } from "@/lib/tones"
+import { isAnchoredSite } from "@/lib/sites"
+import { TONE_TEXT, severityTone, type Tone } from "@/lib/tones"
 import type { Discrepancy, Site } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import type { Severity } from "@/lib/verdict"
 
-/** A path or a unit name, what gets typed into a terminal: monospace, discreet. */
-function Terminal({ children }: { children: string }) {
-  return <code className="font-mono text-xs text-muted-foreground">{children}</code>
+/**
+ * A site's Overview, as a hub: the Service panel, the facts of the service
+ * on the machine, one 44 px line each; the Site panel, one line per section
+ * with its headline and a chevron to it; the Services table for a project
+ * that runs several. A caption that explains a value sits in its tooltip,
+ * unless the value is in trouble, when it is said beside it in its tone.
+ */
+
+// --- The rows ----------------------------------------------------------------------
+
+/** A facts row: its label in a 6.5 rem column, its value, and for a section, the chevron that leads there. */
+const ROW = "grid min-h-11 items-center gap-x-3 px-4 py-2"
+const ROW_COLUMNS = "grid-cols-[5.5rem_minmax(0,1fr)] @sm/facts:grid-cols-[6.5rem_minmax(0,1fr)]"
+const LINK_COLUMNS = "grid-cols-[5.5rem_minmax(0,1fr)_1rem] @sm/facts:grid-cols-[6.5rem_minmax(0,1fr)_1rem]"
+/** A facts list, the container its rows follow: a narrower label column, and a shorter track, in a narrow panel. */
+const FACTS = "@container/facts divide-y divide-divider"
+
+/**
+ * One line of a facts panel. With `href`, the whole line is the link to the
+ * section it sums up, its headline its name, the chevron at its end; a value
+ * holding a link of its own (an address) never takes one.
+ */
+function FactRow({ label, href, tone, children }: { label: string; href?: string; tone?: Tone; children: ReactNode }) {
+  const marked = tone === "error" || tone === "attention"
+  const content = (
+    <>
+      <span className="text-muted-foreground">{label}</span>
+      <span className={cn("flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5", marked && cn("font-medium", TONE_TEXT[tone!]))}>{children}</span>
+    </>
+  )
+  if (href === undefined) return <li className={cn(ROW, ROW_COLUMNS)}>{content}</li>
+  return (
+    <li>
+      <InternalLink
+        href={href}
+        className={cn(
+          ROW,
+          LINK_COLUMNS,
+          "group/fact outline-none hover:bg-muted/45 focus-visible:bg-muted/45 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+        )}
+      >
+        {content}
+        <ChevronRight aria-hidden="true" className="size-4 text-muted-foreground group-hover/fact:text-foreground" />
+      </InternalLink>
+    </li>
+  )
+}
+
+/** A value whose caption waits in its tooltip, and reaches a screen reader beside it. */
+function Explained({ detail, className, children }: { detail: string | null; className?: string; children: ReactNode }) {
+  return (
+    <span title={detail ?? undefined} className={cn("min-w-0 tabular-nums", className)}>
+      {children}
+      {detail !== null && <span className="sr-only">, {detail}</span>}
+    </span>
+  )
+}
+
+/** A value still being read: a bar the height of a line of text. */
+function ValueSkeleton() {
+  return <span aria-hidden="true" className="block h-3.5 w-28 animate-pulse rounded-md bg-muted" />
 }
 
 /** The facts whose value is a machine string, set in monospace like every other: a port. */
 const MACHINE_FACTS: ReadonlySet<string> = new Set(["Port"])
 
-/** Facts as divided rows: the label on the left, the value and its clarification on the right. */
-function FactList({ facts, className }: { facts: readonly Fact[]; className?: string }) {
-  if (facts.length === 0) return null
+/** A fact of the card: its caption in the tooltip when all is well, said in its tone beside it when not. */
+function FactLine({ fact }: { fact: Fact }) {
+  const marked = fact.tone === "attention" || fact.tone === "error"
+  const machine = MACHINE_FACTS.has(fact.label) && /^\d+$/.test(fact.value)
   return (
-    <dl className={cn("divide-y divide-divider", className)}>
-      {facts.map((fact) => {
-        const marked = fact.tone === "attention" || fact.tone === "error"
-        const machine = MACHINE_FACTS.has(fact.label) && /^\d+$/.test(fact.value)
-        return (
-          <div key={fact.label} className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 px-4 py-2.5">
-            <dt className="text-muted-foreground">{fact.label}</dt>
-            <dd className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-              <span className={cn("tabular-nums", machine && "font-mono text-[0.8125rem]", marked && cn("font-medium", TONE_TEXT[fact.tone]))}>
-                {fact.value}
-              </span>
-              {fact.detail !== null && (
-                <span className={cn("text-xs", marked ? TONE_TEXT[fact.tone] : "text-muted-foreground")}>{fact.detail}</span>
-              )}
-            </dd>
-          </div>
-        )
-      })}
-    </dl>
+    <FactRow label={fact.label} tone={fact.tone}>
+      <Explained detail={marked ? null : fact.detail} className={cn(machine && "font-mono text-[0.8125rem]")}>
+        {fact.value}
+      </Explained>
+      {marked && fact.detail !== null && <span className="text-xs">{fact.detail}</span>}
+    </FactRow>
   )
 }
 
 // --- The discrepancies -----------------------------------------------------------
 
-/** The site's discrepancies at the top of its card, one banner each, errors first. */
+/** The site's discrepancies at the top of its Overview, one banner of one line each, errors first. */
 export function SiteDiscrepancies({ discrepancies }: { discrepancies: readonly Discrepancy[] }) {
   const id = useId()
   if (discrepancies.length === 0) return null
@@ -86,31 +133,17 @@ export function SiteDiscrepancies({ discrepancies }: { discrepancies: readonly D
 // --- The service -----------------------------------------------------------------
 
 /**
- * The service's memory, in the manner of the machine plate: the figure, the
- * track and its ticks, here at the service's thresholds. The peak is a marker
- * on the track, repeated in the caption: it is what turns the bar amber.
+ * The service's memory on one line: the amount, a 120 px track ticked at the
+ * service's thresholds with its peak marked across it, and the share. The
+ * peak's words are in the tooltip: it is what turns the bar amber.
  */
-function MemoryGauge({ gauge }: { gauge: ServiceGauge }) {
+function MemoryLine({ gauge }: { gauge: ServiceGauge }) {
   const { tile } = gauge
+  const level = tile.level === "critical" ? "error" : tile.level === "warn" ? "attention" : "neutral"
   return (
-    <div className="grid gap-2">
-      <div className="flex items-baseline justify-between gap-3">
-        <p className="flex flex-wrap items-baseline gap-x-2">
-          <span
-            className={cn(
-              "text-2xl leading-7 font-semibold tracking-title tabular-nums",
-              LEVEL_TEXT[tile.level],
-            )}
-          >
-            {tile.value}
-          </span>
-          <span className="text-sm text-muted-foreground tabular-nums">{tile.detail}</span>
-        </p>
-        {tile.percent !== null && (
-          <span className="text-sm text-muted-foreground tabular-nums">{tile.percent}%</span>
-        )}
-      </div>
-      <div className="relative">
+    <FactRow label="Memory" tone={level}>
+      <Explained detail={gauge.peakDetail}>{gauge.amount}</Explained>
+      <span className="relative w-16 shrink-0 @sm/facts:w-[7.5rem]">
         <Track tile={tile} thresholds={SERVICE_THRESHOLD_POSITIONS} title={SERVICE_THRESHOLDS_TITLE} />
         {gauge.peak !== null && (
           <span
@@ -119,35 +152,27 @@ function MemoryGauge({ gauge }: { gauge: ServiceGauge }) {
             style={{ left: `${gauge.peak}%` }}
           />
         )}
-      </div>
-      <p className="-mt-1 flex items-center gap-2 text-xs text-muted-foreground tabular-nums">
-        {gauge.peak !== null && <span aria-hidden="true" className="h-3 w-0.5 rounded-full bg-foreground" />}
-        {gauge.peakDetail}
-      </p>
-    </div>
+      </span>
+      {tile.percent !== null && <span className={cn("tabular-nums", level === "neutral" && "text-muted-foreground")}>{tile.percent}%</span>}
+    </FactRow>
   )
 }
 
+/**
+ * The project's main unit, as facts: its state and how long it has been up,
+ * its memory against its ceiling, its CPU, its restarts, its port. Nothing
+ * for a static site or a folder with no manifest, which run no service: the
+ * kind under the title says so. `action` is the Restart a Developer or an
+ * Admin may ask for.
+ */
 export function ServicePanel({ site, now, action }: { site: Site; now: number; action?: ReactNode }) {
   const card = serviceCard(site, now)
-  if (card.kind !== "app") {
-    return (
-      <Panel title="Service">
-        <div className="flex gap-3">
-          <FileCode2 aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-          <div className="grid gap-1">
-            <p className="font-medium">{card.kind === "static" ? "Static files" : "No manifest"}</p>
-            <p className="text-muted-foreground">
-              {card.kind === "static"
-                ? "Caddy serves the folder as files. There is no service to run or watch."
-                : "The folder has no sitesolide.json and no service: Caddy serves it as it is."}
-            </p>
-          </div>
-        </div>
-      </Panel>
-    )
-  }
-
+  if (card.kind !== "app") return null
+  const { state } = card
+  const marked = state.tone === "error" || state.tone === "attention"
+  // The anchor of a project whose every service is scheduled runs nothing: while it keeps their timers armed, the Services table says it all.
+  if (isAnchoredSite(site) && !marked && action === undefined) return null
+  const stateDetail = [card.uptime?.since ?? null, card.systemd].filter((piece): piece is string => piece !== null).join(", ")
   return (
     <Panel
       title={card.title}
@@ -155,365 +180,344 @@ export function ServicePanel({ site, now, action }: { site: Site; now: number; a
       actions={
         card.unit === null && action === undefined ? undefined : (
           <>
-            {card.unit !== null && <Terminal>{card.unit}</Terminal>}
+            {card.unit !== null && <code className="font-mono text-xs text-muted-foreground">{card.unit}</code>}
             {action}
           </>
         )
       }
     >
-      <div className="grid gap-4 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-          <Status tone={card.state.tone} className="font-medium">
-            {card.state.label}
-          </Status>
-          {card.systemd !== null && <span className="text-xs text-muted-foreground">{card.systemd}</span>}
-        </div>
-        {card.gauge !== null ? <MemoryGauge gauge={card.gauge} /> : <p className="text-muted-foreground">{card.note}</p>}
-      </div>
-      <FactList facts={card.facts} className="border-t" />
-    </Panel>
-  )
-}
-
-/**
- * What reaches a service, or what starts it, as a badge: its paths, the rest
- * of the site, the project alone; nothing for a worker; its timer for a
- * scheduled service, its schedule in words or as written.
- */
-function ReachBadges({ reach }: { reach: Reach }) {
-  if (reach.kind === "background") {
-    return (
-      <Badge variant="secondary" className="rounded-md" title="A worker: it runs for good, in the background, and listens on nothing">
-        <Cog aria-hidden="true" />
-        Background
-      </Badge>
-    )
-  }
-  if (reach.kind === "scheduled") {
-    return (
-      <Badge
-        variant="secondary"
-        className={cn("rounded-md", reach.words === null && "font-mono")}
-        title={`Started by its timer, ${reach.timer}, at the times its schedule names; nothing runs between two runs`}
-      >
-        <CalendarClock aria-hidden="true" />
-        {reach.words ?? reach.expression}
-      </Badge>
-    )
-  }
-  if (reach.kind === "internal") {
-    return (
-      <Badge variant="secondary" className="rounded-md" title="Called by the project's other services, never by visitors">
-        <Lock aria-hidden="true" />
-        Internal
-      </Badge>
-    )
-  }
-  if (reach.kind === "rest") {
-    return (
-      <Badge variant="outline" className="rounded-md" title="Every request no other service claims">
-        <Globe aria-hidden="true" />
-        All other paths
-      </Badge>
-    )
-  }
-  return (
-    <span className="flex flex-wrap gap-1">
-      {reach.paths.map((path) => (
-        <Badge key={path} variant="outline" className="rounded-md font-mono" title="Requests on this path">
-          <Globe aria-hidden="true" />
-          {path}
-        </Badge>
-      ))}
-    </span>
-  )
-}
-
-/** The port under the badge: where Caddy, or the siblings, reach the service. */
-function PortLine({ row }: { row: ServiceRow }) {
-  if (row.port === null) return null
-  return row.listening === false ? (
-    <span className="text-xs font-medium text-destructive tabular-nums">port {row.port}, nothing listens</span>
-  ) : (
-    <span className="text-xs text-muted-foreground tabular-nums">port {row.port}</span>
-  )
-}
-
-/** Memory against the ceiling, a short bar and the figure; a dash when the service isn't running. */
-function MemoryLine({ row }: { row: ServiceRow }) {
-  if (row.memory === null) return <span className="text-muted-foreground">{ABSENT}</span>
-  return (
-    <span className="flex items-center gap-2 whitespace-nowrap tabular-nums">
-      <MemoryBar percent={row.memoryPercent} level={row.memoryLevel} />
-      {row.memory}
-    </span>
-  )
-}
-
-/**
- * The word, then what it adds: the restarts, and for a scheduled service its
- * last run and its next. A failed run takes the warning's tone.
- */
-function StateLine({ row, end = false }: { row: ServiceRow; end?: boolean }) {
-  const last = row.runs?.last ?? null
-  const next = row.runs?.next ?? null
-  return (
-    <span className={cn("grid gap-0.5", end ? "justify-items-end text-right" : "justify-items-start")}>
-      <Status tone={row.state.tone} className={row.state.tone === "ok" ? undefined : "font-medium"}>
-        {row.state.label}
-      </Status>
-      {row.restarts !== null && <span className="text-xs text-attention-text tabular-nums">{row.restarts}</span>}
-      {last !== null && (
-        <span className={cn("text-xs tabular-nums", last.tone === "attention" ? "text-attention-text" : "text-muted-foreground")}>
-          {last.text}
-        </span>
-      )}
-      {next !== null && <span className="text-xs text-muted-foreground tabular-nums">{next}</span>}
-    </span>
-  )
-}
-
-const SERVICES_HEAD = "h-10 px-3 mono-label"
-const SERVICES_CELL = "px-3 py-3 align-top whitespace-normal"
-
-/**
- * The second column's heading: what a server receives, or, beside a worker or
- * a scheduled service, which receive nothing, how each one runs.
- */
-function reachHeading(rows: readonly ServiceRow[]): string {
-  return rows.every((row) => row.kind === "server") ? "Receives" : "How it runs"
-}
-
-/** The panel's sentence, naming only the kinds the project has. */
-function servicesDescription(rows: readonly ServiceRow[]): string {
-  const parts: string[] = []
-  if (rows.some((row) => row.kind === "server")) {
-    parts.push("Caddy sends each request to the service that claims its path. An internal service is only called by the others.")
-  }
-  if (rows.some((row) => row.kind === "worker")) parts.push("A worker runs in the background and listens on nothing.")
-  if (rows.some((row) => row.kind === "scheduled")) parts.push("A scheduled service runs at the times its schedule names, and nothing between two runs.")
-  return parts.join(" ")
-}
-
-/**
- * The processes of a project that runs several: what each one is, what
- * reaches it, what it weighs and how it runs. A table where there is room, a
- * card per service below that. Nothing for a single service, which the
- * Service panel already describes whole, unless it is scheduled: the Service
- * panel then describes the project's anchor.
- */
-export function ServicesPanel({ site, now }: { site: Site; now: number }) {
-  const rows = serviceRows(site, now)
-  if (rows.length === 0) return null
-  return (
-    <Panel title="Services" count={rows.length} full description={servicesDescription(rows)}>
-      <div className="@container">
-        <div className="hidden @xl:block">
-          <Table>
-            <caption className="sr-only">The services of {site.slug}, the main one first.</caption>
-            <TableHeader className="bg-cell">
-              <TableRow className="hover:bg-transparent">
-                <TableHead className={cn(SERVICES_HEAD, "pl-4")}>Service</TableHead>
-                <TableHead className={SERVICES_HEAD}>{reachHeading(rows)}</TableHead>
-                <TableHead className={SERVICES_HEAD}>Memory</TableHead>
-                <TableHead className={cn(SERVICES_HEAD, "pr-4")}>Status</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((row) => (
-                <TableRow key={row.unit} className="border-divider hover:bg-transparent">
-                  <TableCell className={cn(SERVICES_CELL, "pl-4")}>
-                    <span className="grid gap-0.5">
-                      <span className="font-medium">{row.name}</span>
-                      <Terminal>{row.unit}</Terminal>
-                    </span>
-                  </TableCell>
-                  <TableCell className={SERVICES_CELL}>
-                    <span className="grid justify-items-start gap-1">
-                      <ReachBadges reach={row.reach} />
-                      <PortLine row={row} />
-                    </span>
-                  </TableCell>
-                  <TableCell className={SERVICES_CELL}>
-                    <MemoryLine row={row} />
-                  </TableCell>
-                  <TableCell className={cn(SERVICES_CELL, "pr-4")}>
-                    <StateLine row={row} />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-
-        <ul className="divide-y divide-divider @xl:hidden">
-          {rows.map((row) => (
-            <li key={row.unit} className="grid gap-2 px-4 py-3">
-              <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
-                <span className="grid gap-0.5">
-                  <span className="font-medium">{row.name}</span>
-                  <Terminal>{row.unit}</Terminal>
-                </span>
-                <StateLine row={row} end />
-              </div>
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <ReachBadges reach={row.reach} />
-                <PortLine row={row} />
-                <span className="ml-auto text-xs">
-                  <MemoryLine row={row} />
-                </span>
-              </div>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </Panel>
-  )
-}
-
-// --- The addresses ---------------------------------------------------------------
-
-export function AddressesPanel({ site }: { site: Site }) {
-  const lines = siteAddresses(site)
-  return (
-    <Panel title="Addresses" full>
-      <ul className="divide-y divide-divider">
-        {lines.map((line) => (
-          <li
-            key={line.name}
-            className={cn("flex items-start justify-between gap-3 py-2.5 pr-4", line.role === "alias" ? "pl-8" : "pl-4")}
-          >
-            <div className="grid min-w-0 justify-items-start gap-0.5">
-              {line.href === null ? (
-                <span className="font-mono text-[0.8125rem] wrap-anywhere" title="Doesn't answer yet">
-                  {line.name}
-                </span>
-              ) : (
-                <ExternalLink href={line.href} className="font-mono text-[0.8125rem]">
-                  {line.name}
-                </ExternalLink>
-              )}
-              {line.detail !== null && <span className="text-xs text-muted-foreground">{line.detail}</span>}
-            </div>
-            {line.state !== null && (
-              <Status tone={line.state.tone} className="mt-px">
-                {line.state.label}
-              </Status>
-            )}
-          </li>
+      <ul className={FACTS}>
+        <FactRow label="State" tone={state.tone}>
+          <Explained detail={stateDetail === "" ? null : stateDetail}>{state.label}</Explained>
+          {card.uptime !== null && <span className="text-muted-foreground tabular-nums">up {card.uptime.value}</span>}
+          {/* Why there is no memory to show, or what an anchor does: said when the state is in trouble, on hover otherwise. */}
+          {card.note !== null && card.gauge === null && marked && <span className="basis-full text-xs font-normal text-muted-foreground">{card.note}</span>}
+        </FactRow>
+        {card.gauge !== null && <MemoryLine gauge={card.gauge} />}
+        {card.note !== null && card.gauge === null && !marked && (
+          <li className="px-4 py-2.5 text-xs text-pretty text-muted-foreground">{card.note}</li>
+        )}
+        {card.facts.map((fact) => (
+          <FactLine key={fact.label} fact={fact} />
         ))}
       </ul>
     </Panel>
   )
 }
 
-// --- General access ------------------------------------------------------------------
+// --- The services ----------------------------------------------------------------
 
-const ACCESS_ICONS: Record<"code" | "portal" | "open" | "mismatch", LucideIcon> = {
-  code: KeyRound,
-  portal: Lock,
-  open: Globe,
-  mismatch: ShieldX,
+const SERVICE_ICON: Record<ServiceRow["kind"], LucideIcon> = { server: AppWindow, worker: Cog, scheduled: CalendarClock }
+const SERVICE_KIND: Record<ServiceRow["kind"], string> = {
+  server: "Serves pages",
+  worker: "Background: runs for good, listens on nothing",
+  scheduled: "Scheduled: runs at the times its schedule names, nothing between two runs",
+}
+
+/** What reaches a service, or what starts it, in words: its paths, the rest of the site, the project alone, its schedule. */
+function reachText(reach: Reach): { text: string; mono: boolean; title: string } {
+  switch (reach.kind) {
+    case "background":
+      return { text: "Background", mono: false, title: "A worker: it runs for good, in the background, and listens on nothing" }
+    case "scheduled":
+      return {
+        text: reach.words ?? reach.expression,
+        mono: reach.words === null,
+        title: `Started by its timer, ${reach.timer}, at the times its schedule names; nothing runs between two runs`,
+      }
+    case "internal":
+      return { text: "Internal", mono: false, title: "Called by the project's other services, never by visitors" }
+    case "rest":
+      return { text: "All other paths", mono: false, title: "Every request no other service claims" }
+    case "paths":
+      return { text: reach.paths.join(" "), mono: true, title: `Requests on ${reach.paths.join(", ")}` }
+  }
+}
+
+function rowSeverity(row: ServiceRow): Severity | null {
+  if (row.state.tone === "error" || row.listening === false) return "error"
+  if (row.state.tone === "attention" || row.restarts !== null) return "warning"
+  return null
 }
 
 /**
- * The site's general access as the snapshot sees it, on its Overview;
- * `actions` leads to its Access section. `plain`: a Viewer or a Developer
- * reads Applied rather than the Caddy block.
+ * The row's word, quiet when fine: the state when it is not, otherwise what
+ * else is wrong, a silent port, restarts. Its tooltip carries the last run
+ * of a scheduled service that failed.
  */
-export function AccessPanel({ site, actions, plain = false }: { site: Site; actions?: ReactNode; plain?: boolean }) {
-  const reading = readAccess(site, plain)
-  const { access } = reading
-  const Icon = ACCESS_ICONS[access.kind]
-  const error = reading.tone === "error"
+function rowState(row: ServiceRow): { tone: Tone; text: string; title?: string } | null {
+  if (row.state.tone !== "ok") return { tone: row.state.tone, text: row.state.label, title: row.runs?.last?.text }
+  if (row.listening === false) return { tone: "error", text: `Port ${row.port}, nothing listens` }
+  if (row.restarts !== null) return { tone: "attention", text: row.restarts }
+  return null
+}
+
+/** Since when it runs, or when it runs next, without the words the column's head already says. */
+function whenText(row: ServiceRow): { text: string; title: string | undefined } | null {
+  if (row.runs === null) return null
+  const last = row.runs.last?.text
+  if (row.state.label === "Running") return last === undefined ? null : { text: last, title: undefined }
+  if (row.runs.next === null) return null
+  return { text: row.runs.next.replace(/^Next run /, ""), title: last }
+}
+
+const SERVICE_COLUMNS: readonly Column<ServiceRow>[] = [
+  {
+    key: "service",
+    head: "Service",
+    width: "minmax(12rem,1.4fr)",
+    slot: "primary",
+    cell: (row) => {
+      const Icon = SERVICE_ICON[row.kind]
+      const state = rowState(row)
+      return (
+        <>
+          <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+          <span className="sr-only">{SERVICE_KIND[row.kind]}: </span>
+          <span title={row.unit} className="shrink-0 font-medium text-strong">
+            {row.name}
+          </span>
+          {state !== null && (
+            <StateLabel tone={state.tone} title={state.title}>
+              {state.text}
+            </StateLabel>
+          )}
+          {/* On two lines the unit goes: the name and the state fill the first, and the unit stays in the name's tooltip. */}
+          <CellText title={row.unit} className="font-mono text-xs text-muted-foreground @max-2xl/table:hidden">
+            {row.unit}
+          </CellText>
+        </>
+      )
+    },
+  },
+  {
+    key: "reach",
+    head: "How it runs",
+    width: "minmax(8rem,1fr)",
+    cell: (row) => {
+      const reach = reachText(row.reach)
+      const port = row.port === null ? "" : `, port ${row.port}`
+      return (
+        <CellText title={`${reach.title}${port}`} className={cn("text-muted-foreground", reach.mono && "font-mono text-[0.8125rem]")}>
+          {reach.text}
+        </CellText>
+      )
+    },
+  },
+  {
+    key: "memory",
+    head: "Memory",
+    width: "7rem",
+    align: "end",
+    // On two lines an empty cell goes, its dot with it; in columns it keeps its track.
+    className: "@max-2xl/table:empty:hidden",
+    // Nothing while it does not run: a scheduled service between two runs weighs nothing, and a stopped one says so in its state.
+    cell: (row) => row.memory,
+  },
+  {
+    key: "when",
+    head: "Next run",
+    width: "7.5rem",
+    align: "end",
+    slot: "time",
+    cell: (row) => {
+      const when = whenText(row)
+      return when === null ? null : (
+        <span title={when.title} className="text-muted-foreground">
+          {when.text}
+        </span>
+      )
+    },
+  },
+]
+
+/**
+ * The processes of a project that runs several, one line each: its kind's
+ * icon, its name and unit, its state only when not fine, what reaches it or
+ * its schedule, what it weighs, its next run. Nothing for a single service,
+ * which the Service panel already describes whole, unless it is scheduled:
+ * the Service panel then describes the project's anchor.
+ */
+export function ServicesPanel({ site, now }: { site: Site; now: number }) {
+  const rows = serviceRows(site, now)
+  if (rows.length === 0) return null
+  const scheduled = rows.some((row) => row.runs !== null)
   return (
-    <Panel title="General access" full actions={actions}>
-      <div className="grid gap-3 p-4">
-        <div className="flex gap-3">
-          <Icon
-            aria-hidden="true"
-            className={cn("mt-0.5 size-4 shrink-0", error ? "text-destructive" : "text-muted-foreground")}
-          />
-          <div className="grid min-w-0 gap-1">
-            <p className={cn("font-medium", error && "text-destructive")}>
-              {error && <span className="sr-only">Error: </span>}
-              {reading.title}
-            </p>
-            <p className="text-muted-foreground">{reading.detail}</p>
-          </div>
-        </div>
-
-        {access.kind === "code" && (
-          <div className="pl-7">
-            {access.code !== null ? (
-              <CodeChip slug={site.slug} code={access.code} url={access.url} large />
-            ) : (
-              <p className="text-xs text-muted-foreground">An Admin of {site.slug} has its code.</p>
-            )}
-          </div>
-        )}
-
-        {access.kind === "portal" && (
-          <div className="grid gap-1.5 pl-7">
-            <p className="text-xs text-muted-foreground">
-              {access.exemptions.length === 0 ? "Every path asks to sign in." : "Open to anyone, guarded by the app alone:"}
-            </p>
-            {access.exemptions.length > 0 && (
-              <ul className="flex flex-wrap gap-1.5">
-                {access.exemptions.map((path) => (
-                  <li key={path}>
-                    <code className="rounded-sm border bg-cell px-1.5 py-px font-mono text-xs">{path}</code>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-      </div>
-
-      {reading.checks.length > 0 && (
-        <table className="w-full border-t text-sm">
-          <caption className="sr-only">Each setting, as sitesolide.json asks and as the server applies it</caption>
-          <thead className="bg-cell mono-label">
-            <tr>
-              <th scope="col" className="h-8 py-0 pr-3 pl-4 text-left">
-                Setting
-              </th>
-              <th scope="col" className="h-8 px-3 py-0 text-left tracking-normal normal-case">
-                sitesolide.json
-              </th>
-              <th scope="col" className="h-8 py-0 pr-4 pl-3 text-left">
-                Server
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-divider border-t">
-            {reading.checks.map((check) => (
-              <tr key={check.setting}>
-                <th scope="row" className="py-2.5 pr-3 pl-4 text-left align-top font-normal">
-                  {check.setting}
-                </th>
-                <td className="px-3 py-2.5 align-top">{check.requested}</td>
-                <td className="py-2.5 pr-4 pl-3 align-top">
-                  <Status tone={check.tone} className="whitespace-normal">
-                    {check.applied}
-                  </Status>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+    <Panel title="Services" count={rows.length} full>
+      <DataTable
+        label={`Services of ${site.slug}`}
+        caption="The main one first."
+        rows={rows}
+        rowKey={(row) => row.unit}
+        columns={scheduled ? SERVICE_COLUMNS : SERVICE_COLUMNS.filter((column) => column.key !== "when")}
+        severity={rowSeverity}
+        narrowBelow="42rem"
+      />
     </Panel>
   )
 }
 
-// --- The storage -----------------------------------------------------------------
+// --- The Site panel --------------------------------------------------------------
 
-export function StoragePanel({ site, now }: { site: Site; now: number }) {
+/** What the Site panel shows of a section: its headline once read, a bar the height of a line until then. */
+export type Headline = { state: "loading" } | { state: "ready"; content: ReactNode }
+
+function Head({ headline }: { headline: Headline }) {
+  return headline.state === "loading" ? <ValueSkeleton /> : <>{headline.content}</>
+}
+
+/**
+ * Where the site answers: the address that does, a link; a domain not yet
+ * answering as asked, its state in a word; the other addresses under it,
+ * muted. A project that serves no page says so rather than offer itself as
+ * a page.
+ */
+function AddressLine({ site }: { site: Site }) {
+  const address = addressSummary(site)
   return (
-    <Panel title="Storage" full actions={<Terminal>{siteFolder(site.slug)}</Terminal>}>
-      <FactList facts={siteStorage(site, now)} />
+    <FactRow label="Address">
+      <ExternalLink href={address.href} className="font-mono text-[0.8125rem] text-foreground">
+        {address.name}
+      </ExternalLink>
+      {address.domain !== null && (
+        <StateLabel tone={address.domain.state.tone} className="text-xs">
+          {`${address.domain.state.label}: ${address.domain.name}`}
+        </StateLabel>
+      )}
+      {address.headless && <span className="text-xs text-muted-foreground">Serves no page</span>}
+      {address.others.length > 0 && (
+        <span className="basis-full truncate font-mono text-xs text-muted-foreground" title={address.others.join(", ")}>
+          {address.others.join(", ")}
+        </span>
+      )}
+    </FactRow>
+  )
+}
+
+/**
+ * How the site opens, with the Access section's icon and word, and who is on
+ * its list. A disagreement between sitesolide.json and the server is an
+ * error: the row says it in red, and under it each setting from both sides.
+ */
+function AccessLine({ site, href, people, plain }: { site: Site; href: string; people: string | null; plain: boolean }) {
+  const reading = readAccess(site, plain)
+  const key = accessKey(reading.access)
+  const { icon: Icon, tone } = accessEntry(key)
+  const error = reading.tone === "error"
+  return (
+    <>
+      <FactRow label="Access" href={href} tone={error ? "error" : undefined}>
+        <Icon aria-hidden="true" className={cn("size-4 shrink-0", tone)} />
+        <span className="min-w-0">
+          {error && <span className="sr-only">Error: </span>}
+          {reading.title}
+        </span>
+        {people !== null && !error && <span className="text-muted-foreground">{people}</span>}
+      </FactRow>
+      {error && reading.checks.length > 0 && (
+        <li className="bg-cell/60">
+          <table className="w-full text-sm">
+            <caption className="sr-only">Each setting, as sitesolide.json asks and as the server applies it</caption>
+            <thead className="mono-label">
+              <tr>
+                <th scope="col" className="h-8 py-0 pr-3 pl-4 text-left">
+                  Setting
+                </th>
+                <th scope="col" className="h-8 px-3 py-0 text-left tracking-normal normal-case">
+                  sitesolide.json
+                </th>
+                <th scope="col" className="h-8 py-0 pr-4 pl-3 text-left">
+                  Server
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-divider border-t border-divider">
+              {reading.checks.map((check) => (
+                <tr key={check.setting}>
+                  <th scope="row" className="py-2 pr-3 pl-4 text-left align-top font-normal">
+                    {check.setting}
+                  </th>
+                  <td className="px-3 py-2 align-top">{check.requested}</td>
+                  <td className="py-2 pr-4 pl-3 align-top">
+                    {check.tone === "error" ? (
+                      <Status tone="error" className="whitespace-normal">
+                        {check.applied}
+                      </Status>
+                    ) : (
+                      check.applied
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </li>
+      )}
+    </>
+  )
+}
+
+/**
+ * The site's hub: one line per section, its headline and a chevron to it,
+ * between where it answers and what it weighs. Each section's line shows for
+ * whoever may open that section; `null` leaves it out.
+ */
+export function SitePanel({
+  site,
+  now,
+  links,
+  people,
+  plainAccess,
+  secrets,
+  backups,
+  audience,
+  deployedBy = null,
+}: {
+  site: Site
+  now: number
+  /** The address of each section the reader may open. */
+  links: { access: string; secrets: string | null; backups: string | null; audience: string | null }
+  /** Who is on the list, in a few words, once read. */
+  people: string | null
+  /** A Viewer or a Developer reads Applied rather than the Caddy block. */
+  plainAccess: boolean
+  secrets: Headline | null
+  backups: Headline | null
+  audience: Headline | null
+  /** Who made the last deployment, when Activity knows it. */
+  deployedBy?: string | null
+}) {
+  return (
+    <Panel title="Site" full>
+      <ul className={FACTS}>
+        <AddressLine site={site} />
+        <AccessLine site={site} href={links.access} people={people} plain={plainAccess} />
+        {secrets !== null && links.secrets !== null && (
+          <FactRow label="Secrets" href={links.secrets}>
+            <Head headline={secrets} />
+          </FactRow>
+        )}
+        {backups !== null && links.backups !== null && (
+          <FactRow label="Backups" href={links.backups}>
+            <Head headline={backups} />
+          </FactRow>
+        )}
+        {audience !== null && links.audience !== null && (
+          <FactRow label="Audience" href={links.audience}>
+            <Head headline={audience} />
+          </FactRow>
+        )}
+        {siteStorage(site, now).map((fact) =>
+          fact.label === "Deployed" && deployedBy !== null ? (
+            <FactRow key={fact.label} label={fact.label}>
+              <Explained detail={fact.detail}>{fact.value}</Explained>
+              <span className="min-w-0 truncate text-muted-foreground">by {deployedBy}</span>
+            </FactRow>
+          ) : (
+            <FactLine key={fact.label} fact={fact} />
+          ),
+        )}
+      </ul>
     </Panel>
   )
 }

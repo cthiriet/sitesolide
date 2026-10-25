@@ -197,15 +197,9 @@ export function mayRenew(state: GeneralState, steward: StewardChoices, mayChange
 /** Who reads General access: the owner, an Admin of the project, or someone who only reads it. */
 export type GeneralReader = "owner" | "admin" | "reader"
 
-/**
- * General access for someone who may not change it, in one line: how the
- * site opens, and who changes it. A platform project says how it opens
- * alone: nobody but the owner has any say on it.
- */
-export function generalLine(state: GeneralState, slug: string, platform = false): string {
-  const choice = GENERAL_CHOICES.find((one) => one.access === state.current)!
-  const how = choice.access === "code" ? "the preview code opens it." : `${choice.sentence.charAt(0).toLowerCase()}${choice.sentence.slice(1)}`
-  return platform ? `${choice.title}: ${how}` : `${choice.title}: ${how} Only an Admin of ${slug}, or the owner, changes it.`
+/** General access for someone who may not change it: who does. */
+export function whoChanges(slug: string): string {
+  return `Only an Admin of ${slug}, or the owner, changes it.`
 }
 
 /** A site that opens with a code, for whoever may not see it: whom to ask. */
@@ -675,15 +669,13 @@ export function selfChangeWarning(slug: string): string {
   return `You'll no longer manage ${slug}. Only another Admin or the owner can give it back.`
 }
 
-/** The people with access in a few words, for the Overview: "6 people and 1 domain have access". */
-export function accessSummary(entries: readonly EntryView[]): string {
+/** Who is on the list, in a few words, beside the way a site opens on its Overview: "4 people", "3 people, 1 domain". */
+export function listCount(entries: readonly Pick<EntryView, "kind">[]): string {
   const domains = entries.filter((entry) => entry.kind === "domain").length
   const people = entries.length - domains
-  if (people + domains === 0) return "Nobody is on the list yet"
-  const parts = [people > 0 ? `${people} ${people === 1 ? "person" : "people"}` : null, domains > 0 ? `${domains} ${domains === 1 ? "domain" : "domains"}` : null].filter(
-    (part): part is string => part !== null,
-  )
-  return `${parts.join(" and ")} ${people + domains === 1 ? "has" : "have"} access`
+  if (entries.length === 0) return "Nobody on the list"
+  const parts = [people > 0 ? `${people} ${people === 1 ? "person" : "people"}` : null, domains > 0 ? `${domains} ${domains === 1 ? "domain" : "domains"}` : null]
+  return parts.filter((part): part is string => part !== null).join(", ")
 }
 
 /**
