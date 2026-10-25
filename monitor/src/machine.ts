@@ -23,6 +23,7 @@ import {
   readProperties,
   readUnitList,
   readValidTo,
+  TUNNEL_READY,
   withExitStatuses,
   type BackupReading,
   type CertificateReading,
@@ -50,6 +51,8 @@ export type Machine = {
   disks(paths: readonly string[]): Array<{ path: string; stats: DiskStats | null }>;
   backup(): Promise<BackupReading>;
   probe(host: string, timeoutMs: number): Promise<ProbeResponse>;
+  /** cloudflared's `/ready`, on a machine served through a tunnel. */
+  tunnelReady(timeoutMs: number): Promise<ProbeResponse>;
   certificate(sni: string, timeoutMs: number): Promise<CertificateReading>;
   readState(): string | null;
   writeState(text: string): void;
@@ -247,6 +250,16 @@ export function createMachine(config: Config, options: MachineOptions = { system
       };
       try {
         const response = await fetch(url, options);
+        await response.body?.cancel();
+        return { status: response.status };
+      } catch (error) {
+        return { error: errorCode(error) };
+      }
+    },
+
+    async tunnelReady(timeoutMs) {
+      try {
+        const response = await fetch(TUNNEL_READY, { redirect: "manual", keepalive: false, signal: AbortSignal.timeout(timeoutMs), headers: { "User-Agent": "sitesolide-monitor" } });
         await response.body?.cancel();
         return { status: response.status };
       } catch (error) {

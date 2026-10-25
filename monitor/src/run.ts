@@ -35,8 +35,10 @@ import {
   judgeProbe,
   judgeRestarts,
   judgeSelf,
+  judgeTunnel,
   judgeUnits,
   notProbed,
+  TUNNEL_UNIT,
   type Kind,
   type Result,
 } from "./checks";
@@ -143,10 +145,13 @@ export async function run(config: Config, machine: Machine, now: number, clock: 
     problems.push(units.error);
     unknownKinds.add("unit");
     unknownKinds.add("platform");
-  } else if (names !== null) {
-    results.push(...judgeUnits(units.value, projectUnits(names, config.zone)));
+    unknownKinds.add("tunnel");
   } else {
-    unknownKinds.add("platform");
+    if (names !== null) results.push(...judgeUnits(units.value, projectUnits(names, config.zone)));
+    else unknownKinds.add("platform");
+    // A machine served through a Cloudflare Tunnel: the connector every visitor comes in by.
+    const tunnel = units.value.find((unit) => unit.name === TUNNEL_UNIT && unit.load === "loaded");
+    if (tunnel !== undefined) results.push(judgeTunnel(tunnel, await machine.tunnelReady(config.probe.timeoutMs)));
   }
 
   // With manual DNS each name of the zone has its own certificate, read

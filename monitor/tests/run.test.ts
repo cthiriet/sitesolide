@@ -229,6 +229,42 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     expect(calls.every((call) => call.startsWith("show caddy.service ") || call.startsWith("show -p Id -p ExecMainStatus -- ") || call.startsWith("list-units "))).toBe(true);
   });
 
+  test("behind a tunnel: its connector checked, down once the edge is lost, a message each way", async () => {
+    let ready: { status: number } | { error: string } = { status: 200 };
+    const tunnel = { tunnelReady: async () => ready };
+    setUnits([
+      "caddy.service loaded active running Caddy",
+      "cms.service loaded active running cms",
+      "sitesolide-landing.service loaded active running landing",
+      "sitesolide-collector.service loaded inactive dead Machine state snapshot",
+      "sitesolide-tunnel.service loaded active running Cloudflare Tunnel",
+    ]);
+    const quiet = await pass({}, tunnel);
+    expect(quiet.status.checks).toBe(17);
+    expect(quiet.status.down).toEqual([]);
+
+    ready = { status: 503 };
+    await pass({}, tunnel);
+    const second = await pass({}, tunnel);
+    // Every site lost to the Internet at once: the heartbeat fails, the one
+    // alert that reaches someone when the machine can still send it.
+    expect(second.heartbeat).toEqual(["/ping/5a7f/fail"]);
+    expect(second.webhook).toEqual([
+      `sitesolide monitor, ${ZONE}: 1 down\nDOWN The tunnel's connector runs and is not connected to Cloudflare's edge (503) (since 2026-10-04 12:01 UTC)`,
+    ]);
+    ready = { status: 200 };
+    await pass({}, tunnel);
+    const recovered = await pass({}, tunnel);
+    expect(recovered.webhook[0]).toStartWith(`sitesolide monitor, ${ZONE}: 1 recovered\nRECOVERED The tunnel is connected to Cloudflare's edge`);
+  });
+
+  test("a machine served directly reads no tunnel", async () => {
+    let asked = 0;
+    const quiet = await pass({}, { tunnelReady: async () => (asked++, { status: 200 }) });
+    expect(asked).toBe(0);
+    expect(quiet.status.checks).toBe(16);
+  });
+
   test("manual DNS: the certificate of each name of the zone read under its own name, and no wildcard", async () => {
     // The ids of the certificate checks the pass left in the monitor's memory.
     const certificates = (): string[] =>

@@ -235,10 +235,11 @@ export function webhookRequest(
 export const DASHBOARD_SLUG = "dashboard";
 
 /** The kinds that are the platform's whatever they name. */
-const PLATFORM_KINDS: ReadonlySet<Tracked["kind"]> = new Set(["caddy", "disk", "memory", "monitor"]);
+const PLATFORM_KINDS: ReadonlySet<Tracked["kind"]> = new Set(["caddy", "tunnel", "disk", "memory", "monitor"]);
 
 /**
- * Whether a check is the platform's rather than one project's: Caddy, a disk,
+ * Whether a check is the platform's rather than one project's: Caddy, the
+ * tunnel every visitor comes in by on a machine served through one, a disk,
  * the memory, the monitor's own blindness, and two sites, the bare domain and
  * the dashboard, which every installation serves and from which the author
  * sees the rest. The memory and the monitor are warnings on the dashboard, yet

@@ -32,6 +32,7 @@ export type Kind =
   | "disk"
   | "memory"
   | "backup"
+  | "tunnel"
   | "monitor";
 
 export type Verdict = "ok" | "fail" | "unknown";
@@ -219,6 +220,15 @@ export const SELF_UNIT = "sitesolide-monitor.service";
 export const PLATFORM_PREFIX = "sitesolide-";
 
 /**
+ * The connector of a machine served through a Cloudflare Tunnel, judged by
+ * judgeTunnel rather than among the platform's units, and where it says
+ * whether it is connected: bin/cli/tunnel.ts's TUNNEL_METRICS, which a test
+ * holds equal.
+ */
+export const TUNNEL_UNIT = "sitesolide-tunnel.service";
+export const TUNNEL_READY = "http://127.0.0.1:20240/ready";
+
+/**
  * A unit that crashes in a loop is `activating (auto-restart)` most of the
  * time, never `failed`, since `Restart=always` keeps trying: read as healthy,
  * it would never be reported.
@@ -325,7 +335,7 @@ export function judgeUnits(units: readonly ListedUnit[], projectUnits: ReadonlyM
       continue;
     }
 
-    if (!timer && unit.name.startsWith(PLATFORM_PREFIX)) {
+    if (!timer && unit.name.startsWith(PLATFORM_PREFIX) && unit.name !== TUNNEL_UNIT) {
       const failing = unit.active === "failed" || crashLooping(unit);
       results.push({
         id: `unit:${unit.name}`,
@@ -339,6 +349,24 @@ export function judgeUnits(units: readonly ListedUnit[], projectUnits: ReadonlyM
     }
   }
   return results.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * The tunnel, on a machine served through one, critical: every visitor comes
+ * in by it, and with it down every site is unreachable while Caddy, the
+ * units and the probes, all read on the loopback, look fine. Up means its
+ * unit active and cloudflared's `/ready` answering 200, which it does once a
+ * connection to Cloudflare's edge is up: a connector that runs and reaches
+ * nothing, its tunnel deleted or its credentials revoked, answers 503.
+ */
+export function judgeTunnel(unit: ListedUnit, ready: ProbeResponse): Result {
+  const base = { id: "tunnel", kind: "tunnel", label: TUNNEL_UNIT, severity: "critical", slug: null } as const;
+  if (unit.active !== "active") {
+    return { ...base, verdict: "fail", summary: `${TUNNEL_UNIT} is ${unit.active} (${unit.sub}): no visitor reaches the machine` };
+  }
+  if ("error" in ready) return { ...base, verdict: "fail", summary: `The tunnel's connector runs and says nothing of the edge: ${ready.error}` };
+  if (ready.status !== 200) return { ...base, verdict: "fail", summary: `The tunnel's connector runs and is not connected to Cloudflare's edge (${ready.status})` };
+  return { ...base, verdict: "ok", summary: "The tunnel is connected to Cloudflare's edge" };
 }
 
 // --- sites over HTTPS ----------------------------------------------------------

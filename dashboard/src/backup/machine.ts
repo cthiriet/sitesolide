@@ -8,6 +8,8 @@
  *                                 versions of the secrets, the steward's log
  *   /etc/caddy                    the preview codes, the zone's settings, the
  *                                 DNS token, the table of the clients' domains
+ *   /etc/cloudflared              on a machine served through a Cloudflare
+ *                                 Tunnel, its credentials and configuration
  *
  * Without it, a lost machine took its secrets and its access registry with
  * it: the data came back from the bucket, and every key had to be minted
@@ -23,7 +25,7 @@
  * **Its copy reads through one capability, as nobody.** The files belong to
  * every account, `site-<slug>` or root, in 0600: the copy runs as a dynamic
  * user of its own with CAP_DAC_READ_SEARCH alone, in a transient unit with
- * no network, the three folders bound read-only into its empty /srv as one
+ * no network, its folders bound read-only into its empty /srv as one
  * tree, nothing of the machine writable but its staging folder (runner.ts).
  * Not root: uid 0, even stripped of its capabilities, may still signal
  * root's processes and ask PID 1 for a unit. Every file is archived as it
@@ -53,6 +55,8 @@ export const MACHINE_SOURCES: readonly MachineSource[] = [
   { source: "/etc/sitesolide", place: "etc/sitesolide" },
   { source: "/var/lib/sitesolide-steward", place: "var/lib/sitesolide-steward" },
   { source: "/etc/caddy", place: "etc/caddy" },
+  // Absent on a machine served directly, and left out then, as any missing folder.
+  { source: "/etc/cloudflared", place: "etc/cloudflared" },
 ];
 
 /** Where the copy's unit sees them, inside its empty /srv: nothing of the machine's own /srv is there. */

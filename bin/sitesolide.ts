@@ -3007,6 +3007,16 @@ async function switchDomain(
     say(`-> ${domain.name} is already inactive, nothing was touched`);
     return;
   }
+  // Behind a tunnel nothing reaches the machine but the zone's own names:
+  // Cloudflare routes no other into it, and Let's Encrypt could not reach the
+  // machine to certify one. --force skips the DNS, never this.
+  if (active && config.tunnel !== undefined) {
+    die(`${domain.name} cannot be served by a machine behind a Cloudflare Tunnel`, [
+      "Cloudflare routes into the tunnel the zone's own names alone, and Let's Encrypt cannot reach the machine to certify another",
+      `the site stays at https://${project.manifest.slug}.${config.zone}; see docs/tunnel.md`,
+      "nothing was touched",
+    ]);
+  }
 
   // The local manifest leaves for the VM as it is: on a site whose door the
   // dashboard has changed, it would erase it. The guard comes before the DNS,

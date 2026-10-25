@@ -657,6 +657,7 @@ describe.skipIf(NO_RESTIC)("the machine's own state", () => {
         { source: "/etc/sitesolide", place: "etc/sitesolide" },
         { source: "/var/lib/sitesolide-steward", place: "var/lib/sitesolide-steward" },
         { source: "/etc/caddy", place: "etc/caddy" },
+        { source: "/etc/cloudflared", place: "etc/cloudflared" },
       ],
     });
     expect(machineOf({ BACKUP_ISOLATION: "none" })).toBeNull();

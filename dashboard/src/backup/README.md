@@ -59,10 +59,12 @@ repositories, and the next deploy puts them back.
 `/etc/sitesolide`, every project's store and the platform's own files; `/var/lib/sitesolide-steward`,
 who may open which site, the previous versions of the secrets and the
 steward's log; `/etc/caddy`, the preview codes, the zone's settings, the DNS
-token and the table of the clients' domains. No repository gives them back:
+token and the table of the clients' domains; `/etc/cloudflared`, on a machine
+served through a Cloudflare Tunnel, its credentials and configuration. No
+repository gives them back:
 before, a lost machine took them along, and every key had to be minted again
 by hand. Its copy runs as a dynamic user of its own, not root, with
-`CAP_DAC_READ_SEARCH` alone, in a unit with no network, the three folders
+`CAP_DAC_READ_SEARCH` alone, in a unit with no network, the folders
 bound read-only into its empty `/srv`, every file archived as it is, no
 database opened ([machine.ts](machine.ts)); a folder the machine lacks is
 left out. Then it is
@@ -527,7 +529,7 @@ sudo -i
 export RESTIC_REPOSITORY=/var/backups/sitesolide-restic RESTIC_PASSWORD_FILE=/var/backups/sitesolide-restic.key TZ=UTC
 restic snapshots --path /machine.tar
 mkdir -m 700 /root/machine && restic dump <id> /machine.tar | tar -xf - -C /root/machine --no-same-owner
-ls -R /root/machine/data         # etc/sitesolide, var/lib/sitesolide-steward, etc/caddy
+ls -R /root/machine/data         # etc/sitesolide, var/lib/sitesolide-steward, etc/caddy, and etc/cloudflared behind a tunnel
 
 # A project's store, root's alone: its folders 0700, its files 0600.
 cp -a /root/machine/data/etc/sitesolide/projects/cms /etc/sitesolide/projects/
@@ -547,7 +549,10 @@ On a new machine, `sitesolide init` and `sitesolide setup` first, then a
 deploy of each project, which creates its account; its store then
 follows, and the domains and preview codes come back as each project is
 deployed and its access set again. `/etc/caddy/cloudflare.env` holds the DNS
-token, as the copy found it.
+token, as the copy found it. A machine served through a Cloudflare Tunnel
+takes its tunnel back without its secret leaving the machine: the copy's
+`etc/cloudflared/tunnel.json` laid at `/etc/cloudflared/<id>.json`, root's in
+`0600`, then `sitesolide setup ... --tunnel <id>`, which takes it from there.
 
 ## The offsite copy
 

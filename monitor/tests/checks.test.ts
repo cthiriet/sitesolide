@@ -14,7 +14,10 @@ import {
   judgeProbe,
   judgeRestarts,
   judgeSelf,
+  judgeTunnel,
   judgeUnits,
+  TUNNEL_READY,
+  TUNNEL_UNIT,
   failingServices,
   notProbed,
   readExitStatuses,
@@ -26,6 +29,7 @@ import {
   type ListedUnit,
 } from "../src/checks";
 import { CREDENTIALS_EXIT_STATUS, credentialsFailure } from "../../bin/cli/store";
+import { TUNNEL_METRICS, TUNNEL_UNIT as TUNNEL_UNIT_NAME } from "../../bin/cli/tunnel";
 
 const NOW = Date.UTC(2026, 9, 4, 12, 0, 0);
 const MINUTE = 60_000;
@@ -651,5 +655,28 @@ describe("the monitor itself", () => {
     expect(half.summary).toBe(
       "The monitor could not run fully: systemctl list-units: timed out after 10000 ms; HEARTBEAT_URL is not a URL",
     );
+  });
+});
+
+describe("the tunnel, on a machine served through one", () => {
+  const unit = (active: string, sub: string): ListedUnit => ({ name: TUNNEL_UNIT, load: "loaded", active, sub });
+
+  test("where setup lays it: the unit's name, and the address its connector answers /ready on", () => {
+    expect(TUNNEL_UNIT).toBe(`${TUNNEL_UNIT_NAME}.service`);
+    expect(TUNNEL_READY).toBe(`http://${TUNNEL_METRICS}/ready`);
+  });
+
+  test("up only when its unit runs and the edge is reached; critical either way, since every visitor comes in by it", () => {
+    const ok = judgeTunnel(unit("active", "running"), { status: 200 });
+    expect(ok).toEqual({ id: "tunnel", kind: "tunnel", label: TUNNEL_UNIT, severity: "critical", slug: null, verdict: "ok", summary: "The tunnel is connected to Cloudflare's edge" });
+    expect(judgeTunnel(unit("active", "running"), { status: 503 })).toMatchObject({ verdict: "fail", summary: "The tunnel's connector runs and is not connected to Cloudflare's edge (503)" });
+    expect(judgeTunnel(unit("active", "running"), { error: "ConnectionRefused" })).toMatchObject({ verdict: "fail" });
+    expect(judgeTunnel(unit("activating", "auto-restart"), { status: 200 })).toMatchObject({ verdict: "fail", summary: `${TUNNEL_UNIT} is activating (auto-restart): no visitor reaches the machine` });
+    expect(judgeTunnel(unit("failed", "failed"), { error: "x" })).toMatchObject({ verdict: "fail", severity: "critical" });
+  });
+
+  test("never judged a second time among the platform's units", () => {
+    const results = judgeUnits([unit("failed", "failed"), { name: "sitesolide-steward.service", load: "loaded", active: "failed", sub: "failed" }], new Map());
+    expect(results.map((result) => result.label)).toEqual(["sitesolide-steward.service"]);
   });
 });
