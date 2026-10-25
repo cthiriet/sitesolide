@@ -16,7 +16,9 @@
 | `examples/` | Three projects to deploy as they are: a static site, a Bun app, and a worker with a scheduled run. |
 
 The screenshots in `docs/assets/screenshots/`, the README's among them, come
-from the dashboard's page bench, in its showcase mode, with fictitious sites:
+from the dashboard's page bench, in its showcase mode, with fictitious sites,
+and the door page's from `portal/src/page.ts`; `docs/assets/README.md` says
+how each is framed:
 
 ```bash
 cd dashboard && bun run build
