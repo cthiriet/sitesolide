@@ -826,8 +826,8 @@ LOAD âââ 22% 1.3 on 6 cores   MEMORY âââ 49% 5.7 o
   is awaited, "Waiting for the monitor's next pass… 34s" with *See
   progress*, then says *Delivered* a moment. At its foot, *Passwords* and
   two links, *Change the dashboard password*, *Change the portal password*.
-  A file the steward does not rewrite is the Server page's to show, not the
-  guide's. The panel goes once everything is set or skipped, the toast
+  A file the steward does not rewrite, or the portal's own file missing, is
+  the Server page's to show, not the guide's. The panel goes once everything is set or skipped, the toast
   saying "The server is set up. The setup guide is gone."; hiding it says
   "Setup guide hidden. Every setting stays on the Server page." with *Undo*.
   Hidden and skipped are the viewer's own, kept in this browser under one
@@ -1113,7 +1113,8 @@ Advanced: the server's files, in the Secrets of the dashboard site.
   days ago*, *Incomplete* with how many needed settings are set, *Failed*
   with what failed and why in the tooltip, *Delivered* with its check a
   minute after the first ping, *On* with where the copy goes, *Restart
-  pending*, *Unmanaged*; then its one action, *Set up*, *Change* (the
+  pending*, *Unmanaged*, *Missing* in red when the dashboard's or the
+  portal's own file is not there; then its one action, *Set up*, *Change* (the
   guide at its value step), *Change the URL* in the primary for a failing
   heartbeat, *See progress*, *Change password*, *See why* for a file the
   steward does not rewrite; and the "...": *Reveal for 30 s*, *Restart
@@ -1149,7 +1150,13 @@ the field or above the buttons, the page's checks (an https address, the
 check's page pasted in place of its ping URL, 16 characters for the
 passphrase) only help. Save carries the lock glyph while locked; pressed,
 the unlock opens over the guide, "Unlock to set the heartbeat URL", then
-Save goes on. When the monitor's or the backups' file is not on the server
+Save goes on; it is asked before the first write too when less than half a
+minute of it is left (`unlockFirst`), so that a save of several values is
+not cut halfway. One cut all the same, by a refusal or the lock, says what
+is on the server now, "The access key was saved, the secret key wasn't.
+Save again to finish." (`partialSave`), and the rows are read again. A
+Change that would write nothing keeps Save disabled, "Nothing changed:
+every field is left as it is." When the monitor's or the backups' file is not on the server
 yet, a step comes first, *Before you start*: "Run this once on the server,
 then check again.", the command cut before the file's name, its copy
 holding the whole line, and *Check again*.
@@ -1158,10 +1165,12 @@ holding the whole line, and *Check again*.
   minutes, with *Open healthchecks.io*; paste its ping URL; wait for the
   first ping, the seconds since the monitor's last pass on the minute it
   takes and the time to the next, read from the snapshot's `alerting` and
-  read more often meanwhile; then *Delivered*, or "The monitor couldn't
-  reach it. Check the URL." with *Change the URL*, or, when the monitor
-  says nothing (`alerting` null), "Within two minutes the check turns
-  green on healthchecks.io."
+  read more often meanwhile; then *Delivered*, "the monitor's ping went through", or "The
+  monitor couldn't reach it. Check the URL." with *Change the URL*, or,
+  when the monitor says nothing (`alerting` null), a neutral note that the
+  page can't confirm it, never the ok tone. A heartbeat the monitor refuses
+  outside a guide, a pass after its change finding no address to ping, is
+  *Failed* and the sidebar's dot red.
 - *Alert webhook*: Slack, Discord, Google Chat, ntfy or Other, each with
   its outside steps; paste the address, the format read from it said under
   the field, what is off said too ("This doesn't look like a Slack

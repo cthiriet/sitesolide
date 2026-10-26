@@ -62,7 +62,7 @@ function useNavEntries(): NavEntry[] {
 
   return useMemo(() => {
     if (page.name !== "site") {
-      const signals = machineIndicators(snapshot?.discrepancies ?? null, serverSignal(settings))
+      const signals = machineIndicators(snapshot?.discrepancies ?? null, serverSignal(settings, snapshot?.alerting ?? null))
       return machinePagesFor(identity).map((entry) => ({
         key: entry.name,
         target: { name: entry.name },

@@ -763,6 +763,9 @@ export function RestartDialog({
   const reconnect = state?.reconnect ?? null
   // After a restore, the page does not offer another one: that would be tossing a coin between two keys.
   const offerRestore = verdictText !== null && verdictText.restore && restored === null
+  // A plain restart, the Server page's, names no file: one previous version is offered by its words, several are left to the Secrets section.
+  const plain = state?.plain === true
+  const offered = plain && restorable.length > 1 ? [] : restorable
   const VerdictIcon = verdictText?.tone === "ok" ? CircleCheck : CircleX
 
   return (
@@ -834,7 +837,13 @@ export function RestartDialog({
             {reconnect !== null && <Reconnect phase={reconnect} start={state?.start ?? null} />}
             {restored !== null && (
               <p className="text-sm text-pretty text-muted-foreground">
-                This restart came right after restoring the previous <span className="font-mono">{restored}</span>.
+                {plain ? (
+                  "This restart came right after restoring the previous settings."
+                ) : (
+                  <>
+                    This restart came right after restoring the previous <span className="font-mono">{restored}</span>.
+                  </>
+                )}
                 {verdictText.restore && " It still fails: check its logs on the server before changing anything else."}
               </p>
             )}
@@ -847,11 +856,14 @@ export function RestartDialog({
                 the variables, shows what it would bring back before it does.
               </p>
             )}
-            {offerRestore && restorable.length > 0 && (
+            {offerRestore && offered.length > 0 && (
               <p className="text-sm text-pretty text-muted-foreground">
-                Restoring puts the file back as it was before its last change, then restarts {slug}. That version may
-                hold a key you meant to retire.
+                {plain ? "Restoring puts its settings back as they were before their last change" : "Restoring puts the file back as it was before its last change"}, then
+                restarts {slug}. That version may hold a key you meant to retire.
               </p>
+            )}
+            {offerRestore && plain && restorable.length > 1 && (
+              <p className="text-sm text-pretty text-muted-foreground">Its previous settings can be restored from the Secrets of {slug}.</p>
             )}
             <FormError>{state?.message ?? ""}</FormError>
             <AlertDialogFooter>
@@ -859,7 +871,7 @@ export function RestartDialog({
                 Close
               </AlertDialogCancel>
               {offerRestore &&
-                restorable.map((file) => (
+                offered.map((file) => (
                   <Button
                     key={file.name}
                     disabled={busy}
@@ -868,7 +880,7 @@ export function RestartDialog({
                   >
                     {state?.restoration === file.name
                       ? "Restoring…"
-                      : restorable.length === 1
+                      : offered.length === 1
                         ? "Restore previous & restart"
                         : `Restore previous ${file.name} & restart`}
                   </Button>

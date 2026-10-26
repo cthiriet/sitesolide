@@ -18,6 +18,7 @@
  */
 import {
   GROUP_LABELS,
+  SETTINGS,
   WEBHOOK_FORMATS,
   alertAddressProblem,
   detectedWebhookFormat,
@@ -296,11 +297,23 @@ function neededWords(state: SettingState, id: RowId): string {
 
 const guide = (label: string, start: GuideStart, primary = false): RowAction => ({ kind: "guide", label, start, primary })
 
+/**
+ * The monitor refuses the address in the file: a pass that began after the
+ * file's last change still found no heartbeat to ping, which is how it
+ * refuses one (`alertUrl` in monitor/src/notify.ts). Not merely waiting for
+ * its next pass.
+ */
+export function monitorRefusesHeartbeat(state: SettingState, alerting: Alerting | null | undefined): boolean {
+  if (alerting === null || alerting === undefined || state.presence !== "set" || state.changedAt === null) return false
+  return alerting.heartbeat === "unconfigured" && alerting.at > state.changedAt
+}
+
 /** The heartbeat in trouble: the monitor's word, or what the page saw of the first ping since a save. */
-function heartbeatTrouble(state: SettingState, phase: ProofPhase | null): "failed" | "refused" | null {
+function heartbeatTrouble(state: SettingState, phase: ProofPhase | null, alerting: Alerting | null | undefined): "failed" | "refused" | null {
   if (phase === "refused") return "refused"
-  if (phase === "failed" || (phase !== "waiting" && phase !== "delivered" && state.channel === "failed")) return "failed"
-  return null
+  if (phase === "waiting" || phase === "delivered") return null
+  if (phase === "failed" || state.channel === "failed") return "failed"
+  return monitorRefusesHeartbeat(state, alerting) ? "refused" : null
 }
 
 function deliveredShown(proof: Proof | null, phase: ProofPhase | null, serverNow: number, within: number): boolean {
@@ -328,7 +341,8 @@ export function serverRow(id: RowId, inputs: RowInputs): RowView {
   if (state.presence === "unmanaged") {
     return { ...row, word: "Unmanaged", tone: "attention", extra: "can't be changed from here", action: { kind: "secrets", label: "See why", slug: setting.slug } }
   }
-  if (password && state.presence === "no-file") {
+  // The project's own file missing (the portal's holds its password and company sign-in): red, and where the reason is.
+  if ((password || id === "company-signin") && state.presence === "no-file") {
     return { ...row, word: "Missing", tone: "error", error: true, action: { kind: "secrets", label: "See why", slug: setting.slug } }
   }
   if (password && state.presence === "not-set") return { ...row, word: "Not set", tone: "attention", action: { kind: "password" } }
@@ -374,7 +388,7 @@ export function serverRow(id: RowId, inputs: RowInputs): RowView {
       if (phase === "waiting") {
         return { ...row, word: setWord(proof!.savedAt, serverNow), extra: firstPingWords(alerting, serverNow), action: guide("See progress", "wait"), menu }
       }
-      const trouble = heartbeatTrouble(state, phase)
+      const trouble = heartbeatTrouble(state, phase, alerting)
       if (trouble !== null) {
         return {
           ...row,
@@ -460,10 +474,12 @@ export function sitesRowIds(inputs: SitesInputs): GuideId[] {
   return GUIDE_ROWS.filter((id) => {
     const state = inputs.states[id]
     if (state.presence === "unknown" || state.presence === "unmanaged") return false
+    // The portal's own file missing is the Server page's to say, in red, with where the reason is: no guide writes into it.
+    if (id === "company-signin" && state.presence === "no-file") return false
     if (inputs.guideOpen === id) return true
     if (id === "heartbeat") {
       const phase = inputs.proof === null ? null : proofPhase(inputs.proof, inputs.alerting)
-      if (proofKeepsRow(inputs, phase) || heartbeatTrouble(state, phase) !== null) return true
+      if (proofKeepsRow(inputs, phase) || heartbeatTrouble(state, phase, inputs.alerting) !== null) return true
     }
     return missing(state) && !inputs.skipped.has(id)
   })
@@ -471,7 +487,7 @@ export function sitesRowIds(inputs: SitesInputs): GuideId[] {
 
 /** What each guide's row says on Sites once it is set and its guide is still open. */
 const SAVED_LINES: Readonly<Record<GuideId, string>> = {
-  heartbeat: "Within two minutes the check turns green on healthchecks.io.",
+  heartbeat: "The monitor pings it at its next pass, within a minute.",
   webhook: "The monitor sends a message the next time a site goes down or recovers.",
   offsite: "The next hourly backup copies the snapshots offsite.",
   "company-signin": "The portal reads these when it starts: restart it to apply.",
@@ -492,10 +508,12 @@ export function sitesRow(id: GuideId, inputs: SitesInputs, primary = false): Row
     if (phase === "waiting") {
       return { ...row, todo: false, word: setWord(proof!.savedAt, serverNow), line: waitingWords(alerting, serverNow), action: guide("See progress", "wait") }
     }
-    if (heartbeatTrouble(state, phase) !== null) {
-      return { ...row, todo: true, word: "Failed", tone: "error", error: true, line: "The monitor couldn't reach it. Check the URL.", action: guide("Change the URL", "value", primary) }
+    const trouble = heartbeatTrouble(state, phase, alerting)
+    if (trouble !== null) {
+      const line = trouble === "refused" ? "The monitor didn't take this address. Check the URL." : "The monitor couldn't reach it. Check the URL."
+      return { ...row, todo: true, word: "Failed", tone: "error", error: true, line, action: guide("Change the URL", "value", primary) }
     }
-    if (phase === "delivered") return { ...row, todo: false, word: "Delivered", tone: "ok", check: true, line: "healthchecks.io shows the check as up." }
+    if (phase === "delivered") return { ...row, todo: false, word: "Delivered", tone: "ok", check: true, line: "The monitor's ping went through." }
   }
   if (state.presence === "set") return { ...row, todo: false, word: setWord(inputs.changed[id] ?? serverNow, serverNow), line: SAVED_LINES[id] }
   return {
@@ -754,9 +772,14 @@ export type FormatChoice = WebhookFormat | "auto" | "keep"
 export function wantedFormat(service: WebhookService | null, choice: FormatChoice, raw: string): WebhookFormat | null {
   const own = service === null ? null : serviceFormat(service)
   if (own !== null) return own
-  if (service === "other") return choice === "auto" || choice === "keep" ? "json" : choice
+  if (service === "other") return otherFormat(choice)
   if (choice === "keep") return null
   return choice === "auto" ? detectedWebhookFormat(raw) : choice
+}
+
+/** What Other offers, JSON or plain text, from any choice made before: JSON unless plain text was chosen. The control shows what is written. */
+export function otherFormat(choice: FormatChoice): "json" | "text" {
+  return choice === "text" ? "text" : "json"
 }
 
 /** Where a Change's format choice starts: the one saved, when one is. */
@@ -893,6 +916,49 @@ export function writesOf(fields: Fields, specs: readonly FieldSpec[]): Write[] {
   })
 }
 
+/** The offsite copy's writes: its details as typed, then the passphrase as typed. Nothing typed on a Change writes nothing. */
+export function offsiteWrites(fields: Fields, passphrase: string): Write[] {
+  const writes = writesOf(fields, OFFSITE_FIELDS)
+  return passphrase === "" ? writes : [...writes, { variable: PASSPHRASE_VARIABLE, value: passphrase }]
+}
+
+/** Said beside a Save that would write nothing: a Change with every field left as it is. */
+export const NOTHING_TO_SAVE = "Nothing changed: every field is left as it is."
+
+/** A setting's variable by its plain label, for a sentence: "the access key". */
+function spoken(variable: string): string {
+  const label = SETTINGS.flatMap((setting) => setting.variables).find((one) => one.name === variable)?.label ?? "setting"
+  return `the ${label.charAt(0).toLowerCase()}${label.slice(1)}`
+}
+
+function spokenList(variables: readonly string[]): string {
+  const words = variables.map(spoken)
+  return words.length <= 1 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`
+}
+
+/**
+ * A save that stopped partway, the steward having taken some writes and not
+ * the rest: what is on the server now, in plain words. "The access key was
+ * saved, the secret key wasn't. Save again to finish." Null when nothing or
+ * everything went through.
+ */
+export function partialSave(saved: readonly string[], unsaved: readonly string[]): string | null {
+  if (saved.length === 0 || unsaved.length === 0) return null
+  const first = spokenList(saved)
+  return `${first.charAt(0).toUpperCase()}${first.slice(1)} ${saved.length === 1 ? "was" : "were"} saved, ${spokenList(unsaved)} ${unsaved.length === 1 ? "wasn't" : "weren't"}. Save again to finish.`
+}
+
+/**
+ * The unlock asked before the first write when it would not last the save:
+ * locked, or with less than this left, so that a save of several values does
+ * not lose it halfway.
+ */
+export const UNLOCK_MARGIN_MS = 30_000
+
+export function unlockFirst(unlock: { open: boolean; remainingMs?: number }): boolean {
+  return !unlock.open || (unlock.remainingMs ?? 0) < UNLOCK_MARGIN_MS
+}
+
 /** A random passphrase, drawn in the browser: 28 letters and digits nobody confuses, in groups of seven. */
 export function drawPassphrase(random: (bytes: Uint32Array) => Uint32Array = (bytes) => crypto.getRandomValues(bytes)): string {
   const alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -918,11 +984,11 @@ export function removalOf(id: RowId, states: Readonly<Record<SettingId, SettingS
   return revealedOf(id, states).map(({ variable }) => ({ variable, remove: true }))
 }
 
-/** The sidebar's word on the Server entry: a dot while the heartbeat is not set, red when it fails. */
-export function serverSignal(states: Readonly<Record<SettingId, SettingState>> | null): { tone: Tone; label: string } | null {
+/** The sidebar's word on the Server entry: a dot while the heartbeat is not set, red when it fails or the monitor refuses it. */
+export function serverSignal(states: Readonly<Record<SettingId, SettingState>> | null, alerting: Alerting | null | undefined = null): { tone: Tone; label: string } | null {
   if (states === null) return null
   const heartbeat = states.heartbeat
   if (heartbeat.presence === "not-set" || heartbeat.presence === "no-file") return { tone: "attention", label: "heartbeat not set" }
-  if (heartbeat.presence === "set" && heartbeat.channel === "failed") return { tone: "error", label: "heartbeat failed" }
+  if (heartbeat.presence === "set" && (heartbeat.channel === "failed" || monitorRefusesHeartbeat(heartbeat, alerting))) return { tone: "error", label: "heartbeat failed" }
   return null
 }

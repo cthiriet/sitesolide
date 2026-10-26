@@ -169,12 +169,16 @@ export function useServerSetup(): ServerSetup {
   return setup
 }
 
-/** The rows' words move on with the clock while the first ping is awaited: every second then, every ten otherwise. */
+/**
+ * The rows' clock: every second while the first ping is awaited or a value
+ * shows, every ten otherwise, so that "changed just now" moves on; set to
+ * the time at once when it speeds up, so that a countdown starts from now.
+ */
 function useTick(fast: boolean): number {
   const [tick, setTick] = useState(() => Date.now())
   useEffect(() => {
-    if (!fast) return
-    const timer = window.setInterval(() => setTick(Date.now()), 1000)
+    setTick(Date.now())
+    const timer = window.setInterval(() => setTick(Date.now()), fast ? 1000 : 10_000)
     return () => window.clearInterval(timer)
   }, [fast])
   return tick

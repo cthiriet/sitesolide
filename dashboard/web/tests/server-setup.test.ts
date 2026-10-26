@@ -20,8 +20,13 @@ import {
   missingFile,
   nextPassSeconds,
   nextStep,
+  UNLOCK_MARGIN_MS,
   offsiteDetailsReady,
+  offsiteWrites,
   openingStep,
+  otherFormat,
+  partialSave,
+  unlockFirst,
   passphraseHint,
   passphraseReady,
   pingCheck,
@@ -314,7 +319,7 @@ describe("the setup guide on Sites", () => {
     const waiting = inputs(server({ backup: OFFSITE_FIVE, portal: SIGNIN_THREE }), { alerting: alerting({ at: NOW - 40 * SECOND, heartbeat: "unconfigured" }), proof })
     expect(sitesRows(sites(waiting))).toMatchObject([{ id: "heartbeat", word: "Set, changed 30 seconds ago", line: "Waiting for the monitor's next pass… 20s", action: { label: "See progress", start: "wait" } }])
     const came = { ...waiting, alerting: alerting({ at: NOW - 5 * SECOND }) }
-    expect(sitesRows(sites(came))).toMatchObject([{ id: "heartbeat", word: "Delivered", tone: "ok", line: "healthchecks.io shows the check as up." }])
+    expect(sitesRows(sites(came))).toMatchObject([{ id: "heartbeat", word: "Delivered", tone: "ok", line: "The monitor's ping went through." }])
     expect(sitesRowIds(sites({ ...came, proof: { ...proof, deliveredAt: NOW - DELIVERED_SITES_MS - SECOND } }))).toEqual([])
     expect(sitesRowIds(sites({ ...came, proof: { ...proof, seen: true } }))).toEqual([])
     // Seen in its guide, which is still open: it stays until the guide closes.
@@ -544,6 +549,71 @@ describe("reveal, remove and the sidebar", () => {
     expect(serverSignal(settingState(server(), [], alerting({ heartbeat: "failed" })))).toEqual({ tone: "error", label: "heartbeat failed" })
     expect(serverSignal(settingState(server(), [], alerting()))).toBeNull()
     expect(machineIndicators(null, { tone: "attention", label: "heartbeat not set" }).server).toEqual({ count: 1, tone: "attention", label: "heartbeat not set", dot: true })
+  })
+})
+
+describe("what the review found", () => {
+  test("a save cut partway says what is on the server now, in plain words", () => {
+    expect(partialSave(["BACKUP_S3_ACCESS_KEY_ID"], ["BACKUP_S3_SECRET_ACCESS_KEY"])).toBe("The access key was saved, the secret key wasn't. Save again to finish.")
+    expect(partialSave(["BACKUP_S3_ENDPOINT", "BACKUP_S3_BUCKET"], ["BACKUP_S3_ACCESS_KEY_ID", "BACKUP_ENCRYPTION_PASSPHRASE"])).toBe(
+      "The endpoint and the bucket were saved, the access key and the encryption passphrase weren't. Save again to finish.",
+    )
+    expect(partialSave(["ALERT_WEBHOOK_URL"], ["ALERT_WEBHOOK_FORMAT"])).toBe("The webhook address was saved, the message format wasn't. Save again to finish.")
+    expect(partialSave(["OIDC_ISSUER"], ["OIDC_CLIENT_ID"])).toBe("The issuer was saved, the client ID wasn't. Save again to finish.")
+    // Nothing went through, or everything did: nothing partial to say.
+    expect(partialSave([], ["HEARTBEAT_URL"])).toBeNull()
+    expect(partialSave(["HEARTBEAT_URL"], [])).toBeNull()
+  })
+
+  test("the unlock is asked before the first write when it would not last the save", () => {
+    expect(unlockFirst({ open: false })).toBe(true)
+    expect(unlockFirst({ open: true, remainingMs: UNLOCK_MARGIN_MS - 1 })).toBe(true)
+    expect(unlockFirst({ open: true, remainingMs: 9 * MINUTE })).toBe(false)
+  })
+
+  test("a Change with every field left as it is writes nothing", () => {
+    expect(offsiteWrites({}, "")).toEqual([])
+    expect(offsiteWrites({ BACKUP_S3_BUCKET: " " }, "")).toEqual([])
+    expect(writesOf({}, SIGNIN_FIELDS)).toEqual([])
+    expect(offsiteWrites({ BACKUP_S3_REGION: "eu-west-1" }, "a passphrase of sixteen")).toEqual([
+      { variable: "BACKUP_S3_REGION", value: "eu-west-1" },
+      { variable: "BACKUP_ENCRYPTION_PASSPHRASE", value: "a passphrase of sixteen" },
+    ])
+  })
+
+  test("Other shows the format it writes, whatever was chosen before", () => {
+    for (const choice of ["keep", "auto", "json", "slack"] as const) {
+      expect(otherFormat(choice)).toBe("json")
+      expect(wantedFormat("other", choice, "https://hooks.example.test/x")).toBe("json")
+    }
+    expect(otherFormat("text")).toBe("text")
+    expect(wantedFormat("other", "text", "https://hooks.example.test/x")).toBe("text")
+  })
+
+  test("a heartbeat the monitor refuses, with no save awaited here, is Failed, and the sidebar's dot red", () => {
+    // A pass after the file's last change found no address it would ping.
+    const refused = inputs(server(), { alerting: alerting({ heartbeat: "unconfigured", at: NOW - 20 * SECOND }) })
+    expect(serverRow("heartbeat", refused)).toMatchObject({ word: "Failed", tone: "error", error: true, extra: "the monitor didn't take the address" })
+    expect(serverSignal(refused.states, refused.alerting)).toEqual({ tone: "error", label: "heartbeat failed" })
+    expect(sitesRows(sites(refused))[0]).toMatchObject({ id: "heartbeat", word: "Failed", line: "The monitor didn't take this address. Check the URL." })
+    // Its last pass came before the change: it is waiting, not refusing.
+    const waiting = inputs(server(), { alerting: alerting({ heartbeat: "unconfigured", at: NOW - 40 * MINUTE }) })
+    expect(serverRow("heartbeat", waiting)).toMatchObject({ word: "Set", extra: "not pinged yet", error: false })
+    expect(serverSignal(waiting.states, waiting.alerting)).toBeNull()
+  })
+
+  test("the portal's file missing: company sign-in says so in red and leads to the reason, and the guide leaves it out", () => {
+    const projects = server()
+    projects[1] = secretProject({ slug: "portal", files: [secretFile({ name: "portal.env", state: "absent", variables: [], passwords: [], modifiedAt: null })] })
+    const row = inputs(projects, { skipped: new Set(["offsite"]) })
+    expect(serverRow("company-signin", row)).toMatchObject({ word: "Missing", tone: "error", error: true, action: { kind: "secrets", label: "See why", slug: "portal" }, menu: [] })
+    expect(sitesRowIds(sites(row))).toEqual([])
+  })
+
+  test("the words of a ping that came, and of one the page can't confirm, name no service", () => {
+    const proof: Proof = { savedAt: NOW - 30 * SECOND, deliveredAt: null, seen: false }
+    const unknown = inputs(server(), { alerting: null, proof })
+    expect(sitesRows(sites(unknown, { guideOpen: "heartbeat" }))[0]).toMatchObject({ line: "The monitor pings it at its next pass, within a minute." })
   })
 })
 

@@ -622,7 +622,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     afterAction()
   }
 
-  async function restoreAndRestart(slug: string, file: string) {
+  async function restoreAndRestart(slug: string, file: string, plain: boolean) {
     setRestartState((before) => before && { ...before, restoration: file, message: "" })
     const { status, body } = await restoreSecretFile({ slug, file })
     if (!succeeded(status)) {
@@ -630,8 +630,9 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
       if (message !== null) setRestartState((before) => before && { ...before, restoration: null, message })
       return afterAction()
     }
-    announce(`Restored the previous ${file}. Restarting ${slug}.`)
-    await runRestart(slug, file)
+    // A plain restart, the Server page's, names no file, through the restore too.
+    announce(plain ? `Restored the previous settings. Restarting ${slug}.` : `Restored the previous ${file}. Restarting ${slug}.`)
+    await runRestart(slug, file, plain)
   }
 
   // --- General access
@@ -804,7 +805,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
         restorable={restartedProject === null ? [] : restorableFiles(restartedProject)}
         storePrevious={restartedProject?.store?.previous === true && restartedProject.store.may.restore}
         onConfirm={(slug) => void runRestart(slug, restartState?.phase === "error" ? restartState.restored : null, restartState?.plain ?? false)}
-        onRestore={(slug, file) => void restoreAndRestart(slug, file)}
+        onRestore={(slug, file) => void restoreAndRestart(slug, file, restartState?.plain ?? false)}
         onClose={() => setRestartState((before) => before && { ...before, open: false })}
         focusReturn={restartFocusReturn}
       />

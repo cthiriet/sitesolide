@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react"
-import { Check, CircleCheck, CircleX, Copy, Dices, ExternalLink, TriangleAlert, X } from "lucide-react"
+import { Check, CircleCheck, CircleX, Copy, Dices, ExternalLink, Info, TriangleAlert, X } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -21,7 +21,12 @@ import {
   PASSPHRASE_VARIABLE,
   SIGNIN_FIELDS,
   WEBHOOK_SERVICES,
+  NOTHING_TO_SAVE,
   drawPassphrase,
+  offsiteWrites,
+  otherFormat,
+  partialSave,
+  unlockFirst,
   fileCommand,
   formatSummary,
   formatWrite,
@@ -196,6 +201,16 @@ function Result({ bad = false, children }: { bad?: boolean; children: ReactNode 
     >
       <Icon aria-hidden="true" className={cn("mt-0.5 size-4 shrink-0", bad ? "text-destructive" : "text-ok-text")} />
       <div className="min-w-0">{children}</div>
+    </div>
+  )
+}
+
+/** What the page cannot confirm: neutral, neither the ok tone of a result nor its check. */
+function Unconfirmed({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex items-start gap-3 rounded-lg border bg-cell px-3.5 py-3 text-[0.8125rem]">
+      <Info aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+      <p className="min-w-0">{children}</p>
     </div>
   )
 }
@@ -467,43 +482,58 @@ function GuideFlow({
   }
 
   /** One write after another, as the steward takes them: `locked`, `refused` (its message shown), or `ok`. */
-  async function perform(writes: readonly Write[]): Promise<"ok" | "locked" | "refused"> {
-    for (const write of writes) {
+  /**
+   * One write after another, as the steward takes them, until one is not
+   * taken: `locked`, `refused` (the steward's message, null when the page
+   * dealt with it), or `ok`; and which variables went through, which did not.
+   */
+  async function perform(writes: readonly Write[]): Promise<{ outcome: "ok" | "locked" | "refused"; message: string | null; saved: string[]; unsaved: string[] }> {
+    const saved: string[] = []
+    for (const [index, write] of writes.entries()) {
       const target = { slug: setting.slug, file: setting.file, variable: write.variable }
       const { status, body: answer } = "remove" in write ? await removeVariable(target) : await setVariable({ ...target, value: write.value })
-      if (succeeded(status)) continue
+      if (succeeded(status)) {
+        saved.push(write.variable)
+        continue
+      }
+      const unsaved = writes.slice(index).map((one) => one.variable)
       const refusal = refusalOf(status, answer)
-      if (refusal.kind === "locked") return "locked"
-      const message = actions.refusal(refusal)
-      if (message !== null) setError(message)
-      return "refused"
+      if (refusal.kind === "locked") return { outcome: "locked", message: null, saved, unsaved }
+      return { outcome: "refused", message: actions.refusal(refusal), saved, unsaved }
     }
-    return "ok"
+    return { outcome: "ok", message: null, saved, unsaved: [] }
   }
 
   /**
-   * Save: at once while unlocked, otherwise once the unlock asked over the
-   * guide goes through. A 423 met on the way locks and asks again, and Save
-   * is pressed again: a write is never replayed.
+   * Save: at once while the unlock lasts the save, otherwise once the unlock
+   * asked over the guide goes through, before the first write so that a save
+   * of several values is not cut halfway. A 423 met on the way all the same
+   * locks and asks again, the guide saying what was saved and what wasn't,
+   * and Save is pressed again: a write is never replayed.
    */
   function save(writes: readonly Write[], done: () => void) {
+    if (writes.length === 0) return
     const purpose = PURPOSES[id]
     const run = async () => {
       setBusy(true)
       setError("")
       try {
-        const outcome = await perform(writes)
+        const { outcome, message, saved, unsaved } = await perform(writes)
+        // Read again whatever happened: a save cut partway has changed the server all the same.
+        actions.changed()
+        if (outcome === "ok") return done()
+        const partial = partialSave(saved, unsaved)
+        const words = [message, partial].filter((one): one is string => one !== null && one !== "").join(" ")
+        if (words !== "") setError(words)
         if (outcome === "locked") {
           secrets.setUnlockedUntil(null)
-          return setUnlock({ purpose, then: null })
+          setUnlock({ purpose, then: null })
         }
-        actions.changed()
-        if (outcome === "ok") done()
       } finally {
         setBusy(false)
       }
     }
-    if (actions.state.open) return void run()
+    if (!unlockFirst(actions.state)) return void run()
     setUnlock({ purpose, then: () => void run() })
   }
 
@@ -682,14 +712,17 @@ function GuideFlow({
             phase === "delivered" ? (
               <>
                 <Result>
-                  <span className="font-semibold text-strong">Delivered:</span> healthchecks.io shows the check as up.
+                  <span className="font-semibold text-strong">Delivered:</span> the monitor's ping went through.
                 </Result>
-                <p className="text-xs text-muted-foreground">The monitor now pings it every minute. If the pings stop, healthchecks.io tells you after the grace time.</p>
+                <p className="text-xs text-muted-foreground">The monitor now pings it every minute. If the pings stop, the service tells you after the grace time.</p>
               </>
             ) : (
               <>
                 <Saved>Heartbeat saved. The monitor uses it within a minute.</Saved>
-                <Result>Within two minutes the check turns green on healthchecks.io.</Result>
+                <Unconfirmed>
+                  The monitor doesn't report its pings right now, so the page can't confirm this one. Within two minutes, the check should show as
+                  up where you created it.
+                </Unconfirmed>
               </>
             ),
         }
@@ -790,7 +823,7 @@ function GuideFlow({
                   </span>
                   <div role="group" aria-labelledby="message-format" className={cn(SEGMENTED, "flex")}>
                     {(["json", "text"] as const).map((format) => (
-                      <Segment key={format} selected={(choice === "auto" ? "json" : choice) === format} onClick={() => setChoice(format)} className="flex-1">
+                      <Segment key={format} selected={otherFormat(choice) === format} onClick={() => setChoice(format)} className="flex-1">
                         {format === "json" ? "JSON" : "Plain text"}
                       </Segment>
                     ))}
@@ -928,14 +961,15 @@ function GuideFlow({
       case "passphrase": {
         const passphrase = value(PASSPHRASE_VARIABLE)
         const present = state.present.includes(PASSPHRASE_VARIABLE)
-        const ready = passphraseReady(passphrase, saved, change && present)
+        const writes = offsiteWrites(fields, passphrase)
+        // A Change with every field left as it is writes nothing: Save waits for something to save.
+        const nothing = writes.length === 0
+        const ready = passphraseReady(passphrase, saved, change && present) && !nothing
         const hint = passphraseHint(passphrase)
         return {
           title: (change && CHANGE_TITLES[step]) || TITLES[step],
           onSubmit: () => {
             if (!ready) return
-            const writes = writesOf(fields, OFFSITE_FIELDS)
-            if (passphrase !== "") writes.push({ variable: PASSPHRASE_VARIABLE, value: passphrase })
             save(writes, () => {
               setFields({})
               setSaved(false)
@@ -964,6 +998,7 @@ function GuideFlow({
               onToggle={toggle(PASSPHRASE_VARIABLE)}
               saved={saved}
               setSaved={setSaved}
+              nothing={nothing && change}
             />
           ),
         }
@@ -1011,7 +1046,9 @@ function GuideFlow({
           ),
         }
       case "signin-details": {
-        const ready = signinReady(fields, state.present)
+        const writes = writesOf(fields, SIGNIN_FIELDS)
+        const nothing = writes.length === 0
+        const ready = signinReady(fields, state.present) && !nothing
         const [issuer, client, secret, domains, admins, provider] = SIGNIN_FIELDS
         const one = (spec: FieldSpec, extra: { hints?: Hint[]; focus?: boolean; error?: string } = {}) => (
           <GuideField
@@ -1029,7 +1066,7 @@ function GuideFlow({
           title: (change && CHANGE_TITLES[step]) || TITLES[step],
           onSubmit: () => {
             if (!ready) return
-            save(writesOf(fields, SIGNIN_FIELDS), () => {
+            save(writes, () => {
               setFields({})
               announce("Company sign-in saved. The portal uses it when it restarts.")
               go("signin-saved")
@@ -1055,6 +1092,7 @@ function GuideFlow({
                 {one(admins!)}
                 {one(provider!)}
               </div>
+              {nothing && change && <p className="text-xs text-muted-foreground">{NOTHING_TO_SAVE}</p>}
             </div>
           ),
         }
@@ -1128,6 +1166,7 @@ function PassphraseStep({
   onToggle,
   saved,
   setSaved,
+  nothing,
 }: {
   passphrase: string
   setPassphrase: (passphrase: string, show: boolean) => void
@@ -1137,6 +1176,8 @@ function PassphraseStep({
   onToggle: () => void
   saved: boolean
   setSaved: (saved: boolean) => void
+  /** A Change with every field left as it is: Save has nothing to write. */
+  nothing: boolean
 }) {
   const announce = useAnnounce()
   const { state, copy, reset } = useCopy("Passphrase copied")
@@ -1190,6 +1231,7 @@ function PassphraseStep({
         />
         I saved it
       </label>
+      {nothing && <p className="text-xs text-muted-foreground">{NOTHING_TO_SAVE}</p>}
     </>
   )
 }
