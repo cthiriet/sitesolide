@@ -48,7 +48,12 @@ export function sidebarShortcut(agent: string): string {
   return /Mac|iPhone|iPad/.test(agent) ? "⌘B" : "Ctrl+B"
 }
 
-export type Indicator = { count: number; tone: Tone; label: string }
+/**
+ * What an entry reports: a count on its tone's badge, or with `dot` a dot
+ * alone, for a state that is no count (the Server entry while the heartbeat
+ * is not set).
+ */
+export type Indicator = { count: number; tone: Tone; label: string; dot?: boolean }
 
 /** An app service that is not running, as the site's row shows it in red. */
 export function downServices(sites: readonly Site[], now: number): number {
@@ -65,10 +70,22 @@ function discrepancyIndicator(discrepancies: readonly Discrepancy[] | null): Ind
 /**
  * The entries of the machine level. The home page carries the whole machine's
  * discrepancies, which is what makes you open the dashboard; the activity
- * reports nothing, it is read when you go looking for it. Zero is not shown.
+ * reports nothing, it is read when you go looking for it. Server, the
+ * owner's alone, a dot while nothing outside the server would notice it go
+ * down (`serverSignal` in lib/server-setup.ts). Zero is not shown.
  */
-export function machineIndicators(discrepancies: readonly Discrepancy[] | null): Record<MachinePage, Indicator | null> {
-  return { home: discrepancyIndicator(discrepancies), activity: null, people: null, tokens: null, connectors: null }
+export function machineIndicators(
+  discrepancies: readonly Discrepancy[] | null,
+  server: { tone: Tone; label: string } | null = null,
+): Record<MachinePage, Indicator | null> {
+  return {
+    home: discrepancyIndicator(discrepancies),
+    activity: null,
+    people: null,
+    tokens: null,
+    connectors: null,
+    server: server === null ? null : { count: 1, tone: server.tone, label: server.label, dot: true },
+  }
 }
 
 export type SiteSources = {

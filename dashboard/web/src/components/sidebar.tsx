@@ -1,5 +1,5 @@
 import { useMemo } from "react"
-import { ChartNoAxesColumn, ChevronLeft, DatabaseBackup, Gauge, History, KeySquare, Layers, LogOut, PanelLeft, Plug, ShieldCheck, SquareAsterisk, UsersRound, type LucideIcon } from "lucide-react"
+import { ChartNoAxesColumn, ChevronLeft, DatabaseBackup, Gauge, History, KeySquare, Layers, LogOut, PanelLeft, Plug, ShieldCheck, SlidersHorizontal, SquareAsterisk, UsersRound, type LucideIcon } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -13,14 +13,16 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { useData } from "@/components/data"
+import { useSettingStates } from "@/components/server-setup"
 import { Logo } from "@/components/logo"
 import { InternalLink, useNavigation } from "@/components/navigation"
 import { SidebarSitePicker, useSite } from "@/components/site"
 import { useTheme } from "@/components/theme"
 import { isPerson } from "@/lib/identity"
+import { serverSignal } from "@/lib/server-setup"
 import { machineIndicators, siteIndicators, sidebarShortcut, type Indicator } from "@/lib/sidebar"
 import { ariaCurrent, machinePagesFor, pageUrl, sectionsFor, type MachinePage, type Page, type Section } from "@/lib/pages"
-import { TONE_BADGE, TONE_DOT } from "@/lib/tones"
+import { TONE_BADGE, TONE_DOT, TONE_HALO } from "@/lib/tones"
 import { cn } from "@/lib/utils"
 import { VERSION } from "@/lib/version"
 
@@ -35,6 +37,7 @@ const MACHINE_ICONS: Record<MachinePage, LucideIcon> = {
   people: UsersRound,
   tokens: KeySquare,
   connectors: Plug,
+  server: SlidersHorizontal,
 }
 
 /** The icon of each section of a site, shared by the sidebar, the tabs and the Sites row menu. */
@@ -55,10 +58,11 @@ function useNavEntries(): NavEntry[] {
   const { snapshot, now, offset, identity } = useData()
   const slug = page.name === "site" ? page.slug : ""
   const { site, discrepancies, project } = useSite(slug)
+  const settings = useSettingStates()
 
   return useMemo(() => {
     if (page.name !== "site") {
-      const signals = machineIndicators(snapshot?.discrepancies ?? null)
+      const signals = machineIndicators(snapshot?.discrepancies ?? null, serverSignal(settings))
       return machinePagesFor(identity).map((entry) => ({
         key: entry.name,
         target: { name: entry.name },
@@ -80,7 +84,7 @@ function useNavEntries(): NavEntry[] {
       Icon: SECTION_ICONS[entry.section],
       signal: signals[entry.section],
     }))
-  }, [page, snapshot, site, discrepancies, project, now, offset, identity])
+  }, [page, snapshot, site, discrepancies, project, now, offset, identity, settings])
 }
 
 /** An indicator's word for screen readers, which the figure alone does not say. */
@@ -132,7 +136,18 @@ function SidebarEntries({ entries, label }: { entries: NavEntry[]; label: string
                   <HiddenIndicator indicator={signal} />
                 </span>
               </SidebarMenuButton>
-              {signal !== null && (
+              {signal !== null && signal.dot === true && (
+                // A state with no count: its tone's dot alone, where the badge would sit.
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "pointer-events-none absolute top-1/2 right-3.5 size-2 -translate-y-1/2 rounded-full group-data-[collapsible=icon]:hidden",
+                    TONE_DOT[signal.tone],
+                    TONE_HALO[signal.tone],
+                  )}
+                />
+              )}
+              {signal !== null && signal.dot !== true && (
                 <SidebarMenuBadge
                   aria-hidden="true"
                   className={cn(
@@ -316,7 +331,10 @@ export function MobileTabs() {
                 )}
                 <span className="relative">
                   <Icon aria-hidden="true" className="size-5" strokeWidth={current !== undefined ? 2.25 : 1.75} />
-                  {signal !== null && (
+                  {signal !== null && signal.dot === true && (
+                    <span aria-hidden="true" className={cn("absolute -top-0.5 -right-1 size-2 rounded-full ring-2 ring-background", TONE_DOT[signal.tone])} />
+                  )}
+                  {signal !== null && signal.dot !== true && (
                     <span
                       aria-hidden="true"
                       className={cn(

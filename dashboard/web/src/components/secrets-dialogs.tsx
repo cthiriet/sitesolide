@@ -585,6 +585,8 @@ export function ConfirmDialog({
 
 export type RestartState = {
   slug: string
+  /** Name no file: the Server page says the server's settings in words, never by their file. */
+  plain: boolean
   open: boolean
   phase: "confirmation" | "in-progress" | "verdict" | "error"
   /** The browser time at which the wait started, for the track. */
@@ -780,7 +782,10 @@ export function RestartDialog({
                 seconds in between.
               </AlertDialogDescription>
             </AlertDialogHeader>
-            {phase === "confirmation" && (pending.length > 0 || pendingVariables) && (
+            {phase === "confirmation" && state?.plain === true && (pending.length > 0 || pendingVariables) && (
+              <p className="text-sm text-pretty">Applies the changes saved since it last started.</p>
+            )}
+            {phase === "confirmation" && state?.plain !== true && (pending.length > 0 || pendingVariables) && (
               <p className="text-sm text-pretty">
                 Applies the changes to {pendingVariables && (pending.length === 0 ? "the variables on the server" : "the variables on the server, ")}
                 {pending.map((name, index) => (

@@ -25,6 +25,7 @@ describe("the page for an address", () => {
     expect(pageFromUrl("/")).toEqual({ name: "home" })
     expect(pageFromUrl("/activity/")).toEqual({ name: "activity" })
     expect(pageFromUrl("/connectors/")).toEqual({ name: "connectors" })
+    expect(pageFromUrl("/server/")).toEqual({ name: "server" })
   })
 
   test("every section of a site is read from its path and ?s=", () => {

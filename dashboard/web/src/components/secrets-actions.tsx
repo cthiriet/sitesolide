@@ -117,8 +117,13 @@ export type SecretsActions = {
   remove: (target: VariableTarget) => void
   create: (target: FileTarget) => void
   restore: (target: FileTarget) => void
-  changePassword: (target: VariableTarget) => void
-  restart: (slug: string) => void
+  /** `purpose` names the password in the unlock's title: "Unlock to change the dashboard password". */
+  changePassword: (target: VariableTarget, options?: RequireOptions) => void
+  /**
+   * `plain`: the confirmation names no file, for the Server page, which says
+   * the server's settings in words; the restart is the same.
+   */
+  restart: (slug: string, options?: RequireOptions & { plain?: boolean }) => void
   /**
    * `from`: how the site opens before the change. `warning`, said in the
    * confirmation: who still opens a site restricted with nobody on its list.
@@ -191,6 +196,7 @@ type Opening<T> = T & { open: boolean; opening: number }
 
 const NEW_RESTART: RestartState = {
   slug: "",
+  plain: false,
   open: false,
   phase: "confirmation",
   start: null,
@@ -461,11 +467,11 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
 
   // --- Changing a password
 
-  function changePassword(target: VariableTarget) {
+  function changePassword(target: VariableTarget, options: RequireOptions = {}) {
     require(() => {
       openings.current += 1
       setPassword({ ...target, opening: openings.current, open: true })
-    })
+    }, options)
   }
 
   // --- Removing, restoring
@@ -564,14 +570,14 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
 
   // --- Restarting
 
-  function askRestart(slug: string) {
+  function askRestart(slug: string, { plain = false, ...options }: RequireOptions & { plain?: boolean } = {}) {
     // A person restarts with their session alone, the steward judging their
     // role; the owner restarts from an unlocked Secrets section.
     if (person) {
       rememberOrigin()
-      return setRestartState({ ...NEW_RESTART, slug, open: true })
+      return setRestartState({ ...NEW_RESTART, slug, plain, open: true })
     }
-    require(() => setRestartState({ ...NEW_RESTART, slug, open: true }))
+    require(() => setRestartState({ ...NEW_RESTART, slug, plain, open: true }), options)
   }
 
   /**
@@ -596,8 +602,8 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     announce("The dashboard is back. Unlock again to change secrets.")
   }
 
-  async function runRestart(slug: string, restored: string | null = null) {
-    const base = { ...NEW_RESTART, slug, open: true, restored }
+  async function runRestart(slug: string, restored: string | null = null, plain = false) {
+    const base = { ...NEW_RESTART, slug, open: true, restored, plain }
     setRestartState({ ...base, phase: "in-progress", start: Date.now() })
     const { status, body } = await restartService({ slug })
     if (succeeded(status) && body !== null && typeof body.verdict?.kind === "string") {
@@ -797,7 +803,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
         pendingVariables={restartedProject !== null && pendingVariables(restartedProject)}
         restorable={restartedProject === null ? [] : restorableFiles(restartedProject)}
         storePrevious={restartedProject?.store?.previous === true && restartedProject.store.may.restore}
-        onConfirm={(slug) => void runRestart(slug, restartState?.phase === "error" ? restartState.restored : null)}
+        onConfirm={(slug) => void runRestart(slug, restartState?.phase === "error" ? restartState.restored : null, restartState?.plain ?? false)}
         onRestore={(slug, file) => void restoreAndRestart(slug, file)}
         onClose={() => setRestartState((before) => before && { ...before, open: false })}
         focusReturn={restartFocusReturn}

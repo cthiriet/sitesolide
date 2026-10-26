@@ -77,9 +77,9 @@ export type SettingId =
 export type SettingGroup = "monitoring" | "sign-in" | "offsite"
 
 export const GROUP_LABELS: Readonly<Record<SettingGroup, string>> = {
-  monitoring: "Monitoring",
+  monitoring: "Alerts",
   "sign-in": "Sign-in",
-  offsite: "Offsite copy",
+  offsite: "Backups",
 }
 
 export type SettingVariable = {
@@ -142,7 +142,7 @@ export const SETTINGS: readonly MachineSetting[] = [
     label: "Alert webhook",
     slug: "dashboard",
     file: "dashboard-monitor.env",
-    variables: [{ name: "ALERT_WEBHOOK_URL", label: "Webhook URL", required: true }],
+    variables: [{ name: "ALERT_WEBHOOK_URL", label: "Webhook address", required: true }],
     reader: MONITOR_CADENCE.reader,
     applies: noRestart(MONITOR_CADENCE, "add"),
     hint: "applies within a minute",
@@ -154,7 +154,7 @@ export const SETTINGS: readonly MachineSetting[] = [
     label: "Message format",
     slug: "dashboard",
     file: "dashboard-monitor.env",
-    variables: [{ name: "ALERT_WEBHOOK_FORMAT", label: "Format", required: true }],
+    variables: [{ name: "ALERT_WEBHOOK_FORMAT", label: "Message format", required: true }],
     reader: MONITOR_CADENCE.reader,
     applies: noRestart(MONITOR_CADENCE, "add"),
     hint: "applies within a minute",
@@ -191,7 +191,7 @@ export const SETTINGS: readonly MachineSetting[] = [
     slug: "portal",
     file: "portal.env",
     variables: [
-      { name: "OIDC_ISSUER", label: "Issuer address", required: true },
+      { name: "OIDC_ISSUER", label: "Issuer", required: true },
       { name: "OIDC_CLIENT_ID", label: "Client ID", required: true },
       { name: "OIDC_CLIENT_SECRET", label: "Client secret", required: true },
       { name: "OIDC_ALLOWED_DOMAINS", label: "Allowed domains", required: false },
@@ -212,11 +212,11 @@ export const SETTINGS: readonly MachineSetting[] = [
     variables: [
       { name: "BACKUP_S3_ENDPOINT", label: "Endpoint", required: true },
       { name: "BACKUP_S3_BUCKET", label: "Bucket", required: true },
-      { name: "BACKUP_S3_ACCESS_KEY_ID", label: "Access key ID", required: true },
-      { name: "BACKUP_S3_SECRET_ACCESS_KEY", label: "Secret access key", required: true },
-      { name: "BACKUP_ENCRYPTION_PASSPHRASE", label: "Passphrase", required: true },
+      { name: "BACKUP_S3_ACCESS_KEY_ID", label: "Access key", required: true },
+      { name: "BACKUP_S3_SECRET_ACCESS_KEY", label: "Secret key", required: true },
+      { name: "BACKUP_ENCRYPTION_PASSPHRASE", label: "Encryption passphrase", required: true },
       { name: "BACKUP_S3_REGION", label: "Region", required: false },
-      { name: "BACKUP_S3_PREFIX", label: "Prefix", required: false },
+      { name: "BACKUP_S3_PREFIX", label: "Folder", required: false },
     ],
     reader: BACKUP_CADENCE.reader,
     applies: noRestart(BACKUP_CADENCE, "add"),

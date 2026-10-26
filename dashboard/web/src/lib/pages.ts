@@ -5,8 +5,8 @@
  *
  * Two levels. The machine's: the home page, where the machine, its
  * discrepancies and the list of sites live, the machine's audit, the People
- * with a role somewhere, the Tokens that deploy without SSH, and the
- * connectors the egress proxy lends. A site's: five sections, Overview,
+ * with a role somewhere, the Tokens that deploy without SSH, the
+ * connectors the egress proxy lends, and the server's own settings. A site's: five sections, Overview,
  * Audience, Secrets, Access and Backups, the site as a parameter.
  *
  * Every page is a file of the build, `site/secrets/index.html` for
@@ -32,7 +32,7 @@ import type { Verdict } from "./verdict"
 export type Section = "overview" | "audience" | "secrets" | "access" | "backups"
 
 /** The pages of the machine level. */
-export type MachinePage = "home" | "activity" | "people" | "tokens" | "connectors"
+export type MachinePage = "home" | "activity" | "people" | "tokens" | "connectors" | "server"
 
 export type Page = { name: MachinePage } | { name: "site"; slug: string; section: Section }
 
@@ -46,6 +46,7 @@ export const MACHINE_PAGES: readonly MachineEntry[] = [
   { name: "people", title: "People", path: "/people/" },
   { name: "tokens", title: "Tokens", path: "/tokens/" },
   { name: "connectors", title: "Connectors", path: "/connectors/" },
+  { name: "server", title: "Server", path: "/server/" },
 ]
 
 /**

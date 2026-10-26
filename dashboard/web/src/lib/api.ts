@@ -11,6 +11,7 @@ import type {
   Reading,
   DashboardUnlockResponse,
   FileResponse,
+  LogResponse,
   PasswordResponse,
   RestartResponse,
   DashboardResponse,
@@ -141,6 +142,11 @@ function sendSecrets<T>(method: "POST" | "PUT" | "DELETE", path: string, body?: 
 
 export function readSecrets() {
   return callApi<DashboardResponse & SecretsRefusal>("/api/secrets")
+}
+
+/** The steward's last operations on a project's secrets: names and dates, never a value. The Server page dates its settings by them. */
+export function readSecretsLog(slug: string) {
+  return callApi<LogResponse & SecretsRefusal>(`/api/secrets/log?slug=${encodeURIComponent(slug)}`)
 }
 
 export function unlockSecrets(password: string) {

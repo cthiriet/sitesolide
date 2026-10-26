@@ -285,6 +285,7 @@ Computer (>= 768 px), machine level
 | People       |                                                           |
 | Tokens       |   machine strip, server banners, filters, list of sites   |
 | Connectors   |                                                           |
+| Server     * |                                                           |
 | Dark mode    |                                                           |
 | Sign out     |                                                           |
 | Collapse  ^B |                                                           |
@@ -319,15 +320,15 @@ beside an entry sits on its tone's solid badge. The sidebar's own controls
 below them in mono.
 
 **Two levels.** On the machine's pages (Sites, Activity, People, Tokens,
-Connectors), the sidebar carries them. Inside a site it becomes that site's: the *All sites*
+Connectors and Server), the sidebar carries them. Inside a site it becomes that site's: the *All sites*
 return, the current site on a raised card (its initial on a tile, its name,
 then its kind when fine, "App", "Static site", and its state in its tone with
 a dot when not, "Restarting, 3 errors", quiet when fine like the Overview's
 header), which opens the site switcher, every site by name, a dot on those in
 trouble alone; then its five sections, Overview, Audience, Secrets, Access
 and Backups. Collapsed, the site is just its initial, with its dot while in
-trouble. On a phone the tabs follow the level: five for the
-machine, five for a site, on one row.
+trouble. On a phone the tabs follow the level: six for the
+owner's machine, five for a site, on one row.
 
 **A person's shell.** Someone signed in with their company account sees the
 pages that are theirs and no other entry (`machinePagesFor` and `sectionsFor`
@@ -347,8 +348,11 @@ empty state rather than an error, and a section their role does not open,
 *Not part of your role*: the service refuses both too.
 
 Indicators (`lib/sidebar.ts`). Machine: *Sites* the number of discrepancies (error
-if there is one, otherwise attention); Activity, People, Tokens and
-Connectors report nothing. Site: *Overview* its discrepancies; *Secrets* what
+if there is one, otherwise attention); *Server* a dot and no count, in
+attention while the heartbeat is not set, since nothing outside the server
+would then notice it go down, in error while it fails (`serverSignal` in
+`lib/server-setup.ts`); Activity, People, Tokens and Connectors report
+nothing. Site: *Overview* its discrepancies; *Secrets* what
 its store and its files ask for, a declared name or file not set in the tone
 of the warning the verdict counts it by, a platform file missing as an
 error, unmanaged, a unit that does not read its store yet or a restart
@@ -486,6 +490,9 @@ on screen.
 | `MachineStrip`, `Track` | the strip, reserved for the home page: a status line, no panel, load, memory and disk on one 32 px line, each a mono label, a 56 px bar, its figure in its level's colour and, from 56 rem of the line (`@container/strip`), its caption ("1.3 on 6 cores"); each the button of a sort, Load of CPU; `UsageRing` is an 18 px ring of a share in its level's colour, the Sites list's memory against its limit; `Track` is a 6 px groove with a 1 px tick across it at each threshold, for a service's memory |
 | `Track` (dialogs) | waiting for a long answer: the time actually elapsed on its scale, the usual duration ticked when known, never an invented progress bar |
 | `Command` | a command to type in a terminal, copyable |
+| `SettingRow` | `server-setup.tsx`: one of the server's own settings, the same row on the Server page and in the setup guide on Sites (7, *Server*): its icon, its name and one sentence, its state on the right, one action, the "..." of the rest |
+| `InfoButton` | the (i) and its popover: a page's intro, through `PageHeader`, or a panel that explains itself, through `Panel`'s `afterTitle` |
+| The toast | `server-setup.tsx`: one at a time at the foot of the screen, for a choice of the viewer's own that has an Undo (the guide hidden, an item skipped) or that ends something (the guide gone); its words go through the one live region |
 | `serviceWord` | the word and tone of a systemd unit, the same on the home page, the Overview and Secrets; *Scheduled* for the anchor of a project whose every service is scheduled, `active (exited)` |
 | `scheduledWord`, `runLines` | a scheduled service's word, *Waiting* between two runs and never *Down*, and its last and next runs under it |
 
@@ -613,12 +620,16 @@ with one meaning everywhere and its words in its tooltip (`lib/legend.ts`):
 | `Pause`, 12 px | a project or a permission a person's token holds but may not use now, their role being below it | muted |
 | `Lock`, 12 px, after a label | a write that asks for the unlock first | the label's |
 | `Server`, `Cloud` | where a snapshot lives: on this server, in the offsite copy | muted |
-| `Layers`, `History`, `UsersRound`, `KeySquare`, `Plug` | the machine's pages in the sidebar, the tabs and the Sites row menu: Sites, Activity, People, Tokens, Connectors | `secondary-foreground` |
+| `Layers`, `History`, `UsersRound`, `KeySquare`, `Plug`, `SlidersHorizontal` | the machine's pages in the sidebar, the tabs and the Sites row menu: Sites, Activity, People, Tokens, Connectors, Server | `secondary-foreground` |
+| `HeartPulse`, `BellRing`, `Cloud`, `LogIn`, `UserKey`, `Asterisk` | the server's own settings, on the Server page and in the setup guide: the heartbeat, the alert webhook, the offsite copy (the same `Cloud` as a snapshot's), company sign-in, the dashboard password, the portal password | muted |
 | `Gauge`, `ChartNoAxesColumn`, `SquareAsterisk`, `ShieldCheck`, `DatabaseBackup` | a site's sections, there and in the Sites row menu: Overview, Audience, Secrets, Access, Backups | `secondary-foreground` |
 
 Navigation borrows no row's icon: Sites is not a `Globe`, which says
 *Public*, nor Secrets a `KeyRound`, which says a code; a note under every
-way a site opens is not a `Globe` either (`Link2`).
+way a site opens is not a `Globe` either (`Link2`). The Server page is not a
+`Server`, which says where a snapshot lives, nor a `Cog`, which says
+Background; its two passwords are neither the Secrets section's
+`SquareAsterisk` nor the code's `KeyRound`.
 
 The facet menus show the same icons beside the same words: they are the
 legend. A sheet's facts use `LegendEntry`, the icon and its word.
@@ -718,7 +729,10 @@ or a value never passes. Under the sign-in of an expired session, the page is
 
 | Object | Word | Do not write |
 |---|---|---|
-| Machine pages | Sites (the home page), Activity, People, Tokens, Connectors | Dashboard, Home, Overview, Members, Team |
+| Machine pages | Sites (the home page), Activity, People, Tokens, Connectors, Server | Dashboard, Home, Overview, Members, Team, Settings, Machine |
+| The server's own settings | Alerts, Sign-in, Backups (the Server page's panels); Heartbeat, Alert webhook, Dashboard password, Portal password, Company sign-in, Offsite copy; Not set, Set, Set, changed 12 days ago, Incomplete, 3 of 5 needed settings are set, Delivered, Failed, last ping did not go through, 3 undelivered, Off, On, Misconfigured, Unmanaged, See why, Restart pending, skipped; Set up, Change, Change the URL, See progress, Change password, Reveal for 30 s, Hide value, Hides in 24s, Hide now, Restart portal, Restart dashboard, Skip, Unskip, Remove; Set up this server, Why these are here, Open the Server page, Hide the setup guide, Show it again, Passwords, Change the dashboard password, Change the portal password; Advanced: the server's files, in the Secrets of the dashboard site | a file or a variable name, Configure, Enable, Disable, Settings, Wizard, Onboarding |
+| The guides | Step 2 of 3, Before you start, One command to run first, Check again, Next, Back, Save and continue, Save, Done; Create a check, Paste its ping URL, Ping URL, Wait for the first ping, Waiting for the monitor's next pass, Last pass 26s ago, Next pass; Choose where messages go, Paste the Slack address, Webhook address, Message format, From the address, Keep the current one, read from the address, as you chose; Create a bucket, Enter its details, Change its details, Endpoint, Bucket, Access key, Secret key, Region, Folder, Optional, Leave empty to keep it, Encryption passphrase, New passphrase, Generate, Copy, I saved it; Register the app, Issuer, Client ID, Client secret, Allowed domains, Admin emails, Provider name | Submit, Finish, Wizard, URL for a webhook (Webhook address), Prefix, Access key ID |
+| Toasts | Setup guide hidden. Every setting stays on the Server page., Undo, Offsite copy skipped. You can set it up on the Server page., The setup guide is back on Sites., The server is set up. The setup guide is gone., Heartbeat removed., Dismiss | Success, Done! |
 | Connectors | Connector, Add connector, Change, Remove connector, Requests, Grant, Withdraw, Granted, Granted, asked for, Asked, not granted, No such connector, Not asked for, Site removed, Base address, Header, Changed, Write-only (in the dialog and the sheet, never in a row) | Integration, Secret, Token, Revoke access, Grants |
 | Site sections | Overview, Audience, Secrets, Access, Backups; the breadcrumb *All sites > cms*; *Switch site* | Settings, Details, Sharing, Guests, Members |
 | The machine | Server | VM, host |
@@ -761,6 +775,7 @@ One page per served file, the site in `?s=`:
 | People | `/people/` | `people/index.html` |
 | Tokens | `/tokens/` | `tokens/index.html` |
 | Connectors | `/connectors/` | `connectors/index.html` |
+| Server, the owner's alone | `/server/` | `server/index.html` |
 | A site's Overview | `/site/?s=cms` | `site/index.html` |
 | A site's Audience | `/site/audience/?s=cms` | `site/audience/index.html` |
 | A site's Secrets | `/site/secrets/?s=cms` | `site/secrets/index.html` |
@@ -779,7 +794,7 @@ to open. Its intro, behind the title's (i); *History* opens Activity on the
 deployments.
 
 ```
-LOAD ━── 22% 1.3 on 6 cores   MEMORY ━━─ 49% 5.7 of 12 GB used   DISK ━━─ 41% 49 of 120 GB used     32 px line
+LOAD âââ 22% 1.3 on 6 cores   MEMORY âââ 49% 5.7 of 12 GB used   DISK âââ 41% 49 of 120 GB used     32 px line
 [!] Server  The last backup run failed for builder, 52 min ago                       banners, 2 then "Show 3 more"
 [Search sites /] [Access v] [Kind v]                              3 of 16  [Issues first v]
 | x | [app] hiring  Access mismatch +2 | hiring.example.com | [shield] | (o) 44 MB  | 25m ago | ... |  44 px
@@ -797,6 +812,27 @@ LOAD ━── 22% 1.3 on 6 cores   MEMORY ━━─ 49% 5.7 of 12 GB used   DIS
   readout is the button of a sort, Load of *CPU*, Memory and Disk of
   theirs, tinted `highlight` while in force: pressed again, the list goes
   back to *Issues first*.
+- **Set up this server**, the owner's alone, under the strip and the
+  banners: a panel, its count the rows it holds, its (i) saying why these
+  are here, its "..." with *Open the Server page* and *Hide the setup
+  guide*. Its rows are the Server page's (7, *Server*), only what the
+  server still lacks, in the guide's order: the heartbeat, the alert
+  webhook, the offsite copy and company sign-in, each with why it is
+  missing, "Nothing outside the server notices if it goes down.", *Set up*
+  on the first one the panel's one primary button, *Skip* in the menu of
+  the two optional ones; the heartbeat in trouble comes back to it, *Failed*
+  with *Change the URL*. A row whose guide is open stays, *Set, changed just
+  now*, until the guide closes; the heartbeat's stays while its first ping
+  is awaited, "Waiting for the monitor's next pass… 34s" with *See
+  progress*, then says *Delivered* a moment. At its foot, *Passwords* and
+  two links, *Change the dashboard password*, *Change the portal password*.
+  A file the steward does not rewrite is the Server page's to show, not the
+  guide's. The panel goes once everything is set or skipped, the toast
+  saying "The server is set up. The setup guide is gone."; hiding it says
+  "Setup guide hidden. Every setting stays on the Server page." with *Undo*.
+  Hidden and skipped are the viewer's own, kept in this browser under one
+  key, `setup-guide`, names only (`readSetupPrefs` in
+  `lib/server-setup.ts`).
 - **No Issues panel.** A site's issues are its row's. What has no row, the
   server's own discrepancies and those of a fragment with no folder, is a
   `Banner` each, errors first, two of them then *Show 3 more*; nothing at
@@ -1043,6 +1079,103 @@ it, and *All activity*; *Remove connector* at its foot. The add and change
 dialog types the value in a password field and leaves it empty on a change
 to keep it; a removal retypes the name.
 
+**Server.** The owner's alone, at `/server/`, `SlidersHorizontal` in the
+sidebar and a sixth tab on a phone, a dot beside it while the heartbeat is
+not set: the server's own settings, how it tells you it is down, who signs
+in, where its backups go. Its header is the other machine pages': the
+title, the (i) ("Only you see this page.", that no site reads them, that
+every setting stays here for good), *History* on Activity's secrets, the
+verdict. A person finds neither the entry nor the page, *Only the owner's*
+at its address, and the steward refuses them anyway.
+
+```
+| Alerts                         Changes apply within a minute. Nothing restarts. |
+| [heart] Heartbeat      Pings an outside service...   Set, changed 35 minutes ago   [Change] ... |
+| [x]     Alert webhook  Posts in your chat...         Failed  3 undelivered         [Change] ... |
+| Sign-in                        The portal applies changes when it restarts.     |
+| [key]   Dashboard password  Signs you in...          Restart pending  changed 4m [Change password] ... |
+| Backups                        The next hourly backup uses the change.          |
+| [cloud] Offsite copy   Copies the encrypted...       On  example-backups at s3...  [Change] ... |
+Advanced: the server's files, in the Secrets of the dashboard site.
+```
+
+- **Three panels, always in this order**, every setting shown, done or
+  not (`SERVER_GROUPS` in `lib/server-setup.ts`): *Alerts*, the heartbeat
+  and the alert webhook, its message format folded into its guide;
+  *Sign-in*, the two passwords and company sign-in; *Backups*, the offsite
+  copy as one row. Each panel's head says when a change applies, in plain
+  words.
+- **One row component**, `SettingRow`, the same as the guide's on Sites:
+  the setting's icon in the 28 px gutter, the severity icon in its place
+  when it fails; its name and one sentence of what it does; its state on
+  the right, *Not set* (attention for the heartbeat and the webhook, which a
+  server is expected to have), *Off* for the offsite copy, *Set, changed 12
+  days ago*, *Incomplete* with how many needed settings are set, *Failed*
+  with what failed and why in the tooltip, *Delivered* with its check a
+  minute after the first ping, *On* with where the copy goes, *Restart
+  pending*, *Unmanaged*; then its one action, *Set up*, *Change* (the
+  guide at its value step), *Change the URL* in the primary for a failing
+  heartbeat, *See progress*, *Change password*, *See why* for a file the
+  steward does not rewrite; and the "...": *Reveal for 30 s*, *Restart
+  portal* or *Restart dashboard* while one is pending, *Skip* or *Unskip*
+  on the optional ones, and under a separator *Remove*, confirmed.
+- **The dates are the steward's log**, `/api/secrets/log`, for a setting
+  that shares its file: the steward dates a file, not a variable. A
+  setting alone in its file takes the file's date; one with no line about
+  it in the log says *Set*, no date.
+- **No file name and no variable name** on the page or in its guides: the
+  labels are plain, *Ping URL*, *Webhook address*, *Bucket*, *Access key*,
+  *Secret key*, *Encryption passphrase*, *Issuer*, *Client ID*. *Reveal
+  for 30 s* shows each value of the setting under its row, by those labels,
+  through the steward's journaled reveal, masked as a Secrets value is. The
+  files stay reachable from the last line, *Advanced: the server's files,
+  in the Secrets of the dashboard site*, whose page is unchanged; while the
+  guide is hidden and something is missing, a line above the panels says
+  "The setup guide is hidden on Sites." with *Show it again*.
+- **The passwords** keep the Secrets section's *Change password* dialog,
+  and a restart its dialog, which names no file here (`plain`).
+
+**The guides** (`setup-guide.tsx`), one per setting a row sets up: a
+dialog, its head a mono *Step 2 of 3* and as many bars as steps, the done
+ones and the current one in the accent, its title, its body, its buttons
+(*Cancel* or *Back* on the left, the primary on the right). *Set up* opens
+the first step, *Change* the one that takes the value, which on a Change
+starts empty: a value is never filled in from the server, a field left
+empty keeps what is there, "Leave empty to keep it". A secret's field (the
+ping URL, the webhook address, the keys, the passphrase, the client
+secret) is `type="password"` with *Show*; no field offers anything to a
+password manager (`NO_PASSWORD_MANAGER`). The steward's refusal shows under
+the field or above the buttons, the page's checks (an https address, the
+check's page pasted in place of its ping URL, 16 characters for the
+passphrase) only help. Save carries the lock glyph while locked; pressed,
+the unlock opens over the guide, "Unlock to set the heartbeat URL", then
+Save goes on. When the monitor's or the backups' file is not on the server
+yet, a step comes first, *Before you start*: "Run this once on the server,
+then check again.", the command cut before the file's name, its copy
+holding the whole line, and *Check again*.
+
+- *Heartbeat*: create a check at healthchecks.io, Simple, 1 minute, 5
+  minutes, with *Open healthchecks.io*; paste its ping URL; wait for the
+  first ping, the seconds since the monitor's last pass on the minute it
+  takes and the time to the next, read from the snapshot's `alerting` and
+  read more often meanwhile; then *Delivered*, or "The monitor couldn't
+  reach it. Check the URL." with *Change the URL*, or, when the monitor
+  says nothing (`alerting` null), "Within two minutes the check turns
+  green on healthchecks.io."
+- *Alert webhook*: Slack, Discord, Google Chat, ntfy or Other, each with
+  its outside steps; paste the address, the format read from it said under
+  the field, what is off said too ("This doesn't look like a Slack
+  address."); Other chooses JSON or plain text, a Change keeps the format
+  saved or chooses another; the format's own variable is set only where the
+  address does not say it.
+- *Offsite copy*: create a bucket; its endpoint, bucket, access key, secret
+  key, region and folder; the encryption passphrase, typed or *Generate*d
+  in the browser, *Copy*, a note that without it the copy can't be read,
+  and *I saved it* before *Save*.
+- *Company sign-in*: register the app; its issuer, client ID, client
+  secret, allowed domains, admin emails and provider name; then that the
+  portal applies them when it restarts, the row saying *Restart pending*.
+
 **A site's Overview.** The site's hub: is it working, and which of its
 sections needs me. Under the title, what the project is, its kind's icon and
 word (`kindLine`: *App*, *Static site*, *Background, 3 services*), its state
@@ -1056,7 +1189,7 @@ banners of one line each. Then two panels side by side, a single column below
 
 ```
 | Service             cms.service [Restart] |  | Site                                  |
-| State     Running  up 20h                 |  | Address   cms.example.com ↗           |
+| State     Running  up 20h                 |  | Address   cms.example.com â           |
 | Memory    131 of 256 MB  [====|--||]  51% |  | Access    [Lock] Restricted  4 people >|
 | CPU       5%                              |  | Secrets   3 variables  1 not set     > |
 | Restarts  0                               |  | Backups   Last snapshot 45m ago     > |
@@ -1346,7 +1479,7 @@ opens it when restricted; no one can be given a role on it."
 **A site's Backups.** One status row, then the snapshots; the runs and the
 restores are in Activity, behind *History* (`type=backups`), the intro behind
 the (i). The **status row**, 64 px, the backups' tile at its left: *Last
-snapshot 45m ago*, then *Hourly · Offsite copy · Verified 9h ago*, muted. It
+snapshot 45m ago*, then *Hourly Â· Offsite copy Â· Verified 9h ago*, muted. It
 turns to attention, the warning icon in the tile's place, when the last run
 failed (its reason under it, and the age of the snapshot before it among the
 facts), when the offsite copy is misconfigured or a check failed, and past
@@ -1570,6 +1703,23 @@ and no table.
 56. **A leftover grant in red** among Connectors' requests, under a verdict
     saying *All clear*: it lends nothing until a project of that name asks
     again, a warning like a Caddy fragment with no folder.
+57. **The server's own settings in the dashboard site's Secrets alone**, as
+    variables of files named by their file: point 8 keeps everything about
+    a site in that site, and these are about no site. The heartbeat, the
+    alert webhook, the passwords, company sign-in and the offsite copy are
+    read by the monitor, the portal and the backup run, no site reads them,
+    and the dashboard's Secrets showed them as `HEARTBEAT_URL` in
+    `dashboard-monitor.env` under a site that does not use them, with a
+    restart that applied nothing. They get a machine page of their own,
+    Server, in words and in the order they are read, with a guide for each;
+    the files stay in those Secrets, for repairs, one link away.
+58. **Four ways to the same settings**, mockups A to D: a page, each setting
+    in a sheet where its state shows, a guided list on the home page, a
+    command menu. One row component in two places was kept: the Server page
+    holds every setting for good, the guide on Sites only what is missing,
+    and both open the same guide. A command menu would have been a second
+    navigation for six settings, and sheets scattered over five pages would
+    have left nobody a place to find them all.
 
 ## 9. Seeing the page, and looking at it
 
@@ -1597,7 +1747,9 @@ and `reports`, whose every service is scheduled. The platform's own three,
 `BENCH_NO_EGRESS=1`, `BENCH_NO_BACKUPS=1`, `BENCH_OLD_STEWARD=1`,
 `BENCH_EMPTY=1`, `BENCH_FRESH=1` (the platform's own projects alone, all
 well), `BENCH_PLATFORM_DOWN=1` (the portal's unit failed, alone or with
-`BENCH_FRESH=1`), `BENCH_SHOWCASE=1` (the fleet healed, the README's
+`BENCH_FRESH=1`), `BENCH_ALERTING=none`, `empty` or `failed` (the
+monitoring file absent, empty, or set with both channels failing; a fresh
+machine has none, and its backups file neither), `BENCH_SHOWCASE=1` (the fleet healed, the README's
 screenshot: every service runs, every name is set, no run or deployment
 failed, so that no page says red under *All clear*). After `bun run
 web:build`, a reload is enough.
@@ -1620,6 +1772,11 @@ bun run page-bench       # http://localhost:4322/gallery/, password demo
 A visible change is looked at before being shipped, through headless Chrome
 screenshots of the bench, in light and in dark:
 
+- the Server page and the setup guide on Sites, with `BENCH_ALERTING=empty`
+  (each guide to its end, the heartbeat's first ping arriving at the
+  bench's next state write), `BENCH_ALERTING=failed` and `BENCH_FRESH=1`
+  (the step that asks for the file first), the guide hidden and an item
+  skipped;
 - the home page, Activity, People and Tokens; the home page under Platform,
   on a fresh machine (`BENCH_FRESH=1`) and with the portal down
   (`BENCH_PLATFORM_DOWN=1`); the five sections of a site,

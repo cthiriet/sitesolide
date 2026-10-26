@@ -249,6 +249,7 @@ export function PageBody({ narrow = false, className, children }: { narrow?: boo
 export function Panel({
   title,
   count,
+  afterTitle,
   description,
   actions,
   full = false,
@@ -258,6 +259,8 @@ export function Panel({
 }: {
   title?: string
   count?: number | string
+  /** What follows the title and its count on their line: the (i) of a panel that explains itself. */
+  afterTitle?: ReactNode
   description?: ReactNode
   actions?: ReactNode
   full?: boolean
@@ -280,6 +283,7 @@ export function Panel({
             {title}
           </h2>
           {count !== undefined && <Count>{count}</Count>}
+          {afterTitle}
           {actions !== undefined && <div className="ml-auto flex items-center gap-2">{actions}</div>}
           {description !== undefined && <p className="basis-full text-xs text-muted-foreground">{description}</p>}
         </div>
@@ -663,6 +667,11 @@ function ShellBanners() {
  * with, kept whole and moved out of the way of its list.
  */
 function IntroButton({ title, children }: { title: string; children: ReactNode }) {
+  return <InfoButton label={`About ${title}`}>{children}</InfoButton>
+}
+
+/** The (i) and its popover, for a page's intro or a panel that explains itself: `label` names it to a screen reader. */
+export function InfoButton({ label, children }: { label: string; children: ReactNode }) {
   return (
     <Popover>
       <PopoverTrigger
@@ -670,7 +679,7 @@ function IntroButton({ title, children }: { title: string; children: ReactNode }
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label={`About ${title}`}
+            aria-label={label}
             className="shrink-0 text-muted-foreground hover:text-foreground max-md:size-9"
           />
         }

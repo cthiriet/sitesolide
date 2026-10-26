@@ -7,6 +7,8 @@ import { FilterBar, useListState, type Facet, type ListControls } from "@/compon
 import { MachineStrip, StripSkeleton } from "@/components/gauge"
 import { accessEntry, kindEntry } from "@/components/legend"
 import { Banner, EmptyState, InlineEmpty, PageBody, PageHeader, Panel, PanelSkeleton, WithSnapshot } from "@/components/page"
+import { ServerSetupProvider } from "@/components/server-setup"
+import { SetupPanel } from "@/components/setup-panel"
 import { SiteList } from "@/components/sites"
 import { isPerson } from "@/lib/identity"
 import { mayOpen } from "@/lib/pages"
@@ -173,6 +175,7 @@ function Sites({ snapshot, list, narrowed }: { snapshot: Snapshot; list: ListCon
       <>
         <MachineStrip snapshot={snapshot} sort={list.sort} onSort={(sort) => list.setSort(list.sort === sort ? SITE_SORTS[0]!.value : sort)} />
         <RowlessIssues issues={rowless} />
+        <SetupPanel />
         <Panel full>
           <InlineEmpty icon={Layers}>{FRESH_TITLE}. Run sitesolide deploy in a project's folder.</InlineEmpty>
         </Panel>
@@ -186,6 +189,7 @@ function Sites({ snapshot, list, narrowed }: { snapshot: Snapshot; list: ListCon
         <MachineStrip snapshot={snapshot} sort={list.sort} onSort={(sort) => list.setSort(list.sort === sort ? SITE_SORTS[0]!.value : sort)} />
       )}
       <RowlessIssues issues={rowless} />
+      {!person && <SetupPanel />}
       <section aria-label="Sites" className="grid gap-3">
         <FilterBar
           list={{ ...list, narrowed: narrowedSites(list) }}
@@ -245,7 +249,7 @@ export function HomePage() {
     [sites, worst, list.query, list.facets],
   )
   return (
-    <>
+    <ServerSetupProvider place="sites">
       <PageHeader
         title="Sites"
         count={narrowed?.total}
@@ -258,6 +262,9 @@ export function HomePage() {
             <p className="text-muted-foreground">
               Load, memory and disk are ticked at 70 and 90 %. Press Memory or Disk to sort the sites by what each one holds.
             </p>
+            {!isPerson(identity) && (
+              <p className="text-muted-foreground">When the server itself lacks a setting, a setup guide sits under the strip. Only you see it.</p>
+            )}
           </>
         }
         history={mayOpen({ name: "activity" }, identity) ? { type: "deployments" } : undefined}
@@ -267,6 +274,6 @@ export function HomePage() {
           {(snapshot) => (narrowed === null ? <HomeSkeleton /> : <Sites snapshot={snapshot} list={list} narrowed={narrowed} />)}
         </WithSnapshot>
       </PageBody>
-    </>
+    </ServerSetupProvider>
   )
 }

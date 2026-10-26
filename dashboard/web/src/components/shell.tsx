@@ -12,6 +12,7 @@ import { ActivityPage } from "@/components/pages/activity"
 import { ConnectorsPage } from "@/components/pages/connectors"
 import { TokensPage } from "@/components/pages/tokens"
 import { PeoplePage } from "@/components/pages/people"
+import { ServerPage } from "@/components/pages/server"
 import { AccessSection } from "@/components/pages/site-access"
 import { BackupsSection } from "@/components/pages/site-backups"
 import { OverviewSection } from "@/components/pages/site-overview"
@@ -36,6 +37,7 @@ const MACHINE_PAGES: Record<MachinePage, ComponentType> = {
   people: PeoplePage,
   tokens: TokensPage,
   connectors: ConnectorsPage,
+  server: ServerPage,
 }
 
 /**

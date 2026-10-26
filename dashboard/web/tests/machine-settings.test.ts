@@ -148,7 +148,7 @@ describe("the catalogue", () => {
     expect(settingsOf("monitoring").map((setting) => setting.id)).toEqual(["heartbeat", "webhook", "format"])
     expect(settingsOf("sign-in").map((setting) => setting.id)).toEqual(["dashboard-password", "portal-password", "company-signin"])
     expect(settingsOf("offsite").map((setting) => setting.id)).toEqual(["offsite"])
-    expect(Object.values(GROUP_LABELS)).toEqual(["Monitoring", "Sign-in", "Offsite copy"])
+    expect(Object.values(GROUP_LABELS)).toEqual(["Alerts", "Sign-in", "Backups"])
   })
 
   test("the sentences the plan gives", () => {
