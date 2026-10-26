@@ -120,6 +120,32 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## What each site takes, back on the Sites list
+
+**What the release brings.** The Sites list says again what each site takes,
+without a figure on every row: a small ring of the memory its services hold
+against their limit, beside the figure, amber or red near the limit; "CPU
+18%" beside the name of a site that takes 15 % of the processor or more; and
+a CPU sort, which the strip's Load also gives. The machine's load, memory and
+disk are one quiet line at the top of the page rather than a panel. A
+project that serves no page shows no access icon, and no access filter counts
+it. A table no longer overflows its panel at middle widths, where its end was
+cut off: it takes two lines a row sooner.
+
+**What `sitesolide upgrade` brings**: the dashboard. Caddy is not reloaded.
+
+**What changes for you.**
+
+- **A site's CPU is a share of the whole processor**, on its Overview as in
+  the list, the scale of the Load gauge: "30%, 1.8 of 6 cores" where the
+  Overview said "180% of one core".
+- **Sorting by Memory adds no column**: Memory has its own on every row.
+  Sorting by CPU or by Disk adds theirs.
+- **A worker or a scheduled job is no longer counted under Public** in the
+  Access filter: it serves no page.
+
+**Going back.** `sitesolide upgrade` with the previous binary.
+
 ## A calmer dashboard, in the site's look
 
 **What the release brings.** The dashboard, the portal's sign-in page and the
