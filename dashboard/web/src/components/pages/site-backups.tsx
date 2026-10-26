@@ -258,7 +258,8 @@ function SnapshotsPanel({
     {
       key: "taken",
       head: "Taken",
-      width: "minmax(14rem,1fr)",
+      // 12.5 rem keeps the one-line layout's minimum, 572 px with the row's padding and the menu, within its 36 rem.
+      width: "minmax(12.5rem,1fr)",
       slot: "primary",
       cell: (line) =>
         line.kind === "day" ? (

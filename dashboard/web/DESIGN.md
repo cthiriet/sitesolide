@@ -823,7 +823,9 @@ LOAD ━── 22% 1.3 on 6 cores   MEMORY ━━─ 49% 5.7 of 12 GB used   DIS
   sections with the sidebar's icons). The whole row leads to the Overview. A restart pending, which no
   discrepancy says, is the state's word in attention with no gutter icon,
   after any issue, and in the tooltip.
-- **On two lines**, below 42 rem of the table: the kind, the slug and its
+- **On two lines**, below 42 rem of the table, 48 rem when a sort brings a
+  figure's column, the widths under which the columns' minimums no longer
+  fit and the panel would clip the row: the kind, the slug and its
   tags, the access icon; then the state where the address goes, or the
   address, and the age. No menu and no link inside the row: it is one
   target.

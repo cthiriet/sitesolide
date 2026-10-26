@@ -31,8 +31,8 @@ import { cn } from "@/lib/utils"
  * 18%". A row in trouble carries the severity icon in the gutter and its
  * first issue's word beside the name, every message in the word's tooltip.
  * CPU and disk come back as a column when the list is sorted by them. Below
- * 42 rem of its own width, two lines: the name and the access, then the state
- * or the address and the age.
+ * 42 rem of its own width, 48 rem with that column, two lines: the name and
+ * the access, then the state or the address and the age.
  */
 
 /** The narrow layout's threshold, the table's own width: `@2xl/table` is 42 rem. */
@@ -233,7 +233,7 @@ function siteColumns(
   const site: Column<ListedSite> = {
     key: "site",
     head: "Site",
-    width: "minmax(15rem,1.1fr)",
+    width: "minmax(10rem,1.1fr)",
     slot: "primary",
     cell: (row) => {
       const state = states.get(row.slug) ?? null
@@ -256,7 +256,7 @@ function siteColumns(
   const address: Column<ListedSite> = {
     key: "address",
     head: "Address",
-    width: "minmax(11rem,1fr)",
+    width: "minmax(8.5rem,1fr)",
     slot: "meta",
     cell: (row) => {
       const state = states.get(row.slug) ?? null
@@ -284,7 +284,7 @@ function siteColumns(
   const memory: Column<ListedSite> = {
     key: "memory",
     head: "Memory",
-    width: "112px",
+    width: "104px",
     slot: "hide",
     cell: (row) => <MemoryCell site={row} />,
   }
@@ -301,7 +301,7 @@ function siteColumns(
   const extra: Column<ListedSite> = {
     key: which,
     head: FIGURE_HEAD[which],
-    width: "96px",
+    width: "88px",
     align: "end",
     slot: "time",
     cell: (row) => <FigureCell site={row} which={which} cores={cores} />,
@@ -329,6 +329,9 @@ export function SiteList({
 }) {
   const { now, offset, snapshot } = useData()
   const cores = snapshot?.machine?.cores ?? null
+  // The one-line layout needs its tracks' minimums, the row's padding and the menu: 640 px, 668 with the
+  // gutter, and 728 or 756 with the figure a sort brings. Below 42 rem, or 48 rem with that figure, the rows
+  // take two lines rather than overflow a panel that clips them.
   // The gutter is the line the eye scans for trouble: with none in the list, it is not drawn at all.
   const trouble = rows.some((row) => (states.get(row.slug)?.severity ?? null) !== null)
   return (
@@ -341,7 +344,7 @@ export function SiteList({
       severity={trouble ? (row) => states.get(row.slug)?.severity ?? null : undefined}
       rowHref={(row) => siteUrl(row.slug)}
       menu={(row) => <SiteMenu site={row} />}
-      narrowBelow="42rem"
+      narrowBelow={which === null ? "42rem" : "48rem"}
       narrowMenu={false}
       empty={empty}
     />
