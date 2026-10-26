@@ -36,25 +36,25 @@ const courier = site({ slug: "courier", headless: true, services: [siteService({
 const SITES = [calendar, cms, showcase, forgotten, expose, wheels, courier]
 
 describe("the facets", () => {
-  test("a site's access and kind, as the row's icons say them", () => {
-    expect(facetValues(calendar)).toEqual({ access: "restricted", kind: ["app"] })
-    expect(facetValues(showcase)).toEqual({ access: "public", kind: ["static"] })
-    expect(facetValues(expose)).toEqual({ access: "mismatch", kind: ["static"] })
-    expect(facetValues(wheels)).toEqual({ access: "code", kind: ["static"] })
-    expect(facetValues(courier)).toEqual({ access: "public", kind: ["background"] })
-    expect(facetValues(forgotten)).toEqual({ access: "public", kind: ["none"] })
-    expect(facetValues(site({ slug: "portal", platform: true }))).toEqual({ access: "public", kind: ["app", "platform"] })
+  test("a site's access and kind, as the row's icons say them, no access for a project that serves no page", () => {
+    expect(facetValues(calendar)).toEqual({ access: ["restricted"], kind: ["app"] })
+    expect(facetValues(showcase)).toEqual({ access: ["public"], kind: ["static"] })
+    expect(facetValues(expose)).toEqual({ access: ["mismatch"], kind: ["static"] })
+    expect(facetValues(wheels)).toEqual({ access: ["code"], kind: ["static"] })
+    expect(facetValues(courier)).toEqual({ access: [], kind: ["background"] })
+    expect(facetValues(forgotten)).toEqual({ access: ["public"], kind: ["none"] })
+    expect(facetValues(site({ slug: "portal", platform: true }))).toEqual({ access: ["public"], kind: ["app", "platform"] })
   })
 
-  test("each value keeps its sites, and the counts add up to the list", () => {
+  test("each value keeps its sites, and the access counts add up to the projects that serve a page", () => {
     const healthy = worstSeverities([])
     expect(slugs(narrowSites(SITES, healthy, state("access=restricted")).rows)).toEqual(["calendar"])
     expect(slugs(narrowSites(SITES, healthy, state("access=code")).rows)).toEqual(["wheels"])
     expect(slugs(narrowSites(SITES, healthy, state("kind=static")).rows)).toEqual(["showcase", "expose", "wheels"])
     const { counts, total } = narrowSites(SITES, healthy, state())
-    expect(counts.access).toEqual({ restricted: 1, public: 4, mismatch: 1, code: 1 })
+    expect(counts.access).toEqual({ restricted: 1, public: 3, mismatch: 1, code: 1 })
     expect(counts.kind).toEqual({ app: 2, static: 3, none: 1, background: 1, platform: 0 })
-    expect(Object.values(counts.access).reduce((a, b) => a + b)).toBe(total)
+    expect(Object.values(counts.access).reduce((a, b) => a + b)).toBe(total - 1)
   })
 
   /** A facet's menu says what choosing each value would show: under the search and the other facet, never under itself. */
@@ -62,7 +62,9 @@ describe("the facets", () => {
     const narrowed = narrowSites(SITES, worstSeverities([]), state("kind=static&access=public"))
     expect(slugs(narrowed.rows)).toEqual(["showcase"])
     expect(narrowed.counts.access).toEqual({ public: 1, mismatch: 1, code: 1 })
-    expect(narrowed.counts.kind).toMatchObject({ app: 1, static: 1, none: 1, background: 1 })
+    // courier serves no page: no access keeps it, so Public counts no Background.
+    expect(narrowed.counts.kind).toMatchObject({ app: 1, static: 1, none: 1 })
+    expect(narrowed.counts.kind.background).toBeUndefined()
   })
 
   test("a facet offers the values some project has, and the one chosen even when none has it any more", () => {

@@ -363,15 +363,16 @@ export function CellText({ title, className, children }: { title?: string; class
 
 /**
  * A row's name when the row is a page: the real link, for the keyboard and
- * for screen readers, underlined faintly at rest and fully under the
- * pointer, anywhere on the row.
+ * for screen readers, underlined only under the pointer, anywhere on the
+ * row: at rest, a column of underlined names reads as a page of links
+ * rather than a list, and the row's own hover already says it opens.
  */
 export function RowLink({ href, className, children }: { href: string; className?: string; children: ReactNode }) {
   return (
     <InternalLink
       href={href}
       className={cn(
-        "min-w-0 truncate rounded-sm font-medium text-strong underline decoration-foreground/20 underline-offset-4 outline-none group-hover/row:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring",
+        "min-w-0 truncate rounded-sm font-medium text-strong underline decoration-transparent underline-offset-4 outline-none group-hover/row:decoration-foreground/40 focus-visible:ring-2 focus-visible:ring-ring",
         className,
       )}
     >

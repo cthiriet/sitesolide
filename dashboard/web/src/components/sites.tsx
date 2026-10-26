@@ -15,7 +15,7 @@ import { roleOn } from "@/lib/identity"
 import { siteKind } from "@/lib/legend"
 import { sectionsFor, siteUrl } from "@/lib/pages"
 import { siteFolder } from "@/lib/site-card"
-import { PLATFORM_FACET, figure, kindDetail, type ListedSite, type RowState } from "@/lib/site-list"
+import { PLATFORM_FACET, figure, kindDetail, listedAccess, type ListedSite, type RowState } from "@/lib/site-list"
 import { HEADLESS_NOTE, memoryShare, siteAccess, siteAddress, siteWeight } from "@/lib/sites"
 import { cn } from "@/lib/utils"
 
@@ -233,7 +233,8 @@ function siteColumns(states: ReadonlyMap<string, RowState>, which: "memory" | "d
     width: "76px",
     align: "center",
     slot: "state",
-    cell: (row) => <AccessIcon access={siteAccess(row)} slug={row.slug} />,
+    // A project that serves no page has no visitor to let in: its cell stays empty.
+    cell: (row) => (listedAccess(row) === null ? null : <AccessIcon access={siteAccess(row)} slug={row.slug} />),
   }
   const deployed: Column<ListedSite> = {
     key: "deployed",

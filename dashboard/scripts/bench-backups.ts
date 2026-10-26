@@ -3,12 +3,12 @@
  * snapshots every hour for a day and a half, then one a day, an offsite copy,
  * and the troubles the page must know how to say:
  *
- * - `photos` is a static site, `example.com` the landing with no manifest;
+ * - `brand` is a static site, `example.com` the landing with no manifest;
  * - `builder`'s last run failed, the disk being too full, as the monitor's
  *   backup check says in scripts/page-bench.ts; healed in the showcase,
  *   whose monitor has nothing to say;
- * - `library` carries the leftovers of an interrupted restore: no restore offered;
- * - a restore of `roster` fails, the service not coming back, and the previous
+ * - `inventory` carries the leftovers of an interrupted restore: no restore offered;
+ * - a restore of `hiring` fails, the service not coming back, and the previous
  *   data is put back; every other restore succeeds, in about nine seconds,
  *   through the phases the real one-shot writes;
  * - `dashboard` is not restored from itself.
@@ -96,7 +96,7 @@ export function benchBackupRoutes(options: { start: number; folders: Folder[]; i
     else if (slug === "dashboard") reason = DASHBOARD_REFUSAL;
     else if (restore?.state === "running") reason = RUNNING_REASON;
     else if (!isApp(folder)) reason = "no data folder to restore into";
-    else if (slug === "library") reason = INTERRUPTED_REASON;
+    else if (slug === "inventory") reason = INTERRUPTED_REASON;
     else if (list.length === 0) reason = "no snapshot yet";
     return {
       slug,
@@ -138,7 +138,7 @@ export function benchBackupRoutes(options: { start: number; folders: Folder[]; i
     const preRestore = snapshotName(slug, preTakenAt, "pre-restore");
     const list = snapshots.get(slug) ?? [];
     list.unshift({ name: preRestore, takenAt: preTakenAt, kind: "pre-restore", bytes: list[0]?.bytes ?? 1_000_000, added: 52_000, local: true, offsite: false });
-    const failed = slug === "roster";
+    const failed = slug === "hiring";
     const when = new Date(snapshot.takenAt).toISOString().slice(0, 16).replace("T", " ");
     const done: RestoreView = failed
       ? { ...base, state: "failure", preRestore, at: Date.now(), message: `${slug} did not start on the restored data (${slug} looping, activating/auto-restart). The previous data is back and ${slug} is running again.` }

@@ -510,7 +510,7 @@ the dashboard:
 
 ```
 | 28 gutter | NAME minmax(..)    | COLUMN | COLUMN | AGE 96 | 44 menu |    one line, 44 px (40 dense)
-[x] [icon] roster  Restarting +2   roster.example.com   [icon]   24m ago   ...
+[x] [icon] hiring  Restarting +2   hiring.example.com   [icon]   24m ago   ...
 ```
 
 - **Head**: 40 px, `bg-cell`, the mono capitals of `mono-label`, ruled in
@@ -731,7 +731,7 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | General access | General access, Public, Restricted, Anyone with the code, Current, Change; Make public, Restrict; in a disagreement, On the server, In sitesolide.json, Keep Public, Apply Restricted; Preview code, Replace the code, Remove the code; Open to anyone, guarded by the app alone (the exempt paths); See changes in Activity | Door, Gate, Portal on, Portal off, Turn on portal, Behind the portal, Private, Password protected, Enable, Disable |
 | People with access | People with access, Add people, Add, Remove access; Can open, Viewer, Developer, Admin; company account, password access, Password access lasts, No expiry, expires in 5d, Expired, Added by; Can't sign in until company sign-in is set up; Copy message; What each role can do, a disclosure from Can open to Admin, (your role), (you); Also open it | Sharing, Share, Guest, Member, Team, Invite, Permissions, ACL, work account, Super admin, Project admin; an Owner row or rung |
 | People | People, Person, Projects, Expires, Type; Company account, Password access, Domain, as facets Company accounts, Password access, Domains; Creates projects (a row's tag), May create projects, Let someone create projects, Let create projects, Stop creating projects, Allow, Company email, Remove from every project, Remove expired, 1 password access has ended.; No project yet, Every site, as admin: set on the server in OIDC_ADMIN_EMAILS | Members, Invite |
-| Tokens | Tokens, New token, Create token, Name, Owner, Projects, Permissions, Last used, Expires; You, Never, No expiry, in 4d, Expired, Revoked, Paused; the chips Public sites, Secrets, Domain, Network, New projects, and their sentences Can deploy public sites, Can manage secrets, Can declare a domain, Can use outbound network, Can create projects; Paused: no longer allowed, Paused: Viewer now; Made by, Created by it; Whose token, Mine, For someone in People, Projects it may deploy, All projects (13), Filter projects, Permissions: None, Needed by cms, Deploys cms and photos, expires in 90 days, no extra permission.; Show 1 revoked or expired, View activity, Revoke token, Revoke "alice-ci"?, Copy message | Team, API key, Yours, Their own, Active, Public sites allowed, Restricted sites only, Write secrets, Secrets access, Recent deployments, Token activity |
+| Tokens | Tokens, New token, Create token, Name, Owner, Projects, Permissions, Last used, Expires; You, Never, No expiry, in 4d, Expired, Revoked, Paused; the chips Public sites, Secrets, Domain, Network, New projects, and their sentences Can deploy public sites, Can manage secrets, Can declare a domain, Can use outbound network, Can create projects; Paused: no longer allowed, Paused: Viewer now; Made by, Created by it; Whose token, Mine, For someone in People, Projects it may deploy, All projects (13), Filter projects, Permissions: None, Needed by cms, Deploys cms and brand, expires in 90 days, no extra permission.; Show 1 revoked or expired, View activity, Revoke token, Revoke "alice-ci"?, Copy message | Team, API key, Yours, Their own, Active, Public sites allowed, Restricted sites only, Write secrets, Secrets access, Recent deployments, Token activity |
 | The lock | Unlocked, 9 min, and its x, Lock changes now; in its dialog, Unlock changes, Unlock to create a token (the write that waits), Unlock, Sign in again; under a field, Giving Developer asks to unlock changes first.; after a person's re-sign-in, Unlocked. Press Add to finish.; in Activity, Unlocked changes, Locked changes | Unlock the secrets, Locked, Unlock to add, Unlock to create, Unlock to allow, an Unlock changes button |
 | Kind | Static site, App, Background, Scheduled, No manifest; as facets, Static, Apps, Background, Scheduled, Platform; Runs in the background, serves no page | Worker, Service, Job, Cron, Daemon |
 | Lists | Search sites, Filter, Clear filters, Sort, Issues first, Name, Last deployed, Memory, Disk, 3 of 14, All, Show all, Show 1 revoked or expired; an access facet's Public, Restricted, Anyone with the code, Mismatch; Access mismatch beside a name | Reset, Filter by, Results, No results |
@@ -783,8 +783,8 @@ deployments.
 | LOAD 1.3 on 6 cores        22% | MEMORY 5.7 of 12 GB   49% | DISK 49 of 120 GB   41% |   64 px strip
 [!] Server  The last backup run failed for builder, 52 min ago                       banners, 2 then "Show 3 more"
 [Search sites /] [Access v] [Kind v]                              3 of 16  [Issues first v]
-| x | [app] roster  Access mismatch +2 | roster.example.com | [shield] | 25m ago | ... |  44 px
-|   | [files] wheels                   | riverside-cycles.ex| [globe]  | 26d ago | ... |
+| x | [app] hiring  Access mismatch +2 | hiring.example.com | [shield] | 25m ago | ... |  44 px
+|   | [files] blog                     | blog.example.net   | [globe]  | 26d ago | ... |
 ```
 
 - **The strip**, the owner's alone: load, memory and disk in one 64 px
@@ -799,14 +799,16 @@ deployments.
   all when there is none, the verdict saying *All clear*.
 - **The row**, `DataTable` of 44 px: the gutter, drawn only while some row
   is in trouble; the kind icon (`KindIcon`, its tooltip the number of
-  services or the next run), the slug, the real link, its description in
-  its title, the *Platform* tag or a person's role, then, only when not
+  services or the next run), the slug, the real link, underlined only
+  under the pointer, its description in its title, the *Platform* tag or a person's role, then, only when not
   fine, the state: the first issue's `label` from the server, errors
   first, in its tone, "+2" for the others, every message whole in its
   tooltip; the address visitors use in muted mono, cut, its arrow on hover,
   *No page* for a project that serves none, the preview or a domain's
   trouble in its title; the access icon (`AccessIcon`, the exempt paths and
-  the code in its tooltip); the deployment's age; the row menu (*Open site*,
+  the code in its tooltip), none for a project that serves no page, which
+  has no visitor to let in, unless its access is a mismatch; the
+  deployment's age; the row menu (*Open site*,
   *Copy address*, *Copy code*, *Copy link with code*, then the site's
   sections with the sidebar's icons). The whole row leads to the Overview. A restart pending, which no
   discrepancy says, is the state's word in attention with no gutter icon,
@@ -818,7 +820,7 @@ deployments.
 - **Filters**: Access (Public, Restricted, Anyone with the code, Mismatch)
   and Kind (Static, Apps, Background, Scheduled, No manifest, Platform),
   each offering only what some project is, with the rows' own icons and
-  their counts. **Sort**: *Issues first* (errors, warnings, a restart
+  their counts; a project that serves no page is under no access. **Sort**: *Issues first* (errors, warnings, a restart
   pending, then the rest, each by name), *Name*, *Last deployed*, *Memory*
   and *Disk*, the heaviest first; those two bring their figure back as a
   column, in the age's place on two lines. CPU, the services' count and
@@ -921,7 +923,7 @@ asks for the unlock first; *History* opens what tokens did,
 revoked and the expired fold under the rows, *Show 1 revoked or expired*.
 
 A row, 44 px: *Name*; *Owner*, "You" or the person's email, for the owner
-alone; *Projects*, "cms, photos" then "+2", each linked to its site, a project where the person's
+alone; *Projects*, "cms, brand" then "+2", each linked to its site, a project where the person's
 role is below Developer muted after the `Pause` glyph; *Permissions*, what
 it may do beyond deploying, at most two chips then "+N", *Public sites*,
 *Secrets*, *Domain*, *Network*, *New projects*, a person's paused one dashed
@@ -971,10 +973,10 @@ already, and sent only when ticked, so that a steward from before it still
 mints the rest; ticked against one, the dialog says "The server's steward
 predates this permission: run sitesolide upgrade." One a project chosen
 cannot be deployed without is ticked for you and says which, "Needed by
-bookshop and wheels": a public project for the owner's own, exempted paths,
+docs and blog": a public project for the owner's own, exempted paths,
 a declared domain; the disclosure then opens by itself, the reason in its
 summary. Then *Expires*, a segmented control. Above the buttons, one line
-says what the token will be, "Deploys cms and photos, expires in 90 days, no
+says what the token will be, "Deploys cms and brand, expires in 90 days, no
 extra permission." The token is then shown once, with *Copy message*.
 Revoking asks "Revoke "alice-ci"?", "Its next request is refused; a
 deployment already running finishes.", and, for a token that created
@@ -1015,7 +1017,7 @@ not granted, *Asked, not granted* in attention, with *Grant*; one that asks
 for a connector the server lacks, *No such connector* in attention, with
 *Add connector*, its name filled in. Then the connectors, one 44 px row
 each: the name in mono, the base address without its scheme, muted and cut,
-the projects it is granted to, "cms, roster", each linked to its site, one
+the projects it is granted to, "cms, hiring", each linked to its site, one
 that does not ask for it muted, and when it changed; the row menu, *Change* and *Remove connector*,
 each asking for the unlock first. A click opens the sheet (`?connector=`):
 *Write-only*, said there and in the dialog rather than on every row; the
@@ -1084,7 +1086,7 @@ age in the Backups section's words, in attention when the last run failed;
 *Audience*, the visits over analytics' window, "1,148 visits in 30 days".
 Around them, the facts that are no section: *Address*, the address that
 answers, a domain not answering as asked in its state's word ("Pending:
-martin-bakery.example"), the other addresses muted under it, "Serves no page"
+example.net"), the other addresses muted under it, "Serves no page"
 for a project that serves none; *Disk*, its folder in the tooltip;
 *Deployed*, the age, and who deployed when Activity's latest success for the
 site is the deployment the manifest dates (`deployedBy`). A disagreement
@@ -1122,7 +1124,7 @@ titled by it; a mono head naming the rows and what they count; rows of
 the first; the first six, then *Show all 9*, the whole ranking in a sheet,
 `?ranking=pages`. A site the measurement does not know says so in one
 line, "cms isn't measured yet: it joins the list within a minute of a
-deployment.", "courier serves no page: there is nothing to measure."; one
+deployment.", "mailer serves no page: there is nothing to measure."; one
 with no visit yet gives the tag to paste, with its copy button; numbers
 older than ten minutes, a banner.
 
@@ -1214,7 +1216,7 @@ beside them, the paths "Open to anyone, guarded by the app alone" under
 code, each with its icon and its sentence, the current one ticked, a way that
 lets more people in carrying the lock glyph while changes are locked; a way
 the steward refuses here is greyed with its reason in place of its sentence,
-"it serves its own domain, riverside-cycles.example, which a code would not
+"it serves its own domain, blog.example.net, which a code would not
 close: switch it back to its preview first, sitesolide domain --deactivate".
 *Change* appears once the steward has said what may change, and a reason
 that stops every way, a change in progress, is said once under the row
@@ -1241,17 +1243,17 @@ stops working at once, and the link that carries it." and asks no typing;
 leaving a code says "Its code stops working." first. A site already as asked
 is left as it is, "already restricted: nothing to change". Restricting a site
 nobody is on the list of warns "Nobody is on the list yet: after this, only
-the owner and the admin emails can open wheels." All say "Takes up to a
+the owner and the admin emails can open blog." All say "Takes up to a
 minute. If anything fails, nothing changes."; the wait neither closes nor
 cancels and shows the time elapsed on a minute and a half's scale; the result
-says what the site now does, "wheels.example.com now asks visitors to sign
+says what the site now does, "blog.example.com now asks visitors to sign
 in. The 13 other sites still answer.", "calendar.example.com now opens
 without signing in." or "cms.example.com now asks for its code.", with the
 code and its link when there is one, then "Your next sitesolide deploy writes
 this into sitesolide.json."
 
 Then **People with access**, its count the number of rows, and while the site
-is not restricted a note, "wheels is public, so anyone can open it. Viewer,
+is not restricted a note, "blog is public, so anyone can open it. Viewer,
 Developer and Admin still apply; Can open matters once you restrict it." For
 the owner and the project's Admins, *Add people* at the top: an email or a
 `@domain`, the domain only once company sign-in is set up, a role among those
@@ -1558,12 +1560,12 @@ The bench runs the real `server.ts` on fictional data, a fake steward with
 the real access and sign-in routes, a fake portal, and plays Caddy in front
 of them. *Sign in with Google* leads to a page of the bench's that signs in
 one of its people: alice@example.com, a Developer on `cms`, an Admin on
-`calendar` and a Viewer on `photos`; bruno@example.com, an Admin on `cms`;
+`calendar` and a Viewer on `brand`; bruno@example.com, an Admin on `cms`;
 chloe@example.com, a Viewer on `calendar`; editor@example.com, Can open on
 `cms`, whom the dashboard refuses with `can-open-only`; stranger@example.com,
 on no list, refused with `no-role`. It seeds an expired password access on
-`library`, and alice's token `alice-ci`, paused on `photos`, where she is a
-Viewer now. Two projects serve no page: `courier`, a worker beside two
+`inventory`, and alice's token `alice-ci`, paused on `brand`, where she is a
+Viewer now. Two projects serve no page: `mailer`, a worker beside two
 scheduled services, the hourly one's last run failed outside the showcase,
 and `reports`, whose every service is scheduled. The platform's own three,
 `dashboard`, `portal` and `analytics`, sit under Platform. Variants:
@@ -1599,7 +1601,7 @@ screenshots of the bench, in light and in dark:
   on a fresh machine (`BENCH_FRESH=1`) and with the portal down
   (`BENCH_PLATFORM_DOWN=1`); the five sections of a site,
   the Overview of a service in a restart loop and of a locked static site,
-  of `courier` and of `reports`,
+  of `mailer` and of `reports`,
   the Secrets of a site with a store, and of the dashboard itself;
 - at 1440 px, at 1024 px with the sidebar expanded, and at 390 px;
 - the collapsed sidebar, the switcher open, sign-in, an expired session, Secrets

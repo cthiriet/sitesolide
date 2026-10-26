@@ -72,7 +72,7 @@ the density, in light, the clock in UTC:
 | `dashboard.png` | Sites | 1440 × 900 | 1200 wide, `dashboard.example.com` |
 | `tokens.png` | Tokens, Release agent's sheet open | 1440 × 900 | 1200 wide, `dashboard.example.com` |
 | `access.png` | cms's Access, the content alone | 1208 × 739 | 1000 wide, `dashboard.example.com` |
-| `preview-lock.png` | The door page | 1200 × 720 | 1000 wide, `bakery-martin.example.com` |
+| `preview-lock.png` | The door page | 1200 × 720 | 1000 wide, `launch.example.com` |
 
 Each is framed as the landing page frames its hero: in its window, an address
 in its bar, on its dawn landscape, 1312 × 902 for a window 1200 wide and

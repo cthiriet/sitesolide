@@ -1577,7 +1577,7 @@ manifest refuses the two together. A choice the steward refuses says why
 under it, a site on its own domain taking no code, a static site no portal;
 a reason that stops all three, a change in progress, is said once under them.
 The confirmation says it "Takes up to a minute. If anything fails, nothing
-changes.", and the result what the site now does, "wheels.example.com now asks
+changes.", and the result what the site now does, "blog.example.com now asks
 visitors to sign in. The 13 other sites still answer.", the code when there is
 one, then that the next `sitesolide deploy` writes it into `sitesolide.json`.
 Who may open a restricted site is the steward's registry, not this switch: see
@@ -2405,21 +2405,21 @@ made by the real migration from a `members.json` and a portal database of
 before, and its portal signs people in: *Sign in with Google* on the sign-in
 page leads to a page of the bench's that signs in one of its people:
 alice@example.com, a Developer on `cms`, an Admin on `calendar` and a Viewer
-on `photos`; bruno@example.com, an Admin on `cms` and a Developer on
+on `brand`; bruno@example.com, an Admin on `cms` and a Developer on
 `calendar`; chloe@example.com, a Viewer on `calendar`; editor@example.com,
 Can open on `cms`, whose sign-in is refused `can-open-only`; or
 stranger@example.com, whom the registry does not name, refused `no-role`.
 maya@example.com may create projects. People and a domain can open `cms` and
 `calendar`, and five password accesses are carried over, the one on
-`library` expired. `BENCH_NO_SSO=1` runs a portal with no provider, where
-everyone added gets password access. `courier` and `reports` serve no page:
+`inventory` expired. `BENCH_NO_SSO=1` runs a portal with no provider, where
+everyone added gets password access. `mailer` and `reports` serve no page:
 a worker beside two scheduled services, the hourly one's last run failed, and
 a project whose every service is scheduled.
 The same page stands for the provider's forced sign-in when a person
 unlocks, and the bench's steward judges a person's secrets and general access
 by role before its own fake operations, and her own tokens on the *Tokens*
 page with the real rules of src/people/tokens.ts; the owner's *Tokens* page
-lists two of hers, made by her, `alice-ci` paused on `photos`, where she is a
+lists two of hers, made by her, `alice-ci` paused on `brand`, where she is a
 Viewer now.
 
 ## Tests

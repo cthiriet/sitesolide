@@ -15,7 +15,7 @@
  *   seconds in the `Raw` format of `src/state.ts`: a dozen sites, static and
  *   app, a service that loops, a preview lock, sites behind the portal,
  *   discrepancies of both severities; two projects that serve no page,
- *   `courier`, a worker beside two scheduled services whose hourly one's
+ *   `mailer`, a worker beside two scheduled services whose hourly one's
  *   last run failed, and `reports`, whose every service is scheduled; the
  *   platform's own three, `dashboard`, `portal` and `analytics`, each on its
  *   own port, which the Sites page lists under Platform;
@@ -32,9 +32,9 @@
  *   longer declares, and builder's declared file present (`storeOf`). The
  *   store's writes are not simulated;
  * - a simulated gatekeeper behind `/portal`, which takes six seconds: it
- *   restricts `wheels` or `bookshop` and makes them public again, always
- *   fails on `photos` and restores, refuses `roster` because Caddy's
- *   lock is held from the workstation, and refuses `library`, for which a
+ *   restricts `blog` or `docs` and makes them public again, always
+ *   fails on `brand` and restores, refuses `hiring` because Caddy's
+ *   lock is held from the workstation, and refuses `inventory`, for which a
  *   backup of an interrupted action has remained: its state is unknown. The
  *   messages are those of the real gatekeeper and of the real steward,
  *   imported from src/;
@@ -46,7 +46,7 @@
  *   socket, the registry made by the real migration from a `members.json`
  *   and a portal database from before it, written in the temporary
  *   directory: alice@example.com is a Developer on `cms`, an Admin on
- *   `calendar` and a Viewer on `photos`, bruno@example.com an Admin on `cms`
+ *   `calendar` and a Viewer on `brand`, bruno@example.com an Admin on `cms`
  *   and a Developer on `calendar`, chloe@example.com a Viewer on
  *   `calendar`, maya@example.com may create projects; people and a domain
  *   can open `cms` and `calendar`, editor@example.com can only open `cms`,
@@ -219,34 +219,34 @@ const FOLDERS: FakeFolder[] = [
     portal: true,
   },
   {
-    slug: "wheels",
+    slug: "blog",
     manifest: {
-      slug: "wheels",
-      description: "Riverside Cycles, showcase site",
-      domain: { name: "riverside-cycles.example", aliases: ["www.riverside-cycles.example"], active: true },
+      slug: "blog",
+      description: "Product blog",
+      domain: { name: "blog.example.net", aliases: ["news.example.net"], active: true },
     },
     unit: null,
     bytes: 14 * MB,
     deployedMs: 26 * DAY,
   },
   {
-    slug: "bakery-martin",
+    slug: "launch",
     manifest: {
-      slug: "bakery-martin",
-      description: "Martin Bakery, redesign under way",
+      slug: "launch",
+      description: "Launch page, under review",
       lock: true,
-      domain: { name: "martin-bakery.example", active: false },
+      domain: { name: "example.net", active: false },
     },
     unit: null,
     bytes: 31 * MB,
     deployedMs: 2 * HOUR,
   },
   {
-    slug: "bookshop",
+    slug: "docs",
     manifest: {
-      slug: "bookshop",
-      description: "Corner Bookshop",
-      domain: { name: "corner-bookshop.example", active: true },
+      slug: "docs",
+      description: "Product documentation",
+      domain: { name: "docs.example.net", active: true },
     },
     unit: null,
     bytes: 6 * MB,
@@ -288,18 +288,20 @@ const FOLDERS: FakeFolder[] = [
       start: "bun run server.ts",
       port: 3041,
       memory: "512M",
+      portal: true,
       secrets: { runtime: ["GITHUB_TOKEN", "NPM_TOKEN"], files: ["registry.json"], build: ["SENTRY_AUTH_TOKEN"] },
       env: { NODE_ENV: "production", REGISTRY_URL: "https://registry.npmjs.org" },
     },
     unit: { memory: 143 * MB, peak: 301 * MB, limit: 512 * MB, sinceMs: 9 * DAY, cpu: 3.4 },
     bytes: 186 * MB,
     deployedMs: 9 * DAY,
+    portal: true,
   },
   {
-    slug: "library",
+    slug: "inventory",
     manifest: {
-      slug: "library",
-      description: "Lending library",
+      slug: "inventory",
+      description: "Equipment inventory",
       start: "bun run server.ts",
       port: 3044,
       portal: true,
@@ -311,8 +313,8 @@ const FOLDERS: FakeFolder[] = [
     portal: true,
   },
   {
-    slug: "photos",
-    manifest: { slug: "photos", description: "Family albums", portal: true },
+    slug: "brand",
+    manifest: { slug: "brand", description: "Logos, photos and decks", portal: true },
     unit: null,
     bytes: 2.3 * GB,
     deployedMs: 15 * DAY,
@@ -349,15 +351,15 @@ const FOLDERS: FakeFolder[] = [
     portal: true,
   },
   {
-    slug: "lab",
+    slug: "playground",
     manifest: {
-      slug: "lab",
-      description: "A small AI lab: platform, API and model",
+      slug: "playground",
+      description: "Model playground: web app, API and model",
       services: {
-        platform: { start: "/srv/sites/lab/app/.venv/bin/python -m lab.platform --port 3047", port: 3047 },
-        api: { start: "/srv/sites/lab/app/.venv/bin/python -m lab.api --port 3048", port: 3048, routes: ["/v1/*"] },
+        platform: { start: "/srv/sites/playground/app/.venv/bin/python -m playground.platform --port 3047", port: 3047 },
+        api: { start: "/srv/sites/playground/app/.venv/bin/python -m playground.api --port 3048", port: 3048, routes: ["/v1/*"] },
         inference: {
-          start: "/srv/sites/lab/app/.venv/bin/python -m lab.inference --port 3049",
+          start: "/srv/sites/playground/app/.venv/bin/python -m playground.inference --port 3049",
           port: 3049,
           internal: true,
           memory: "768M",
@@ -366,8 +368,8 @@ const FOLDERS: FakeFolder[] = [
     },
     unit: { memory: 47 * MB, peak: 49 * MB, limit: 256 * MB, sinceMs: 2 * HOUR, cpu: 0.3 },
     units: {
-      "lab.api": { memory: 38 * MB, peak: 40 * MB, limit: 256 * MB, sinceMs: 2 * HOUR, cpu: 0.2 },
-      "lab.inference": { memory: 237 * MB, peak: 239 * MB, limit: 768 * MB, sinceMs: 2 * HOUR, cpu: 1.4 },
+      "playground.api": { memory: 38 * MB, peak: 40 * MB, limit: 256 * MB, sinceMs: 2 * HOUR, cpu: 0.2 },
+      "playground.inference": { memory: 237 * MB, peak: 239 * MB, limit: 768 * MB, sinceMs: 2 * HOUR, cpu: 1.4 },
     },
     bytes: 1.1 * GB,
     deployedMs: 2 * HOUR,
@@ -376,10 +378,10 @@ const FOLDERS: FakeFolder[] = [
     // Runs in the background and serves no page: a worker holding the queue,
     // its main service, and two scheduled jobs, the hourly one failing
     // outside the showcase.
-    slug: "courier",
+    slug: "mailer",
     manifest: {
-      slug: "courier",
-      description: "Order emails and the morning digest",
+      slug: "mailer",
+      description: "Transactional emails and the morning digest",
       services: {
         queue: { start: "bun run worker.ts", internal: true },
         digest: { start: "bun run digest.ts", schedule: "Mon..Fri 08:00", timeout: "15m" },
@@ -389,14 +391,14 @@ const FOLDERS: FakeFolder[] = [
     },
     unit: { memory: 52 * MB, peak: 58 * MB, limit: 256 * MB, sinceMs: 4 * DAY, cpu: 0.4 },
     units: {
-      "courier.digest": { ...IDLE, limit: 256 * MB, run: { result: "success", status: 0, endedMs: 5 * HOUR, tookMs: 47_000 } },
-      "courier.cleanup": SHOWCASE
+      "mailer.digest": { ...IDLE, limit: 256 * MB, run: { result: "success", status: 0, endedMs: 5 * HOUR, tookMs: 47_000 } },
+      "mailer.cleanup": SHOWCASE
         ? { ...IDLE, limit: 256 * MB, run: { result: "success", status: 0, endedMs: 22 * MINUTE, tookMs: 3_000 } }
         : { ...IDLE, active: "failed", subState: "failed", limit: 256 * MB, run: { result: "exit-code", status: 1, endedMs: 22 * MINUTE, tookMs: 3_000 } },
     },
     timers: {
-      "courier.digest.timer": { lastMs: 5 * HOUR + 47_000, nextMs: 19 * HOUR },
-      "courier.cleanup.timer": { lastMs: 22 * MINUTE + 3_000, nextMs: 38 * MINUTE },
+      "mailer.digest.timer": { lastMs: 5 * HOUR + 47_000, nextMs: 19 * HOUR },
+      "mailer.cleanup.timer": { lastMs: 22 * MINUTE + 3_000, nextMs: 38 * MINUTE },
     },
     bytes: 21 * MB,
     deployedMs: 4 * DAY,
@@ -418,15 +420,15 @@ const FOLDERS: FakeFolder[] = [
     deployedMs: 4 * DAY,
   },
   {
-    slug: "roster",
+    slug: "hiring",
     manifest: {
-      slug: "roster",
-      description: "Staff roster",
+      slug: "hiring",
+      description: "Hiring pipeline",
       start: "bun run server.ts",
       port: 3045,
       secrets: ["MAIL_KEY"],
-      // Restricted in sitesolide.json, not in the live block: general access in disagreement.
-      ...(SHOWCASE ? {} : { portal: true }),
+      // Restricted in sitesolide.json and, outside the showcase, not in the live block: general access in disagreement.
+      portal: true,
     },
     unit: {
       active: "activating",
@@ -440,13 +442,14 @@ const FOLDERS: FakeFolder[] = [
     },
     bytes: 18 * MB,
     deployedMs: 25 * MINUTE,
+    portal: SHOWCASE,
   },
   {
-    slug: "yoga-studio",
+    slug: "careers",
     manifest: {
-      slug: "yoga-studio",
-      description: "Yoga studio",
-      domain: { name: "yoga-studio.example", active: false },
+      slug: "careers",
+      description: "Careers page",
+      domain: { name: "careers.example.net", active: false },
     },
     unit: null,
     bytes: 27 * MB,
@@ -458,10 +461,10 @@ if (SHOWCASE) {
   for (const d of FOLDERS) {
     if (d.unit !== null) d.unit.cpu = Math.min(d.unit.cpu, 6);
     const domain = d.manifest?.domain as { active?: boolean } | undefined;
-    if (domain !== undefined && d.slug !== "bakery-martin") domain.active = true;
+    if (domain !== undefined && d.slug !== "launch") domain.active = true;
   }
   const unit = (slug: string) => FOLDERS.find((d) => d.slug === slug)!.unit!;
-  Object.assign(unit("roster"), { active: "active", subState: "running", memory: 44 * MB, peak: 61 * MB, restarts: 0, sinceMs: 25 * MINUTE, cpu: 0.6 });
+  Object.assign(unit("hiring"), { active: "active", subState: "running", memory: 44 * MB, peak: 61 * MB, restarts: 0, sinceMs: 25 * MINUTE, cpu: 0.6 });
   Object.assign(unit("cms"), { memory: 131 * MB, peak: 163 * MB });
 }
 
@@ -502,21 +505,21 @@ function monitorStatus(generatedAt: number): string {
     ? []
     : [
         {
-          id: "site:yoga-studio.example",
+          id: "site:careers.example.net",
           kind: "site",
-          label: "yoga-studio.example",
+          label: "careers.example.net",
           severity: "critical",
-          slug: "yoga-studio",
-          summary: "https://yoga-studio.example/ did not answer: ERR_TLS_CERT_ALTNAME_INVALID",
+          slug: "careers",
+          summary: "https://careers.example.net/ did not answer: ERR_TLS_CERT_ALTNAME_INVALID",
           since: ago(14),
         },
         {
-          id: "certificate:riverside-cycles.example",
+          id: "certificate:blog.example.net",
           kind: "certificate",
-          label: "riverside-cycles.example",
+          label: "blog.example.net",
           severity: "warning",
-          slug: "wheels",
-          summary: `The certificate for riverside-cycles.example expires in 9 days, on ${new Date(generatedAt + 9.5 * 24 * 60 * MINUTE).toISOString().slice(0, 10)}`,
+          slug: "blog",
+          summary: `The certificate for blog.example.net expires in 9 days, on ${new Date(generatedAt + 9.5 * 24 * 60 * MINUTE).toISOString().slice(0, 10)}`,
           since: ago(3 * 60),
         },
         {
@@ -609,36 +612,36 @@ function audience(generatedAt: number): string {
     from: day(29),
     to: day(0),
     sites: {
-      "wheels": {
+      "blog": {
         totals: { views: 2417, visits: 1148, bounces: 402, timedViews: 1502, seconds: 128671 },
         days: curve({ visits: 1148, views: 2417 }, { seed: 7, growth: 0.45, spike: { daysBack: 9, boost: 1.65 } }),
         rankings: {
-          chemin: lines([["/", 902], ["/projects", 641], ["/contact", 388], ["/repairs", 311], ["/pricing", 175]]),
-          entree: lines([["/", 714], ["/projects", 249], ["/contact", 185]]),
-          source: lines([["Google", 508], ["direct", 344], ["Yellow Pages", 141], ["trades-directory.example", 92], ["LinkedIn", 63]]),
-          campagne: lines([["autumn-flyer", 84]]),
+          chemin: lines([["/", 902], ["/posts/one-server", 641], ["/posts/launch-week", 388], ["/changelog", 311], ["/about", 175]]),
+          entree: lines([["/", 714], ["/posts/one-server", 249], ["/changelog", 185]]),
+          source: lines([["Google", 508], ["direct", 344], ["Hacker News", 141], ["LinkedIn", 92], ["newsletter", 63]]),
+          campagne: lines([["launch-week", 84]]),
           appareil: lines([["mobile", 701], ["bureau", 338], ["tablette", 109]]),
           navigateur: lines([["Chrome", 502], ["Safari", 431], ["Firefox", 128], ["Edge", 87]]),
           systeme: lines([["iOS", 388], ["Android", 327], ["Windows", 271], ["macOS", 162]]),
           langue: lines([["en", 1021], ["fr", 87], ["de", 40]]),
-          hote: lines([["riverside-cycles.example", 1908], ["wheels.example.com", 509]]),
+          hote: lines([["blog.example.net", 1908], ["blog.example.com", 509]]),
         },
       },
-      "yoga-studio": {
+      "careers": {
         totals: { views: 63, visits: 41, bounces: 29, timedViews: 38, seconds: 1824 },
         days: curve({ visits: 41, views: 63 }, { seed: 11, growth: 0.6, since: 12 }),
         rankings: {
-          chemin: lines([["/", 44], ["/classes", 19]]),
+          chemin: lines([["/", 44], ["/jobs/product-designer", 19]]),
           entree: lines([["/", 41]]),
           source: lines([["direct", 27], ["Google", 14]]),
           appareil: lines([["mobile", 33], ["bureau", 8]]),
           navigateur: lines([["Safari", 24], ["Chrome", 17]]),
           systeme: lines([["iOS", 24], ["Android", 11], ["Windows", 6]]),
           langue: lines([["en", 41]]),
-          hote: lines([["yoga-studio.example", 63]]),
+          hote: lines([["careers.example.net", 63]]),
         },
       },
-      "bakery-martin": {
+      "launch": {
         totals: { views: 0, visits: 0, bounces: 0, timedViews: 0, seconds: 0 },
         days: curve({ visits: 0, views: 0 }, { seed: 1, growth: 0 }),
         rankings: {},
@@ -650,14 +653,14 @@ function audience(generatedAt: number): string {
 function reading(now: number) {
   const generatedAt = process.env.BENCH_STALE === "1" ? start - 10 * MINUTE : now;
   const cpu: Record<string, number> = {};
-  // The current stanza hands the site who is in; outside the showcase, photos
+  // The current stanza hands the site who is in; outside the showcase, brand
   // keeps the one from before identities, for the Sharing section to say so.
   const earlier = "\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\turi /verifier\n\t}\n";
   const current =
     "\troute {\n\t\trequest_header -X-Sitesolide*\n\t\trequest_header -X_sitesolide*\n" +
     "\t\tforward_auth @portal_guard 127.0.0.1:3026 {\n\t\t\turi /verifier\n" +
     "\t\t\tcopy_headers X-Sitesolide-User X-Sitesolide-User-Name X-Sitesolide-Role\n\t\t}\n\t}\n";
-  const kept = (slug: string) => (!SHOWCASE && slug === "photos" ? earlier : current);
+  const kept = (slug: string) => (!SHOWCASE && slug === "brand" ? earlier : current);
   const blocks: Record<string, string> = SHOWCASE || FRESH ? {} : { "old-kiosk": "# forgotten block\n" };
 
   // What systemctl show would return for a fake unit, its CPU counter kept
@@ -724,11 +727,11 @@ function reading(now: number) {
     codes: JSON.stringify(CODES),
     domains: FRESH
       ? ""
-      : "\triverside-cycles.example wheels\n\twww.riverside-cycles.example wheels\n\tyoga-studio.example yoga-studio\n" +
-        (SHOWCASE ? "\tcorner-bookshop.example bookshop\n" : ""),
+      : "\tblog.example.net blog\n\tnews.example.net blog\n\tcareers.example.net careers\n" +
+        (SHOWCASE ? "\tdocs.example.net docs\n" : ""),
     audience: audience(generatedAt),
     monitor: monitorStatus(generatedAt),
-    // roster (3045) does not listen: it is looping; nor does the portal (3026) once its unit failed.
+    // hiring (3045) does not listen: it is looping; nor does the portal (3026) once its unit failed.
     ports: (SHOWCASE
       ? [3040, 3041, 3022, 3043, 3044, 3045, 3026, 3029, 3047, 3048, 3049]
       : [3040, 3041, 3022, 3043, 3044, 3026, 3029, 3047, 3048, 3049]
@@ -749,7 +752,7 @@ function reading(now: number) {
 }
 
 /** The preview codes in force, which the bench's gatekeeper draws and takes away. */
-const CODES: Record<string, string> = FRESH ? {} : { "bakery-martin": "K7PX3M" };
+const CODES: Record<string, string> = FRESH ? {} : { "launch": "K7PX3M" };
 
 async function writeState() {
   if (process.env.BENCH_EMPTY === "1") return;
@@ -857,7 +860,7 @@ if (SHOWCASE) {
  * (src/gatekeeper/rules.ts): the portal, the dashboard, the landing with no
  * manifest. The bench does not copy the rest of the rules: a static site
  * changes its door there, so that the wait and the success can be watched on
- * `wheels`; a site on its own domain takes no code, in the real words.
+ * `blog`; a site on its own domain takes no code, in the real words.
  */
 const PLATFORM = ["portal", "dashboard", "example.com"];
 const UNTOUCHABLE: Record<string, string> = Object.fromEntries(PLATFORM.map((slug) => [slug, fixedRefusal(slug, null) ?? "the portal of this site cannot be changed"]));
@@ -866,10 +869,10 @@ const UNTOUCHABLE: Record<string, string> = Object.fromEntries(PLATFORM.map((slu
  * An interrupted action whose backup has remained: the real steward offers
  * nothing more on this site and says so, until a human has looked.
  */
-if (!SHOWCASE) UNTOUCHABLE.library = INTERRUPTED_TRANSACTION_REASON;
+if (!SHOWCASE) UNTOUCHABLE.inventory = INTERRUPTED_TRANSACTION_REASON;
 
 /** The site whose change the gatekeeper always fails to check, and restores. */
-const FAILING_SITE = "photos";
+const FAILING_SITE = "brand";
 
 /**
  * The site on which the gatekeeper finds Caddy's lock held from the
@@ -877,7 +880,7 @@ const FAILING_SITE = "photos";
  * counts for every site; the bench confines it to one so as to keep the other
  * actions to watch.
  */
-const LOCK_HELD_SITE = "roster";
+const LOCK_HELD_SITE = "hiring";
 
 const PROJECTS: FakeProject[] = FOLDERS.map((d) => ({
   slug: d.slug,
@@ -914,11 +917,11 @@ const log: LogRow[] = [
   { a: start - 40 * MINUTE, operation: "unlock", result: "rejects", slug: null, file: null, variable: null, detail: "refused" },
   { a: start - 38 * MINUTE, operation: "unlock", result: "ok", slug: null, file: null, variable: null, detail: null },
   { a: start - 35 * MINUTE, operation: "set", result: "ok", slug: "dashboard", file: "dashboard-monitor.env", variable: "HEARTBEAT_URL", detail: null },
-  { a: start - 26 * MINUTE, operation: "set", result: "ok", slug: "roster", file: "store", variable: "MAIL_KEY", detail: null },
-  { a: start - 25 * MINUTE, operation: "restart", result: "ok", slug: "roster", file: null, variable: null, detail: "looping" },
-  { a: start - 24 * MINUTE, operation: "set", result: "rejects", slug: "roster", file: "store", variable: null, detail: "invalid" },
-  // The action whose backup remained on `library`: the gatekeeper wrote nothing of its result.
-  { a: start - 3 * HOUR, operation: "portal", result: "failure", slug: "library", file: null, variable: null, detail: "off, failed" },
+  { a: start - 26 * MINUTE, operation: "set", result: "ok", slug: "hiring", file: "store", variable: "MAIL_KEY", detail: null },
+  { a: start - 25 * MINUTE, operation: "restart", result: "ok", slug: "hiring", file: null, variable: null, detail: "looping" },
+  { a: start - 24 * MINUTE, operation: "set", result: "rejects", slug: "hiring", file: "store", variable: null, detail: "invalid" },
+  // The action whose backup remained on `inventory`: the gatekeeper wrote nothing of its result.
+  { a: start - 3 * HOUR, operation: "portal", result: "failure", slug: "inventory", file: null, variable: null, detail: "off, failed" },
   // What tokens did through the control API, for a token's sheet and Activity: the
   // owner's Release agent, which may manage secrets, set a variable of calendar's store and
   // restarted calendar; alice-ci, which may not, was refused on cms.
@@ -1133,8 +1136,8 @@ const teamTokens: BenchToken[] = [
   { id: "9a8b7c6d5e4f", label: "Bob, contractor", email: "bob@example.com", createdAt: start - 90 * DAY, expiresAt: null, revokedAt: start - 20 * DAY, lastUsedAt: start - 21 * DAY, scope: { slugs: [], create: true, outbound: false, domain: false, public: false }, owned: ["mockups"], member: null, by: "owner" },
   // A person's own, minted from her Tokens page: a Developer on cms, an Admin on calendar.
   { id: "c0ffee123456", label: "Alice's agent", email: "alice@example.com", createdAt: start - 2 * DAY, expiresAt: start + 88 * DAY, revokedAt: null, lastUsedAt: start - 5 * HOUR, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: false }, owned: [], member: "alice@example.com", by: "alice@example.com" },
-  // Hers too, minted while she was a Developer on photos: a Viewer there now, it is paused on photos.
-  { id: "a11ce0c1ab12", label: "alice-ci", email: "alice@example.com", createdAt: start - 9 * DAY, expiresAt: null, revokedAt: null, lastUsedAt: start - 2 * DAY, scope: { slugs: ["cms", "photos"], create: false, outbound: false, domain: false, public: false }, owned: [], member: "alice@example.com", by: "alice@example.com" },
+  // Hers too, minted while she was a Developer on brand: a Viewer there now, it is paused on brand.
+  { id: "a11ce0c1ab12", label: "alice-ci", email: "alice@example.com", createdAt: start - 9 * DAY, expiresAt: null, revokedAt: null, lastUsedAt: start - 2 * DAY, scope: { slugs: ["cms", "brand"], create: false, outbound: false, domain: false, public: false }, owned: [], member: "alice@example.com", by: "alice@example.com" },
 ];
 
 // The control API's history, written by the service's own store in its data
@@ -1204,7 +1207,7 @@ writeFileSync(
   join(membersState, "members.json"),
   JSON.stringify({
     members: [
-      { email: "alice@example.com", roles: { cms: "developer", calendar: "admin", photos: "viewer" }, create: false, invitedBy: "owner", createdAt: start - 20 * DAY, updatedAt: start - 20 * DAY },
+      { email: "alice@example.com", roles: { cms: "developer", calendar: "admin", brand: "viewer" }, create: false, invitedBy: "owner", createdAt: start - 20 * DAY, updatedAt: start - 20 * DAY },
       { email: "bruno@example.com", roles: { calendar: "developer", cms: "admin" }, create: false, invitedBy: "owner", createdAt: start - 12 * DAY, updatedAt: start - 3 * DAY },
       { email: "chloe@example.com", roles: { calendar: "viewer" }, create: false, invitedBy: "alice@example.com", createdAt: start - 4 * DAY, updatedAt: start - 4 * DAY },
       { email: "maya@example.com", roles: {}, create: true, invitedBy: "owner", createdAt: start - 2 * DAY, updatedAt: start - 2 * DAY },
@@ -1221,8 +1224,8 @@ writeFileSync(
   invite.run("benchGuest000001", "cms.example.com", "client@example.org", hashOf("bench one"), start - 6 * DAY - 19 * HOUR, start + 5 * HOUR);
   invite.run("benchGuest000002", "calendar.example.com", "Example Accounting", hashOf("bench two"), start - DAY, start + 6 * DAY);
   invite.run("benchGuest000005", "calendar.example.com", "auditor@partner.example", hashOf("bench five"), start - 3 * DAY, start + 14 * HOUR);
-  invite.run("benchGuest000003", "photos.example.com", "Bob and Carol", hashOf("bench three"), start - 41 * DAY, null);
-  invite.run("benchGuest000004", "library.example.com", "Dave, intern", hashOf("bench four"), start - 32 * DAY, start - 2 * DAY);
+  invite.run("benchGuest000003", "brand.example.com", "Bob and Carol", hashOf("bench three"), start - 41 * DAY, null);
+  invite.run("benchGuest000004", "inventory.example.com", "Dave, intern", hashOf("bench four"), start - 32 * DAY, start - 2 * DAY);
   const policy = fixture.query("INSERT INTO sharing (host, mode, people, domains, updated_at) VALUES (?, ?, ?, ?, ?)");
   policy.run("cms.example.com", "people", JSON.stringify(["alice@example.com", "editor@example.com"]), "[]", start - 2 * DAY);
   policy.run("calendar.example.com", "domain", "[]", JSON.stringify(["example.com"]), start - 9 * DAY);
@@ -1785,8 +1788,8 @@ const steward =
                 return Response.json({ verdict: { kind: "scheduled", state: "active", subState: "running", restarts: 0 } });
               }
               await Bun.sleep(2500);
-              // roster always loops, the others come back up.
-              const loop = project.slug === "roster";
+              // hiring always loops, the others come back up.
+              const loop = project.slug === "hiring";
               const verdict = loop
                 ? { kind: "looping", state: "activating", subState: "auto-restart", restarts: 4 }
                 : { kind: "active", state: "active", subState: "running", restarts: 0 };
@@ -1834,9 +1837,9 @@ const portalEvents = [
   portalEvent("owner", "sharing.update", "cms.example.com", { mode: "people", previousMode: "people", peopleAdded: ["editor@example.org"], peopleRemoved: [], domainsAdded: [], domainsRemoved: [] }, start - 2 * DAY),
   portalEvent("guest:benchGuest000001", "portal.signin", "cms.example.com", { method: "guest" }, start - 2 * HOUR),
   portalEvent("password:benchGuest000002", "portal.signin", "calendar.example.com", { method: "password-access", name: "Example Accounting" }, start - 70 * MINUTE),
-  portalEvent("owner", "portal.signin", "photos.example.com", { method: "password", count: 3 }, start - 90 * MINUTE),
+  portalEvent("owner", "portal.signin", "brand.example.com", { method: "password", count: 3 }, start - 90 * MINUTE),
   portalEvent("eve@elsewhere.example.net", "portal.signin_failed", "cms.example.com", { method: "oidc", reason: "not-shared" }, start - 50 * MINUTE),
-  portalEvent("anonymous", "portal.signin_failed", "library.example.com", { method: "password" }, start - 30 * MINUTE),
+  portalEvent("anonymous", "portal.signin_failed", "inventory.example.com", { method: "password" }, start - 30 * MINUTE),
   portalEvent("alice@example.com", "portal.signin", "cms.example.com", { method: "oidc", role: "member" }, start - 18 * MINUTE),
   portalEvent("owner@example.com", "portal.signin", "calendar.example.com", { method: "oidc", role: "admin" }, start - 6 * MINUTE),
   portalEvent("alice@example.com", "portal.signout", "cms.example.com", null, start - 4 * MINUTE),
@@ -1860,15 +1863,15 @@ for (const [name, baseUrl, header] of [
   if ("file" in created) connectorsFile = created.file;
 }
 let grantsFile: GrantsFile = EMPTY_GRANTS;
-for (const [slug, name] of [["cms", "slack"], ["roster", "github"], ["retired-tool", "slack"]] as const) {
+for (const [slug, name] of [["cms", "slack"], ["hiring", "github"], ["retired-tool", "slack"]] as const) {
   const granted = setGrant(grantsFile, connectorsFile, slug, name, true, new Date(start - 6 * DAY).toISOString(), OWNER_ACTOR);
   if ("file" in granted) grantsFile = granted.file;
 }
 /** Who asks, as the deployed manifests would say. */
 const CONNECTOR_REQUESTS = [
   { slug: "cms", connectors: ["slack"] },
-  { slug: "lab", connectors: ["github", "slack"] },
-  { slug: "roster", connectors: ["github", "mail"] },
+  { slug: "playground", connectors: ["github", "slack"] },
+  { slug: "hiring", connectors: ["github", "mail"] },
 ];
 
 function connectorsView() {
@@ -1891,10 +1894,10 @@ function egressRow(actor: string, action: string, target: string | null, detail:
 // Oldest first, so that ids grow with time as the proxy's own do.
 const egressRows = [
   egressRow("owner", "connector.update", "github", { change: "created", baseUrl: "https://api.github.com/repos/example", header: "Authorization" }, start - 9 * DAY),
-  egressRow("owner", "connector.grant", "roster", { connector: "github", granted: true }, start - 6 * DAY),
-  egressRow("system", "egress.denied", "roster", { destination: "metadata.example.com:443", reason: "resolves to a cloud metadata address", count: 1 }, start - 5 * HOUR),
-  egressRow("system", "connector.use", "roster", { connector: "github", count: 5, failures: 2, statuses: { "2xx": 3, "5xx": 2 } }, start - 2 * HOUR),
-  egressRow("system", "egress.denied", "lab", { destination: "pastebin.com:443", reason: "not in the list", count: 7 }, start - 12 * MINUTE),
+  egressRow("owner", "connector.grant", "hiring", { connector: "github", granted: true }, start - 6 * DAY),
+  egressRow("system", "egress.denied", "hiring", { destination: "metadata.example.com:443", reason: "resolves to a cloud metadata address", count: 1 }, start - 5 * HOUR),
+  egressRow("system", "connector.use", "hiring", { connector: "github", count: 5, failures: 2, statuses: { "2xx": 3, "5xx": 2 } }, start - 2 * HOUR),
+  egressRow("system", "egress.denied", "playground", { destination: "pastebin.com:443", reason: "not in the list", count: 7 }, start - 12 * MINUTE),
   egressRow("system", "connector.use", "cms", { connector: "slack", count: 42, failures: 0, statuses: { "2xx": 42 } }, start - 3 * MINUTE),
 ].sort((a, b) => b.id - a.id);
 
@@ -1959,7 +1962,7 @@ const portal =
             if (!benchFlows.has(flow)) return new Response("unknown flow", { status: 400 });
             const choice = (email: string, label: string) => `<p><a href="/oidc/pick?flow=${flow}&email=${encodeURIComponent(email)}">Sign in as ${label}</a></p>`;
             return new Response(
-              `<!doctype html><meta charset="utf-8"><title>Bench provider</title><h1>Bench identity provider</h1>${choice("alice@example.com", "alice@example.com: Admin of calendar, Developer of cms, Viewer of photos")}${choice("bruno@example.com", "bruno@example.com: Admin of cms, Developer of calendar")}${choice("chloe@example.com", "chloe@example.com: Viewer of calendar")}${choice("editor@example.com", "editor@example.com: Can open on cms")}${choice("stranger@example.com", "stranger@example.com, no role anywhere")}`,
+              `<!doctype html><meta charset="utf-8"><title>Bench provider</title><h1>Bench identity provider</h1>${choice("alice@example.com", "alice@example.com: Admin of calendar, Developer of cms, Viewer of brand")}${choice("bruno@example.com", "bruno@example.com: Admin of cms, Developer of calendar")}${choice("chloe@example.com", "chloe@example.com: Viewer of calendar")}${choice("editor@example.com", "editor@example.com: Can open on cms")}${choice("stranger@example.com", "stranger@example.com, no role anywhere")}`,
               { headers: { "Content-Type": "text/html; charset=utf-8" } },
             );
           },

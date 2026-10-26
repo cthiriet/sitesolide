@@ -72,10 +72,21 @@ export function listed(
   return !site.platform || worst.has(site.slug) || site.restartPending === true
 }
 
-/** A site's value for each facet: its access, and its kind, Platform as well for one of the platform's own. */
-export function facetValues(site: ListedSite): { access: AccessKey; kind: readonly KindFacet[] } {
+/**
+ * How a site opens, as its row shows it: nothing for a project that serves no
+ * page, whose address answers only a line saying so, unless the manifest and
+ * the running block disagree, which is an issue wherever it is.
+ */
+export function listedAccess(site: ListedSite): AccessKey | null {
+  const key = accessKey(siteAccess(site))
+  return site.headless && site.domain === null && key !== "mismatch" ? null : key
+}
+
+/** A site's value for each facet: its access, none when it serves no page, and its kind, Platform as well for one of the platform's own. */
+export function facetValues(site: ListedSite): { access: readonly AccessKey[]; kind: readonly KindFacet[] } {
   const kind = siteKind(site)
-  return { access: accessKey(siteAccess(site)), kind: site.platform ? [kind, "platform"] : [kind] }
+  const access = listedAccess(site)
+  return { access: access === null ? [] : [access], kind: site.platform ? [kind, "platform"] : [kind] }
 }
 
 export type Narrowed<T> = {
@@ -114,7 +125,7 @@ export function narrowSites<T extends ListedSite>(sites: readonly T[], worst: Re
   const present = { access: new Set<string>(), kind: new Set<string>() }
   for (const site of sites) {
     const values = facetValues(site)
-    present.access.add(values.access)
+    for (const access of values.access) present.access.add(access)
     for (const kind of values.kind) present.kind.add(kind)
   }
   const offer = <V extends string>(values: readonly V[], name: "access" | "kind") =>
