@@ -24,9 +24,9 @@ below their surface, Hanken Grotesk for the words and IBM Plex Mono for the
 machine's, and one accent, a deep teal, which is the brand's: the logo is a
 teal gradient, and the accent marks what is current or in focus and the one
 primary action, pressable like a key. Red is the error colour, not the
-brand's, and it only says error. The only remarkable piece is **the machine
-strip** at the top of the home page, where the 70 and 90 % thresholds are
-ticked on each gauge. Everything else is calm, dense and aligned.
+brand's, and it only says error. Everything is calm, dense and aligned,
+the machine's own load, memory and disk included: one quiet line at the top
+of the home page, amber or red past a threshold.
 
 The owner's attention is the scarce thing. A page that shows everything at
 equal weight pulls it everywhere at once; these rules decide what a page
@@ -372,7 +372,6 @@ gutters, bottom margin, touch target size.
 | `@container/body` | `@4xl/body:` (56 rem) | two columns: a site's Overview |
 | Audience's rankings | `@2xl/body:`, `@5xl/body:` (42, 64 rem) | two panels a row, then three; one below; the chart's four figures a row from `@2xl/body:`, two by two below |
 | Activity's tables, one per day | `narrowBelow` 48 rem | five columns, otherwise two lines |
-| `@container/strip`, the machine strip | `@lg/strip:` (32 rem) | each gauge's caption beside its label, otherwise the label and the figure alone |
 | `@container/facts`, a site's Overview panels | `@sm/facts:` (24 rem) | a 6.5 rem label column and a 120 px memory track, otherwise 5.5 rem and 64 px |
 | `@container/people`, a site's people with access | `@xl/people:` (36 rem) | what a row is beside its name, otherwise under it |
 
@@ -484,7 +483,7 @@ on screen.
 | `CHIP`, `AccessWord` | a 20 or 24 px chip; a site's general access as the landing page's badges, *Restricted* with a lock, *Public* with a globe and quieter, *Anyone with the code* with a key over the code in its well |
 | `RoleBars` | a role as four rising bars, as many lit in `share-ink` as the role has rungs, before its word: beside a site's name, in a role's menu, in what each role can do |
 | `ExternalLink` | a site address, underlined at rest, in a new tab; the address in mono |
-| `MachineStrip`, `Track` | the strip, reserved for the home page: one 64 px panel, load, memory and disk, each a mono label, its caption ("1.3 on 6 cores") and its figure over its track; Memory and Disk are the buttons of those two sorts; `Track` is a 6 px groove with a 1 px tick across it at each threshold, reused for a service's memory |
+| `MachineStrip`, `Track` | the strip, reserved for the home page: a status line, no panel, load, memory and disk on one 32 px line, each a mono label, a 56 px bar, its figure in its level's colour and, from 56 rem of the line (`@container/strip`), its caption ("1.3 on 6 cores"); Memory and Disk are the buttons of those two sorts; `Track` is a 6 px groove with a 1 px tick across it at each threshold, for a service's memory |
 | `Track` (dialogs) | waiting for a long answer: the time actually elapsed on its scale, the usual duration ticked when known, never an invented progress bar |
 | `Command` | a command to type in a terminal, copyable |
 | `serviceWord` | the word and tone of a systemd unit, the same on the home page, the Overview and Secrets; *Scheduled* for the anchor of a project whose every service is scheduled, `active (exited)` |
@@ -780,19 +779,22 @@ to open. Its intro, behind the title's (i); *History* opens Activity on the
 deployments.
 
 ```
-| LOAD 1.3 on 6 cores        22% | MEMORY 5.7 of 12 GB   49% | DISK 49 of 120 GB   41% |   64 px strip
+LOAD ━── 22% 1.3 on 6 cores   MEMORY ━━─ 49% 5.7 of 12 GB used   DISK ━━─ 41% 49 of 120 GB used     32 px line
 [!] Server  The last backup run failed for builder, 52 min ago                       banners, 2 then "Show 3 more"
 [Search sites /] [Access v] [Kind v]                              3 of 16  [Issues first v]
 | x | [app] hiring  Access mismatch +2 | hiring.example.com | [shield] | 25m ago | ... |  44 px
 |   | [files] blog                     | blog.example.net   | [globe]  | 26d ago | ... |
 ```
 
-- **The strip**, the owner's alone: load, memory and disk in one 64 px
-  panel, each its mono label, its caption ("1.3 on 6 cores", "5.7 of 12 GB
-  used"; on a phone the figure alone) and its figure over the track, ticked
-  at 70 and 90 %. The server's zone is the sidebar's. Memory and Disk are
-  the buttons of those two sorts, tinted `highlight` while in force:
-  pressed again, the list goes back to *Issues first*.
+- **The strip**, the owner's alone: load, memory and disk on one 32 px
+  line with no panel, each its mono label, a 56 px bar, its figure and its
+  caption ("1.3 on 6 cores", "5.7 of 12 GB used"; below 56 rem of the
+  line the figure alone, so that the three keep to one line). Past 70 and 90 % the figure and the bar turn amber and red, the
+  thresholds in the bar's title; the alarm is the verdict's. A panel of
+  gauges gave the machine the weight of the list it serves, for figures
+  that are fine nearly always. The server's zone is the sidebar's. Memory
+  and Disk are the buttons of those two sorts, tinted `highlight` while in
+  force: pressed again, the list goes back to *Issues first*.
 - **No Issues panel.** A site's issues are its row's. What has no row, the
   server's own discrepancies and those of a fragment with no folder, is a
   `Banner` each, errors first, two of them then *Show 3 more*; nothing at

@@ -83,24 +83,30 @@ export function MemoryBar({ percent, level, className }: { percent: number | nul
 }
 
 /**
- * One gauge of the strip: its label, its caption beside it once the cell has
- * room, its figure on the right in its level's colour, and the track under
- * them with its ticks at 70 and 90 %. `onPress` makes the whole cell the
- * button of a sort, Memory or Disk: the question the figure raises, which
- * site holds it, answered by the list below.
+ * One readout of the strip: its label, a 56 px bar, its figure in its
+ * level's colour and, once the line has 56 rem, the machine's size in muted
+ * text: the three keep to one line rather than wrap.
+ * `onPress` makes it the button of a sort, Memory or Disk: the question the
+ * figure raises, which site holds it, answered by the list below.
  */
-function StripGauge({ tile, pressed, onPress }: { tile: Tile; pressed?: boolean; onPress?: () => void }) {
+function StripReadout({ tile, pressed, onPress }: { tile: Tile; pressed?: boolean; onPress?: () => void }) {
   const body = (
     <>
-      <span className="flex min-w-0 items-baseline gap-2">
-        <span className="mono-label">{tile.heading}</span>
-        <span className="hidden min-w-0 truncate text-xs text-muted-foreground tabular-nums @lg/strip:inline">{tile.detail}</span>
-        <span className={cn("ml-auto text-[0.9375rem] leading-5 font-medium tabular-nums", LEVEL_TEXT[tile.level])}>{tile.value}</span>
+      <span className="mono-label">{tile.heading}</span>
+      <span
+        className="relative h-1 w-14 shrink-0 overflow-hidden rounded-full bg-track"
+        title={`Warning from ${WARNING_THRESHOLD}%, critical from ${CRITICAL_THRESHOLD}%`}
+      >
+        <span
+          className={cn("absolute inset-y-0 left-0 rounded-full", READOUT_FILL[tile.level])}
+          style={{ width: `${Math.min(tile.percent ?? 0, 100)}%` }}
+        />
       </span>
-      <Track tile={tile} />
+      <span className={cn("text-sm font-medium tabular-nums", LEVEL_TEXT[tile.level])}>{tile.value}</span>
+      <span className="hidden text-xs text-muted-foreground tabular-nums @4xl/strip:inline">{tile.detail}</span>
     </>
   )
-  const cell = "grid h-16 min-w-0 content-center gap-1.5 px-3 text-left @lg/strip:px-4"
+  const cell = "-mx-2 flex h-8 items-center gap-2.5 rounded-md px-2"
   if (onPress === undefined) return <div className={cell}>{body}</div>
   return (
     <button
@@ -108,24 +114,24 @@ function StripGauge({ tile, pressed, onPress }: { tile: Tile; pressed?: boolean;
       aria-pressed={pressed}
       title={pressed ? `Sites sorted by ${tile.heading.toLowerCase()}` : `Sort sites by ${tile.heading.toLowerCase()}`}
       onClick={onPress}
-      className={cn(
-        cell,
-        "outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-        pressed ? "bg-highlight" : "hover:bg-muted/45",
-      )}
+      className={cn(cell, "outline-none focus-visible:ring-2 focus-visible:ring-ring", pressed ? "bg-highlight" : "hover:bg-muted/45")}
     >
       {body}
     </button>
   )
 }
 
+const READOUT_FILL: Record<Level, string> = { normal: "bg-primary", warn: "bg-attention", critical: "bg-destructive" }
+
 /**
  * The machine strip: a single VM serves every site, and what it runs short of
- * runs short for everyone, hence its place at the top of the home page. One
- * panel, 64 px, three gauges: load, memory and disk, the thresholds ticked on
- * each. The machine's size is in the captions ("1.3 on 6 cores", "5.7 of
- * 12 GB used"), its zone in the sidebar. Memory and Disk sort the list by
- * what each site holds, `sort` saying which is in force.
+ * runs short for everyone, hence its place at the top of the home page. A
+ * status line rather than a panel: load, memory and disk on one line, quiet
+ * while they are fine, the figure and its bar amber or red past a
+ * threshold; the alarm itself is the verdict's, which the monitor's
+ * discrepancies raise. The machine's size is in the captions ("1.3 on 6
+ * cores", "5.7 of 12 GB used"), its zone in the sidebar. Memory and Disk sort
+ * the list by what each site holds, `sort` saying which is in force.
  */
 export function MachineStrip({
   snapshot,
@@ -138,26 +144,22 @@ export function MachineStrip({
 }) {
   const { machine } = snapshot
   return (
-    <section aria-label="Server" className="@container/strip overflow-clip rounded-xl border bg-card text-card-foreground shadow-panel">
-      <div className="grid grid-cols-3 divide-x">
-        <StripGauge tile={loadTile(machine)} />
-        <StripGauge tile={memoryTile(machine)} pressed={sort === "memory"} onPress={() => onSort("memory")} />
-        <StripGauge tile={diskTile(machine)} pressed={sort === "disk"} onPress={() => onSort("disk")} />
-      </div>
+    <section aria-label="Server" className="@container/strip -my-1 flex flex-wrap items-center gap-x-8 gap-y-1">
+      <StripReadout tile={loadTile(machine)} />
+      <StripReadout tile={memoryTile(machine)} pressed={sort === "memory"} onPress={() => onSort("memory")} />
+      <StripReadout tile={diskTile(machine)} pressed={sort === "disk"} onPress={() => onSort("disk")} />
     </section>
   )
 }
 
 export function StripSkeleton() {
   return (
-    <div aria-hidden="true" className="grid h-[4.125rem] grid-cols-3 divide-x rounded-xl border bg-card shadow-panel">
+    <div aria-hidden="true" className="-my-1 flex h-8 items-center gap-8">
       {Array.from({ length: 3 }, (_, index) => (
-        <div key={index} className="grid content-center gap-2.5 px-4">
-          <div className="flex justify-between">
-            <Skeleton className="h-3 w-14" />
-            <Skeleton className="h-3.5 w-8" />
-          </div>
-          <Skeleton className="h-1.5 w-full" />
+        <div key={index} className="flex items-center gap-2.5">
+          <Skeleton className="h-3 w-12" />
+          <Skeleton className="h-1 w-14" />
+          <Skeleton className="h-3.5 w-8" />
         </div>
       ))}
     </div>
