@@ -466,6 +466,8 @@ if (SHOWCASE) {
   const unit = (slug: string) => FOLDERS.find((d) => d.slug === slug)!.unit!;
   Object.assign(unit("hiring"), { active: "active", subState: "running", memory: 44 * MB, peak: 61 * MB, restarts: 0, sinceMs: 25 * MINUTE, cpu: 0.6 });
   Object.assign(unit("cms"), { memory: 131 * MB, peak: 163 * MB });
+  // A build running: 1.1 cores of 6, 18 % of the processor, which its row names beside it.
+  Object.assign(unit("builder"), { cpu: 110 });
 }
 
 if (FRESH) {

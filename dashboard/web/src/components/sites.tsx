@@ -6,30 +6,33 @@ import { CHIP, RoleBars } from "@/components/access-word"
 import { useCopy } from "@/components/copy"
 import { useData } from "@/components/data"
 import { CellText, DataTable, RowLink, RowMenu, RowMenuLink, type Column } from "@/components/data-table"
+import { LEVEL_TEXT, UsageRing } from "@/components/gauge"
 import { AccessIcon, KindIcon } from "@/components/legend"
 import { StateLabel, When } from "@/components/page"
 import { SECTION_ICONS } from "@/components/sidebar"
 import { roleLabel } from "@/lib/access"
-import { ABSENT, size, sizeOutOf } from "@/lib/format"
+import { ABSENT, size } from "@/lib/format"
 import { roleOn } from "@/lib/identity"
 import { siteKind } from "@/lib/legend"
 import { sectionsFor, siteUrl } from "@/lib/pages"
 import { siteFolder } from "@/lib/site-card"
-import { PLATFORM_FACET, figure, kindDetail, listedAccess, type ListedSite, type RowState } from "@/lib/site-list"
-import { HEADLESS_NOTE, memoryShare, siteAccess, siteAddress, siteWeight } from "@/lib/sites"
+import { PLATFORM_FACET, busyShare, figure, kindDetail, listedAccess, memoryUsage, type ListedSite, type RowState } from "@/lib/site-list"
+import { HEADLESS_NOTE, computeCpuShare, processorShare, processorTitle, siteAccess, siteAddress, siteWeight } from "@/lib/sites"
 import { cn } from "@/lib/utils"
 
 /**
  * The Sites list: one line per site, 44 px, quiet when fine.
  *
- *   | gutter | [kind] slug  tags  State +N | address | access | deployed | ... |
+ *   | gutter | [kind] slug  tags  State +N | address | access | memory | deployed | ... |
  *
- * A healthy row says its kind, its name, its address, how it opens and when
- * it was deployed, nothing more; a row in trouble carries the severity icon
- * in the gutter and its first issue's word beside the name, every message in
- * the word's tooltip. Memory and disk come back as a column when the list is
- * sorted by them. Below 42 rem of its own width, two lines: the name and the
- * access, then the state or the address and the age.
+ * A healthy row says its kind, its name, its address, how it opens, what its
+ * services hold against their limit and when it was deployed, nothing more;
+ * a site taking a large share of the processor says so beside its name, "CPU
+ * 18%". A row in trouble carries the severity icon in the gutter and its
+ * first issue's word beside the name, every message in the word's tooltip.
+ * CPU and disk come back as a column when the list is sorted by them. Below
+ * 42 rem of its own width, two lines: the name and the access, then the state
+ * or the address and the age.
  */
 
 /** The narrow layout's threshold, the table's own width: `@2xl/table` is 42 rem. */
@@ -60,6 +63,41 @@ function PlatformTag({ site }: { site: Pick<ListedSite, "platform"> }) {
   return (
     <span title="Part of the platform" className={cn(CHIP, "font-normal text-muted-foreground")}>
       {PLATFORM_FACET}
+    </span>
+  )
+}
+
+/**
+ * A site taking at least 15 % of the processor, beside its name: "CPU 18%",
+ * muted, a fact rather than an issue. The CPU sort ranks every site.
+ */
+function CpuTag({ site, cores }: { site: ListedSite; cores: number | null }) {
+  const share = busyShare(site, cores)
+  const cpu = siteWeight(site).cpuShare
+  if (share === null || cpu === null) return null
+  return (
+    <span title={processorTitle(cpu, cores)} className={cn(CHIP, "font-normal text-muted-foreground tabular-nums")}>
+      CPU {computeCpuShare(share)}
+    </span>
+  )
+}
+
+/**
+ * What a site's running services hold, an 18 px ring of it against their
+ * limit and the figure beside it, muted while fine, amber or red near the
+ * limit: the one resource a site runs out of, killed and restarted at its
+ * limit. Empty when nothing runs.
+ */
+function MemoryCell({ site }: { site: ListedSite }) {
+  const usage = memoryUsage(site)
+  if (usage === null) return null
+  const title = usage.limit === null ? `${size(usage.memory)}, no memory limit` : `${size(usage.memory)} of its ${size(usage.limit)} limit, ${usage.share}%`
+  return (
+    <span title={title} className="flex min-w-0 items-center gap-2">
+      {usage.share !== null && <UsageRing percent={usage.share} level={usage.level} />}
+      <span className={cn("text-[0.8125rem] whitespace-nowrap tabular-nums", usage.level === "normal" ? "text-muted-foreground" : cn("font-medium", LEVEL_TEXT[usage.level]))}>
+        {size(usage.memory)}
+      </span>
     </span>
   )
 }
@@ -120,14 +158,13 @@ function AddressText({ site }: { site: ListedSite }) {
   )
 }
 
-/** What the Memory or the Disk sort brings back: the figure, and the rest of it in its tooltip. */
-function FigureCell({ site, which }: { site: ListedSite; which: "memory" | "disk" }) {
+/** What the CPU or the Disk sort brings back: the figure, and the rest of it in its tooltip. */
+function FigureCell({ site, which, cores }: { site: ListedSite; which: "cpu" | "disk"; cores: number | null }) {
   const value = figure(site, which)
   if (value === null) return <span className="text-muted-foreground">{ABSENT}</span>
   if (which === "disk") return <span title={`On disk, in ${siteFolder(site.slug)}`}>{size(value)}</span>
-  const { limit } = siteWeight(site)
-  const share = memoryShare(value, limit)
-  return <span title={limit === null ? "No memory limit" : `${sizeOutOf(value, limit)}, ${share}% of its limit`}>{size(value)}</span>
+  const share = processorShare(value, cores)
+  return <span title={processorTitle(value, cores)}>{computeCpuShare(share ?? value)}</span>
 }
 
 /** The row menu: where to go first, then what to copy, then the site's sections. */
@@ -184,9 +221,15 @@ function SiteMenu({ site }: { site: ListedSite }) {
   )
 }
 
-const FIGURE_HEAD = { memory: "Memory", disk: "Disk" } as const
+const FIGURE_HEAD = { cpu: "CPU", disk: "Disk" } as const
 
-function siteColumns(states: ReadonlyMap<string, RowState>, which: "memory" | "disk" | null, now: number, serverNow: number): Column<ListedSite>[] {
+function siteColumns(
+  states: ReadonlyMap<string, RowState>,
+  which: "cpu" | "disk" | null,
+  now: number,
+  serverNow: number,
+  cores: number | null,
+): Column<ListedSite>[] {
   const site: Column<ListedSite> = {
     key: "site",
     head: "Site",
@@ -203,6 +246,8 @@ function siteColumns(states: ReadonlyMap<string, RowState>, which: "memory" | "d
           </RowLink>
           <PlatformTag site={row} />
           <RoleTag slug={row.slug} />
+          {/* Sorted by CPU, the column says it on every row. */}
+          {which !== "cpu" && <CpuTag site={row} cores={cores} />}
           {state !== null && <RowStateLabel state={state} className={WIDE_ONLY} />}
         </>
       )
@@ -236,6 +281,13 @@ function siteColumns(states: ReadonlyMap<string, RowState>, which: "memory" | "d
     // A project that serves no page has no visitor to let in: its cell stays empty.
     cell: (row) => (listedAccess(row) === null ? null : <AccessIcon access={siteAccess(row)} slug={row.slug} />),
   }
+  const memory: Column<ListedSite> = {
+    key: "memory",
+    head: "Memory",
+    width: "112px",
+    slot: "hide",
+    cell: (row) => <MemoryCell site={row} />,
+  }
   const deployed: Column<ListedSite> = {
     key: "deployed",
     head: "Deployed",
@@ -245,16 +297,16 @@ function siteColumns(states: ReadonlyMap<string, RowState>, which: "memory" | "d
     slot: which === null ? "time" : "hide",
     cell: (row) => <When at={row.deployed} serverNow={serverNow} />,
   }
-  if (which === null) return [site, address, access, deployed]
+  if (which === null) return [site, address, access, memory, deployed]
   const extra: Column<ListedSite> = {
     key: which,
     head: FIGURE_HEAD[which],
     width: "96px",
     align: "end",
     slot: "time",
-    cell: (row) => <FigureCell site={row} which={which} />,
+    cell: (row) => <FigureCell site={row} which={which} cores={cores} />,
   }
-  return [site, address, access, extra, deployed]
+  return [site, address, access, memory, extra, deployed]
 }
 
 /**
@@ -271,11 +323,12 @@ export function SiteList({
 }: {
   rows: readonly ListedSite[]
   states: ReadonlyMap<string, RowState>
-  which: "memory" | "disk" | null
+  which: "cpu" | "disk" | null
   caption: string
   empty: ReactNode
 }) {
-  const { now, offset } = useData()
+  const { now, offset, snapshot } = useData()
+  const cores = snapshot?.machine?.cores ?? null
   // The gutter is the line the eye scans for trouble: with none in the list, it is not drawn at all.
   const trouble = rows.some((row) => (states.get(row.slug)?.severity ?? null) !== null)
   return (
@@ -284,7 +337,7 @@ export function SiteList({
       caption={caption}
       rows={rows}
       rowKey={(row) => row.slug}
-      columns={siteColumns(states, which, now, now + offset)}
+      columns={siteColumns(states, which, now, now + offset, cores)}
       severity={trouble ? (row) => states.get(row.slug)?.severity ?? null : undefined}
       rowHref={(row) => siteUrl(row.slug)}
       menu={(row) => <SiteMenu site={row} />}

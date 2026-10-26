@@ -232,6 +232,30 @@ export function computeCpuShare(percent: number): string {
   return `${Math.round(percent)}%`
 }
 
+/**
+ * A share of one core as a share of the whole processor, 100 % being every
+ * core busy: the Load gauge's scale, so that a site's CPU and the machine's
+ * load read alike. Nothing without the number of cores.
+ */
+export function processorShare(cpuShare: number, cores: number | null): number | null {
+  if (cores === null || cores <= 0) return null
+  return cpuShare / cores
+}
+
+/** The cores a share of one core amounts to: "1.8 of 6 cores", "0.05 of 6 cores". */
+export function coresUsed(cpuShare: number, cores: number): string {
+  const used = cpuShare / 100
+  const figure = used >= 10 ? String(Math.round(used)) : used >= 1 ? used.toFixed(1) : used >= 0.01 ? used.toFixed(2) : "<0.01"
+  return `${figure} of ${cores} ${cores === 1 ? "core" : "cores"}`
+}
+
+/** What a site's CPU says in a title: its share of the processor, then in cores. */
+export function processorTitle(cpuShare: number, cores: number | null): string {
+  const share = processorShare(cpuShare, cores)
+  if (share === null || cores === null) return `${computeCpuShare(cpuShare)} of one core, over the last minute`
+  return `${computeCpuShare(share)} of the processor over the last minute, ${coresUsed(cpuShare, cores)}`
+}
+
 export function restartsLabel(count: number | null): string | null {
   if (!count) return null
   return `${count} restart${count > 1 ? "s" : ""}`

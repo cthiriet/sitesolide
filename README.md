@@ -13,7 +13,7 @@ by you or run by an agent, puts it live on HTTPS, behind your company's
 sign-in, open to exactly the people who need it. One machine, no
 containers, no per-seat pricing.
 
-<img alt="The dashboard: every site on the machine, one line each, with its address, its access and when it was deployed" src="docs/assets/screenshots/dashboard.png">
+<img alt="The dashboard: every site on the machine, one line each, with its address, its access, its memory against its limit and when it was deployed" src="docs/assets/screenshots/dashboard.png">
 
 ## Quick start
 

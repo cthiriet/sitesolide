@@ -5,10 +5,12 @@ import {
   PENDING_LINE,
   SITES_LIST,
   SITE_SORTS,
+  busyShare,
   facetValues,
   figureOf,
   kindDetail,
   listed,
+  memoryUsage,
   narrowSites,
   narrowedSites,
   rowState,
@@ -262,22 +264,53 @@ describe("the order", () => {
     expect(slugs(sortSites(sites, "deployed", healthy))).toEqual(["new", "old", "never"])
   })
 
-  test("Memory and Disk, the heaviest first, a site with no figure last, and they bring their column", () => {
-    const heavy = site({ slug: "heavy", service: service({ memory: 300 * MB }), bytes: 1 * MB })
-    const light = site({ slug: "light", service: service({ memory: 30 * MB }), bytes: 900 * MB })
+  test("CPU, Memory and Disk, the heaviest first, a site with no figure last; CPU and Disk bring their column", () => {
+    const heavy = site({ slug: "heavy", service: service({ memory: 300 * MB, cpuShare: 4 }), bytes: 1 * MB })
+    const light = site({ slug: "light", service: service({ memory: 30 * MB, cpuShare: 120 }), bytes: 900 * MB })
     const files = site({ slug: "files", type: "static", service: null, bytes: 50 * MB })
+    expect(slugs(sortSites([files, light, heavy], "cpu", healthy))).toEqual(["light", "heavy", "files"])
     expect(slugs(sortSites([files, light, heavy], "memory", healthy))).toEqual(["heavy", "light", "files"])
     expect(slugs(sortSites([files, light, heavy], "disk", healthy))).toEqual(["light", "files", "heavy"])
-    expect(figureOf("memory")).toBe("memory")
+    // Memory has its column always.
+    expect(figureOf("cpu")).toBe("cpu")
+    expect(figureOf("memory")).toBeNull()
     expect(figureOf("disk")).toBe("disk")
     expect(figureOf("name")).toBeNull()
     expect(figureOf(null)).toBeNull()
   })
 
   test("the sorts, Issues first the default", () => {
-    expect(SITE_SORTS.map((sort) => sort.label)).toEqual(["Issues first", "Name", "Last deployed", "Memory", "Disk"])
+    expect(SITE_SORTS.map((sort) => sort.label)).toEqual(["Issues first", "Name", "Last deployed", "CPU", "Memory", "Disk"])
     expect(state().sort).toBe("issues")
     expect(state("sort=bogus").sort).toBe("issues")
+  })
+})
+
+describe("what a row says of its usage", () => {
+  test("a site taking 15 % of the processor or more is named, as a share of every core", () => {
+    // 6 cores: 90 % of one core is 15 % of the processor, 84 % is 14 %.
+    expect(busyShare(site({ service: service({ cpuShare: 90 }) }), 6)).toBe(15)
+    expect(busyShare(site({ service: service({ cpuShare: 84 }) }), 6)).toBeNull()
+    expect(busyShare(site({ service: service({ cpuShare: 300 }) }), 2)).toBe(150)
+    // No share without the number of cores, nor without a measure.
+    expect(busyShare(site({ service: service({ cpuShare: 300 }) }), null)).toBeNull()
+    expect(busyShare(site({ service: service({ cpuShare: null }) }), 6)).toBeNull()
+    expect(busyShare(site({ type: "static", service: null }), 6)).toBeNull()
+  })
+
+  test("memory against its limit, at the service's own bounds, nothing when nothing runs", () => {
+    expect(memoryUsage(site({ service: service({ memory: 64 * MB, peak: 80 * MB, limit: 256 * MB }) }))).toEqual({
+      memory: 64 * MB,
+      limit: 256 * MB,
+      share: 25,
+      level: "normal",
+    })
+    // A peak at 80 % of the limit warns, as the server's discrepancy does; past 90 % now, critical.
+    expect(memoryUsage(site({ service: service({ memory: 100 * MB, peak: 205 * MB, limit: 256 * MB }) }))?.level).toBe("warn")
+    expect(memoryUsage(site({ service: service({ memory: 240 * MB, peak: 250 * MB, limit: 256 * MB }) }))?.level).toBe("critical")
+    expect(memoryUsage(site({ service: service({ memory: 40 * MB, peak: null, limit: null }) }))).toEqual({ memory: 40 * MB, limit: null, share: null, level: "normal" })
+    expect(memoryUsage(site({ type: "static", service: null }))).toBeNull()
+    expect(memoryUsage(site({ service: service({ active: "failed" }) }))).toBeNull()
   })
 })
 
@@ -285,6 +318,7 @@ describe("the table's caption", () => {
   test("it states the order, then what narrows the list", () => {
     expect(sitesCaption("issues", state())).toBe("Sites served by the server, issues first, then by name")
     expect(sitesCaption("memory", state("sort=memory"))).toBe("Sites served by the server, by memory")
+    expect(sitesCaption("cpu", state("sort=cpu"))).toBe("Sites served by the server, by CPU")
     expect(sitesCaption("issues", state("access=restricted&kind=app&q=cal"))).toBe(
       'Sites served by the server, issues first, then by name, access restricted, kind app, matching "cal"',
     )

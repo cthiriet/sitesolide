@@ -14,7 +14,8 @@ import { ACCESS_KEYS, KIND_WORDS, KINDS, accessKey, siteKind, type AccessKey, ty
 import { narrowList, type ListSpec, type ListState } from "./list-state"
 import { correspond, queryWords } from "./search"
 import { PENDING_LABEL, type SiteSecretsPanel } from "./secrets"
-import { serviceSummaryOf, siteAccess, siteWeight } from "./sites"
+import { serviceLevel, type Level } from "./gauges"
+import { memoryShare, processorShare, serviceSummaryOf, siteAccess, siteWeight } from "./sites"
 import type { Tone } from "./tones"
 import type { Discrepancy, Site } from "./types"
 import { sortDiscrepancies, type Severity } from "./verdict"
@@ -34,13 +35,14 @@ export const KIND_FACETS: readonly KindFacet[] = [...KINDS, "platform"]
 /** The facet item of the platform's own projects, and the tag beside their name. */
 export const PLATFORM_FACET = "Platform"
 
-export type SiteSort = "issues" | "name" | "deployed" | "memory" | "disk"
+export type SiteSort = "issues" | "name" | "deployed" | "cpu" | "memory" | "disk"
 
 /** The orders, the default first, and their words in the Sort menu. */
 export const SITE_SORTS: readonly { value: SiteSort; label: string }[] = [
   { value: "issues", label: "Issues first" },
   { value: "name", label: "Name" },
   { value: "deployed", label: "Last deployed" },
+  { value: "cpu", label: "CPU" },
   { value: "memory", label: "Memory" },
   { value: "disk", label: "Disk" },
 ]
@@ -51,9 +53,37 @@ export const SITES_LIST: ListSpec = {
   sorts: SITE_SORTS.map((sort) => sort.value),
 }
 
-/** The two orders that bring a figure back into the row, as its own column. */
-export function figureOf(sort: string | null): "memory" | "disk" | null {
-  return sort === "memory" || sort === "disk" ? sort : null
+/**
+ * The two orders that bring a figure into the row, as its own column: CPU and
+ * Disk. Memory has its column always, the one a site runs out of.
+ */
+export function figureOf(sort: string | null): "cpu" | "disk" | null {
+  return sort === "cpu" || sort === "disk" ? sort : null
+}
+
+/**
+ * A site's share of the processor past which its row names it beside its
+ * name, "CPU 18%": nearly one core in six on a six-core machine. Below it a
+ * site's CPU says nothing worth a glance, and the CPU sort ranks them all.
+ */
+export const BUSY_PROCESSOR_SHARE = 15
+
+/** The share of the processor a row names, or null below BUSY_PROCESSOR_SHARE or with nothing measured. */
+export function busyShare(site: ListedSite, cores: number | null): number | null {
+  const cpu = siteWeight(site).cpuShare
+  const share = cpu === null ? null : processorShare(cpu, cores)
+  return share !== null && share >= BUSY_PROCESSOR_SHARE ? share : null
+}
+
+/**
+ * The Memory column: what the running services hold, against their limit,
+ * and the level of the service's own bounds, amber from a peak at 80 % of the
+ * limit, red past 90 %. Null when nothing runs.
+ */
+export function memoryUsage(site: ListedSite): { memory: number; limit: number | null; share: number | null; level: Level } | null {
+  const { counted, memory, peak, limit } = siteWeight(site)
+  if (counted === 0 || memory === null) return null
+  return { memory, limit, share: memoryShare(memory, limit), level: serviceLevel(memory, peak, limit) }
 }
 
 // --- What the list keeps ---------------------------------------------------------
@@ -222,8 +252,9 @@ function issueRank(site: ListedSite, worst: ReadonlyMap<string, Severity>): numb
   return site.restartPending === true ? 2 : 3
 }
 
-/** The figure a Memory or a Disk sort reads: what the running services hold, what the folder weighs. */
-export function figure(site: ListedSite, which: "memory" | "disk"): number | null {
+/** The figure a sort reads: the running services' CPU, in % of one core, what they hold, what the folder weighs. */
+export function figure(site: ListedSite, which: "cpu" | "memory" | "disk"): number | null {
+  if (which === "cpu") return siteWeight(site).cpuShare
   return which === "memory" ? siteWeight(site).memory : site.bytes
 }
 
@@ -231,7 +262,7 @@ export function figure(site: ListedSite, which: "memory" | "disk"): number | nul
  * The list's order. Issues first, by name inside each group: the site to look
  * at is on top, and a name is always found in the same place within its
  * group. Name alone. The newest deployment first. The heaviest first, in
- * memory or on disk, a project with no figure last. Ties go by name.
+ * CPU, memory or on disk, a project with no figure last. Ties go by name.
  */
 export function sortSites<T extends ListedSite>(sites: readonly T[], sort: string | null, worst: ReadonlyMap<string, Severity>): T[] {
   const byName = (a: T, b: T) => a.slug.localeCompare(b.slug, "en")
@@ -247,6 +278,8 @@ export function sortSites<T extends ListedSite>(sites: readonly T[], sort: strin
         return byName
       case "deployed":
         return descending((site) => site.deployed)
+      case "cpu":
+        return descending((site) => figure(site, "cpu"))
       case "memory":
         return descending((site) => figure(site, "memory"))
       case "disk":
@@ -261,7 +294,9 @@ export function sortSites<T extends ListedSite>(sites: readonly T[], sort: strin
 /** The table's caption, for screen readers: the order, then what narrows the list. */
 export function sitesCaption(sort: string | null, state: ListState): string {
   const order = SITE_SORTS.find((candidate) => candidate.value === sort)?.label ?? SITE_SORTS[0]!.label
-  const parts = [`Sites served by the server, ${order === "Issues first" ? "issues first, then by name" : `by ${order.toLowerCase()}`}`]
+  // An acronym keeps its capitals: "by CPU", "by last deployed".
+  const words = order === order.toUpperCase() ? order : order.toLowerCase()
+  const parts = [`Sites served by the server, ${order === "Issues first" ? "issues first, then by name" : `by ${words}`}`]
   const { access, kind } = state.facets
   if (access !== null && access !== undefined) parts.push(`access ${access}`)
   if (kind !== null && kind !== undefined) parts.push(kind === "platform" ? "the platform's own projects" : `kind ${kind}`)

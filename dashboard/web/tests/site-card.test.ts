@@ -83,6 +83,7 @@ describe("a site's service", () => {
         }),
       }),
       NOW,
+      null,
       "UTC",
     )
     expect(card).toEqual({
@@ -117,6 +118,14 @@ describe("a site's service", () => {
   test("a peak beyond the ceiling is capped on the track, not in the text", () => {
     const card = serviceCard(site({ service: service({ memory: 250 * MO, peak: 300 * MO, limit: 256 * MO }) }), NOW)
     expect(card).toMatchObject({ gauge: { peak: 100, peakDetail: "Peak 300 MB, 117% of the limit" } })
+  })
+
+  /** The Load gauge's scale: a share of every core, so the list, the Overview and the machine's load read alike. */
+  test("with the machine's cores known, the CPU is a share of the processor, in cores beside it", () => {
+    const busy = serviceCard(site({ service: service({ cpuShare: 180 }) }), NOW, 6)
+    expect(busy.kind === "app" && busy.facts[0]).toEqual({ label: "CPU", value: "30%", detail: "of the processor over the last minute, 1.8 of 6 cores", tone: "neutral" })
+    const idle = serviceCard(site({ service: service({ cpuShare: 0.3 }) }), NOW, 6)
+    expect(idle.kind === "app" && idle.facts[0]).toEqual({ label: "CPU", value: "<1%", detail: "of the processor over the last minute, <0.01 of 6 cores", tone: "neutral" })
   })
 
   test("with no measured CPU share, a hyphen and when it will come", () => {

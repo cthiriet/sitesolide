@@ -66,19 +66,37 @@ export function Track({
   )
 }
 
+const RING_STROKE: Record<Level, string> = {
+  normal: "stroke-primary",
+  warn: "stroke-attention",
+  critical: "stroke-destructive",
+}
+
 /**
- * A service's memory over its ceiling, as a short bar beside its figure:
- * neutral, then in the colours of the service's thresholds. Nothing without a
- * known ceiling.
+ * A share as an 18 px ring: a grey track and an arc from the top, clockwise,
+ * in the level's colour. The Sites list's Memory column draws a site's
+ * memory against its limit with it, read at a glance down the column. A
+ * share under 1 % still draws a dot, the round cap of a zero-length arc.
  */
-export function MemoryBar({ percent, level, className }: { percent: number | null; level: Level; className?: string }) {
-  if (percent === null) return null
+export function UsageRing({ percent, level = "normal" }: { percent: number; level?: Level }) {
+  const radius = 7
+  const length = 2 * Math.PI * radius
+  const share = Math.min(Math.max(percent, 0), 100) / 100
   return (
-    <Progress
-      value={percent}
-      aria-hidden="true"
-      className={cn("w-12 shrink-0 [&_[data-slot=progress-track]]:h-1", BAR_CLASSES[level], className)}
-    />
+    <svg viewBox="0 0 18 18" className="size-[18px] shrink-0" aria-hidden="true">
+      <circle cx="9" cy="9" r={radius} fill="none" className="stroke-input" strokeWidth={3} />
+      <circle
+        cx="9"
+        cy="9"
+        r={radius}
+        fill="none"
+        className={RING_STROKE[level]}
+        strokeWidth={3}
+        strokeLinecap="round"
+        strokeDasharray={`${share * length} ${length}`}
+        transform="rotate(-90 9 9)"
+      />
+    </svg>
   )
 }
 
@@ -86,10 +104,10 @@ export function MemoryBar({ percent, level, className }: { percent: number | nul
  * One readout of the strip: its label, a 56 px bar, its figure in its
  * level's colour and, once the line has 56 rem, the machine's size in muted
  * text: the three keep to one line rather than wrap.
- * `onPress` makes it the button of a sort, Memory or Disk: the question the
- * figure raises, which site holds it, answered by the list below.
+ * `onPress` makes it the button of a sort, `sortWord` naming it: the question
+ * the figure raises, which site holds it, answered by the list below.
  */
-function StripReadout({ tile, pressed, onPress }: { tile: Tile; pressed?: boolean; onPress?: () => void }) {
+function StripReadout({ tile, sortWord, pressed, onPress }: { tile: Tile; sortWord?: string; pressed?: boolean; onPress?: () => void }) {
   const body = (
     <>
       <span className="mono-label">{tile.heading}</span>
@@ -112,7 +130,7 @@ function StripReadout({ tile, pressed, onPress }: { tile: Tile; pressed?: boolea
     <button
       type="button"
       aria-pressed={pressed}
-      title={pressed ? `Sites sorted by ${tile.heading.toLowerCase()}` : `Sort sites by ${tile.heading.toLowerCase()}`}
+      title={pressed ? `Sites sorted by ${sortWord}` : `Sort sites by ${sortWord}`}
       onClick={onPress}
       className={cn(cell, "outline-none focus-visible:ring-2 focus-visible:ring-ring", pressed ? "bg-highlight" : "hover:bg-muted/45")}
     >
@@ -130,8 +148,8 @@ const READOUT_FILL: Record<Level, string> = { normal: "bg-primary", warn: "bg-at
  * while they are fine, the figure and its bar amber or red past a
  * threshold; the alarm itself is the verdict's, which the monitor's
  * discrepancies raise. The machine's size is in the captions ("1.3 on 6
- * cores", "5.7 of 12 GB used"), its zone in the sidebar. Memory and Disk sort
- * the list by what each site holds, `sort` saying which is in force.
+ * cores", "5.7 of 12 GB used"), its zone in the sidebar. Each sorts the list
+ * by what each site takes of it, Load by CPU, `sort` saying which is in force.
  */
 export function MachineStrip({
   snapshot,
@@ -140,14 +158,14 @@ export function MachineStrip({
 }: {
   snapshot: Snapshot
   sort: string | null
-  onSort: (sort: "memory" | "disk") => void
+  onSort: (sort: "cpu" | "memory" | "disk") => void
 }) {
   const { machine } = snapshot
   return (
     <section aria-label="Server" className="@container/strip -my-1 flex flex-wrap items-center gap-x-8 gap-y-1">
-      <StripReadout tile={loadTile(machine)} />
-      <StripReadout tile={memoryTile(machine)} pressed={sort === "memory"} onPress={() => onSort("memory")} />
-      <StripReadout tile={diskTile(machine)} pressed={sort === "disk"} onPress={() => onSort("disk")} />
+      <StripReadout tile={loadTile(machine)} sortWord="CPU" pressed={sort === "cpu"} onPress={() => onSort("cpu")} />
+      <StripReadout tile={memoryTile(machine)} sortWord="memory" pressed={sort === "memory"} onPress={() => onSort("memory")} />
+      <StripReadout tile={diskTile(machine)} sortWord="disk" pressed={sort === "disk"} onPress={() => onSort("disk")} />
     </section>
   )
 }

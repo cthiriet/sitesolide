@@ -483,7 +483,7 @@ on screen.
 | `CHIP`, `AccessWord` | a 20 or 24 px chip; a site's general access as the landing page's badges, *Restricted* with a lock, *Public* with a globe and quieter, *Anyone with the code* with a key over the code in its well |
 | `RoleBars` | a role as four rising bars, as many lit in `share-ink` as the role has rungs, before its word: beside a site's name, in a role's menu, in what each role can do |
 | `ExternalLink` | a site address, underlined at rest, in a new tab; the address in mono |
-| `MachineStrip`, `Track` | the strip, reserved for the home page: a status line, no panel, load, memory and disk on one 32 px line, each a mono label, a 56 px bar, its figure in its level's colour and, from 56 rem of the line (`@container/strip`), its caption ("1.3 on 6 cores"); Memory and Disk are the buttons of those two sorts; `Track` is a 6 px groove with a 1 px tick across it at each threshold, for a service's memory |
+| `MachineStrip`, `Track` | the strip, reserved for the home page: a status line, no panel, load, memory and disk on one 32 px line, each a mono label, a 56 px bar, its figure in its level's colour and, from 56 rem of the line (`@container/strip`), its caption ("1.3 on 6 cores"); each the button of a sort, Load of CPU; `UsageRing` is an 18 px ring of a share in its level's colour, the Sites list's memory against its limit; `Track` is a 6 px groove with a 1 px tick across it at each threshold, for a service's memory |
 | `Track` (dialogs) | waiting for a long answer: the time actually elapsed on its scale, the usual duration ticked when known, never an invented progress bar |
 | `Command` | a command to type in a terminal, copyable |
 | `serviceWord` | the word and tone of a systemd unit, the same on the home page, the Overview and Secrets; *Scheduled* for the anchor of a project whose every service is scheduled, `active (exited)` |
@@ -782,8 +782,9 @@ deployments.
 LOAD ━── 22% 1.3 on 6 cores   MEMORY ━━─ 49% 5.7 of 12 GB used   DISK ━━─ 41% 49 of 120 GB used     32 px line
 [!] Server  The last backup run failed for builder, 52 min ago                       banners, 2 then "Show 3 more"
 [Search sites /] [Access v] [Kind v]                              3 of 16  [Issues first v]
-| x | [app] hiring  Access mismatch +2 | hiring.example.com | [shield] | 25m ago | ... |  44 px
-|   | [files] blog                     | blog.example.net   | [globe]  | 26d ago | ... |
+| x | [app] hiring  Access mismatch +2 | hiring.example.com | [shield] | (o) 44 MB  | 25m ago | ... |  44 px
+|   | [app] builder  CPU 18%           | builder.example.com| [lock]   | (o) 143 MB | 9d ago  | ... |
+|   | [files] blog                     | blog.example.net   | [globe]  |            | 26d ago | ... |
 ```
 
 - **The strip**, the owner's alone: load, memory and disk on one 32 px
@@ -792,9 +793,10 @@ LOAD ━── 22% 1.3 on 6 cores   MEMORY ━━─ 49% 5.7 of 12 GB used   DIS
   line the figure alone, so that the three keep to one line). Past 70 and 90 % the figure and the bar turn amber and red, the
   thresholds in the bar's title; the alarm is the verdict's. A panel of
   gauges gave the machine the weight of the list it serves, for figures
-  that are fine nearly always. The server's zone is the sidebar's. Memory
-  and Disk are the buttons of those two sorts, tinted `highlight` while in
-  force: pressed again, the list goes back to *Issues first*.
+  that are fine nearly always. The server's zone is the sidebar's. Each
+  readout is the button of a sort, Load of *CPU*, Memory and Disk of
+  theirs, tinted `highlight` while in force: pressed again, the list goes
+  back to *Issues first*.
 - **No Issues panel.** A site's issues are its row's. What has no row, the
   server's own discrepancies and those of a fragment with no folder, is a
   `Banner` each, errors first, two of them then *Show 3 more*; nothing at
@@ -802,15 +804,21 @@ LOAD ━── 22% 1.3 on 6 cores   MEMORY ━━─ 49% 5.7 of 12 GB used   DIS
 - **The row**, `DataTable` of 44 px: the gutter, drawn only while some row
   is in trouble; the kind icon (`KindIcon`, its tooltip the number of
   services or the next run), the slug, the real link, underlined only
-  under the pointer, its description in its title, the *Platform* tag or a person's role, then, only when not
-  fine, the state: the first issue's `label` from the server, errors
+  under the pointer, its description in its title, the *Platform* tag or a
+  person's role, "CPU 18%" in a muted chip when the site takes 15 % of the
+  processor or more (`BUSY_PROCESSOR_SHARE`, every core counted, the Load
+  gauge's scale), then, only when not fine, the state: the first issue's `label` from the server, errors
   first, in its tone, "+2" for the others, every message whole in its
   tooltip; the address visitors use in muted mono, cut, its arrow on hover,
   *No page* for a project that serves none, the preview or a domain's
   trouble in its title; the access icon (`AccessIcon`, the exempt paths and
   the code in its tooltip), none for a project that serves no page, which
-  has no visitor to let in, unless its access is a mismatch; the
-  deployment's age; the row menu (*Open site*,
+  has no visitor to let in, unless its access is a mismatch; the memory
+  its running services hold, an 18 px `UsageRing` of it against their
+  limit and the figure beside it, muted while fine, amber from a peak at
+  80 % of the limit and red past 90 %, the service's own bounds, empty when
+  nothing runs: the one resource a site runs out of, killed and restarted
+  at its limit; the deployment's age; the row menu (*Open site*,
   *Copy address*, *Copy code*, *Copy link with code*, then the site's
   sections with the sidebar's icons). The whole row leads to the Overview. A restart pending, which no
   discrepancy says, is the state's word in attention with no gutter icon,
@@ -823,10 +831,13 @@ LOAD ━── 22% 1.3 on 6 cores   MEMORY ━━─ 49% 5.7 of 12 GB used   DIS
   and Kind (Static, Apps, Background, Scheduled, No manifest, Platform),
   each offering only what some project is, with the rows' own icons and
   their counts; a project that serves no page is under no access. **Sort**: *Issues first* (errors, warnings, a restart
-  pending, then the rest, each by name), *Name*, *Last deployed*, *Memory*
-  and *Disk*, the heaviest first; those two bring their figure back as a
-  column, in the age's place on two lines. CPU, the services' count and
-  their memory bars are the Overview's.
+  pending, then the rest, each by name), *Name*, *Last deployed*, *CPU*,
+  *Memory* and *Disk*, the heaviest first; CPU and Disk bring their figure
+  as a column, in the age's place on two lines, Memory having its own
+  always. A CPU column on every row would read "<1%" on nearly all of
+  them: the chip names the site that stands out, the sort ranks the rest.
+  The services' count and each service's figures are the Overview's, its
+  CPU on the same scale, "30% of the processor, 1.8 of 6 cores".
 - **Counts agree**: the sidebar's badge and the verdict count every
   discrepancy, which the rows' states with their "+N" and the banners say
   once each; the header counts what the list holds, "3 of 16" said only
@@ -1444,8 +1455,9 @@ and no table.
 25. **Resource figures in every row**: a CPU share of the last minute, a
     memory bar and "143 of 512 MB" on the apps alone, the services'
     count, the folder's size. Noise in a fleet list, and uneven, since a
-    static site had none: they are the Overview's, and Sort by Memory or
-    Disk brings the one asked for back as a column.
+    static site had none. Memory came back as a ring and its figure, the
+    one a site runs out of; CPU as a chip on the site that takes 15 % of
+    the processor and a sort; the folder's size behind Sort by Disk.
 26. **The client reading a discrepancy's message** to name it in a row: the
     server gives each one its `label`, chosen where it is judged.
 27. **The gutter on an all-clear list**, 28 px of empty space on every row:

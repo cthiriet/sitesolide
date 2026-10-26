@@ -14,6 +14,7 @@ import {
   serviceState,
   serviceWord,
   computeCpuShare,
+  coresUsed,
   isAnchoredSite,
   memoryShare,
   restartsLabel,
@@ -232,6 +233,7 @@ function serviceTitle(site: Pick<Site, "services">): string {
 export function serviceCard(
   site: Pick<Site, "type" | "service" | "port" | "listening" | "services" | "headless">,
   now: number,
+  cores: number | null = null,
   timeZone?: string,
 ): ServiceCard {
   const service = site.service
@@ -274,7 +276,9 @@ export function serviceCard(
     facts.push(
       service.cpuShare === null
         ? fact("CPU", ABSENT, "Measured from the next collection")
-        : fact("CPU", computeCpuShare(service.cpuShare), "of one core, over the last minute"),
+        : cores === null
+          ? fact("CPU", computeCpuShare(service.cpuShare), "of one core, over the last minute")
+          : fact("CPU", computeCpuShare(service.cpuShare / cores), `of the processor over the last minute, ${coresUsed(service.cpuShare, cores)}`),
     )
   }
 

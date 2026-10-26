@@ -3,6 +3,7 @@ import { AppWindow, CalendarClock, ChevronRight, Cog, type LucideIcon } from "lu
 import { Track } from "@/components/gauge"
 import { ExternalLink } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
+import { useData } from "@/components/data"
 import { Banner, Panel, StateLabel, Status } from "@/components/page"
 import { CellText, DataTable, gutterFor, type Column } from "@/components/data-table"
 import { accessEntry } from "@/components/legend"
@@ -166,7 +167,8 @@ function MemoryLine({ gauge }: { gauge: ServiceGauge }) {
  * Admin may ask for.
  */
 export function ServicePanel({ site, now, action }: { site: Site; now: number; action?: ReactNode }) {
-  const card = serviceCard(site, now)
+  const { snapshot } = useData()
+  const card = serviceCard(site, now, snapshot?.machine?.cores ?? null)
   if (card.kind !== "app") return null
   const { state } = card
   const marked = state.tone === "error" || state.tone === "attention"
