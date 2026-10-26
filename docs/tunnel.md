@@ -221,12 +221,15 @@ Cloudflare's edge rather than in the DNS:
   edge serves for any proxied name before the domain is activated;
 - no name may still point at the machine's own address, a record from before
   the tunnel left DNS only;
-- the name's root must not answer 520 to 526, the edge's own answers when it
-  fails to reach an origin by its address: a record left proxied at an
-  address resolves to Cloudflare and answers its trace like the others, but
-  a name routed into the tunnel gets the connector's 502 before its
-  activation, Caddy refusing its handshake. A proxied record pointing at a
-  host that answers is not caught: its root answers that host's status.
+- the name's root must answer the connector's 502: before its activation, a
+  name routed into the tunnel gets it at once, Caddy refusing its handshake.
+  A record left proxied at an address, or a wildcard of the zone sending the
+  name to another host, resolves to Cloudflare and answers its trace like
+  the others, but its root answers something else: the edge's own 520 to
+  526 for an origin it fails to reach by its address, that host's own
+  status, or nothing within thirty seconds. A name whose certificate Caddy
+  still holds from an earlier activation may answer the site itself:
+  `--force` is for that case, once its record points at the tunnel.
 
 A name that fails is refused with the records to create; `--force` goes
 ahead anyway, as it does past the DNS check of a machine served directly.

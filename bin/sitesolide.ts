@@ -244,6 +244,7 @@ import {
   caddyHandshakeCommand,
   caddyReasonCommand,
   domainCarriers,
+  EDGE_ANSWER_MS,
   EDGE_TRACE_PATH,
   edgeOrigin,
   readCaddyHandshake,
@@ -3002,7 +3003,7 @@ async function checkTunnelRoute(domain: NonNullable<Manifest["domain"]>, config:
     names.map(async (name): Promise<EdgeReading> => {
       const here = await domainPointsHere(name, config);
       const edge = !here && (await servedByEdge(name));
-      return { name, here, edge, root: edge ? await httpsCode(name) : null };
+      return { name, here, edge, root: edge ? await httpsCode(name, EDGE_ANSWER_MS) : null };
     }),
   );
   const problems = readings.flatMap((reading) => {
@@ -3030,11 +3031,11 @@ async function checkTunnelRoute(domain: NonNullable<Manifest["domain"]>, config:
 }
 
 /** The HTTP code at a name's root, or why nothing answered. */
-async function httpsCode(name: string): Promise<string> {
+async function httpsCode(name: string, timeoutMs = 15000): Promise<string> {
   try {
     const response = await fetch(`https://${name}/`, {
       redirect: "manual",
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return String(response.status);
   } catch (err) {
@@ -3050,17 +3051,31 @@ async function httpsCode(name: string): Promise<string> {
  * machine says which: a verified handshake for the name on its loopback
  * means Caddy holds the certificate, and the 502 comes from behind it; none
  * means the certificate is missing, most often the token's permissions on
- * the domain's zone, and Caddy's journal says why.
+ * the domain's zone, and Caddy's journal says why. Silence, or an error
+ * Caddy does not answer on the machine itself, comes from another host the
+ * name reaches, a record of its own or a wildcard of its zone.
  */
 async function tunnelCause(name: string, code: string, config: Config, executor: Executor, tunnel: string): Promise<{ cause: string; reason?: string } | null> {
   const origin = edgeOrigin(code);
-  if (origin === "address") {
-    say("   cause      Cloudflare's own answer for an origin it reaches by its address: the name's record most likely points at an");
-    say("              address, proxied, rather than at the tunnel; it should be:");
+  const shouldBe = () => {
     for (const line of tunnelRecordLines([name], tunnelTarget(tunnel))) say(`              ${line}`);
+  };
+  if (origin === "address") {
+    say("   cause      Cloudflare's own answer for an origin it reaches by its address: the name's record, or a wildcard of its");
+    say("              zone, most likely points at an address, proxied, rather than at the tunnel; it should be:");
+    shouldBe();
     return { cause: "address" };
   }
-  if (origin !== "tunnel") return null;
+  if (origin === null) {
+    if (/^[23][0-9][0-9]$/.test(code)) return null;
+    const handshake = code.startsWith("unreachable") ? null : readCaddyHandshake(await executor.read(config, caddyHandshakeCommand(name)));
+    if (handshake?.kind === "answered" && String(handshake.status) === code) return null;
+    say(`   cause      ${code.startsWith("unreachable") ? "nothing answered through Cloudflare's edge" : `Caddy does not answer ${code} for the name on the machine`}: the name most`);
+    say("              likely reaches another host, through a record of its own or a wildcard of its zone, rather than the");
+    say("              tunnel; it should be:");
+    shouldBe();
+    return { cause: "elsewhere" };
+  }
   const handshake = readCaddyHandshake(await executor.read(config, caddyHandshakeCommand(name)));
   if (handshake === null) {
     say("   cause      unknown: the machine did not say whether Caddy completes a handshake for the name");
@@ -3136,13 +3151,13 @@ async function showDomain(
     say(`   dns        ${edge ? "served by Cloudflare's edge" : "not served by Cloudflare's edge yet"}`);
   }
 
-  let code = await httpsCode(domain.name);
+  let code = await httpsCode(domain.name, tunnel ? EDGE_ANSWER_MS : undefined);
   if (tunnel && active && patienceMs > 0 && edgeOrigin(code) === "tunnel") {
     say(`   ${code}: Caddy is obtaining the domain's first certificate through the DNS challenge; asking again for up to ${patienceMs / 1000} s`);
     const deadline = Date.now() + patienceMs;
     while (edgeOrigin(code) === "tunnel" && Date.now() + VERIFY_RETRY_MS < deadline) {
       await Bun.sleep(VERIFY_RETRY_MS);
-      code = await httpsCode(domain.name);
+      code = await httpsCode(domain.name, EDGE_ANSWER_MS);
     }
   }
   say(`   https      ${code}`);

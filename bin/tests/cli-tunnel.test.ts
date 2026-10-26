@@ -12,6 +12,7 @@ import {
   caddyHandshakeCommand,
   caddyReasonCommand,
   domainCarriers,
+  EDGE_ANSWER_MS,
   EDGE_TRACE_PATH,
   edgeOrigin,
   isTunnelId,
@@ -342,8 +343,19 @@ describe("a site's own domain behind a tunnel", () => {
     for (const root of ["521", "522", "523"]) {
       expect(tunnelRouteProblem(reading({ root }), server)).toContain(`answers ${root}, Cloudflare's own answer for an origin it reaches by its address`);
     }
-    // Anything else is not taken for an address: a host that answers is not caught.
-    for (const root of ["200", "403", "unreachable: timed out"]) expect(tunnelRouteProblem(reading({ root }), server)).toBeNull();
+    // A wildcard of the zone sending the name to another host: the edge waited
+    // for it, or it answered, but never the connector's 502.
+    expect(tunnelRouteProblem(reading({ root: "unreachable: The operation timed out." }), server)).toContain(
+      `https://${DOMAIN}/ answered nothing, where a name routed into the tunnel gets the connector's 502 at once`,
+    );
+    for (const root of ["200", "403", "404"]) {
+      expect(tunnelRouteProblem(reading({ root }), server)).toContain(`https://${DOMAIN}/ answers ${root}, not the connector's 502: another host serves the name`);
+    }
+  });
+
+  test("the workstation waits for the edge longer than the edge waits for an origin it cannot reach", () => {
+    // Cloudflare's 522 came after nineteen seconds on a zone's wildcard.
+    expect(EDGE_ANSWER_MS).toBeGreaterThanOrEqual(25_000);
   });
 
   test("the files that carry a site's own domain are the connector's configuration and Caddy's options, as this release lays them", () => {

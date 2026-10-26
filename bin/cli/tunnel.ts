@@ -273,21 +273,39 @@ export type EdgeReading = {
  * would. A record left from before the tunnel, DNS only, resolves to the
  * machine, where the firewall now answers nothing; a name the edge does not
  * serve never reaches the tunnel. A record left proxied resolves to
- * Cloudflare, and its trace answers like any other: what gives it away is its
- * root, where the edge answers 520 to 526 for the address it cannot reach,
- * while a name routed into the tunnel gets the connector's 502 before its
- * activation, Caddy refusing its handshake. A proxied record pointing at a
- * host that answers is not caught: its root answers that host's status.
+ * Cloudflare, and its trace answers like any other, as does a name a wildcard
+ * of the zone sends to another host: what tells them apart is the root.
+ * Before its activation, a name routed into the tunnel gets the connector's
+ * 502 at once, Caddy refusing its handshake; anything else comes from
+ * elsewhere, the edge's own 520 to 526 for an address it cannot reach,
+ * another host's answer, or nothing within EDGE_ANSWER_MS. Met on a zone
+ * whose wildcard sent the name to another service's server: its root
+ * answered the edge's 522 after nineteen seconds.
+ *
+ * A name Caddy still holds a certificate for, from an earlier activation,
+ * may answer the site itself rather than the 502: --force is for that case,
+ * once its record is known to point at the tunnel.
  */
 export function tunnelRouteProblem(reading: EdgeReading, server: string): string | null {
   const { name, here, edge, root } = reading;
   if (here) return `${name} points at ${server}, a record from before the tunnel, which nothing answers there now`;
   if (!edge) return `https://${name}${EDGE_TRACE_PATH} answers no trace of Cloudflare's: the name is not proxied there, or its edge certificate is not issued yet`;
-  if (root !== null && edgeOrigin(root) === "address") {
-    return `https://${name}/ answers ${root}, Cloudflare's own answer for an origin it reaches by its address: its record points at an address, proxied, rather than at the tunnel`;
+  if (root === null || root === "502") return null;
+  if (edgeOrigin(root) === "address") {
+    return `https://${name}/ answers ${root}, Cloudflare's own answer for an origin it reaches by its address: its record, or a wildcard of its zone, points at an address, proxied, rather than at the tunnel`;
   }
-  return null;
+  if (root.startsWith("unreachable")) {
+    return `https://${name}/ answered nothing, where a name routed into the tunnel gets the connector's 502 at once: its record, or a wildcard of its zone, most likely sends it to a host that does not answer`;
+  }
+  return `https://${name}/ answers ${root}, not the connector's 502: another host serves the name, through a record of its own or a wildcard of its zone, or Caddy still holds its certificate from an earlier activation`;
 }
+
+/**
+ * How long the workstation waits for the edge's answer at a name's root
+ * behind a tunnel: longer than the edge's own wait for an origin it cannot
+ * reach, so that its 522 is read rather than taken for silence.
+ */
+export const EDGE_ANSWER_MS = 30_000;
 
 /**
  * A command for the machine, read only: whether Caddy completes a verified
