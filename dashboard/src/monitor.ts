@@ -20,6 +20,11 @@
  * dashboard are deployed separately, either may be older than the other, and
  * a field this module does not know is ignored rather than refused.
  *
+ * The same status also says how the two alerting channels fared at its last
+ * pass, which `monitorAlerting` turns into the snapshot's `alerting`: the one
+ * place the page learns that no heartbeat address is set, since the monitor
+ * alone reads the file that holds it and the dashboard never does.
+ *
  * It also holds what the collector lets through, `statusFileRefusal` and
  * `copyMonitorStatus`: the collector reads the file as root in a directory the
  * monitor's account owns, and what it may copy into the reading is a rule of
@@ -199,6 +204,60 @@ export function copyMonitorStatus(text: string): string {
     undelivered: count(status.undelivered),
     unchecked: count(status.unchecked),
   });
+}
+
+/**
+ * How the monitor's two outgoing channels fared at its last pass, in the
+ * monitor's own words (`ChannelState` in monitor/src/status.ts):
+ *
+ * - `unconfigured`: no address is set, the journal is the only output;
+ * - `ok`: the last attempt went through;
+ * - `failed`: the last attempt did not, and for the webhook the notices wait
+ *   for the next pass;
+ * - `idle`, the webhook alone: an address is set and the pass had nothing to
+ *   say.
+ *
+ * `undelivered` counts the notices waiting for the webhook. `at` is when that
+ * pass began, in epoch milliseconds, which is how a page tells a ping sent
+ * after a change from one sent before it. Never an address.
+ */
+export type Alerting = {
+  heartbeat: "ok" | "failed" | "unconfigured";
+  webhook: "ok" | "failed" | "unconfigured" | "idle";
+  undelivered: number;
+  at: number;
+};
+
+/**
+ * The alerting channels of the monitor's last pass, or null when the monitor
+ * says nothing about them now: no status (a collector older than the monitor,
+ * or no monitor installed), one the collector refused or that cannot be read,
+ * one older than `MONITOR_STALE_MS`, which no longer describes the machine and
+ * is reported as "Monitor silent" among the Issues, or one from a monitor that
+ * does not name both channels. Null means unknown, never "not set": a page
+ * that reads it as an absence would invite someone to set up what is set.
+ */
+export function monitorAlerting(content: string | null | undefined, generated: number): Alerting | null {
+  if (content === null || content === undefined) return null;
+  let status: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    status = parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (typeof status.refused === "string") return null;
+  const at = typeof status.generatedAt === "number" && Number.isFinite(status.generatedAt) ? status.generatedAt : null;
+  if (at === null || generated - at > MONITOR_STALE_MS) return null;
+  if (!HEARTBEAT_STATES.has(status.heartbeat as string) || !WEBHOOK_STATES.has(status.webhook as string)) return null;
+  const undelivered = typeof status.undelivered === "number" && Number.isFinite(status.undelivered) ? Math.max(0, status.undelivered) : 0;
+  return {
+    heartbeat: status.heartbeat as Alerting["heartbeat"],
+    webhook: status.webhook as Alerting["webhook"],
+    undelivered,
+    at,
+  };
 }
 
 /**

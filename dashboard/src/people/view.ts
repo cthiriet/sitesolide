@@ -14,7 +14,8 @@ import type { Roles } from "./protocol";
 /**
  * The reading as a member may see it: their sites, the discrepancies of their
  * sites, their sites' audience. The machine's own figures, its memory, disk
- * and load, and its discrepancies that name no site, are the owner's.
+ * and load, how its alerting fares, and its discrepancies that name no site,
+ * are the owner's.
  *
  * A site's preview code opens it to whoever holds it: an Admin of the site
  * reads it, to send it; a Viewer or a Developer reads that the site opens
@@ -44,6 +45,7 @@ export function memberReading(reading: Reading, roles: Roles): Reading {
           (discrepancy.section !== "secrets" || may(roleOn(roles, discrepancy.slug), "secrets.list")),
       ),
       machine: null,
+      alerting: null,
     },
     audience: { ...audience, sites },
   };

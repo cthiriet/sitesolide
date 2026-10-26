@@ -6,6 +6,7 @@ import {
   MONITOR_STALE_MS,
   copyMonitorStatus,
   duration,
+  monitorAlerting,
   monitorDiscrepancies,
   problemLabel,
   monitorRefusal,
@@ -164,6 +165,82 @@ describe("the monitor among the Issues", () => {
     expect(buildSnapshot(raw).discrepancies).toEqual([
       { slug: null, severity: "error", label: "Caddy down", message: "Caddy is inactive (dead), result success (monitor, for 12 min)" },
     ]);
+  });
+});
+
+describe("how the alerting fared, among the snapshot's fields", () => {
+  test("no status says nothing, from a collector older than the monitor or with no monitor installed", () => {
+    expect(monitorAlerting(undefined, NOW)).toBeNull();
+    expect(monitorAlerting(null, NOW)).toBeNull();
+  });
+
+  test("the two channels, the notices waiting and when the pass began, as the monitor writes them", () => {
+    const content = status({}, { heartbeat: "failed", webhook: "failed", undelivered: 3 });
+    expect(monitorAlerting(content, NOW)).toEqual({ heartbeat: "failed", webhook: "failed", undelivered: 3, at: NOW - 30_000 });
+    expect(monitorAlerting(status({}, { heartbeat: "unconfigured", webhook: "unconfigured" }), NOW)).toEqual({
+      heartbeat: "unconfigured",
+      webhook: "unconfigured",
+      undelivered: 0,
+      at: NOW - 30_000,
+    });
+    expect(monitorAlerting(status({}, { heartbeat: "ok", webhook: "idle" }), NOW)?.webhook).toBe("idle");
+  });
+
+  test("a status the collector copied says the same as the one the monitor wrote", () => {
+    const written = status({}, { heartbeat: "unconfigured", webhook: "ok", undelivered: 2 });
+    expect(monitorAlerting(copyMonitorStatus(written), NOW)).toEqual(monitorAlerting(written, NOW));
+  });
+
+  test("a status that is refused, unreadable, without a date or from a monitor that does not name both channels is unknown, never not set", () => {
+    expect(monitorAlerting(monitorRefusal("status.json is a symbolic link"), NOW)).toBeNull();
+    expect(monitorAlerting("{", NOW)).toBeNull();
+    expect(monitorAlerting("[]", NOW)).toBeNull();
+    expect(monitorAlerting("{}", NOW)).toBeNull();
+    const original = JSON.parse(status({})) as Record<string, unknown>;
+    expect(monitorAlerting(JSON.stringify({ ...original, heartbeat: undefined }), NOW)).toBeNull();
+    expect(monitorAlerting(JSON.stringify({ ...original, webhook: "paused" }), NOW)).toBeNull();
+    expect(monitorAlerting(JSON.stringify({ ...original, generatedAt: "now" }), NOW)).toBeNull();
+  });
+
+  test("a status older than five minutes no longer describes the machine", () => {
+    const content = status({});
+    expect(monitorAlerting(content, NOW - 30_000 + MONITOR_STALE_MS)).not.toBeNull();
+    expect(monitorAlerting(content, NOW - 30_000 + MONITOR_STALE_MS + 1)).toBeNull();
+  });
+
+  test("a count that is not a number, or is negative, is zero waiting", () => {
+    const original = JSON.parse(status({})) as Record<string, unknown>;
+    expect(monitorAlerting(JSON.stringify({ ...original, undelivered: "3" }), NOW)?.undelivered).toBe(0);
+    expect(monitorAlerting(JSON.stringify({ ...original, undelivered: -4 }), NOW)?.undelivered).toBe(0);
+    expect(monitorAlerting(JSON.stringify({ ...original }), NOW)?.undelivered).toBe(0);
+  });
+
+  test("never an address: only the four fields leave", () => {
+    const original = JSON.parse(status({}, { heartbeat: "ok" })) as Record<string, unknown>;
+    const alerting = monitorAlerting(JSON.stringify({ ...original, heartbeatUrl: "https://hc.test-zone.invalid/secret" }), NOW);
+    expect(Object.keys(alerting ?? {}).sort()).toEqual(["at", "heartbeat", "undelivered", "webhook"]);
+  });
+
+  test("the snapshot carries it, null without a status", () => {
+    const raw: Raw = {
+      generated: NOW,
+      zone: "test-zone.invalid",
+      folders: [],
+      codes: "{}",
+      domains: null,
+      ports: [],
+      blocks: {},
+      machine: null,
+      previous: null,
+    };
+    expect(buildSnapshot(raw).alerting).toBeNull();
+    expect(buildSnapshot({ ...raw, monitor: null }).alerting).toBeNull();
+    expect(buildSnapshot({ ...raw, monitor: status({}, { heartbeat: "unconfigured", webhook: "failed", undelivered: 1 }) }).alerting).toEqual({
+      heartbeat: "unconfigured",
+      webhook: "failed",
+      undelivered: 1,
+      at: NOW - 30_000,
+    });
   });
 });
 

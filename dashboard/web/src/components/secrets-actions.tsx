@@ -38,6 +38,7 @@ import {
   type Refusal,
 } from "@/lib/secrets"
 import { isPerson, reauthUrl, unlockFailure } from "@/lib/identity"
+import { unrestartedSentence } from "@/lib/machine-settings"
 import type { ChangeTarget } from "@/lib/access"
 import type { GeneralAccess } from "@/lib/types"
 
@@ -516,7 +517,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
       const { status, body } = await restoreSecretFile(target)
       if (succeeded(status)) {
         setRestoration({ ...restoration, open: false })
-        announce(`Restored the previous ${target.file}. Restart ${target.slug} to use it.`)
+        announce(`Restored the previous ${target.file}. ${unrestartedSentence(target.slug, target.file, "restore") ?? `Restart ${target.slug} to use it.`}`)
         return afterAction()
       }
       const message = onRefusal(refusalOf(status, body))
@@ -752,8 +753,11 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
         }
         description={
           <>
-            It goes out of <span className="font-mono">{removal?.file}</span>. {removal?.slug} keeps using it until it
-            restarts, and Restore previous can bring it back until the next change.
+            It goes out of <span className="font-mono">{removal?.file}</span>.{" "}
+            {removal === null
+              ? null
+              : (unrestartedSentence(removal.slug, removal.file, "remove") ?? `${removal.slug} keeps using it until it restarts.`)}{" "}
+            Restore previous can bring it back until the next change.
           </>
         }
         action="Remove"
@@ -773,7 +777,11 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
             Restore the previous <span className="font-mono">{restoration?.file}</span>?
           </>
         }
-        description="The whole file goes back to how it was before its last change, and may hold a key you meant to retire. The service keeps its current values until it restarts."
+        description={`The whole file goes back to how it was before its last change, and may hold a key you meant to retire. ${
+          restoration === null
+            ? ""
+            : (unrestartedSentence(restoration.slug, restoration.file, "restore") ?? "The service keeps its current values until it restarts.")
+        }`}
         action="Restore"
         actionInProgress="Restoring…"
         inProgress={confirmationInProgress}

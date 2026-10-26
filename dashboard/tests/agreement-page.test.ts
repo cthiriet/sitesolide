@@ -3,8 +3,29 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { LANDING_FOLDER, buildSnapshot, type Raw, type Discrepancy, type Site } from "../src/state";
 import { MAX_RESTART_MS } from "../src/secrets/protocol";
+import { HASH_FILE_SETTINGS, PASSWORD_VARIABLE, PLATFORM_FILES, outsideHashRefusal } from "../src/secrets/scope";
+import { OFFSITE_VARIABLES, offsiteFrom } from "../src/backup/offsite";
+import { readManifest } from "../borrowed/manifest";
+import { unitEnvironment } from "../borrowed/envfile";
+import { SECRETS_FOLDER } from "../borrowed/store";
+import { generateUnit } from "../borrowed/unit";
+import { readConfig } from "../../monitor/src/config";
+import { alertUrl, webhookFormat } from "../../monitor/src/notify";
+import { buildStatus } from "../../monitor/src/status";
 import { downServices } from "../web/src/lib/sidebar";
 import { PEAK_WARNING_SHARE, serviceLevel } from "../web/src/lib/gauges";
+import {
+  ALERTS_UNDELIVERED_LABEL,
+  HEARTBEAT_FAILED_LABEL,
+  SETTINGS,
+  WEBHOOK_FORMATS,
+  alertAddressProblem,
+  appliesOnRestart,
+  detectedWebhookFormat,
+  settingById,
+  settingState,
+  unrestartedSentence,
+} from "../web/src/lib/machine-settings";
 import { RESTART_SCALE_MS } from "../web/src/lib/secrets";
 import { serviceRows, siteAddresses } from "../web/src/lib/site-card";
 import { siteAccess, siteAddress, serviceState, type Mismatch } from "../web/src/lib/sites";
@@ -20,6 +41,16 @@ import { siteAccess, siteAddress, serviceState, type Mismatch } from "../web/src
 
 const PROJECT = resolve(import.meta.dir, "..");
 const WEB = join(PROJECT, "web", "src");
+
+/**
+ * The portal's own reader of its sign-in settings, imported by its path: its
+ * sources are written for the portal's TypeScript, and this project's compiler
+ * refuses one of them (a Uint8Array against BufferSource) that the portal's
+ * accepts. Only the shape this test calls is typed.
+ */
+const { readSettings } = (await import(join(PROJECT, "..", "portal", "src", "oidc.ts"))) as {
+  readSettings: (env: Record<string, string | undefined>, publicUrl: string) => { settings: unknown };
+};
 
 // --- The page receives only types ------------------------------------------------
 
@@ -318,5 +349,236 @@ describe("a project's services, on their rows and in the discrepancies", () => {
     }
     expect(serviceState(snapshot.sites.find((site) => site.slug === "armed")!)).toEqual({ tone: "ok", label: "Scheduled" });
     expect(downServices(snapshot.sites, NOW)).toBe(1);
+  });
+});
+
+// --- The server's own settings ---------------------------------------------------
+
+/**
+ * The page names the server's settings, and judges a few things about them
+ * before sending (web/src/lib/machine-settings.ts). Each of them is a copy of a
+ * rule of the monitor, the steward, the portal or the backups, confronted here
+ * with the original: a setting that names a variable its reader ignores would
+ * be saved with a smile and do nothing.
+ */
+describe("the server's settings and the services that read them", () => {
+  const ZONE = "test-zone.invalid";
+  const variable = (id: Parameters<typeof settingById>[0], index = 0) => settingById(id).variables[index]!.name;
+
+  const ADDRESSES = [
+    "",
+    "   ",
+    "https://hc-ping.test-zone.invalid/0b7c",
+    "  https://hc-ping.test-zone.invalid/0b7c  ",
+    "HTTPS://HC-PING.TEST-ZONE.INVALID/0b7c",
+    "https://user:secret@hc-ping.test-zone.invalid/",
+    "https://[::1]/x",
+    "https://",
+    "https:/hc-ping.test-zone.invalid",
+    "http://hc-ping.test-zone.invalid/0b7c",
+    "http://127.0.0.1:9/x",
+    "http://localhost/x",
+    "ftp://files.test-zone.invalid/",
+    "javascript:alert(1)",
+    "mailto:someone@test-zone.invalid",
+    "hc-ping.test-zone.invalid/0b7c",
+    "not an address",
+    "https://hooks.slack.com/services/T0/B0/x",
+    "https://discord.com/api/webhooks/1/x",
+    "https://canary.discord.com/api/webhooks/1/x",
+    "https://discordapp.com/api/webhooks/1/x",
+    "https://notdiscord.com/x",
+    "https://discord.com.test-zone.invalid/x",
+    "https://chat.googleapis.com/v1/spaces/A/messages?key=k",
+    "https://ntfy.sh/a-topic",
+    "https://ntfy.sh.test-zone.invalid/a-topic",
+    "https://ntfy.test-zone.invalid/a-topic",
+  ];
+
+  test("an address is refused by the page exactly when the monitor refuses it", () => {
+    let refused = 0;
+    for (const address of ADDRESSES) {
+      const monitor = alertUrl("HEARTBEAT_URL", address).problem !== null;
+      if (monitor) refused += 1;
+      expect([address, alertAddressProblem(address) !== null]).toEqual([address, monitor]);
+    }
+    expect(refused).toBeGreaterThan(8);
+    expect(refused).toBeLessThan(ADDRESSES.length - 8);
+  });
+
+  test("the format read from an address is the monitor's", () => {
+    const seen = new Set<string>();
+    for (const address of ADDRESSES) {
+      const monitor = webhookFormat(null, alertUrl("ALERT_WEBHOOK_URL", address).url).format;
+      seen.add(monitor);
+      expect([address, detectedWebhookFormat(address)]).toEqual([address, monitor]);
+    }
+    expect([...seen].sort()).toEqual(["discord", "googlechat", "json", "slack", "text"]);
+  });
+
+  test("the formats a choice offers are the ones the monitor accepts, and no others", () => {
+    for (const { value } of WEBHOOK_FORMATS) {
+      expect([value, webhookFormat(value, null)]).toEqual([value, { format: value, problem: null }]);
+    }
+    // The monitor names its five in the order and the words of its refusal.
+    const values = WEBHOOK_FORMATS.map((format) => format.value);
+    expect(webhookFormat("telegram", null).problem).toBe(`ALERT_WEBHOOK_FORMAT must be ${values.slice(0, -1).join(", ")} or ${values.at(-1)}`);
+  });
+
+  test("the monitor reads the variables the page writes for the heartbeat, the webhook and the format", () => {
+    const env = {
+      SITESOLIDE_ZONE: ZONE,
+      [variable("heartbeat")]: "https://hc-ping.test-zone.invalid/0b7c",
+      [variable("webhook")]: "https://chat.test-zone.invalid/hook",
+      [variable("format")]: "discord",
+    };
+    const read = readConfig(env);
+    if (!("config" in read)) throw new Error(read.error);
+    expect(read.config).toMatchObject({
+      heartbeatUrl: "https://hc-ping.test-zone.invalid/0b7c",
+      webhookUrl: "https://chat.test-zone.invalid/hook",
+      webhookFormat: "discord",
+      problems: [],
+    });
+    // A name the page did not write is none of the monitor's.
+    const typo = readConfig({ SITESOLIDE_ZONE: ZONE, HEARTBEAT_ULR: env[variable("heartbeat")] });
+    if (!("config" in typo)) throw new Error(typo.error);
+    expect(typo.config.heartbeatUrl).toBeNull();
+  });
+
+  test("the monitor's unit reads the monitoring file, and the backup's the backups'", () => {
+    const read = (path: string) =>
+      unitEnvironment(readFileSync(join(PROJECT, "..", path), "utf8")).files.map((file) => file.path);
+    const file = (name: string) => `${SECRETS_FOLDER}/${name}`;
+    expect(read("infra/monitor/sitesolide-monitor.service")).toContain(file(settingById("heartbeat").file));
+    expect(read("infra/backup/sitesolide-backup.service")).toContain(file(settingById("offsite").file));
+    expect(read("infra/backup/sitesolide-restore@.service")).toContain(file(settingById("offsite").file));
+  });
+
+  test("every setting's file is one the steward lists for its project, and the passwords are its hash", () => {
+    for (const setting of SETTINGS) expect([setting.id, PLATFORM_FILES[setting.slug]]).toEqual([setting.id, expect.arrayContaining([setting.file])]);
+    for (const id of ["dashboard-password", "portal-password"] as const) expect(settingById(id).variables.map((one) => one.name)).toEqual([PASSWORD_VARIABLE]);
+  });
+
+  test("a restart applies the file the project's generated unit reads, and no other", () => {
+    const manifests = { dashboard: join(PROJECT, "sitesolide.json"), portal: join(PROJECT, "..", "portal", "sitesolide.json") };
+    let judged = 0;
+    for (const [slug, path] of Object.entries(manifests)) {
+      const manifest = readManifest(readFileSync(path, "utf8")).manifest;
+      if (manifest === undefined) throw new Error(`${slug} has no readable manifest`);
+      const read = new Set(unitEnvironment(generateUnit(manifest, { slug, zone: ZONE, contact: "" })).files.map((file) => file.path));
+      for (const file of PLATFORM_FILES[slug]!) {
+        expect([slug, file, appliesOnRestart(slug, file)]).toEqual([slug, file, read.has(`${SECRETS_FOLDER}/${file}`)]);
+        judged += 1;
+      }
+    }
+    expect(judged).toBe(4);
+  });
+
+  test("the steward never marks the monitor's or the backups' file pending, and the page never offers a restart for them", () => {
+    for (const setting of SETTINGS) {
+      const restart = appliesOnRestart(setting.slug, setting.file);
+      expect([setting.id, unrestartedSentence(setting.slug, setting.file, "add") === null]).toEqual([setting.id, restart]);
+    }
+    expect(appliesOnRestart("dashboard", "dashboard-monitor.env")).toBe(false);
+    expect(appliesOnRestart("dashboard", "dashboard-backup.env")).toBe(false);
+  });
+
+  test("the company sign-in is the portal's own list of sign-in settings, and the steward lets exactly those into portal.env", () => {
+    const names = settingById("company-signin").variables.map((one) => one.name);
+    expect(new Set(names)).toEqual(new Set(HASH_FILE_SETTINGS["portal.env"]));
+    for (const name of names) expect([name, outsideHashRefusal("portal.env", name)]).toEqual([name, null]);
+    expect(outsideHashRefusal("portal.env", "PORT")).not.toBeNull();
+    // Nothing else is allowed in the dashboard's own file.
+    for (const name of names) expect(outsideHashRefusal("dashboard.env", name)).not.toBeNull();
+  });
+
+  test("the portal needs the issuer, the client and its secret, and takes the rest as refinements", () => {
+    const values: Record<string, string> = {
+      OIDC_ISSUER: "https://idp.test-zone.invalid",
+      OIDC_CLIENT_ID: "client",
+      OIDC_CLIENT_SECRET: "secret",
+      OIDC_ALLOWED_DOMAINS: "test-zone.invalid",
+      OIDC_ADMIN_EMAILS: "owner@test-zone.invalid",
+      OIDC_PROVIDER_NAME: "Company",
+    };
+    const portal = "https://portal.test-zone.invalid";
+    for (const { name, required } of settingById("company-signin").variables) {
+      const { [name]: _left, ...rest } = values;
+      expect([name, readSettings(rest, portal).settings !== null]).toEqual([name, !required]);
+    }
+    expect(readSettings(values, portal).settings).not.toBeNull();
+  });
+
+  test("the offsite copy needs the five the backups need, and takes the region and the prefix as refinements", () => {
+    const required = settingById("offsite").variables.filter((one) => one.required).map((one) => one.name);
+    expect(required).toEqual([...OFFSITE_VARIABLES]);
+    const values: Record<string, string> = {
+      BACKUP_S3_ENDPOINT: "https://s3.test-zone.invalid",
+      BACKUP_S3_BUCKET: "bucket",
+      BACKUP_S3_ACCESS_KEY_ID: "id",
+      BACKUP_S3_SECRET_ACCESS_KEY: "secret",
+      BACKUP_ENCRYPTION_PASSPHRASE: "a passphrase of enough characters",
+      BACKUP_S3_REGION: "eu",
+      BACKUP_S3_PREFIX: "server",
+    };
+    expect(settingById("offsite").variables.map((one) => one.name).sort()).toEqual(Object.keys(values).sort());
+    for (const { name, required: needed } of settingById("offsite").variables) {
+      const { [name]: _left, ...rest } = values;
+      const offsite = offsiteFrom(rest);
+      expect([name, needed ? offsite !== null && "error" in offsite : offsite !== null && !("error" in offsite)]).toEqual([name, true]);
+    }
+    const whole = offsiteFrom(values);
+    expect(whole).toMatchObject({ region: "eu", prefix: "server" });
+  });
+
+  test("the words the page reads in the Issues are the server's", () => {
+    const raw: Raw = {
+      generated: NOW,
+      zone: ZONE,
+      folders: [],
+      codes: "{}",
+      domains: null,
+      ports: [],
+      blocks: {},
+      machine: null,
+      previous: null,
+      monitor: JSON.stringify(buildStatus({ now: NOW - 30_000, zone: ZONE, checks: {}, heartbeat: "failed", webhook: "failed", undelivered: 2, unchecked: 0 })),
+    };
+    const snapshot = buildSnapshot(raw);
+    expect(snapshot.discrepancies.filter((one) => one.slug === null).map((one) => one.label).sort()).toEqual([ALERTS_UNDELIVERED_LABEL, HEARTBEAT_FAILED_LABEL]);
+  });
+
+  test("the settings read the same alerting from the snapshot as from its Issues", () => {
+    const file = (variables: string[]) => ({
+      name: "dashboard-monitor.env",
+      state: "managed" as const,
+      reason: null,
+      expected: "root:root 0600",
+      variables,
+      passwords: [],
+      modifiedAt: NOW - 3_600_000,
+      previous: false,
+      restartPending: false,
+    });
+    const projects = [{ slug: "dashboard", service: null, files: [file(["HEARTBEAT_URL", "ALERT_WEBHOOK_URL"])], portal: { requested: false, installed: false, modifiable: false, reason: null }, store: null }];
+    const monitor = (heartbeat: "ok" | "failed" | "unconfigured", webhook: "ok" | "failed" | "unconfigured" | "idle", undelivered: number) =>
+      JSON.stringify(buildStatus({ now: NOW - 30_000, zone: ZONE, checks: {}, heartbeat, webhook, undelivered, unchecked: 0 }));
+    const stand = (monitorText: string) => {
+      const snapshot = buildSnapshot({ generated: NOW, zone: ZONE, folders: [], codes: "{}", domains: null, ports: [], blocks: {}, machine: null, previous: null, monitor: monitorText });
+      const withField = settingState(projects, snapshot.discrepancies, snapshot.alerting);
+      const withoutField = settingState(projects, snapshot.discrepancies, undefined);
+      return { withField, withoutField };
+    };
+    const failing = stand(monitor("failed", "failed", 2));
+    expect(failing.withField["heartbeat"].channel).toBe("failed");
+    expect(failing.withField["webhook"]).toMatchObject({ channel: "failed", undelivered: 2 });
+    expect(failing.withoutField["heartbeat"].channel).toBe("failed");
+    expect(failing.withoutField["webhook"].channel).toBe("failed");
+    const working = stand(monitor("ok", "idle", 0));
+    expect(working.withField["heartbeat"].channel).toBe("ok");
+    expect(working.withField["webhook"].channel).toBe("idle");
+    // Without the field, a page cannot tell that all is well, and says it does not know.
+    expect(working.withoutField["heartbeat"].channel).toBe("unknown");
   });
 });

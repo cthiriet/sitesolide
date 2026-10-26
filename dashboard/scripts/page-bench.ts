@@ -22,9 +22,12 @@
  * - a fake steward on a Unix socket, which follows `src/secrets/protocol.ts`
  *   and the real one's guard rails: every deployed site and its portal, the
  *   platform's own files alone, the dashboard's and the portal's, one of them
- *   out of management and one pending restart, `dashboard.env` and
- *   `portal.env` which carry nothing but their `PASSWORD_HASH`, which changes
- *   only through `/password` and is never restored, one log per site, lines
+ *   out of management and `dashboard.env` pending a restart, as only a
+ *   project's own `<slug>.env` can be: the monitor's and the backups' files
+ *   are read by units of their own, at their own next pass. `dashboard.env`
+ *   and `portal.env` carry nothing but their `PASSWORD_HASH` (`portal.env` also
+ *   takes the names of its `OIDC_*` sign-in settings, as the real steward
+ *   allows), which changes only through `/password` and is never restored, one log per site, lines
  *   written by tokens through the control API among them, for a token's
  *   sheet and Activity, and an unlocking by the same password; each app's
  *   store, listed by the real `storeView` from its manifest: every declared
@@ -77,11 +80,26 @@
  *   BENCH_OLD_PORTAL=1    a portal that still reads its own lists: Access says changes don't reach it
  *   BENCH_NO_EGRESS=1     no egress proxy: the Connectors page says so, and Activity
  *   BENCH_EMPTY=1             no snapshot at all: the "No snapshot" state
- *   BENCH_FRESH=1             a fresh machine: the platform's own projects alone, all well
- *   BENCH_PLATFORM_DOWN=1     the portal's unit failed: it shows under All and Issues
+ *   BENCH_FRESH=1             a fresh machine: the platform's own projects alone, all well,
+ *                             no monitoring file and no backups file on the server (it implies
+ *                             BENCH_ALERTING=none, unless that is set)
+ *   BENCH_ALERTING=none       the monitoring file (dashboard-monitor.env) is not on the server:
+ *                             the steward does not list it, as the real one lists it only once
+ *                             it exists, and the monitor reports both channels unconfigured
+ *   BENCH_ALERTING=empty      the file is there and holds no variable: both channels are
+ *                             unconfigured until HEARTBEAT_URL or ALERT_WEBHOOK_URL is set
+ *   BENCH_ALERTING=failed     the file holds the three variables and neither channel gets
+ *                             through, 3 alerts waiting, until the file is next written
+ *   BENCH_ALERTING=set        the default: the three variables, both channels working
  *   BENCH_SHOWCASE=1          the same fleet healed, for the README's screenshots
  *   BENCH_NO_BACKUPS=1        the backup component not installed
  *   BENCH_OLD_STEWARD=1       a steward from before the backups: `no such route`
+ *
+ * The monitor's status in the snapshot follows the fake monitoring file, at
+ * each of the state's writes, every thirty seconds, and carries the date of
+ * that write: a channel reads "unconfigured" while its address is unset and
+ * "ok" at the first write after it is set, as the real monitor says at its
+ * next pass.
  *
  * The password is fixed and obvious, `demo`, since nothing here is real.
  */
@@ -93,7 +111,7 @@ import { fixedRefusal } from "../src/gatekeeper/rules";
 import type { GeneralAccess, GeneralView } from "../src/access/protocol";
 import { generateCode } from "../borrowed/locks";
 import { lockHeldMessage } from "../src/gatekeeper/transaction";
-import { HASH_ONLY, PASSWORD_VARIABLE, MIN_PASSWORD } from "../src/secrets/scope";
+import { HASH_ONLY, PASSWORD_VARIABLE, MIN_PASSWORD, outsideHashRefusal } from "../src/secrets/scope";
 import { storeMay, storeView } from "../src/secrets/store";
 import { hasStore, secretsOf, type Manifest } from "../borrowed/manifest";
 import { PLATFORM_PORTS } from "../borrowed/services";
@@ -136,6 +154,23 @@ const SHOWCASE = process.env.BENCH_SHOWCASE === "1";
  * them is not well.
  */
 const FRESH = process.env.BENCH_FRESH === "1";
+/**
+ * The server's alerting file as the machine holds it: `set`, the default, three
+ * variables and both channels working; `none`, `dashboard-monitor.env` not on
+ * the server, which the real steward lists only once it exists (the owner
+ * creates it by hand); `empty`, it exists and holds nothing; `failed`, it holds
+ * the three and neither channel gets through. A fresh machine has none, unless
+ * the variable says otherwise.
+ */
+const ALERTING_MODES = ["set", "none", "empty", "failed"] as const;
+type AlertingMode = (typeof ALERTING_MODES)[number];
+const ALERTING: AlertingMode = (() => {
+  const asked = process.env.BENCH_ALERTING;
+  if (asked === undefined || asked === "") return FRESH ? "none" : "set";
+  const mode = ALERTING_MODES.find((one) => one === asked);
+  if (mode === undefined) throw new Error(`BENCH_ALERTING must be ${ALERTING_MODES.join(", ")}, not ${asked}`);
+  return mode;
+})();
 /** The portal's unit has failed: a project of the platform's own the Sites page must list. */
 const PLATFORM_DOWN = process.env.BENCH_PLATFORM_DOWN === "1";
 const PORT = Number(process.env.BENCH_PORT ?? 4322);
@@ -500,6 +535,12 @@ function counters(unit: FakeUnit): { before: number; now: number } {
  */
 function monitorStatus(generatedAt: number): string {
   const ago = (minutes: number) => generatedAt - minutes * MINUTE;
+  // What the real monitor does at each pass: read the file, then ping and post
+  // where an address is set. An empty value is none (monitor/src/notify.ts).
+  const monitoring = FILES.dashboard?.find((one) => one.name === MONITORING_FILE);
+  const set = (name: string) => (monitoring?.state === "managed" ? (monitoring.variables.get(name) ?? "") !== "" : false);
+  // The failure lasts until the file is next written: the owner mended an address.
+  const failing = ALERTING === "failed" && monitoring !== undefined && (monitoring.modifiedAt ?? 0) <= start;
   const runEnded = Math.floor(start / HOUR) * HOUR + 3 * MINUTE;
   const runAge = Math.max(0, generatedAt - runEnded);
   const runAgo = runAge < MINUTE ? "less than a minute" : runAge < HOUR ? `${Math.floor(runAge / MINUTE)} min` : `${Math.floor(runAge / HOUR)} h`;
@@ -536,13 +577,14 @@ function monitorStatus(generatedAt: number): string {
       ];
   return JSON.stringify({
     version: 1,
-    generatedAt: ago(0.5),
+    // The date of this write, so that a pass after a change is told from one before it.
+    generatedAt,
     zone: "example.com",
     checks: 41,
     down,
-    heartbeat: "ok",
-    webhook: SHOWCASE ? "idle" : "ok",
-    undelivered: 0,
+    heartbeat: !set("HEARTBEAT_URL") ? "unconfigured" : failing ? "failed" : "ok",
+    webhook: !set("ALERT_WEBHOOK_URL") ? "unconfigured" : failing ? "failed" : SHOWCASE ? "idle" : "ok",
+    undelivered: failing && set("ALERT_WEBHOOK_URL") ? 3 : 0,
   });
 }
 
@@ -761,8 +803,7 @@ async function writeState() {
   await Bun.write(stateFile, JSON.stringify(reading(Date.now())));
 }
 
-await writeState();
-const stateTimer = process.env.BENCH_STALE === "1" ? null : setInterval(() => void writeState(), 30_000);
+// The first write comes with the files below: the monitor's status follows the monitoring file.
 
 // --- The fake steward --------------------------------------------------------
 //
@@ -809,32 +850,53 @@ function file(slug: "dashboard" | "portal", partial: Partial<FakeFile> & { name:
   };
 }
 
-/** The platform's own files, as the real steward lists them (PLATFORM_FILES); every other site has none. */
+const MONITORING_FILE = "dashboard-monitor.env";
+const BACKUPS_FILE = "dashboard-backup.env";
+
+/**
+ * The platform's own files, as the real steward lists them (PLATFORM_FILES);
+ * every other site has none. The monitoring file and the backups' are listed
+ * once they exist: the owner creates each by hand (monitor/README.md), the
+ * dashboard never does.
+ */
 const FILES: Record<string, FakeFile[]> = {
   dashboard: [
     file("dashboard", {
       name: "dashboard.env",
       variables: new Map([[PASSWORD_VARIABLE, hash]]),
       passwords: [PASSWORD_VARIABLE],
-      modifiedAt: start - 12 * DAY,
-    }),
-    file("dashboard", {
-      name: "dashboard-monitor.env",
-      variables: new Map([
-        ["HEARTBEAT_URL", "https://hc-ping.example.com/bench-fake-check"],
-        ["ALERT_WEBHOOK_URL", "https://ntfy.example.com/bench-fake-topic"],
-        ["ALERT_WEBHOOK_FORMAT", "text"],
-      ]),
-      modifiedAt: start - 35 * MINUTE,
-      previous: { variables: new Map([["HEARTBEAT_URL", "https://hc-ping.example.com/bench-old-check"]]) },
+      // Changed since the dashboard last started: the one restart pending in the demo, and it can only be
+      // this file, the one `dashboard.service` reads.
+      modifiedAt: start - 20 * MINUTE,
       wait: true,
     }),
-    file("dashboard", {
-      name: "dashboard-backup.env",
-      state: "unmanaged",
-      reason: "Line 2 starts with export, which systemd reads but the steward doesn't rewrite.",
-      modifiedAt: start - 12 * DAY,
-    }),
+    ...(ALERTING === "none"
+      ? []
+      : [
+          file("dashboard", {
+            name: MONITORING_FILE,
+            variables:
+              ALERTING === "empty"
+                ? new Map()
+                : new Map([
+                    ["HEARTBEAT_URL", "https://hc-ping.example.com/bench-fake-check"],
+                    ["ALERT_WEBHOOK_URL", "https://ntfy.example.com/bench-fake-topic"],
+                    ["ALERT_WEBHOOK_FORMAT", "text"],
+                  ]),
+            modifiedAt: ALERTING === "empty" ? start - 3 * DAY : start - 35 * MINUTE,
+            previous: ALERTING === "empty" ? null : { variables: new Map([["HEARTBEAT_URL", "https://hc-ping.example.com/bench-old-check"]]) },
+          }),
+        ]),
+    ...(FRESH
+      ? []
+      : [
+          file("dashboard", {
+            name: BACKUPS_FILE,
+            state: "unmanaged",
+            reason: "Line 2 starts with export, which systemd reads but the steward doesn't rewrite.",
+            modifiedAt: start - 12 * DAY,
+          }),
+        ]),
   ],
   portal: [
     file("portal", {
@@ -851,11 +913,16 @@ if (SHOWCASE) {
   for (const files of Object.values(FILES)) {
     for (const f of files) {
       if (f.state !== "managed") Object.assign(f, { state: "managed", reason: null, modifiedAt: start - 5 * DAY });
-      if (f.name === "dashboard-backup.env") f.variables = new Map([["BACKUP_S3_BUCKET", "bench-fake-bucket"]]);
+      if (f.name === BACKUPS_FILE) f.variables = new Map([["BACKUP_S3_BUCKET", "bench-fake-bucket"]]);
+      // Healed: nothing waits for a restart, and the password was changed long ago.
+      if (f.name === "dashboard.env") f.modifiedAt = start - 12 * DAY;
       f.wait = false;
     }
   }
 }
+
+await writeState();
+const stateTimer = process.env.BENCH_STALE === "1" ? null : setInterval(() => void writeState(), 30_000);
 
 /**
  * What the gatekeeper refuses to change, and why, in the real one's words
@@ -918,10 +985,15 @@ const log: LogRow[] = [
   { a: start - 6 * DAY, operation: "replace", result: "ok", slug: "builder", file: "store/registry.json", variable: null, detail: null },
   { a: start - 40 * MINUTE, operation: "unlock", result: "rejects", slug: null, file: null, variable: null, detail: "refused" },
   { a: start - 38 * MINUTE, operation: "unlock", result: "ok", slug: null, file: null, variable: null, detail: null },
-  { a: start - 35 * MINUTE, operation: "set", result: "ok", slug: "dashboard", file: "dashboard-monitor.env", variable: "HEARTBEAT_URL", detail: null },
+  // The monitoring file, when the machine has one that was set.
+  ...(ALERTING === "set" || ALERTING === "failed"
+    ? [{ a: start - 35 * MINUTE, operation: "set", result: "ok" as const, slug: "dashboard", file: MONITORING_FILE, variable: "HEARTBEAT_URL", detail: null }]
+    : []),
   { a: start - 26 * MINUTE, operation: "set", result: "ok", slug: "hiring", file: "store", variable: "MAIL_KEY", detail: null },
   { a: start - 25 * MINUTE, operation: "restart", result: "ok", slug: "hiring", file: null, variable: null, detail: "looping" },
   { a: start - 24 * MINUTE, operation: "set", result: "rejects", slug: "hiring", file: "store", variable: null, detail: "invalid" },
+  // The change `dashboard.env` has been waiting a restart for.
+  ...(SHOWCASE ? [] : [{ a: start - 20 * MINUTE, operation: "password", result: "ok" as const, slug: "dashboard", file: "dashboard.env", variable: PASSWORD_VARIABLE, detail: null }]),
   // The action whose backup remained on `inventory`: the gatekeeper wrote nothing of its result.
   { a: start - 3 * HOUR, operation: "portal", result: "failure", slug: "inventory", file: null, variable: null, detail: "off, failed" },
   // What tokens did through the control API, for a token's sheet and Activity: the
@@ -1073,6 +1145,16 @@ function locate(requested: Record<string, unknown>): { project: FakeProject; fil
   return { project, file: found };
 }
 
+/**
+ * Whether a change to this file waits for a restart: only `<slug>.env`, the one
+ * file the project's unit reads, as at the real steward (`service.reads` in
+ * src/secrets/steward.ts). The monitor and the backups read theirs at their
+ * own next pass, and nothing restarts for them.
+ */
+function waitsForRestart(project: FakeProject, f: FakeFile): boolean {
+  return project.service !== null && f.name === `${project.slug}.env`;
+}
+
 /** The common skeleton of the writes: token, place, action, then the trace and the pending restart. */
 async function writeTo(
   req: Request,
@@ -1090,7 +1172,7 @@ async function writeTo(
     return refuse;
   }
   place.file.modifiedAt = Date.now();
-  place.file.wait = place.project.service !== null;
+  place.file.wait = waitsForRestart(place.project, place.file);
   record({ operation, result: "ok", slug: place.project.slug, file: place.file.name, variable, detail: null });
   return Response.json({ file: fileView(place.file) });
 }
@@ -1523,13 +1605,9 @@ const steward =
                 if (name === PASSWORD_VARIABLE) {
                   return refusal(403, "out-of-scope", `${name} is a password hash, change it with Change password`);
                 }
-                if (HASH_ONLY.includes(f.name)) {
-                  return refusal(
-                    403,
-                    "out-of-scope",
-                    `${f.name} holds ${PASSWORD_VARIABLE} only: any other variable would change how its service runs, not add a secret`,
-                  );
-                }
+                // The real steward's own rule: PASSWORD_HASH and, in portal.env, the portal's OIDC_* names.
+                const outside = outsideHashRefusal(f.name, name);
+                if (outside !== null) return refusal(403, outside.error, outside.message);
                 if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
                   return refusal(400, "invalid", "Use letters, digits and underscores, not starting with a digit.");
                 }
@@ -1596,7 +1674,7 @@ const steward =
               f.variables.set(name, await Bun.password.hash(password, { algorithm: "argon2id" }));
               if (!f.passwords.includes(name)) f.passwords.push(name);
               f.modifiedAt = Date.now();
-              f.wait = project.service !== null;
+              f.wait = waitsForRestart(project, f);
               record({ operation: "password", result: "ok", slug: project.slug, file: f.name, variable: name, detail: null });
               return Response.json({ file: fileView(f), password: chosen === null ? password : null });
             },

@@ -36,7 +36,8 @@ import { fragmentIsProtected, fragmentPassesIdentity } from "../borrowed/portal"
 import { isValidCode, previewHost } from "../borrowed/locks";
 import { PLATFORM_PORTS } from "../borrowed/services";
 import { timerUnit } from "../borrowed/unit";
-import { duration, monitorDiscrepancies } from "./monitor";
+import { duration, monitorAlerting, monitorDiscrepancies, type Alerting } from "./monitor";
+export type { Alerting } from "./monitor";
 import { MISSING_SECRET_SEVERITY, type StoreMissing } from "../borrowed/store-protocol";
 
 /**
@@ -406,6 +407,15 @@ export type Snapshot = {
   sites: Site[];
   discrepancies: Discrepancy[];
   machine: RawMachine | null;
+  /**
+   * How the monitor's heartbeat and webhook fared at its last pass, built from
+   * the status the collector copies (src/monitor.ts). Null when the monitor
+   * says nothing about them: a collector older than the monitor, no monitor
+   * installed, a status refused, unreadable or silent for too long. Null is
+   * unknown, never "not set". A person's snapshot carries null: the machine's
+   * own alerting is the owner's.
+   */
+  alerting: Alerting | null;
 };
 
 /** An integer from `systemctl show`, whose absence is written in three ways. */
@@ -774,7 +784,14 @@ export function buildSnapshot(raw: Raw): Snapshot {
   discrepancies.push(...findDiscrepancies(sites, raw));
   discrepancies.push(...monitorDiscrepancies(raw.monitor, raw.generated));
 
-  return { generated: raw.generated, zone: raw.zone, sites, discrepancies: sortDiscrepancies(discrepancies), machine: raw.machine };
+  return {
+    generated: raw.generated,
+    zone: raw.zone,
+    sites,
+    discrepancies: sortDiscrepancies(discrepancies),
+    machine: raw.machine,
+    alerting: monitorAlerting(raw.monitor, raw.generated),
+  };
 }
 
 /** Errors first, then warnings, each by slug, the machine's own first: a stable order for the page. */

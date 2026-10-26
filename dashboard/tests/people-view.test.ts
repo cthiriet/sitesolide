@@ -71,6 +71,7 @@ describe("what a person sees of the snapshot", () => {
         { slug: null, severity: "warning", label: "Disk full", message: "disk at 91%" },
       ],
       machine: { memoryTotal: 1, memoryAvailable: 1, diskTotal: 1, diskFree: 1, load1: 1, load5: 1, load15: 1, cores: 1 },
+      alerting: { heartbeat: "unconfigured", webhook: "ok", undelivered: 0, at: NOW },
     },
     audience: { present: true, age: 1, stale: false, days: 30, from: "", to: "", sites: { blog: {} as never, "secret-project": {} as never } },
   } as Reading;
@@ -78,6 +79,7 @@ describe("what a person sees of the snapshot", () => {
   test("their projects alone, and nothing of the machine's own figures", () => {
     const seen = memberReading(reading, { blog: "viewer", shop: "developer" });
     if (!seen.present) throw new Error("absent");
+    expect(seen.snapshot.alerting).toBeNull();
     expect(seen.snapshot.sites.map((one) => one.slug)).toEqual(["blog", "shop"]);
     expect(seen.snapshot.discrepancies.map((one) => one.message)).toEqual(["blog is down"]);
     expect(seen.snapshot.machine).toBeNull();

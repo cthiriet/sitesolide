@@ -6,6 +6,7 @@
  * crosses over is the shape of the data, and it has a single source.
  */
 export type {
+  Alerting,
   Discrepancy,
   Snapshot,
   RawMachine,

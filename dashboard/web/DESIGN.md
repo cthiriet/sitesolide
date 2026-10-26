@@ -1205,7 +1205,14 @@ owner's alone, as one **Files** list: each file a heading line (its name,
 variable* under the pointer, *Restore previous version* in its menu, *Create
 file* while it is missing), then its variables, one line each, with *Reveal*,
 *Copy* and *Change* under the pointer; a password variable offers only
-*Change password*. Restarting the dashboard itself gives the *Restarting*
+*Change password*. Only a project's own file, `dashboard.env` or `portal.env`,
+waits for a restart and offers *Save & restart*. The monitor's and the
+backups' files, which the dashboard's site lists beside its own, are read by
+units of their own: their dialogs, their intro and the announcement of a
+restore say so instead, "The monitor uses it at its next pass, within a
+minute. Nothing to restart.", and `lib/machine-settings.ts` is where each of
+the server's own settings, its file, its reader and that sentence are named.
+Restarting the dashboard itself gives the *Restarting*
 verdict: the dialog waits out the cut, reconnects by itself, then asks you to
 unlock again. The Overview's **Secrets** sums a store up in rows, its
 variables counted set and not set, its files by name, never a variable's

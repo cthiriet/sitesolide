@@ -5,6 +5,7 @@ import { Banner, ErrorState, EmptyState, Panel, PanelSkeleton, useRetry } from "
 import { FilesPanel } from "@/components/secrets"
 import { Code, StoreSection } from "@/components/secrets-store"
 import { SitePage, useSite } from "@/components/site"
+import { readingSentence } from "@/lib/machine-settings"
 import { UNREACHABLE } from "@/lib/secrets"
 import { isPerson, roleOn } from "@/lib/identity"
 
@@ -21,6 +22,9 @@ import { isPerson, roleOn } from "@/lib/identity"
  */
 function Intro({ slug }: { slug: string }) {
   const { identity } = useData()
+  const { project } = useSite(slug)
+  // The dashboard and the portal, which have no store, list files: the monitor's and the backups' are read at their own pace.
+  const files = project !== null && project.store === null ? project.files.map((file) => file.name) : []
   const role = roleOn(identity, slug)
   const reads =
     role === "developer" || role === "admin"
@@ -31,7 +35,7 @@ function Intro({ slug }: { slug: string }) {
   return (
     <>
       <p>
-        {slug} reads these when it starts: a change applies after a restart. {reads}
+        {readingSentence(slug, files)} {reads}
       </p>
       <p>The changes, reveals and restarts are in History.</p>
     </>

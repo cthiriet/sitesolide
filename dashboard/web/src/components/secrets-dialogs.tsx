@@ -26,6 +26,7 @@ import { Progress } from "@/components/ui/progress"
 import { useAnnounce } from "@/components/copy"
 import { FormError, INPUT_DIALOG, Status } from "@/components/page"
 import { unlockSecrets, setVariable } from "@/lib/api"
+import { appliesOnRestart, unrestartedSentence } from "@/lib/machine-settings"
 import { waitMessage } from "@/lib/signin"
 import { restartProgress, generateToken, refusalOf, readVerdict, succeeded, type Refusal } from "@/lib/secrets"
 import { TONE_TEXT } from "@/lib/tones"
@@ -357,14 +358,7 @@ export function VariableDialog({
             )}
           </DialogTitle>
           <DialogDescription>
-            {editing ? (
-              <>
-                In <span className="font-mono">{target?.file}</span>. {target?.slug} keeps its current value until it
-                restarts.
-              </>
-            ) : (
-              <>{target?.slug} reads it the next time it starts.</>
-            )}
+            {target === null ? null : <ApplyWords target={target} editing={editing} />}
           </DialogDescription>
         </DialogHeader>
         {target !== null && (
@@ -380,6 +374,24 @@ export function VariableDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+/**
+ * When the change applies. The project's own file waits for its restart; the
+ * monitor's and the backups' are read at their own next pass, and say so,
+ * since no restart would apply them.
+ */
+function ApplyWords({ target, editing }: { target: EditTarget; editing: boolean }) {
+  const sentence = unrestartedSentence(target.slug, target.file, editing ? "edit" : "add")
+  if (editing) {
+    return (
+      <>
+        In <span className="font-mono">{target.file}</span>.{" "}
+        {sentence ?? `${target.slug} keeps its current value until it restarts.`}
+      </>
+    )
+  }
+  return <>{sentence ?? `${target.slug} reads it the next time it starts.`}</>
 }
 
 function VariableForm({
@@ -432,6 +444,8 @@ function VariableForm({
   }
 
   const busy = inProgress !== null
+  // Offered where a restart applies the change; Save is then the quiet one beside it.
+  const restartable = appliesOnRestart(target.slug, target.file)
 
   return (
     <form
@@ -495,12 +509,14 @@ function VariableForm({
         <DialogClose render={<Button variant="outline" className="max-sm:h-11" />} disabled={busy}>
           Cancel
         </DialogClose>
-        <Button type="submit" variant="outline" disabled={busy} className="max-sm:h-11">
+        <Button type="submit" variant={restartable ? "outline" : "default"} disabled={busy} className="max-sm:h-11">
           {inProgress === "save" ? "Saving…" : "Save"}
         </Button>
-        <Button type="button" disabled={busy} onClick={() => void save(true)} className="max-sm:h-11">
-          {inProgress === "restart" ? "Saving…" : "Save & restart"}
-        </Button>
+        {restartable && (
+          <Button type="button" disabled={busy} onClick={() => void save(true)} className="max-sm:h-11">
+            {inProgress === "restart" ? "Saving…" : "Save & restart"}
+          </Button>
+        )}
       </DialogFooter>
     </form>
   )
