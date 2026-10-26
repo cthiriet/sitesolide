@@ -119,6 +119,41 @@ describe("inside a route, order counts", () => {
   });
 });
 
+describe("a handle compares whole, as a route does", () => {
+  const GATED = `shop.example {
+\tmap shop.example {sitesolide_domain} {
+\t\tdefault "__unknown"
+\t}
+\t@domain_active vars {sitesolide_domain} shop
+\thandle @domain_active {
+\t\tvars sitesolide_site shop
+\t\timport /etc/caddy/locks/*.caddy
+\t\timport shop-routes
+\t}
+\thandle {
+\t\trespond "off" 404
+\t}
+}
+`;
+
+  test("a line moved out of the handle is a divergence, though every line is still there", () => {
+    const moved = GATED.replace("\t\timport shop-routes\n", "").replace("\thandle {\n", "\timport shop-routes\n\thandle {\n");
+    expect(usefulDirectives(moved).sort()).toEqual(usefulDirectives(GATED).sort());
+    expect(sameDirectives(moved, GATED)).toBe(false);
+    expect(compareDirectives(moved, GATED).added).toEqual(["handle @domain_active { vars sitesolide_site shop; import /etc/caddy/locks/*.caddy; import shop-routes }"]);
+  });
+
+  test("comments and indentation inside it still do not count", () => {
+    expect(sameDirectives(GATED.replace("\thandle @domain_active {\n", "\thandle @domain_active {\n\t\t# why\n").replaceAll("\t\t", "    "), GATED)).toBe(true);
+  });
+
+  test("a text without a handle compares as it always did", () => {
+    // A unit, and every block deployed before the gate: no line opens a handle.
+    expect(sameDirectives(UNIT.split("\n").reverse().join("\n"), UNIT)).toBe(true);
+    expect(compareDirectives(`${UNIT}Restart=always\n`, UNIT)).toEqual({ lost: ["Restart=always"], added: [] });
+  });
+});
+
 describe("naming what differs", () => {
   test("the file on one side, the manifest on the other", () => {
     const divergence = compareDirectives(UNIT, UNIT.replace("3022", "3099"));

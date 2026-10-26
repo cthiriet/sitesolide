@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { generateFragment, ZONE_HOST } from "../cli/fragment";
+import { DOMAIN_TABLE, generateFragment, ZONE_HOST } from "../cli/fragment";
 import { readManifest, type Manifest } from "../cli/manifest";
 import { PORTAL_PORT } from "../cli/portal";
 import { startProvider, type MockProvider } from "../../portal/tests/provider";
@@ -205,16 +205,19 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
     const portalManifest = readManifest(readFileSync(join(REPO_ROOT, "portal", "sitesolide.json"), "utf8")).manifest!;
 
     // Each fragment as the CLI writes it, brought to the workstation: local
-    // addresses over HTTP, temporary folders, the test portal's port, and no
-    // on-demand certificate for the customer domain. Nothing else is touched,
-    // the order of the directives above all. `inject` puts the underscore
-    // spellings on as each site's block opens, ahead of its strip.
+    // addresses over HTTP, temporary folders, the domain table switching the
+    // customer domain on, the test portal's port, and no on-demand certificate
+    // for the customer domain. Nothing else is touched, the order of the
+    // directives above all. `inject` puts the underscore spellings on as each
+    // site's block opens, ahead of its strip.
+    writeFileSync(join(folder, "domains.map"), `\t${OPEN_DOMAIN} open\n`);
     const local = (text: string, slug: string, host: string, publicDir: string, inject = false) => {
       const opening = (address: string) => [`http://${address}:${caddyPort} {`, ...(inject ? INJECTED : [])].join("\n");
       return text
         .replace(`${slug}.${ZONE_HOST} {`, opening(host))
         .replace(`${OPEN_DOMAIN} {\n\ttls {\n\t\ton_demand\n\t}\n`, `${opening(OPEN_DOMAIN)}\n`)
         .replace("import /etc/caddy/locks/*.caddy", `import ${folder}/locks/*.caddy`)
+        .replaceAll(`import ${DOMAIN_TABLE}`, `import ${join(folder, "domains.map")}`)
         .replaceAll(`/srv/sites/${slug}/public`, join(folder, publicDir))
         .replaceAll(`127.0.0.1:${PORTAL_PORT}`, `127.0.0.1:${portalPort}`);
     };

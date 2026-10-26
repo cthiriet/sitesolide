@@ -1150,10 +1150,31 @@ describe("finalManifest and replaceable, pure", () => {
     expect(domainOf(finalManifest(request({ ...APP, domain: { name: "shop.example", active: true } }, DOMAIN_SCOPE), new Map()).text)).toEqual({ name: "shop.example", active: false });
     // Inactive on the machine: the token cannot switch it on.
     expect(domainOf(finalManifest(request({ ...APP, port: 3040, domain: { name: "shop.example", active: true } }, DOMAIN_SCOPE), machine({ name: "shop.example", active: false })).text)?.active).toBe(false);
-    // Active on the machine: the token cannot switch it off, nor carry the switch to another name or a new alias.
+    // Active on the machine: the token cannot switch it off.
     expect(domainOf(finalManifest(request({ ...APP, port: 3040, domain: { name: "shop.example" } }, DOMAIN_SCOPE), machine({ name: "shop.example", active: true })).text)?.active).toBe(true);
-    expect(domainOf(finalManifest(request({ ...APP, port: 3040, domain: { name: "other.example", active: true } }, DOMAIN_SCOPE), machine({ name: "shop.example", active: true })).text)?.active).toBe(false);
-    expect(domainOf(finalManifest(request({ ...APP, port: 3040, domain: { name: "shop.example", aliases: ["new.example"], active: true } }, DOMAIN_SCOPE), machine({ name: "shop.example", active: true })).text)?.active).toBe(false);
+    // Nor carry the switch to another name or a new alias: refused, since
+    // switched off for them the whole domain would stop answering at the
+    // table's next regeneration.
+    for (const domain of [
+      { name: "other.example", active: true },
+      { name: "shop.example", aliases: ["new.example"], active: true },
+    ]) {
+      const refused = (() => {
+        try {
+          finalManifest(request({ ...APP, port: 3040, domain }, DOMAIN_SCOPE), machine({ name: "shop.example", aliases: ["old.example"], active: true }));
+          return null;
+        } catch (error) {
+          return error as { code?: string; message: string };
+        }
+      })();
+      expect(refused?.code).toBe("out-of-scope");
+      expect(refused?.message).toContain("shop.example is switched on, and");
+      expect(refused?.message).toContain("ask the owner of the machine, who adds names to a domain switched on over SSH");
+    }
+    // Fewer names: the domain stays on, for those it keeps.
+    expect(domainOf(finalManifest(request({ ...APP, port: 3040, domain: { name: "shop.example" } }, DOMAIN_SCOPE), machine({ name: "shop.example", aliases: ["old.example"], active: true })).text)?.active).toBe(true);
+    // Switched off on the machine, new names change nothing: it stays off.
+    expect(domainOf(finalManifest(request({ ...APP, port: 3040, domain: { name: "shop.example", aliases: ["new.example"], active: true } }, DOMAIN_SCOPE), machine({ name: "shop.example", active: false })).text)?.active).toBe(false);
   });
 
   test("a file is replaceable when absent, identical, or the previous manifest's own", () => {

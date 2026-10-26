@@ -719,9 +719,19 @@ The project's own domain, once it has one.
 
 `active` is written by `sitesolide domain --activate`, not by hand: that command
 also rebuilds the domain table, and without that step the certificate would
-never be authorised. A token's deployment never switches it: the machine's
+never be authorised nor the domain served. `sitesolide domain --deactivate`
+writes `false` and takes the domain out of the table, which stops the
+certificate's renewal, the `ask` endpoint refusing a name the table does not
+carry, and the domain answering: a static site's at once, with a plain 404,
+and an app's at once too once its block is this release's, a 404 with
+`X-Sitesolide-Domain: inactive <zone>` on every name, whatever certificate
+Caddy still holds. An app whose block predates it keeps answering until that
+certificate expires, which the command says: `sitesolide deploy` writes the
+current block. A token's deployment never switches it: the machine's
 value stands, whatever the manifest says, and only for the names it already
-covered, a new name or alias staying inactive until the owner activates it. A domain under the served zone is refused, the wildcard
+covered, a new name or alias staying inactive until the owner activates it;
+on a domain switched on, a token's deployment that adds a name is refused,
+since it would switch the whole domain off. A domain under the served zone is refused, the wildcard
 already covers it, and so is a domain for a project that serves no page, see
 [A project that serves no page](#a-project-that-serves-no-page).
 

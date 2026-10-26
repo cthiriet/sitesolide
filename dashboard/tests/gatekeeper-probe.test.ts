@@ -110,6 +110,12 @@ describe("the targeted site's addresses", () => {
     expect(targetHosts(preview, "cms.example", new Map([["cms.example", ok]]))).toEqual([preview, "cms.example"]);
     expect(targetHosts(preview, "cms.example", new Map([["cms.example", portal]]))).toEqual([preview, "cms.example"]);
     expect(targetHosts(preview, "cms.example", new Map([["cms.example", unreachable]]))).toEqual([preview]);
+    // Active in the manifest, missing from the domain table, its certificate
+    // held: the block's switched-off 404 serves nothing to close or open, and
+    // a door judged there would roll the change back.
+    expect(targetHosts(preview, "cms.example", new Map([["cms.example", { code: 404, door: false, body: "This domain is switched off.", off: true }]]))).toEqual([preview]);
+    // Any other 404 is the site's own, and judged.
+    expect(targetHosts(preview, "cms.example", new Map([["cms.example", { code: 404, door: false, body: "" }]]))).toEqual([preview, "cms.example"]);
     // Served, whatever it answers at its root: a redirect, a 404, a 502.
     for (const code of [302, 404, 502]) {
       expect(targetHosts(preview, "cms.example", new Map([["cms.example", { code, door: false, body: "" }]]))).toEqual([preview, "cms.example"]);

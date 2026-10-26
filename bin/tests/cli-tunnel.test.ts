@@ -333,7 +333,7 @@ describe("a site's own domain behind a tunnel", () => {
 
   test("a name reaches the tunnel when the edge serves it and its root answers the connector's 502, before activation", () => {
     const server = "203.0.113.10";
-    const reading = (fields: Partial<EdgeReading>): EdgeReading => ({ name: DOMAIN, here: false, edge: true, root: "502", ...fields });
+    const reading = (fields: Partial<EdgeReading>): EdgeReading => ({ name: DOMAIN, here: false, edge: true, root: "502", inactive: null, machine: null, ...fields });
     expect(tunnelRouteProblem(reading({}), server)).toBeNull();
     // A record from before the tunnel, DNS only, still pointing at the machine.
     expect(tunnelRouteProblem(reading({ here: true, edge: false, root: null }), server)).toContain(`${DOMAIN} points at ${server}, a record from before the tunnel`);
@@ -351,6 +351,35 @@ describe("a site's own domain behind a tunnel", () => {
     for (const root of ["200", "403", "404"]) {
       expect(tunnelRouteProblem(reading({ root }), server)).toContain(`https://${DOMAIN}/ answers ${root}, not the connector's 502: another host serves the name`);
     }
+  });
+
+  test("a name switched off since an earlier activation passes on its block's 404, when the machine itself answers it the same, naming the same installation", () => {
+    const server = "203.0.113.10";
+    const OWN = "inactive test-zone.invalid";
+    const switchedOff = { root: "404", inactive: OWN } as const;
+    const reading = (fields: Partial<EdgeReading>): EdgeReading => ({ name: DOMAIN, here: false, edge: true, root: "502", inactive: null, machine: null, ...fields });
+    // Caddy still holds the name's certificate: the handshake completes, and
+    // the gate of the app's block answers its 404, here and on the loopback.
+    expect(tunnelRouteProblem(reading({ ...switchedOff, machine: { kind: "answered", status: 404, inactive: OWN } }), server)).toBeNull();
+    // Never on the edge's word alone: the machine did not say, refused the
+    // handshake, or answers otherwise, and another machine answers the name.
+    for (const machine of [null, { kind: "refused", exit: 35 }, { kind: "answered", status: 200, inactive: null }, { kind: "answered", status: 404, inactive: null }] as const) {
+      expect(tunnelRouteProblem(reading({ ...switchedOff, machine }), server)).toContain(
+        `https://${DOMAIN}/ answers the 404 of a domain switched off, which Caddy does not answer for the name on the machine itself: another machine serves it`,
+      );
+    }
+    // The machine answers its own 404 whatever the record: another
+    // installation's, under another zone, or from before the zone was named,
+    // is refused.
+    for (const other of ["inactive other-zone.invalid", "inactive"]) {
+      expect(tunnelRouteProblem(reading({ root: "404", inactive: other, machine: { kind: "answered", status: 404, inactive: OWN } }), server)).toContain(
+        `https://${DOMAIN}/ answers the 404 of a domain switched off on another installation, "${other}" where this machine answers "${OWN}"`,
+      );
+    }
+    // Only the 404: the header on any other answer is someone else's.
+    expect(tunnelRouteProblem(reading({ root: "200", inactive: OWN, machine: { kind: "answered", status: 404, inactive: OWN } }), server)).toContain(`answers 200, not the connector's 502`);
+    // A plain 404, a static site's or an app's block from before the gate, says what --force is for.
+    expect(tunnelRouteProblem(reading({ root: "404" }), server)).toContain("Caddy still holds its certificate from an earlier activation, for a static site or an app deployed before");
   });
 
   test("the workstation waits for the edge longer than the edge waits for an origin it cannot reach", () => {
@@ -376,18 +405,24 @@ describe("a site's own domain behind a tunnel", () => {
     return { path: `${folder}:${process.env.PATH ?? ""}`, remove: () => rmSync(folder, { recursive: true, force: true }) };
   }
 
-  test("the handshake is read on the loopback, verified, the name quoted, and tells Caddy's answer from a refusal", () => {
+  test("the handshake is read on the loopback, verified, the name quoted, and tells Caddy's answer, a domain switched off among them, from a refusal", () => {
     const command = caddyHandshakeCommand(DOMAIN);
     expect(command).toContain(`--resolve '${DOMAIN}:443:127.0.0.1' 'https://${DOMAIN}/'`);
     expect(command).not.toMatch(/ -k | --insecure/);
     expect(caddyHandshakeCommand("a'b")).toContain(`'a'\\''b:443:127.0.0.1'`);
-    // Run for real against a curl that answers as Caddy would: a status, or
-    // curl's exit 35 and 000 for a handshake Caddy refuses.
+    // The header of a domain switched off, written out by curl itself.
+    expect(command).toContain("-w '%{http_code} %header{X-Sitesolide-Domain}'");
+    // Run for real against a curl that answers as Caddy would: a status and
+    // that header's value, or curl's exit 35 and 000 for a handshake Caddy
+    // refuses.
     for (const [script, expected] of [
-      ["printf 200", { kind: "answered", status: 200 }],
-      ["printf 502", { kind: "answered", status: 502 }],
-      ["printf 000; exit 35", { kind: "refused", exit: 35 }],
-      ["printf 000; exit 60", { kind: "refused", exit: 60 }],
+      ["printf '200 '", { kind: "answered", status: 200, inactive: null }],
+      ["printf '502 '", { kind: "answered", status: 502, inactive: null }],
+      ["printf '404 inactive test-zone.invalid'", { kind: "answered", status: 404, inactive: "inactive test-zone.invalid" }],
+      ["printf '404 '", { kind: "answered", status: 404, inactive: null }],
+      ["printf '404 other'", { kind: "answered", status: 404, inactive: "other" }],
+      ["printf '000 '; exit 35", { kind: "refused", exit: 35 }],
+      ["printf '000 '; exit 60", { kind: "refused", exit: 60 }],
     ] as const) {
       const curl = standInCommand("curl", script);
       const run = Bun.spawnSync(["sh", "-c", command], { stdout: "pipe", env: { PATH: curl.path } });

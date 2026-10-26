@@ -14,19 +14,23 @@
  *      domain would serve without a code what the preview closes;
  *   3. **no `handle`**: all the `handle` of one block form an exclusive group,
  *      the lock's would win, and the visitor holding the right code would get a
- *      200 with an empty body;
+ *      200 with an empty body. The one pair written is the gate of a site's
+ *      own domain, around everything else its block does, the lock's import
+ *      included: inside the first, the lock's handles form a group of their
+ *      own, as at the top of the preview's block. See `gate`;
  *   4. no `tls-zone` on a customer domain, whose certificate goes through
  *      `on_demand`: the server's Cloudflare token only covers the served zone.
  *
  * Pure: returns text, touches nothing. Depositing on the VM belongs to
  * bin/deploy-caddy.sh, which backs up, validates and restores.
  */
-import { sameDirectives } from "./comparison";
+import { sameDirectives, usefulDirectives } from "./comparison";
 import {
   domainHosts,
   hasServices,
   isApp,
   isProtected,
+  isValidDomain,
   isValidHeaderName,
   isValidHeaderValue,
   isValidRoute,
@@ -106,15 +110,19 @@ export type FileGeneration = (typeof FILE_GENERATIONS)[number];
 /**
  * The generations of the blocks of a site's own domain, the current one first:
  *
+ * - `gated`: the blocks of `closable`, each serving only while the domain
+ *   table carries the domain for this site, and answering a 404 otherwise:
+ *   a domain switched off stops answering at once, whatever certificate
+ *   Caddy still holds for it. See `gate`;
  * - `closable`: the domain closes with the preview, the portal's guard or the
  *   preview locks in its block too, and every other name the table carries
  *   for it, its aliases and its `www`, sends there;
  * - `open`: the blocks deployed before, the domain's own name alone, always
  *   open, its other names left to the nameless block of static files.
  *
- * A fragment without a domain is the same in both.
+ * A fragment without a domain is the same in all three.
  */
-export const DOMAIN_GENERATIONS = ["closable", "open"] as const;
+export const DOMAIN_GENERATIONS = ["gated", "closable", "open"] as const;
 
 export type DomainGeneration = (typeof DOMAIN_GENERATIONS)[number];
 
@@ -283,6 +291,88 @@ const OWN_DOMAIN_COMMENT = [
 /** How every block of the site's own names obtains its certificate. */
 const ON_DEMAND_TLS = ["\ttls {", "\t\ton_demand", "\t}"];
 
+/** The domain table, under the name the machine carries (CLAUDE.md), as the Caddyfile imports it too. */
+export const DOMAIN_TABLE = "/etc/caddy/domaines.map";
+
+/** The placeholder the gate reads the table into: the site the table says serves the domain. */
+const DOMAIN_PLACEHOLDER = "sitesolide_domain";
+
+/**
+ * What a site's own domain answers once switched off, see `gate`: a 404 with
+ * this header, `inactive <zone>`, the zone the one Caddy substitutes from
+ * /etc/caddy/sitesolide.env, as for every address under it (ZONE_HOST).
+ *
+ * The zone is what tells installations apart: `sitesolide domain --activate`
+ * reads the header behind a tunnel, and lets a name through only when what
+ * the edge relays equals what this machine answers on its own loopback (see
+ * tunnelRouteProblem in bin/cli/tunnel.ts). Before its activation the
+ * machine always answers its own 404 there, so `inactive` alone would take a
+ * record still pointing at another installation, where the domain is
+ * switched off too, for this one. The header shows the zone hosting the site
+ * only on a domain switched off, and the site's preview address under that
+ * zone is public anyway.
+ */
+export const INACTIVE_HEADER = "X-Sitesolide-Domain";
+export const INACTIVE_VALUE = "inactive";
+export const INACTIVE_ANSWER = "This domain is switched off.";
+
+/** Whether a value of INACTIVE_HEADER says the domain is switched off, whichever installation wrote it. */
+export function isSwitchedOff(value: string | null | undefined): boolean {
+  return typeof value === "string" && (value === INACTIVE_VALUE || value.startsWith(`${INACTIVE_VALUE} `));
+}
+
+/**
+ * The lines of a block of the site's own names, `served`, behind the domain
+ * table: they run while the table carries the domain for this site, and a
+ * 404 answers otherwise.
+ *
+ * `sitesolide domain --deactivate` takes the domain out of the table, which
+ * the ask endpoint reads too: no certificate is obtained or renewed for it
+ * from then on. A certificate Caddy already held, in its cache or its
+ * storage, kept a block without this gate serving the site until it expired:
+ * measured, a domain switched off answered its app with a 200. The table
+ * decides instead, read at every load as the nameless block of static sites
+ * reads it, and generate-domains.sh reloads Caddy after every switch: the
+ * block in service is not written again either way.
+ *
+ * The table is asked for the domain's own name, never `{host}`: `map`
+ * compares exactly, the table is in lower case, and a host in capitals
+ * reaches this block all the same. Every name of the domain switches with it,
+ * on one `active` in the manifest.
+ *
+ * Two `handle`s, exclusive, around everything else the block does: Caddy
+ * sorts `redir`, `forward_auth` and the lock's `handle` before `respond`, so
+ * a bare `respond` for a domain switched off would come after them. Inside the
+ * first, the lock's own handles form a group of their own beside the routes,
+ * as at the top of the preview's block (rule 3 of the header).
+ * bin/tests/cli-domain-caddy.test.ts measures both states in a real Caddy.
+ */
+function gate(name: string, slug: string, served: string[]): string[] {
+  return [
+    "\t# Served while the domain table carries this domain for this site, a 404",
+    "\t# once it no longer does: switched off, a certificate Caddy still holds",
+    "\t# would otherwise keep the site answering here. See gate in",
+    "\t# bin/cli/fragment.ts.",
+    `\tmap ${name} {${DOMAIN_PLACEHOLDER}} {`,
+    '\t\tdefault "__unknown"',
+    `\t\timport ${DOMAIN_TABLE}`,
+    "\t}",
+    `\t@domain_active vars {${DOMAIN_PLACEHOLDER}} ${slug}`,
+    "\thandle @domain_active {",
+    ...served.map((line) => (line === "" ? "" : `\t${line}`)),
+    "\t}",
+    "",
+    "\t# Switched off: nothing of the site, and a header that says so on which",
+    "\t# installation, see INACTIVE_HEADER in bin/cli/fragment.ts. Never cached,",
+    "\t# the same address serving the site again once switched on.",
+    "\thandle {",
+    `\t\theader ${INACTIVE_HEADER} "${INACTIVE_VALUE} ${ZONE_HOST}"`,
+    '\t\theader Cache-Control "no-store"',
+    `\t\trespond "${INACTIVE_ANSWER}" 404`,
+    "\t}",
+  ];
+}
+
 /**
  * The complete fragment, or `null` when the project does not need one: a static
  * showcase site is already served by the zone's wildcard block and, if it has a
@@ -303,7 +393,7 @@ export function generateFragment(
   manifest: Manifest,
   generation: PortalGeneration = "identity",
   files: FileGeneration = "hidden",
-  domains: DomainGeneration = "closable",
+  domains: DomainGeneration = "gated",
   forwarded: ForwardGeneration = "visitor",
 ): string | null {
   if (!isApp(manifest)) return null;
@@ -325,6 +415,12 @@ export function generateFragment(
     }
   }
   const domain = manifest.domain;
+  // The same barrier for the domain's names: each one is a block's address,
+  // and the domain's own name the source of its gate's `map`, where a
+  // placeholder would be read at every request.
+  for (const host of domain === undefined ? [] : domainHosts(domain)) {
+    if (!isValidDomain(host)) throw new Error(`domain: ${JSON.stringify(host)} is not a name validate() accepts, it is never written into a Caddy block`);
+  }
   const lines = [
     `# Caddy block for project ${slug}, generated by bin/sitesolide.ts from its`,
     "# sitesolide.json and deposited into /etc/caddy/sites/. Do not edit by",
@@ -351,12 +447,10 @@ export function generateFragment(
     // domains: that one only serves static files and would never wake the
     // service up. Neither may any of its names, which is why the others are
     // claimed here too, to send them to the first.
-    const [name, ...others] = domainHosts(domain);
-    lines.push(
-      ...OWN_DOMAIN_COMMENT,
-      `${name} {`,
-      ...ON_DEMAND_TLS,
-      "",
+    const [, ...others] = domainHosts(domain);
+    const name = domain.name;
+    const gated = domains === "gated";
+    const site = [
       "\t# The same site as the preview, closed when it is: the preview locks",
       "\t# recognise it by this variable, and a site behind the portal is",
       "\t# guarded here as there, judged on its preview's people. See",
@@ -367,10 +461,10 @@ export function generateFragment(
       ...portalStanza(manifest, generation, announcedFor(slug, ZONE_HOST)),
       ...(isProtected(manifest) ? [] : openStanza(generation)),
       `\timport ${slug}-routes`,
-      "}",
-      "",
-    );
+    ];
+    lines.push(...OWN_DOMAIN_COMMENT, `${name} {`, ...ON_DEMAND_TLS, "", ...(gated ? gate(name, slug, site) : site), "}", "");
     if (others.length > 0) {
+      const redirect = [`\tredir https://${name}{uri} permanent`];
       lines.push(
         "# The domain's other names, its aliases and its www, send to it: one",
         "# address for the site, so one door, one cookie, and one page for",
@@ -378,7 +472,7 @@ export function generateFragment(
         `${others.join(", ")} {`,
         ...ON_DEMAND_TLS,
         "",
-        `\tredir https://${name}{uri} permanent`,
+        ...(gated ? gate(name, slug, redirect) : redirect),
         "}",
         "",
       );
@@ -421,8 +515,9 @@ export function generateFragment(
  * before the identity headers, protected or not, see PORTAL_GENERATIONS in
  * portal.ts; the file servers deployed before they hid `.git` and `.env`, see
  * FILE_GENERATIONS; the blocks of a site's own domain before it closed with
- * the preview, see DOMAIN_GENERATIONS; and the proxies deployed before they
- * handed on the visitor's address, see FORWARD_GENERATIONS.
+ * the preview, and before the domain table switched them off, see
+ * DOMAIN_GENERATIONS; and the proxies deployed before they handed on the
+ * visitor's address, see FORWARD_GENERATIONS.
  */
 export function isEarlierGeneration(block: string, manifest: Manifest): boolean {
   const current = generateFragment(manifest);
@@ -447,10 +542,10 @@ export type Served = { block: string | null; caddyfile: string | null; locks: st
  * before the table certifies a single name: a domain switched on behind any of
  * these would serve without its door what the preview closes.
  *
- * - an app's block in service must be the one this manifest generates: an
- *   earlier release's leaves the domain open, and one that predates a change
- *   of the domain's names claims none of the new ones, which the Caddyfile
- *   then refuses to serve;
+ * - an app's block in service must be one this manifest generates, in a
+ *   generation that closes the domain: the `open` one leaves it open, and
+ *   one that predates a change of the domain's names claims none of the new
+ *   ones, which the Caddyfile then refuses to serve;
  * - a static site's domain is served by the Caddyfile's nameless block, which
  *   must say whose site it serves;
  * - a site that opens with a code needs its stanza in the form that closes
@@ -461,10 +556,14 @@ export type Served = { block: string | null; caddyfile: string | null; locks: st
 export function domainLeftOpen(manifest: Manifest, served: Served): string | null {
   const generated = generateFragment(manifest);
   // The same block with the proxies of before, which hand the service the
-  // peer's address rather than the visitor's: nothing of what closes a domain
-  // differs, and a site deployed before them closes its domain as well.
-  const peer = generateFragment(manifest, "identity", "hidden", "closable", "peer");
-  const current = (block: string) => sameDirectives(block, generated!) || (peer !== null && sameDirectives(block, peer));
+  // peer's address rather than the visitor's, or from before the gate, which
+  // decides whether the domain is served at all: nothing of what closes a
+  // domain differs, and a site deployed before either closes its domain as
+  // well once switched on.
+  const closing = DOMAIN_GENERATIONS.filter((domains) => domains !== "open").flatMap((domains) =>
+    FORWARD_GENERATIONS.map((forwarded) => generateFragment(manifest, "identity", "hidden", domains, forwarded)),
+  );
+  const current = (block: string) => closing.some((one) => one !== null && sameDirectives(block, one));
   if (generated !== null && (served.block === null || !current(served.block))) {
     return "the Caddy block in service is not the one this sitesolide.json generates";
   }
@@ -477,6 +576,48 @@ export function domainLeftOpen(manifest: Manifest, served: Served): string | nul
     if (!current) return "the code's stanza in service predates closing a site's own domain";
   }
   return null;
+}
+
+/**
+ * Whether the block in service switches the site's own domain off with the
+ * table: every block of its names behind the gate (see `gate`). Read, never
+ * assumed: neither `upgrade` nor `refresh` writes an app's block, and an app
+ * deployed before the gate keeps one that serves its domain whatever the
+ * table says, for as long as Caddy holds its certificate. `sitesolide domain`
+ * says so rather than refuse: the switch still stops the certificate's
+ * renewal, and the next deployment writes the gate.
+ */
+export function gatesDomain(block: string | null, manifest: Manifest): boolean {
+  const domain = manifest.domain;
+  if (block === null || domain === undefined) return false;
+  const [, ...others] = domainHosts(domain);
+  const gateLines = [
+    `map ${domain.name} {${DOMAIN_PLACEHOLDER}} {`,
+    `import ${DOMAIN_TABLE}`,
+    `@domain_active vars {${DOMAIN_PLACEHOLDER}} ${manifest.slug}`,
+    "handle @domain_active {",
+    "handle {",
+  ];
+  const addresses = [domain.name, ...(others.length > 0 ? [others.join(", ")] : [])];
+  return addresses.every((address) => {
+    const lines = siteBlock(block, `${address} {`);
+    return lines !== null && gateLines.every((line) => lines.includes(line));
+  });
+}
+
+/** The lines that decide of the site block `opening` starts in a Caddy text, braces counted; null when none does. */
+function siteBlock(text: string, opening: string): string[] | null {
+  const lines = usefulDirectives(text);
+  const start = lines.indexOf(opening);
+  if (start === -1) return null;
+  const body: string[] = [];
+  let depth = 0;
+  for (const line of lines.slice(start)) {
+    body.push(line);
+    depth += (line.match(/\{/g) ?? []).length - (line.match(/\}/g) ?? []).length;
+    if (depth <= 0) break;
+  }
+  return body;
 }
 
 /** What `deploy` does with its block, given the one in service. */

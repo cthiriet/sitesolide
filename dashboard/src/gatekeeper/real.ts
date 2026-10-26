@@ -54,6 +54,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { INACTIVE_HEADER, isSwitchedOff } from "../../borrowed/fragment";
 import { FRAGMENT_NAME, lockField } from "../../borrowed/locks";
 import { isValidSlug } from "../../borrowed/manifest";
 import { isValidSlug as isSitesFolder } from "../../borrowed/table";
@@ -710,10 +711,14 @@ export function createMachine(config: MachineConfig): GeneralMachine {
       try {
         const response = await fetch(url, options);
         const bytes = await readStart(response, MAX_BODY, timeout, () => closing.abort());
+        // A site's own domain switched off by the domain table, which the
+        // transaction does not judge as the site's address: see targetHosts.
+        const off = response.status === 404 && isSwitchedOff(response.headers.get(INACTIVE_HEADER));
         return {
           code: response.status,
           door: response.headers.get("x-portal") === "connexion",
           body: decoder.decode(bytes),
+          ...(off ? { off } : {}),
         };
       } catch (error) {
         // The code alone when it exists (ConnectionRefused,

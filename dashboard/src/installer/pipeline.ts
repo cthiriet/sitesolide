@@ -263,11 +263,24 @@ export function finalManifest(
   // domain, never switch it on or off (docs/access.md): the machine's value
   // stands, and only for names it already covered, so that a new name or a
   // new alias never rides an earlier activation.
+  //
+  // A domain switched on that this deployment would give a name it does not
+  // cover is refused rather than switched off: `active` is one field for all
+  // of a domain's names, which the table and the ask endpoint take or leave
+  // together, and the next regeneration, run by anyone, would take the live
+  // domain out, its blocks then answering 404 at once (gate in
+  // bin/cli/fragment.ts). Its owner adds names over SSH, checking their DNS.
   if (asked.manifest.domain !== undefined) {
     const before = previous?.domain;
     const covered = before !== undefined && typeof before.name === "string" ? new Set(attempt(() => domainHosts(before), [])) : new Set<string>();
-    const active = before?.active === true && domainHosts(asked.manifest.domain).every((host) => covered.has(host));
-    text = setDomainActive(text, active);
+    const uncovered = domainHosts(asked.manifest.domain).filter((host) => !covered.has(host));
+    if (before?.active === true && uncovered.length > 0) {
+      throw new Stop(
+        "out-of-scope",
+        `${before.name} is switched on, and ${uncovered.join(", ")} would be new names of this domain: a token's deployment would switch the whole domain off, and it would stop answering at the next regeneration of the domain table. Deploy without them, or ask the owner of the machine, who adds names to a domain switched on over SSH`,
+      );
+    }
+    text = setDomainActive(text, before?.active === true);
   }
   const final = readManifest(text);
   if (final.manifest === undefined || final.errors.length > 0) {

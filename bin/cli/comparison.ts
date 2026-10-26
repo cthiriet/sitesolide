@@ -19,6 +19,15 @@
  * therefore compares as one directive, its lines in their order, nested
  * blocks included.
  *
+ * **And a `handle`**, the same way, for what it encloses rather than for its
+ * order: the gate of a site's own domain serves everything inside its first
+ * `handle` only while the domain table carries the domain (gate in
+ * bin/cli/fragment.ts). A line moved out of it, or a block of the domain's
+ * other names left without one, holds lines the set of the whole text still
+ * contains, and would compare equal to the generated block. The generator
+ * writes no other `handle` into a block, and a block deployed before the
+ * gate holds none, so that nothing compared before changes.
+ *
  * Pure: reads two texts, returns a comparison.
  */
 
@@ -37,8 +46,8 @@ export type Divergence = {
   added: string[];
 };
 
-/** A `route` opening, with or without a matcher: `route {`, `route /api/* {`. */
-const ROUTE_OPENING = /^route(\s.*)?\{$/;
+/** A `route` or `handle` opening, with or without a matcher: `route {`, `handle @domain_active {`. */
+const ROUTE_OPENING = /^(route|handle)(\s.*)?\{$/;
 
 function braces(line: string): number {
   return (line.match(/\{/g) ?? []).length - (line.match(/\}/g) ?? []).length;
@@ -46,8 +55,8 @@ function braces(line: string): number {
 
 /**
  * What one directive is, for the comparison: `key` decides, `text` is what a
- * refusal shows. A line outside any route is both. A whole route is one
- * directive, its lines kept in order: `key` holds them as a JSON array, which no
+ * refusal shows. A line outside any route or handle is both. A whole route or
+ * handle is one directive, its lines kept in order: `key` holds them as a JSON array, which no
  * line can forge by carrying a separator, and `text` writes them on one line.
  */
 type Directive = { key: string; text: string };

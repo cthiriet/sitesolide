@@ -53,6 +53,7 @@
  *
  * Pure: returns text, touches nothing. setup sends it (bin/cli/setup.ts).
  */
+import { INACTIVE_HEADER, isSwitchedOff } from "./fragment";
 import { APT, machineCheck, runScript, shellQuote } from "./harden";
 import { CADDY_HTTPS_PORT, LOOPBACK_TABLE, TUNNEL_ORIGIN } from "./loopback";
 import type { Condition } from "./steps";
@@ -266,6 +267,10 @@ export type EdgeReading = {
   edge: boolean;
   /** The status at its root, or why nothing answered; null when it was not asked. */
   root: string | null;
+  /** That answer's INACTIVE_HEADER (fragment.ts), `inactive <zone>` on a domain switched off; null when it carries none. */
+  inactive: string | null;
+  /** What Caddy answers for the name on the machine's own loopback, readCaddyHandshake's; null when it was not asked or did not say. */
+  machine: CaddyHandshake | null;
 };
 
 /**
@@ -283,21 +288,37 @@ export type EdgeReading = {
  * answered the edge's 522 after nineteen seconds.
  *
  * A name Caddy still holds a certificate for, from an earlier activation,
- * may answer the site itself rather than the 502: --force is for that case,
- * once its record is known to point at the tunnel.
+ * completes its handshake, and an app's block answers it the 404 of a domain
+ * switched off, its header naming the installation, `inactive <zone>` (gate
+ * and INACTIVE_HEADER in bin/cli/fragment.ts). That 404 passes when the
+ * machine itself, asked on its loopback, answers it with the very same value.
+ * Before the activation the machine always does, whatever the name's record:
+ * what the edge relays is what tells this machine from another installation
+ * where the name is switched off too, and a record still pointing there. A
+ * static site's name, or an app's under a block deployed before the gate,
+ * answers otherwise: --force is for that case, once its record is known to
+ * point at the tunnel.
  */
 export function tunnelRouteProblem(reading: EdgeReading, server: string): string | null {
-  const { name, here, edge, root } = reading;
+  const { name, here, edge, root, inactive, machine } = reading;
   if (here) return `${name} points at ${server}, a record from before the tunnel, which nothing answers there now`;
   if (!edge) return `https://${name}${EDGE_TRACE_PATH} answers no trace of Cloudflare's: the name is not proxied there, or its edge certificate is not issued yet`;
   if (root === null || root === "502") return null;
+  if (root === "404" && isSwitchedOff(inactive)) {
+    const own = machine?.kind === "answered" && machine.status === 404 ? machine.inactive : null;
+    if (own !== null && own === inactive) return null;
+    const elsewhere = "another machine serves it, through a record of its own or a wildcard of its zone";
+    return isSwitchedOff(own)
+      ? `https://${name}/ answers the 404 of a domain switched off on another installation, "${inactive}" where this machine answers "${own}": ${elsewhere}`
+      : `https://${name}/ answers the 404 of a domain switched off, which Caddy does not answer for the name on the machine itself: ${elsewhere}`;
+  }
   if (edgeOrigin(root) === "address") {
     return `https://${name}/ answers ${root}, Cloudflare's own answer for an origin it reaches by its address: its record, or a wildcard of its zone, points at an address, proxied, rather than at the tunnel`;
   }
   if (root.startsWith("unreachable")) {
     return `https://${name}/ answered nothing, where a name routed into the tunnel gets the connector's 502 at once: its record, or a wildcard of its zone, most likely sends it to a host that does not answer`;
   }
-  return `https://${name}/ answers ${root}, not the connector's 502: another host serves the name, through a record of its own or a wildcard of its zone, or Caddy still holds its certificate from an earlier activation`;
+  return `https://${name}/ answers ${root}, not the connector's 502: another host serves the name, through a record of its own or a wildcard of its zone, or Caddy still holds its certificate from an earlier activation, for a static site or an app deployed before its domain's blocks could be switched off`;
 }
 
 /**
@@ -313,26 +334,35 @@ export const EDGE_ANSWER_MS = 30_000;
  * probes it there on 127.0.0.1, which the loopback rule leaves open to every
  * account. What tells a 502 through the tunnel that comes from the name's
  * certificate from one that comes from behind Caddy, an app that does not
- * answer. One line: `handshake <curl's exit> <status>`.
+ * answer; and a domain switched off, whose block answers a 404 with
+ * INACTIVE_HEADER naming this installation, from another one answering the
+ * same. One line: `handshake <curl's exit> <status> <that header's value>`,
+ * the value empty when the answer carries none. `%header{}` is curl 7.84's,
+ * and Debian 13 ships 8.14.
  */
 export function caddyHandshakeCommand(name: string): string {
   const resolve = shellQuote(`${name}:${CADDY_HTTPS_PORT}:127.0.0.1`);
   const url = shellQuote(`https://${name}/`);
-  return `code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 --resolve ${resolve} ${url} 2>/dev/null); echo "handshake $? $code"`;
+  return `code=$(curl -sS -o /dev/null -w '%{http_code} %header{${INACTIVE_HEADER}}' --max-time 10 --resolve ${resolve} ${url} 2>/dev/null); echo "handshake $? $code"`;
 }
+
+/** What Caddy answered on the machine's loopback, see readCaddyHandshake. */
+export type CaddyHandshake = { kind: "answered"; status: number; inactive: string | null } | { kind: "refused"; exit: number };
 
 /**
  * caddyHandshakeCommand's line: `answered` with Caddy's status once the
- * handshake verified, `refused` with curl's exit when it did not, the
- * certificate missing or not trusted, Caddy not listening; null for an
- * answer that is not that line, a read that failed.
+ * handshake verified, and that answer's INACTIVE_HEADER, null when it carries
+ * none; `refused` with curl's exit when it did not, the certificate missing or not
+ * trusted, Caddy not listening; null for an answer that is not that line, a
+ * read that failed.
  */
-export function readCaddyHandshake(output: string): { kind: "answered"; status: number } | { kind: "refused"; exit: number } | null {
-  const line = /^handshake (\d+) (\d{3})$/m.exec(output.trim());
+export function readCaddyHandshake(output: string): CaddyHandshake | null {
+  const line = /^handshake (\d+) (\d{3})(?: (.*))?$/m.exec(output.trim());
   if (line === null) return null;
   const exit = Number(line[1]);
   const status = Number(line[2]);
-  return exit === 0 && status !== 0 ? { kind: "answered", status } : { kind: "refused", exit };
+  const value = (line[3] ?? "").trim();
+  return exit === 0 && status !== 0 ? { kind: "answered", status, inactive: value === "" ? null : value } : { kind: "refused", exit };
 }
 
 /**

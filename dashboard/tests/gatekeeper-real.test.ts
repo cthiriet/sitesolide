@@ -447,6 +447,11 @@ describe.skipIf(OPENSSL === null)("the probe reads at most MAX_BODY bytes", () =
         if (path === "/bomb") {
           return new Response(bomb, { headers: { "Content-Encoding": "gzip", "X-Portal": "connexion" }, status: 401 });
         }
+        // What the gate of a site's own domain answers once switched off,
+        // and a 404 of the site's own that only borrows the header.
+        if (path === "/off" || path === "/borrowed") {
+          return new Response("This domain is switched off.", { status: path === "/off" ? 404 : 200, headers: { "X-Sitesolide-Domain": "inactive test-zone.invalid" } });
+        }
         // /slow: 1 KiB every 20 ms, endlessly. /fast: 1 MiB at once,
         // endlessly. /mute: the headers, then nothing more.
         const chunk = path === "/fast" ? 1024 * 1024 : 1024;
@@ -489,6 +494,11 @@ describe.skipIf(OPENSSL === null)("the probe reads at most MAX_BODY bytes", () =
     const sent = slow.sent;
     await Bun.sleep(300);
     expect(seen.get("/slow")!.sent).toBe(sent);
+  });
+
+  test("the 404 of a domain switched off says so, and nothing else does", async () => {
+    expect(await probeMachine().probe(HOST, "/off", 4000)).toEqual({ code: 404, door: false, body: "This domain is switched off.", off: true });
+    expect(await probeMachine().probe(HOST, "/borrowed", 4000)).toEqual({ code: 200, door: false, body: "This domain is switched off." });
   });
 
   test("a huge and fast body: memory does not follow the stream", async () => {

@@ -227,9 +227,21 @@ Cloudflare's edge rather than in the DNS:
   name to another host, resolves to Cloudflare and answers its trace like
   the others, but its root answers something else: the edge's own 520 to
   526 for an origin it fails to reach by its address, that host's own
-  status, or nothing within thirty seconds. A name whose certificate Caddy
-  still holds from an earlier activation may answer the site itself:
-  `--force` is for that case, once its record points at the tunnel.
+  status, or nothing within thirty seconds;
+- or, for a name whose certificate Caddy still holds from an earlier
+  activation, the 404 of a domain switched off, with the header
+  `X-Sitesolide-Domain: inactive <zone>`, which an app's block answers while
+  the domain table does not carry the name, `<zone>` the zone this machine
+  serves. That answer passes only when the machine itself, asked on its own
+  loopback over SSH, read only, gives the same value: before the activation
+  it always answers its own 404 there, and the zone is what tells it from
+  another installation that a record still points at, where the domain is
+  switched off too. The header shows the zone only on a domain switched off,
+  whose preview address under that zone is public anyway. A static site's
+  name answers a plain 404 instead, and an app's whose block predates that
+  404 the site itself (see [A domain switched off stops
+  answering](upgrading.md#a-domain-switched-off-stops-answering)): `--force`
+  is for those cases, once the record points at the tunnel.
 
 A name that fails is refused with the records to create; `--force` goes
 ahead anyway, as it does past the DNS check of a machine served directly.
@@ -256,9 +268,14 @@ failure answers what it answers:
   the zone's permissions, with the last error Caddy's TLS logged about the
   name in its journal.
 
-Deactivating the domain says what the token may lose: once no active domain
-uses a zone, `Zone / Zone / Read` and `Zone / DNS / Edit` on it can be taken
-off the machine's token, which keeps its value.
+Deactivating the domain stops it answering at once, as on any machine, once
+an app's block is this release's: its names answer the 404 above, a static
+site's a plain 404, and their certificate is left to expire, never renewed.
+An app whose block predates it keeps answering while Caddy holds its
+certificate, which the command says, until it is deployed again. It also
+says what the token may lose: once no active domain uses a zone, `Zone / Zone / Read` and
+`Zone / DNS / Edit` on it can be taken off the machine's token, which keeps
+its value.
 
 ## What a tunnel does not carry
 

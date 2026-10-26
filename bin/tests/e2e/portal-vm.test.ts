@@ -635,6 +635,33 @@ describe("sitesolide domain does not deposit a stale door", () => {
     expect(again.code).toBe(0);
   });
 
+  test("an app whose block predates the gate is switched all the same, saying its domain keeps answering on its certificate", async () => {
+    const live: Manifest = { ...APP, domain: { name: "sample-door.example", active: true } };
+    for (const [block, warned] of [
+      [generateFragment(live, "identity", "hidden", "closable")!, true],
+      [generateFragment(live)!, false],
+    ] as const) {
+      vm = createFakeVm();
+      vm.writeManifest(APP.slug, text(live));
+      vm.writeBlock(APP.slug, block);
+      const r = await run(project(live), ["domain", "--deactivate", "--dry-run"], { vm });
+      expect(r.code).toBe(0);
+      expect(r.output).toContain("generate-domains.sh");
+      const warning = `sample-door.example keeps answering while Caddy holds its certificate: /etc/caddy/sites/${APP.slug}.caddy predates switching a domain off with the table`;
+      expect({ warned, said: r.error.includes(warning) }).toEqual({ warned, said: warned });
+      if (warned) expect(r.error).toContain("sitesolide deploy");
+    }
+    // Switched on over such a block, the switch says what a later one would not do.
+    const off: Manifest = { ...APP, domain: { name: "sample-door.example", active: false } };
+    vm = createFakeVm();
+    vm.writeManifest(APP.slug, text(off));
+    vm.writeBlock(APP.slug, generateFragment(off, "identity", "hidden", "closable")!);
+    const on = await run(project(off), ["domain", "--activate", "--dry-run", "--force"], { vm });
+    expect(on.code).toBe(0);
+    expect(on.error).toContain(`/etc/caddy/sites/${APP.slug}.caddy predates switching a domain off with the table`);
+    expect(on.error).toContain("switched off later, sample-door.example would keep answering while Caddy holds its certificate");
+  });
+
   test("in agreement with the VM, the switch follows its course", async () => {
     vm = createFakeVm();
     vm.writeManifest(SHOWCASE.slug, text(ACTIVE));

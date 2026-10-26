@@ -1062,6 +1062,18 @@ describe("a site on its own domain closes and opens with its preview", () => {
     expect(result.message).toContain(`already not answering before: ${DOMAIN}`);
   });
 
+  test("a domain switched off by the table, its certificate held, is no reason to refuse: named, the preview judged", async () => {
+    // Active in the manifest, missing from the domain table ("Not routed"):
+    // the block's gate answers its 404 before and after the change alike.
+    const off = { code: 404, door: false, body: "This domain is switched off.", off: true };
+    for (const target of [true, "code"] as const) {
+      const s = simulate({ manifest: ON_DOMAIN, probeConfig: (host) => (host === DOMAIN ? off : undefined) });
+      const result = await s.spawn(target);
+      expect({ target, result: result.result }).toEqual({ target, result: "ok" });
+      expect(result.message).toContain(`already not answering before: ${DOMAIN}`);
+    }
+  });
+
   test("public again: both open, without the portal and without a code", async () => {
     const restricted = text({ ...readManifest(ON_DOMAIN).manifest!, portal: true });
     const s = simulate({ manifest: restricted });

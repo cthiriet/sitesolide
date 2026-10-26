@@ -333,6 +333,13 @@ service, during the TLS handshake, whether a domain is allowed. It answers yes
 only for domains in the table. Without that endpoint, anyone pointing DNS at the
 machine would trigger issuances in your name, and those are counted.
 
+The table is also what serves a customer domain, not only what certifies it:
+the nameless block finds a static site's folder there, and an app's blocks
+serve only while it carries their domain for that app, a 404 answering
+otherwise. A certificate already obtained stays in Caddy's storage until it
+expires, and a domain taken out of the table would otherwise keep answering
+with it.
+
 That endpoint is why `api/` exists and why it stays tiny. A mistake in it takes
 down certificate issuance for everyone at once.
 

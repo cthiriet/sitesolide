@@ -24,7 +24,12 @@
  */
 import { isValidSlug, PORTAL_SLUG } from "../../borrowed/manifest";
 
-export type ProbeResponse = { code: number; door: boolean; body: string } | { error: string };
+/**
+ * What a host answered. `off`: the 404 of a site's own domain switched off,
+ * its X-Sitesolide-Domain header saying so (gate in bin/cli/fragment.ts),
+ * absent from the readings that do not tell.
+ */
+export type ProbeResponse = { code: number; door: boolean; body: string; off?: boolean } | { error: string };
 
 /** The portal's 401 and it alone. */
 export function fromPortal(response: ProbeResponse): boolean {
@@ -157,8 +162,13 @@ export function alreadySilent(before: Map<string, ProbeResponse>, targets: reado
  * served on closes and opens with it, and the change is said done only once
  * each one answers as it must. A domain Caddy did not answer for, its
  * certificate not issued yet, serves nothing to close: it is named with the
- * sites that already did not answer.
+ * sites that already did not answer. Nor does a domain whose block answered
+ * the 404 of a domain switched off, `off`: active in the manifest and missing
+ * from the domain table, Caddy holding its certificate, it serves nothing of
+ * the site, and would answer the same 404 after the change, which no
+ * judgement of a door accepts.
  */
 export function targetHosts(preview: string, domain: string | null, before: Map<string, ProbeResponse>): string[] {
-  return domain === null || !("code" in (before.get(domain) ?? { error: "" })) ? [preview] : [preview, domain];
+  const answer = domain === null ? undefined : before.get(domain);
+  return domain === null || answer === undefined || !("code" in answer) || answer.off === true ? [preview] : [preview, domain];
 }

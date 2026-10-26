@@ -120,6 +120,89 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## A domain switched off stops answering
+
+**What the release brings.** `sitesolide domain --deactivate` takes a
+domain out of the domain table, which stops its certificate's renewal, the
+`ask` endpoint refusing it. An app's blocks for its own domain served it all
+the same for as long as Caddy held the certificate it had already obtained:
+measured, a domain switched off kept answering its app with a 200, on a
+machine served directly as behind a tunnel. Those blocks now serve only while
+the table carries the domain for that app, and answer a 404 otherwise, with
+`X-Sitesolide-Domain: inactive <zone>`, the zone the machine serves, and
+`Cache-Control: no-store`, on the domain and on the names that send to it.
+Caddy reads the table at the reload that `domain --activate` and
+`--deactivate` already do: the blocks are the same in both states. A static site's domain already stopped answering, Caddy's
+nameless block finding no folder for it in the table.
+
+Behind a Cloudflare Tunnel, `sitesolide domain --activate` lets through a
+name whose certificate Caddy still holds from an earlier activation, which
+it refused without `--force`: its root answers that 404 rather than the
+connector's 502, and the machine, asked over SSH on its own loopback, read
+only, answers it with the same header, the same zone. Another installation
+the record still points at names another zone, and is refused.
+
+**What `sitesolide upgrade` brings**: the gatekeeper and the installer, which
+write an app's blocks with this release's generator, and the dashboard, which
+carries its copy. Caddy is not reloaded, and nothing changes for the projects
+by itself: an app's block takes the new form when it is next written, by
+`sitesolide deploy`, by a change of its access from the dashboard or
+`sitesolide lock`, or by a token's deployment, none of which needs
+`--force` for it.
+
+**`sitesolide upgrade` first, then the apps.** A gatekeeper or an installer
+from before takes the new block for one edited by hand: it refuses to change
+the site's access with "redeploy the site first", which deploying again
+cannot fix, and refuses a token's deployment of it. Deploy an app with the
+new CLI only once the machine is upgraded.
+
+**Then each app that serves its own domain**, or declares one, when traffic
+allows: `sitesolide deploy` in its folder. It says the block "was written by
+an earlier release, the current one replaces it". `sitesolide refresh --all`
+does not do it: it writes the apps' units, never their Caddy block. Check:
+`curl -sI https://<domain>/` answers as before for a domain switched on, and
+a domain switched off whose certificate Caddy kept answers `404` with
+`x-sitesolide-domain: inactive <zone>`.
+
+**What changes for you.**
+
+- **A domain switched off answers 404 at once**, its `www` and its aliases
+  with it, rather than its site until its certificate expires, once the
+  app's block is this release's. `sitesolide domain --deactivate` on an app
+  whose block predates it switches all the same, and says that the domain
+  keeps answering while Caddy holds its certificate, until `sitesolide
+  deploy`; `--activate` says it too. `sitesolide domain --activate` switches
+  it on again as before.
+- **A token's deployment that adds a name to a domain switched on is
+  refused**, a new alias or another name: it used to switch the whole domain
+  off in the manifest, and the next regeneration of the table, run by
+  anyone, would now take the live domain out at once. The deployment says
+  so, `out-of-scope`; deploy without the new names, or the owner adds them
+  over SSH, the DNS checked. A token's deployment that keeps the names, or
+  drops some, leaves the domain as the machine has it.
+- **A domain active in the manifest and missing from the table**, which the
+  dashboard flags as *Not routed*, is no longer served by an app's new block
+  either: `bin/generate-domains.sh` writes the table again. Its access still
+  changes from the dashboard: the gatekeeper names the domain with the
+  addresses that already did not answer, rather than judging its 404 and
+  rolling the change back.
+- **Behind a tunnel, `--force` is no longer needed** to switch on again an
+  app's domain whose block is this release's. A static site's still answers
+  a plain 404 there, and still needs it.
+- **Hand edits inside a `handle` count.** `deploy`, the gatekeeper and the
+  installer compare a `handle` whole, its lines in order, as they compare a
+  `route`: a line moved out of the gate, or a block of the domain's names
+  left without it, is a hand edit. No block an earlier release generated
+  holds a `handle`, so none compares differently.
+
+**Going back.** `sitesolide upgrade` with the previous binary brings back the
+previous gatekeeper and installer, which take this release's blocks for
+blocks edited by hand: they refuse to change the access of such a site, and
+the previous `sitesolide deploy` stops on its block without `--force`.
+Deploy each app on its own domain with the previous release and `--force`
+first; its domain then answers again whenever Caddy holds its certificate,
+switched on or not.
+
 ## What each site takes, back on the Sites list
 
 **What the release brings.** The Sites list says again what each site takes,

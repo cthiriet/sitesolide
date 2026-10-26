@@ -146,7 +146,12 @@ sitesolide domain --activate
 ```
 
 That writes `domain.active`, puts the manifest on the machine and rebuilds the
-domain table, the last step being the one that authorises the certificate.
+domain table, the last step being the one that authorises the certificate and
+serves the domain. `sitesolide domain --deactivate` takes it back out: the
+domain stops answering at once, an app's once its block is this release's,
+and its certificate is left to expire, never renewed. An app deployed before
+keeps answering on its certificate until it is deployed again, which the
+command says.
 
 ## 5. Know when something breaks
 

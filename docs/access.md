@@ -341,7 +341,7 @@ it in `sitesolide.json` to make it explicit.
 | a static site (no `start`) | the token may deploy public sites | a static site cannot be restricted yet |
 | `"network": "outbound"` | the token may use outbound network | services reach only the loopback otherwise |
 | `egress` | the token may use outbound network | the hosts it lists are reached through the egress proxy, a way out all the same |
-| `domain` | the token may declare a domain | switching to it stays the owner's job: the machine's `active` stands whatever the manifest says, and a name or an alias it did not cover before stays inactive |
+| `domain` | the token may declare a domain | switching to it stays the owner's job: the machine's `active` stands whatever the manifest says, and a name or an alias it did not cover before stays inactive; on a domain switched on, a new name or alias is refused, since it would switch the whole domain off |
 | `lock` | never | a preview code is chosen in the site's *Access* section, by its Admin or the owner, or with `sitesolide lock` over the owner's SSH |
 | `memory` above 1G, more than 6 services | never | one machine serves everyone |
 

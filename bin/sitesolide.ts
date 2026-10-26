@@ -126,7 +126,7 @@ import {
 import { backupComponentCommand, backupsReport, readBackupComponent } from "./cli/backups";
 import { linksOut, publicRefusal, sourceRefusal } from "./cli/source";
 import { excludedBy } from "./cli/bundle";
-import { decideBlock, domainLeftOpen, generateFragment, LOCKS_FRAGMENT, type Served } from "./cli/fragment";
+import { decideBlock, domainLeftOpen, gatesDomain, generateFragment, INACTIVE_HEADER, isSwitchedOff, LOCKS_FRAGMENT, type Served } from "./cli/fragment";
 import { hintFor } from "./cli/hints";
 import { inferManifest, renderManifest, slugFromFolder, type Inference } from "./cli/infer";
 import {
@@ -2988,6 +2988,11 @@ async function requireTunnelCarriers(config: Config, executor: Executor, tunnel:
  * machine. The certificate does not wait on it, the DNS challenge needing no
  * request; the visitors do.
  *
+ * A name whose root answers the 404 of a domain switched off, Caddy still
+ * holding its certificate from an earlier activation, is asked of the
+ * machine too, read only: it passes when Caddy answers the same there, the
+ * header naming the same installation.
+ *
  * Said whatever the check finds, since the switch goes on with --force: the
  * records, and the token. Caddy obtains the domain's certificate through the
  * DNS challenge with the machine's own Cloudflare token
@@ -2995,7 +3000,7 @@ async function requireTunnelCarriers(config: Config, executor: Executor, tunnel:
  * it on the domain's zone too. Cloudflare keeps a token's value when its
  * permissions change, so nothing changes on the machine.
  */
-async function checkTunnelRoute(domain: NonNullable<Manifest["domain"]>, config: Config, tunnel: string, force: boolean): Promise<void> {
+async function checkTunnelRoute(domain: NonNullable<Manifest["domain"]>, config: Config, executor: Executor, tunnel: string, force: boolean): Promise<void> {
   const names = domainHosts(domain);
   const target = tunnelTarget(tunnel);
   const records = tunnelRecordLines(names, target);
@@ -3003,7 +3008,10 @@ async function checkTunnelRoute(domain: NonNullable<Manifest["domain"]>, config:
     names.map(async (name): Promise<EdgeReading> => {
       const here = await domainPointsHere(name, config);
       const edge = !here && (await servedByEdge(name));
-      return { name, here, edge, root: edge ? await httpsCode(name, EDGE_ANSWER_MS) : null };
+      const answer = edge ? await httpsAnswer(name, EDGE_ANSWER_MS) : null;
+      const inactive = answer?.inactive ?? null;
+      const machine = answer?.code === "404" && isSwitchedOff(inactive) ? readCaddyHandshake(await executor.read(config, caddyHandshakeCommand(name))) : null;
+      return { name, here, edge, root: answer?.code ?? null, inactive, machine };
     }),
   );
   const problems = readings.flatMap((reading) => {
@@ -3032,14 +3040,22 @@ async function checkTunnelRoute(domain: NonNullable<Manifest["domain"]>, config:
 
 /** The HTTP code at a name's root, or why nothing answered. */
 async function httpsCode(name: string, timeoutMs = 15000): Promise<string> {
+  return (await httpsAnswer(name, timeoutMs)).code;
+}
+
+/**
+ * httpsCode's answer, and its INACTIVE_HEADER, `inactive <zone>` on a domain
+ * switched off (gate in bin/cli/fragment.ts), null when it carries none.
+ */
+async function httpsAnswer(name: string, timeoutMs = 15000): Promise<{ code: string; inactive: string | null }> {
   try {
     const response = await fetch(`https://${name}/`, {
       redirect: "manual",
       signal: AbortSignal.timeout(timeoutMs),
     });
-    return String(response.status);
+    return { code: String(response.status), inactive: response.headers.get(INACTIVE_HEADER) };
   } catch (err) {
-    return `unreachable: ${(err as Error).message}`;
+    return { code: `unreachable: ${(err as Error).message}`, inactive: null };
   }
 }
 
@@ -3183,7 +3199,10 @@ async function showDomain(
  * Three gestures that go together and that were forgotten separately: the
  * versioned manifest, the same file on the VM, and the table Caddy reads again.
  * The table comes last, and without it nothing changes: it is what authorises
- * the certificate, and it does not regenerate itself at deployment time.
+ * the certificate and what every block of a site's own names serves by, and
+ * it does not regenerate itself at deployment time. Taken out of it, a domain
+ * stops answering at the reload, whatever certificate Caddy still holds: see
+ * gate in bin/cli/fragment.ts.
  */
 async function switchDomain(
   project: Project,
@@ -3215,6 +3234,7 @@ async function switchDomain(
   await takeCaddyLock(config, executor, "nothing was written");
   await requireAgreedDoor(project, config, executor);
   if (active) await requireClosingDomain(project.manifest, config, executor);
+  const gate = await blockGate(project.manifest, config, executor);
 
   // A domain activated before its DNS makes a certificate be asked for that the
   // authority will refuse, and those refusals are counted: a few attempts are
@@ -3222,7 +3242,7 @@ async function switchDomain(
   // Behind a tunnel the DNS that counts is Cloudflare's, and its own check
   // stands in for this one: see checkTunnelRoute.
   if (active && config.tunnel !== undefined) {
-    await checkTunnelRoute(domain, config, config.tunnel, force);
+    await checkTunnelRoute(domain, config, executor, config.tunnel, force);
   } else if (active && !(await domainPointsHere(domain.name, config))) {
     if (!force) {
       die(`${domain.name} does not resolve to ${serverHost(config)}`, [
@@ -3263,8 +3283,48 @@ async function switchDomain(
     say("   once no active domain uses its zone, Zone / Zone / Read and Zone / DNS / Edit on it can be taken off the machine's");
     say("   Cloudflare token at dash.cloudflare.com/profile/api-tokens: the token keeps its value, and nothing changes on the machine");
   }
+  sayGate(gate, project.manifest.slug, domain.name, active);
   say("");
   say(`   commit ${MANIFEST_NAME}: a deployment would otherwise put back the state in git.`);
+}
+
+/**
+ * Whether the app's block in service switches its domain off with the table,
+ * read only: gatesDomain in bin/cli/fragment.ts. Null for a static site,
+ * which the Caddyfile's nameless block serves from the table alone, and for
+ * an app with no block in service, which serves its domain nowhere.
+ */
+async function blockGate(manifest: Manifest, config: Config, executor: Executor): Promise<"gated" | "ungated" | "unreadable" | null> {
+  if (generateFragment(manifest) === null) return null;
+  const reading = await readRemoteFile(config, executor, blockPath(manifest.slug));
+  if (reading.kind === "unreadable") return "unreadable";
+  if (reading.kind === "absent") return null;
+  return gatesDomain(reading.content, manifest) ? "gated" : "ungated";
+}
+
+/**
+ * What a block without the gate means for the switch, which goes on all the
+ * same: switched off, the table stops the certificate's renewal, and the
+ * domain stops answering at its expiry at the latest. Neither `upgrade` nor
+ * `refresh` writes an app's block, its next deployment does.
+ */
+function sayGate(gate: "gated" | "ungated" | "unreadable" | null, slug: string, name: string, active: boolean): void {
+  if (gate === null || gate === "gated") return;
+  if (gate === "unreadable") {
+    warn(`cannot tell whether ${blockPath(slug)} switches ${name} off with the table: it did not read`, [
+      `a block deployed before it would keep ${name} answering while Caddy holds its certificate${active ? ", once switched off" : ""}`,
+    ]);
+    return;
+  }
+  const deploy = "deploy the app again, which writes the block that stops a domain switched off at once:  sitesolide deploy";
+  if (active) {
+    warn(`${blockPath(slug)} predates switching a domain off with the table`, [`switched off later, ${name} would keep answering while Caddy holds its certificate`, deploy]);
+    return;
+  }
+  warn(`${name} keeps answering while Caddy holds its certificate: ${blockPath(slug)} predates switching a domain off with the table`, [
+    "it serves every name it claims whatever the table says, until the certificate expires; it is no longer renewed",
+    deploy,
+  ]);
 }
 
 /**
