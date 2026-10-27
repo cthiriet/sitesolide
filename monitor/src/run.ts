@@ -28,6 +28,8 @@
 import { advance, isBad, isDown, type Notice, type Tracked } from "./alerts";
 import {
   judgeBackup,
+  judgeBinds,
+  judgeListeners,
   judgeCaddy,
   judgeCertificate,
   judgeDisk,
@@ -202,6 +204,14 @@ export async function run(config: Config, machine: Machine, now: number, clock: 
   results.push(judgeMemory(machine.meminfo(), isBad(state.checks.memory)));
   for (const { path, stats } of machine.disks(config.diskPaths)) {
     results.push(judgeDisk(path, stats, isBad(state.checks[`disk:${path}`])));
+  }
+  // Where the projects may listen, as systemd has their units loaded.
+  const binds = await machine.binds();
+  if ("error" in binds) {
+    problems.push(binds.error);
+    unknownKinds.add("binds");
+  } else {
+    results.push(judgeBinds(binds.value), judgeListeners(binds.value));
   }
   const backupResult = judgeBackup(backup, now);
   if (backupResult !== null) results.push(backupResult);

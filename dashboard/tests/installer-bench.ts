@@ -46,6 +46,18 @@ export type BenchOptions = {
   probe?: (host: string, path: string, bench: Bench) => ProbeResponse | null;
   /** The zone certified on demand, manual DNS: its policy laid on the bench, the zone's sites written there. */
   onDemand?: boolean;
+  /** What `nft list table` of the loopback's table answers; absent, there is no table, as on a laptop. */
+  loopbackTable?: string;
+  /** The kernel's ephemeral range, `ip_local_port_range`; 32768 to 60999 otherwise, as on a Debian. */
+  portRange?: string;
+  /** The kernel's reserved ports, `ip_local_reserved_ports`; none otherwise. */
+  reservedPorts?: string;
+  /** The backup component's build, written where the installer looks for it; absent otherwise. */
+  backupScript?: string;
+  /** Sockets listening on the machine, as /proc/net/tcp lists them; none otherwise. */
+  listening?: { port: number; uid: number }[];
+  /** `systemctl show` of the units' binds fails, as on a D-Bus timeout. */
+  bindStatesFail?: boolean;
 };
 
 export type Bench = {
@@ -90,14 +102,26 @@ export function createBench(options: BenchOptions = {}): Bench {
     options,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
-  for (const folder of [bench.sites, bench.blocks, bench.units, bench.secrets, bench.spool, bench.run]) mkdirSync(folder, { recursive: true });
+  for (const folder of [bench.sites, bench.blocks, bench.units, bench.secrets, bench.spool, bench.run, join(root, "proc")]) mkdirSync(folder, { recursive: true });
   writeFileSync(join(root, "passwd"), "root:x:0:0::/root:/bin/sh\n");
+  writeFileSync(join(root, "proc", "ip_local_port_range"), `${options.portRange ?? "32768\t60999"}\n`);
+  writeFileSync(join(root, "proc", "ip_local_reserved_ports"), `${options.reservedPorts ?? ""}\n`);
+  if (options.backupScript !== undefined) writeFileSync(join(root, "backup.js"), options.backupScript);
+  writeFileSync(join(root, "proc", "tcp"), procNetTcp(options.listening ?? []));
+  writeFileSync(join(root, "proc", "tcp6"), procNetTcp([]));
   if (options.onDemand) writeFileSync(join(root, "tls-zone.caddy"), "tls {\n\ton_demand\n}\n");
   // The zone's sites are written as root: a chown that does nothing stands
   // in for it, the rest of the script runs as it is.
   mkdirSync(join(root, "stubs"));
   writeFileSync(join(root, "stubs", "chown"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   return bench;
+}
+
+/** /proc/net/tcp as the kernel writes it, its header and one listening socket on 127.0.0.1 per entry. */
+export function procNetTcp(listening: { port: number; uid: number }[]): string {
+  const header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
+  const lines = listening.map(({ port, uid }, i) => `   ${i}: 0100007F:${port.toString(16).toUpperCase().padStart(4, "0")} 00000000:0000 0A 00000000:00000000 00:00000000 00000000 ${String(uid).padStart(5)}        0 ${20311 + i} 1 0000000000000000 100 0 0 10 0`);
+  return `${[header, ...lines].join("\n")}\n`;
 }
 
 /** The steward's record that this token's write made the project's store (src/control/claims.ts). */
@@ -176,6 +200,10 @@ export function commandsOf(bench: Bench): Commands {
       // What systemd knows of a unit: the file the bench's units folder
       // carries, a package's own unit the test laid, or nothing.
       if (arguments_[0] === "show" && arguments_.includes("NRestarts")) return standing(bench, arguments_.filter((argument, i) => i > 0 && argument !== "-p" && arguments_[i - 1] !== "-p"));
+      if (arguments_[0] === "show" && arguments_.includes("SocketBindDeny")) {
+        if (bench.options.bindStatesFail) return { code: 1, output: "Failed to get properties: Connection timed out" };
+        return bindStates(bench, arguments_.slice(arguments_.indexOf("--") + 1));
+      }
       if (arguments_[0] === "show") {
         // A service asked for as `<unit>.service`, a timer by its own name.
         const name = arguments_.at(-1)!;
@@ -211,7 +239,9 @@ export function commandsOf(bench: Bench): Commands {
       if (run.purpose === "extract") return spawn(run.command, 60_000, { stdin: run.stdin });
       return spawn(run.command, 60_000, { cwd: run.binds[0]!.source, stdin: run.stdin });
     },
-    async nft() {
+    async nft(arguments_) {
+      const table = bench.options.loopbackTable;
+      if (table !== undefined && arguments_[0] === "list" && arguments_[1] === "table") return { code: 0, output: table };
       return { code: 1, output: "Error: No such file or directory" };
     },
     async systemdAnalyze(arguments_) {
@@ -226,6 +256,28 @@ export function commandsOf(bench: Bench): Commands {
       return { code: run.exitCode ?? 1, output: `${run.stdout.toString()}${run.stderr.toString()}` };
     },
   };
+}
+
+/**
+ * `systemctl show -p Id -p User -p SocketBindDeny -p NeedDaemonReload` of the
+ * bench's unit files, as systemd prints them: one `SocketBindDeny=` line per
+ * rule, an empty assignment emptying the list before it, as systemd reads
+ * one; the files are what systemd has loaded.
+ */
+function bindStates(bench: Bench, names: string[]) {
+  const blocks = names.map((name) => {
+    let user = "";
+    let denied: string[] = [];
+    for (const line of readFileSync(join(bench.units, name), "utf8").split("\n")) {
+      const match = /^\s*(User|SocketBindDeny)\s*=\s*(.*?)\s*$/.exec(line);
+      if (match === null) continue;
+      if (match[1] === "User") user = match[2]!;
+      else if (match[2] === "") denied = [];
+      else denied.push(...match[2]!.split(/\s+/));
+    }
+    return [`Id=${name}`, `User=${user}`, ...denied.map((rule) => `SocketBindDeny=${rule}`), "NeedDaemonReload=no", ""].join("\n");
+  });
+  return { code: 0, output: blocks.join("\n") };
 }
 
 /**
@@ -257,6 +309,9 @@ export function hostOf(bench: Bench, log: (line: string) => void = (line) => ben
     spoolFolder: bench.spool,
     accountsFile: join(bench.root, "passwd"),
     projectPortsFile: join(bench.root, "projects.nft"),
+    backupScript: join(bench.root, "backup.js"),
+    procNetFolder: join(bench.root, "proc"),
+    procNetTcp: [join(bench.root, "proc", "tcp"), join(bench.root, "proc", "tcp6")],
     tlsZoneFile: join(bench.root, "tls-zone.caddy"),
     zoneNamesFile: join(bench.root, "zone-names"),
     deployAccount: null,

@@ -8,11 +8,11 @@
  * a marker, for the reason given in unit.ts: an empty output is a failed read,
  * never an answer.
  */
-import { domainHosts, isValidSchedule, isValidSlug, PORTAL_SLUG, readManifest, servicesOf, type Manifest } from "./manifest";
+import { domainHosts, FIRST_BLOCK, inLaterBlock, isValidSchedule, isValidSlug, PORTAL_SLUG, readManifest, servicesOf, type Manifest } from "./manifest";
 import { PORTAL_PORT } from "./portal";
-import { LOOPBACK_TABLE, PROJECT_PORTS_FILE, PROJECT_PORTS_SET } from "./loopback";
+import { autobindReachesBlocks, LOOPBACK_TABLE, PROJECT_PORTS_FILE, PROJECT_PORTS_SET, reservesEveryBlock } from "./loopback";
 import { CREDENTIALS_EXIT_STATUS, credentialsFailure } from "./store";
-import { isTimerUnit, systemUser, unitArgument, unitFileName, unitNames } from "./unit";
+import { BIND_LINES_FEATURE, BIND_PROPERTIES, isTimerUnit, readBindStates, systemUser, unboundStates, unitArgument, unitFileName, unitNames, type BindState } from "./unit";
 
 export const MARKER_DONE = "DONE";
 
@@ -280,6 +280,266 @@ export function readLoopbackState(output: string): LoopbackState {
   if (lines.length !== 2 || lines[1] !== MARKER_DONE) return "unreadable";
   const state = lines[0];
   return state === "none" || state === "table" || state === "set" ? state : "unreadable";
+}
+
+// --- the second block of the services' ports ---------------------------------
+
+/**
+ * The ports `manifest` declares outside the first block: those a machine
+ * lets a project listen on only once it has opened the second block.
+ */
+export function laterBlockPorts(manifest: Manifest): number[] {
+  return servicesOf(manifest).flatMap((service) => (service.port !== null && inLaterBlock(service.port) ? [service.port] : []));
+}
+
+/** Where the backup component and the installer are built into one file each. */
+export const COMPONENTS_FOLDER = "/usr/local/lib/sitesolide";
+
+/**
+ * The components that confine a project's program by DENIED_BINDS without a
+ * unit file of their own: the backup component runs each service's backup
+ * command as the project, and the installer runs `install` and writes the
+ * units of a token's deployment. A build of either from before the second
+ * block lets those programs listen there, or writes units that do.
+ */
+export const BIND_COMPONENTS = ["backup", "installer"] as const;
+export type BindComponent = (typeof BIND_COMPONENTS)[number];
+export type ComponentState = "current" | "outdated" | "absent";
+
+/** The sections of secondBlockStateCommand's answer, in order. */
+const SECTIONS = ["rule", "units", "components", "listeners", "accounts", "ports"] as const;
+
+/** What the read prints when systemctl or the listing of sockets fails: the whole read is then no answer. */
+const READ_FAILED = "read failed";
+
+/**
+ * What a machine is read for before a project may listen in the second block,
+ * and at every deployment after, in one round trip, as root (nft lists
+ * nothing to anyone else), changing nothing:
+ *
+ * - `rule`: the loopback rule the kernel carries, `nft list table`, nothing
+ *   when none is laid;
+ * - `units`: every service unit file of /etc/systemd/system, a dangling link
+ *   and a masked unit skipped as systemd skips them, a template too, which
+ *   runs nothing by itself and which `systemctl show` refuses, as systemd
+ *   has it loaded: `systemctl show` of who it runs as and where it may not
+ *   listen (readBindStates in bin/cli/unit.ts). The number of files comes
+ *   first, `files <n>`, and a systemctl that fails says so: an answer with
+ *   fewer units than files, cut off or empty, is no answer, never a machine
+ *   with no unit at fault;
+ * - `components`: whether the backup component and the installer were built
+ *   with this release's bind lines, BIND_LINES_FEATURE searched in each;
+ * - `listeners`: the listening TCP sockets, the kernel's own lines of
+ *   /proc/net/tcp and tcp6, each with the uid that opened it, and `accounts`
+ *   to name the uid: what already holds a port of the second block, a
+ *   scheduled run started under an earlier unit for one, which no reload
+ *   closes;
+ * - `ports`: the kernel's ephemeral range and its reserved ports
+ *   (PORT_RESERVATION_FILE in bin/cli/loopback.ts).
+ */
+export function secondBlockStateCommand(): string {
+  if (!/^[a-z0-9:,-]+$/.test(BIND_LINES_FEATURE)) throw new Error("unexpected feature marker");
+  const components = BIND_COMPONENTS.join(" ");
+  return [
+    "sudo sh -c '",
+    `echo "== rule"; nft list table inet ${LOOPBACK_TABLE} 2>/dev/null; `,
+    'echo "== units"; units=""; count=0; for unit in /etc/systemd/system/*.service; do [ -f "$unit" ] || continue; case "$unit" in *@.service) continue ;; esac; units="$units ${unit##*/}"; count=$((count + 1)); done; ',
+    `echo "files $count"; [ -z "$units" ] || systemctl show ${BIND_PROPERTIES.map((property) => `-p ${property}`).join(" ")} -- $units || echo "${READ_FAILED}"; `,
+    `echo "== components"; for name in ${components}; do file=${COMPONENTS_FOLDER}/$name.js; `,
+    `if [ ! -f "$file" ]; then echo "$name absent"; elif grep -qF ${BIND_LINES_FEATURE} "$file"; then echo "$name current"; else echo "$name outdated"; fi; done; `,
+    // A listening socket's state is 0A, a field of its own: grep finding none
+    // answers 1, a file it cannot read 2. tcp6 is absent from a kernel booted
+    // without IPv6; tcp never is.
+    `echo "== listeners"; for file in /proc/net/tcp /proc/net/tcp6; do if [ -r "$file" ]; then grep -h " 0A " "$file"; [ $? -le 1 ] || echo "${READ_FAILED}"; `,
+    `elif [ "$file" = /proc/net/tcp ]; then echo "${READ_FAILED}"; fi; done; `,
+    `echo "== accounts"; if accounts=$(getent passwd); then printf "%s\\n" "$accounts" | cut -d: -f1,3; else echo "${READ_FAILED}"; fi; `,
+    'echo "== ports"; cat /proc/sys/net/ipv4/ip_local_port_range /proc/sys/net/ipv4/ip_local_reserved_ports; ',
+    `echo ${MARKER_DONE}'`,
+  ].join("");
+}
+
+/** A socket listening on a port of a later block, and the account that opened it. */
+export type Listener = { port: number; uid: number; account: string | null };
+
+export type SecondBlockState = {
+  /** The loaded rule refuses the others on every block. */
+  reserved: boolean;
+  /** Who each service unit runs as and where it may not listen, as systemd has it loaded. */
+  units: BindState[];
+  components: Record<BindComponent, ComponentState>;
+  /** What already listens on a port of a later block. */
+  listeners: Listener[];
+  /** May the kernel hand a process a port of a block by itself? */
+  autobind: boolean;
+};
+
+/** `getent passwd | cut -d: -f1,3`, or /etc/passwd itself: each uid's account. Null when a line does not read. */
+export function readAccounts(text: string): Map<number, string> | null {
+  const accounts = new Map<number, string>();
+  for (const line of text.split("\n").map((entry) => entry.trim()).filter((entry) => entry !== "")) {
+    const [name, second, third] = line.split(":");
+    const uid = Number(third ?? second);
+    if (name === undefined || name === "" || !Number.isInteger(uid) || uid < 0) return null;
+    if (!accounts.has(uid)) accounts.set(uid, name);
+  }
+  return accounts;
+}
+
+/**
+ * The listening sockets on a port of a later block, from the kernel's lines of
+ * /proc/net/tcp and tcp6: `sl local rem st ... uid timeout inode`, the local
+ * port in hexadecimal, state 0A for a listening one, the uid that opened it in
+ * the eighth field. Null when a line does not read. One per port and uid: a
+ * service listening on IPv4 and IPv6 is one listener.
+ */
+export function readListeners(lines: readonly string[], accounts: ReadonlyMap<number, string>): Listener[] | null {
+  const found = new Map<string, Listener>();
+  for (const line of lines.map((entry) => entry.trim()).filter((entry) => entry !== "")) {
+    const fields = line.split(/\s+/);
+    const local = /^[0-9A-Fa-f]+:([0-9A-Fa-f]{4})$/.exec(fields[1] ?? "");
+    const uid = Number(fields[7]);
+    if (local === null || !Number.isInteger(uid) || uid < 0) return null;
+    if (fields[3] !== "0A") continue;
+    const port = Number.parseInt(local[1]!, 16);
+    if (!inLaterBlock(port)) continue;
+    found.set(`${port}.${uid}`, { port, uid, account: accounts.get(uid) ?? null });
+  }
+  return [...found.values()].sort((a, b) => a.port - b.port || a.uid - b.uid);
+}
+
+/** A listener as a refusal names it: `21000 (site-old)`. */
+export function describeListener(listener: Listener): string {
+  return `${listener.port} (${listener.account ?? `uid ${listener.uid}`})`;
+}
+
+/**
+ * The listeners of a later block that no deposited manifest accounts for: a
+ * port no project declares, or one a project declares and another account
+ * holds. What bin/deploy-loopback.sh refuses to open the block over, and the
+ * monitor reports: a socket a run of the release before opened there, which
+ * no reload closes, would take the visitors of the next project given the
+ * port. A manifest that no longer reads accounts for nothing.
+ */
+export function strayListeners(listeners: readonly Listener[], deposited: ReadonlyMap<string, string>): Listener[] {
+  const owners = new Map<number, string>();
+  for (const [folder, raw] of deposited) {
+    const { manifest } = readManifest(raw);
+    if (manifest === undefined || manifest.slug !== folder) continue;
+    for (const service of servicesOf(manifest)) if (service.port !== null) owners.set(service.port, systemUser(manifest.slug));
+  }
+  return listeners.filter((listener) => owners.get(listener.port) !== listener.account);
+}
+
+/** secondBlockStateCommand's answer, read; null when any part of it does not read, and nothing opens then. */
+export function readSecondBlockState(output: string): SecondBlockState | null {
+  const lines = output.split("\n");
+  if (lines.map((line) => line.trim()).filter((line) => line !== "").at(-1) !== MARKER_DONE) return null;
+  const at = SECTIONS.map((name) => lines.indexOf(`== ${name}`));
+  if (at.some((index, i) => index < 0 || (i > 0 && index < at[i - 1]!))) return null;
+  const section = (i: number): string[] => lines.slice(at[i]! + 1, i + 1 < at.length ? at[i + 1] : lines.findLastIndex((line) => line.trim() === MARKER_DONE));
+  const [files, ...shown] = section(1);
+  const count = /^files (\d+)$/.exec(files?.trim() ?? "");
+  if (count === null || shown.some((line) => line.trim() === READ_FAILED)) return null;
+  const units = readBindStates(shown.join("\n"));
+  if (units === null || units.length !== Number(count[1])) return null;
+  const components = {} as Record<BindComponent, ComponentState>;
+  for (const line of section(2).map((line) => line.trim()).filter((line) => line !== "")) {
+    const [name, state] = line.split(" ");
+    if (!BIND_COMPONENTS.includes(name as BindComponent) || !["current", "outdated", "absent"].includes(state ?? "")) return null;
+    components[name as BindComponent] = state as ComponentState;
+  }
+  if (BIND_COMPONENTS.some((name) => components[name] === undefined)) return null;
+  if ([3, 4].some((i) => section(i).some((line) => line.trim() === READ_FAILED))) return null;
+  const accounts = readAccounts(section(4).join("\n"));
+  const listeners = accounts === null ? null : readListeners(section(3), accounts);
+  if (listeners === null) return null;
+  const ports = section(5).map((line) => line.trim());
+  const [portRange, reservedPorts = "", ...rest] = ports.filter((line, i) => i < 2 || line !== "");
+  if (portRange === undefined || rest.length > 0) return null;
+  const autobind = autobindReachesBlocks(portRange, reservedPorts);
+  if (autobind === null) return null;
+  return { reserved: reservesEveryBlock(section(0).join("\n")), units, components, listeners, autobind };
+}
+
+/** The units of the machine that may still listen in a block, its own `units` aside: those a deployment is about to write. */
+export function unguardedUnits(state: SecondBlockState, own: readonly string[] = []): string[] {
+  const mine = new Set(own.map(unitFileName));
+  return unboundStates(state.units).filter((unit) => !mine.has(unit));
+}
+
+/**
+ * Why a project may not listen on `ports`, ports of the second block, on a
+ * machine that has not opened it; null when it has.
+ *
+ * Open means all of these, measured at the deployment, never remembered:
+ *
+ * - the loaded loopback rule refuses the others on every block, which no
+ *   rule in `observe` does: no other account connects to the service;
+ * - no unit that runs as a project's account may listen in a block, as
+ *   systemd has it loaded: no other project takes the port first. A unit
+ *   generated before this release may bind any port of the second block,
+ *   and on a port Caddy sends one project's visitors to, the first to listen
+ *   gets them, a neighbour's service between two of its restarts included;
+ * - the backup component and the installer, which run a project's programs
+ *   outside its units, carry this release's bind lines;
+ * - the kernel never hands a port of a block out by itself.
+ *
+ * bin/deploy-loopback.sh lays the rule with both blocks only once the last
+ * three hold, so `reserved` alone already says the machine was safe when it
+ * was laid; the rest is read again because each can come back since, a
+ * project deployed by an older CLI for one. `layRule` names the command that
+ * lays the rule, the kit's path for the CLI. `own` are the units this
+ * deployment writes, which the read does not hold against it.
+ *
+ * And, open or not, nothing but the project's own `account` may already
+ * listen on one of `ports`: a run started under a unit of the release before,
+ * a scheduled one up to 24 hours long, can hold a port of the block, and no
+ * reload closes its socket. The project's bind would then fail and Caddy
+ * send its visitors to that socket. `account` null holds every listener
+ * against the project.
+ */
+export function secondBlockRefusal(
+  ports: number[],
+  state: SecondBlockState,
+  layRule: () => string = () => "bin/deploy-loopback.sh close",
+  own: readonly string[] = [],
+  account: string | null = null,
+): string[] | null {
+  if (ports.length === 0) return null;
+  const unbound = unguardedUnits(state, own);
+  const stale = BIND_COMPONENTS.filter((name) => state.components[name] === "outdated");
+  const taken = state.listeners.filter((listener) => ports.includes(listener.port) && (account === null || listener.account !== account));
+  const opened = state.reserved && unbound.length === 0 && stale.length === 0 && !state.autobind;
+  if (opened && taken.length === 0) return null;
+  const named = [...new Set(ports)].sort((a, b) => a - b).join(", ");
+  const held = taken.length === 0 ? [] : [`already listened on by another account, which Caddy would send this project's visitors to: ${taken.map(describeListener).join(", ")}; the owner stops what holds it before the port is given`];
+  if (opened) return [`port ${named}: taken on this machine`, ...held];
+  return [
+    `port ${named}: the second block of the services' ports, which this machine has not opened yet`,
+    ...(state.reserved ? [] : ["its loopback rule does not refuse other accounts on that block: any account could connect there"]),
+    ...(unbound.length === 0 ? [] : [`units that may still listen there, taking another project's visitors: ${unbound.join(", ")}`]),
+    ...(stale.length === 0 ? [] : [`components built before that block, whose programs may listen there: ${stale.join(", ")}`]),
+    ...(state.autobind ? ["the kernel may hand a port of that block to any process that asks for none: its reservation is missing"] : []),
+    ...held,
+    `the owner opens it: sitesolide upgrade, sitesolide refresh --all, then ${layRule()}, in that order (docs/upgrading.md); a unit edited by hand takes the missing SocketBindDeny= lines, then systemctl daemon-reload and a restart`,
+    `until then, a port of ${FIRST_BLOCK.first} to ${FIRST_BLOCK.last} works as before`,
+  ];
+}
+
+/**
+ * What every deployment says once the block is open and a unit may listen in
+ * it again, the deployment going on: the project being deployed has nothing
+ * there to lose, the one that does is not the one deploying. Null when
+ * nothing is to be said.
+ */
+export function unguardedWarning(state: SecondBlockState, own: readonly string[] = []): string[] | null {
+  if (!state.reserved) return null;
+  const unbound = unguardedUnits(state, own);
+  if (unbound.length === 0) return null;
+  return [
+    `units that may listen on the second block's ports, where Caddy sends other projects' visitors: ${unbound.join(", ")}`,
+    "most likely a project deployed by an older CLI: write them again with sitesolide refresh --all; a unit edited by hand takes the missing SocketBindDeny= lines, then systemctl daemon-reload and a restart",
+  ];
 }
 
 /** Reads the uid of each project's system user, one `<slug> <uid>` line each. */

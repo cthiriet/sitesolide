@@ -32,10 +32,12 @@ export const EGRESS_ADDRESS = "127.0.0.1";
  * 3128 is the port proxies have used for decades, which says what it is to
  * whoever reads `ss -ltn`.
  *
- * OUTSIDE 3000-3099 ON PURPOSE. The loopback rule reserves that range to Caddy
- * and root (bin/cli/loopback.ts): a port inside it would be closed to the very
- * projects that need it. Nothing else of this repository listens on 3128 or
- * 3129; bin/deploy-egress.sh checks the machine before starting anything.
+ * OUTSIDE THE SERVICES' BLOCKS ON PURPOSE, 3000 to 3099 and 21000 to 29999
+ * (SERVICE_PORT_RANGES in bin/cli/manifest.ts). The loopback rule reserves
+ * them to Caddy and root (bin/cli/loopback.ts): a port inside would be closed
+ * to the very projects that need it. Nothing else of this repository listens
+ * on 3128 or 3129; bin/deploy-egress.sh checks the machine before starting
+ * anything.
  */
 export const EGRESS_PROXY_PORT = 3128;
 

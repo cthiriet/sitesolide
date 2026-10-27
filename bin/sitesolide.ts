@@ -150,7 +150,9 @@ import {
   setPortal,
   validate,
   PORTAL_SLUG,
-  SERVICE_PORTS,
+  FIRST_BLOCK,
+  isServicePort,
+  servicePortsProse,
   type Manifest,
 } from "./cli/manifest";
 import {
@@ -267,6 +269,7 @@ import { buildEnv, KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, working
 import { ownerGeneralCommand, PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshClaim, sshGeneral, sshPeople, sshTakeBack } from "./cli/access";
 import {
   foreignUnit,
+  laterBlockPorts,
   listUnitsCommand,
   loopbackStateCommand,
   domainConflicts,
@@ -275,6 +278,7 @@ import {
   readCurrentPairs,
   currentPairsCommand,
   readLoopbackState,
+  readSecondBlockState,
   readScheduleCheck,
   readStability,
   readUidsAnswer,
@@ -282,6 +286,9 @@ import {
   readUnitsAnswer,
   removeUnitsCommand,
   scheduleCheckCommand,
+  secondBlockRefusal,
+  secondBlockStateCommand,
+  unguardedWarning,
   stabilityCommand,
   staleUnits,
   uidsCommand,
@@ -781,7 +788,7 @@ function readProject(folder: string, options: { raw?: string; portLater?: boolea
   const manifest = read.manifest;
   let errors = read.errors;
   if (manifest !== undefined && needsPort(manifest)) {
-    const others = validate({ ...manifest, port: SERVICE_PORTS.last });
+    const others = validate({ ...manifest, port: FIRST_BLOCK.last });
     if (options.portLater) errors = others;
     else if (others.length === 0) {
       die("port: required, and only deploy chooses one", [
@@ -1333,6 +1340,7 @@ async function deploy(
   if (isApplication) await checkRemoteBlock(manifest, config, executor, replace, doorConfirmed);
   if (isApplication) await checkUnitNames(manifest, config, executor);
   if (isApplication) await checkPorts(manifest, config, executor);
+  if (isApplication) await checkSecondBlock(manifest, config, executor);
   if (scheduledServices(manifest).length > 0) await checkSchedules(manifest, config, executor);
   // A backup command reaches its service on its port, through the same set.
   if (reachesOwnPorts(manifest)) await requireProjectSet(config, executor);
@@ -2365,12 +2373,44 @@ async function checkPorts(manifest: Manifest, config: Config, executor: Executor
   }
   const conflicts = portConflicts(manifest, reading.manifests);
   if (conflicts.length > 0) {
-    die("port already taken on the server", [...conflicts, "pick a free port between 3000 and 3099 in sitesolide.json"]);
+    die("port already taken on the server", [...conflicts, `pick a free port of ${servicePortsProse()} in sitesolide.json, or delete the key and let deploy pick one`]);
   }
   const names = domainConflicts(manifest, reading.manifests);
   if (names.length > 0) {
     die("domain already declared on the server", [...names, "a name belongs to one project: take it out of this sitesolide.json, or out of the other project's first"]);
   }
+}
+
+/**
+ * Refuses, before anything is pushed, a port of the second block on a machine
+ * that has not opened it, and says so on every other deployment when the
+ * block is open and a unit could listen in it again: a project deployed by
+ * an older CLI, say, whose unit denies none of it. What decides is
+ * secondBlockRefusal in bin/cli/services.ts, read on the machine in one
+ * round trip at each deployment of an app, never remembered. A read, hence
+ * done in a dry run too.
+ */
+async function checkSecondBlock(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
+  const ports = laterBlockPorts(manifest);
+  const own = unitNames(manifest);
+  const state = readSecondBlockState(await executor.read(config, secondBlockStateCommand()));
+  if (state === null) {
+    if (ports.length > 0) {
+      die("cannot tell whether the server has opened the second block of service ports", [
+        "its loopback rule, its units, its components or its reserved ports did not read",
+        "nothing was pushed: a port there could be reached, or taken, by another project",
+      ]);
+    }
+    warn("cannot tell whether every unit on the server still keeps to its own port");
+    return;
+  }
+  if (ports.length > 0) {
+    const refusal = secondBlockRefusal(ports, state, () => `${script("deploy-loopback.sh")} close`, own, systemUser(manifest.slug));
+    if (refusal !== null) die("the server has not opened the second block of service ports", [...refusal, "nothing was pushed"]);
+    return;
+  }
+  const warning = unguardedWarning(state, own);
+  if (warning !== null) warn("units on the server may listen where Caddy sends other projects' visitors", warning);
 }
 
 /**
@@ -2510,7 +2550,7 @@ async function rebuildProjectPorts(config: Config, executor: Executor, mode: "se
     // off from each other.
     // A worker or a scheduled service declares no port, and has none to check.
     const ports = servicesOf(manifest).flatMap((service) => (service.port === null ? [] : [service.port]));
-    if (manifest.slug !== folder || !ports.every((port) => Number.isInteger(port) && port >= SERVICE_PORTS.first && port <= SERVICE_PORTS.last)) {
+    if (manifest.slug !== folder || !ports.every(isServicePort)) {
       say(`   skipped ${folder}: its services on the server do not read, they lose their access`);
       continue;
     }
@@ -3893,7 +3933,7 @@ async function allocatePort(project: Project, config: Config, executor: Executor
   const choice = choosePort(slug, reading.manifests);
   if (choice.kind === "full") {
     die("no free port left on the server", [
-      `every port from ${SERVICE_PORTS.first} to ${SERVICE_PORTS.last} is declared by a project or reserved`,
+      `every port of ${servicePortsProse()} is declared by a project or reserved`,
     ]);
   }
   step(

@@ -268,9 +268,20 @@ describe("ports", () => {
     expect(allocatePorts({ slug: "new", publicDir: "p" }, new Set(), null)).toEqual({ object: { slug: "new", publicDir: "p" }, allocated: [] });
   });
 
-  test("a full range is refused, with the range named", () => {
-    const full = new Set(Array.from({ length: 100 }, (_, i) => 3000 + i));
+  test("a full first block moves on to the second, the lowest port first", () => {
+    const first = new Set(Array.from({ length: 100 }, (_, i) => 3000 + i));
+    expect(allocatePorts({ slug: "new", start: "x" }, first, null)).toEqual({ object: { slug: "new", start: "x", port: 21000 }, allocated: [{ service: null, port: 21000 }] });
+    // A port of the first block freed is taken again before the second's.
+    first.delete(3042);
+    expect(allocatePorts({ slug: "new", start: "x" }, first, null)).toMatchObject({ allocated: [{ service: null, port: 3042 }] });
+    // A port the machine already gave it in the second block is kept.
+    const previous = { slug: "new", start: "x", port: 21007 } as Manifest;
+    expect(allocatePorts({ slug: "new", start: "x" }, new Set(), previous)).toMatchObject({ allocated: [{ service: null, port: 21007 }] });
+  });
+
+  test("every block full is refused, with the blocks named", () => {
+    const full = new Set([...Array.from({ length: 100 }, (_, i) => 3000 + i), ...Array.from({ length: 9000 }, (_, i) => 21000 + i)]);
     const result = allocatePorts({ slug: "new", start: "x" }, full, null);
-    expect("refusal" in result && result.refusal).toContain("3000 and 3099");
+    expect("refusal" in result && result.refusal).toContain("3000 to 3099 or 21000 to 29999");
   });
 });

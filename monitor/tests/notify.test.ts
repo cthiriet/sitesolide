@@ -213,6 +213,14 @@ describe("the heartbeat's request", () => {
     }
   });
 
+  test("where projects may listen, critical once the second block is open, fails it; a warning before does not", () => {
+    // A machine with a heartbeat alone has no other channel that pages.
+    const critical = { ...tracked("down", "critical", "Port 21000 (site-old) listened on in the second block"), kind: "binds" as const };
+    expect(heartbeatFails({ listeners: critical }, ZONE)).toBe(true);
+    expect(heartbeatRequest(url, { listeners: critical }, ZONE).url).toBe(`${url}/fail`);
+    expect(heartbeatFails({ binds: { ...critical, severity: "warning" } }, ZONE)).toBe(false);
+  });
+
   test("one project down, however long, never fails it: the dead man's switch must stay armed", () => {
     const checks = {
       [`site:shop.${ZONE}`]: { ...tracked("down", "critical", `https://shop.${ZONE}/ answered 502`, `shop.${ZONE}`), slug: "shop" },

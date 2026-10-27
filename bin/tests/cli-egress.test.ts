@@ -16,7 +16,7 @@ import {
   type HostPattern,
 } from "../cli/egress";
 import { CADDY_ADMIN_PORT } from "../cli/loopback";
-import { SERVICE_PORTS, validate, type Manifest } from "../cli/manifest";
+import { isServicePort, validate, type Manifest } from "../cli/manifest";
 import { generateUnit, generateUnits } from "../cli/unit";
 
 const APP: Manifest = { slug: "budget", port: 3022, start: "/usr/local/bin/bun run server.ts" };
@@ -249,10 +249,10 @@ describe("the unit", () => {
 });
 
 describe("the ports", () => {
-  test("outside the range the loopback rule closes, and away from Caddy's admin API", () => {
-    // Inside the range, the rule would refuse the very projects that need them.
+  test("outside the blocks the loopback rule closes, and away from Caddy's admin API", () => {
+    // Inside a block, the rule would refuse the very projects that need them.
     for (const port of [EGRESS_PROXY_PORT, CONNECTORS_PORT]) {
-      expect(port < SERVICE_PORTS.first || port > SERVICE_PORTS.last).toBe(true);
+      expect(isServicePort(port)).toBe(false);
       expect(port).not.toBe(CADDY_ADMIN_PORT);
     }
     expect(EGRESS_PROXY_PORT).not.toBe(CONNECTORS_PORT);

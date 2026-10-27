@@ -120,6 +120,183 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## A second block of service ports
+
+**What the release brings.** Every server listened on a port of 3000 to
+3099, the one block the loopback rule closed. With the landing's, the shared
+service's and the platform's own ports taken, a machine held fewer than a
+hundred of them, and a project with a database takes two: at about 100 MiB
+an app, a machine ran out of ports long before it ran out of memory. A
+second block, 21000 to 29999, adds nine thousand. The first stays as it is:
+every manifest and every unit in service keeps its port, and `deploy` still
+gives the lowest free port of the first block while one is left there, then
+of the second.
+
+Why there. Not right after 3099: the egress proxy's 3128 and 3129 sit there,
+and Caddy's admin API on 2019 below, each outside the blocks on purpose, with
+rules of their own. Not from 20000: a machine behind a Cloudflare Tunnel
+serves the connector's metrics on 20240, which the monitor reads as its own
+account, and cloudflared takes 20241 to 20245 by default. And below 32768,
+where Linux's ephemeral ports begin, so that no outgoing connection ever
+takes one of its ports as its source.
+
+**What `sitesolide upgrade` brings**: the components that read a manifest or
+write a unit, rebuilt with both blocks. The backups, whose backup commands
+listen on neither block; the steward, which hands a token's project a port of
+either; the dashboard and the portal, whose own units gain the line; the
+installer, which writes it into every unit of a token's deployment, and
+refuses a port of the second block until the machine has opened it; the
+monitor, with one more check, below. The backups and the installer carry a
+mark of their bind lines, which `backup.js features` and `installer.js
+--features` print, and which the machine is searched for before the block
+opens. Caddy is not reloaded, and the loopback rule does not move: the second
+block stays shut until the two steps below.
+
+**Then by hand, in this order**, once `sitesolide upgrade` has run to its
+end:
+
+1. **Write every project's units again**, so that each gains
+   `SocketBindDeny=21000-29999`:
+
+   ```bash
+   sitesolide refresh --all
+   ```
+
+   A unit the previous release wrote is recognised as the generator's own,
+   replaced without `--force`, and its project restarted. One kept as edited
+   by hand is listed in the summary: `sitesolide deploy --force` in its
+   project's folder, or the line added by hand, then `systemctl
+   daemon-reload` and a restart of the unit, the line holding nothing until
+   both. The landing's unit, which no deployment writes, is not refreshed: if
+   it runs as a `site-` account, add the line to it the same way. Check, as
+   systemd has the units loaded:
+
+   ```bash
+   ssh <server> 'for unit in /etc/systemd/system/*.service; do [ -f "$unit" ] || continue; case "$unit" in *@.service) continue ;; esac; name=${unit##*/}; systemctl show -p User --value "$name" | grep -q "^site-" && ! systemctl show -p SocketBindDeny "$name" | grep -qx "SocketBindDeny=21000-29999" && echo "$name"; done'
+   # -> nothing printed
+   ```
+
+2. **Lay the loopback rule again**, with both blocks, from a checkout or from
+   the kit the binary unpacked:
+
+   ```bash
+   bin/deploy-loopback.sh close
+   ```
+
+   It reads the machine first and lays nothing while a unit that runs as a
+   project's account, as systemd has it loaded, lacks a line, while the
+   backups or the installer predate this release, or while something already
+   listens on a port of the second block that no project declares, or that
+   another account holds, named down to its process and unit: a scheduled run
+   started under a unit of the previous release, up to 24 hours long, keeps
+   its socket through `refresh` and any reload. Stop it, or wait for its end.
+   A `systemctl` that fails or answers for fewer units than there are files
+   reads as nothing, and nothing is laid. Then it lays
+   `/etc/sysctl.d/90-sitesolide-service-ports.conf`, which keeps both blocks
+   out of the ports the kernel hands out by itself, what the machine already
+   reserved carried over, applies it, and lays nothing more while the kernel
+   could still hand one out. Then the rule, verified as it always was, and
+   also for the services' lines with both blocks, the previous rule restored
+   otherwise. `observe` lays it all the same, but opens nothing: every
+   account may still connect there. Check:
+
+   ```bash
+   ssh <server> 'sudo nft list table inet sitesolide_boucle | grep -m1 "ct state new"; cat /proc/sys/net/ipv4/ip_local_reserved_ports'
+   # -> oifname "lo" tcp dport { 3000-3099, 21000-29999 } ct state new counter packets ... reject with tcp reset
+   # -> 3000-3099,21000-29999
+   ```
+
+**Why this order.** The loopback rule judges who connects to a port, never
+who listens on it: that is each unit's `SocketBindDeny=`. A unit of the
+previous release denies 3000 to 3099 and no port of the second block, so its
+project may listen on any of them; so may a backup command or an `install`
+run by a component of the previous release. Were a port there given to
+another project, the older one could take it first, between two restarts of
+its owner or at boot, and Caddy would send it that project's visitors, their
+cookies and the owner's password typed on its sign-in page. Were the rule not
+to refuse other accounts there, every account could connect to the service
+past its portal. And `SocketBindDeny=` sees only the port a program asks
+for: a bind to port 0, or a listen without bind, gets one the kernel picks,
+in a range that a machine whose ephemeral ports were widened would share
+with the blocks.
+
+**What the code holds, and what it can only say.**
+
+- `bin/deploy-loopback.sh` lays no rule, the second block's or any other,
+  while a unit that runs as a `site-` account lacks a bind line, read with
+  `systemctl show` as systemd has it loaded, its drop-ins and a file not yet
+  reloaded included; while the backups or the installer lack the mark of
+  this release's bind lines; or while the kernel could hand a port of a block
+  out by itself.
+- `sitesolide deploy`, before anything is pushed, and the installer, for a
+  token, read all of it again at every deployment that declares a port of
+  the second block, and the loaded rule must refuse other accounts there,
+  which neither a rule from before nor one in `observe` does; nor may
+  another account already listen on the port, open block or not. Anything
+  missing, the deployment is refused, `the server has not opened the second
+  block of service ports` over SSH, `second-block-closed` through a token,
+  naming what is missing and the steps above. A read that fails or comes back
+  cut is no answer: a port of the second block is refused, one of the first
+  deployed with a warning. Nothing is remembered.
+- **What no check can hold**: a CLI of an earlier release, on another
+  workstation or in an agent's hands, still deploys, and writes a unit without
+  the line; `--force` with one strips it from a unit in service. The block
+  being open, such a unit could take the port of a project already there. It
+  is said, not prevented: every deployment of an app over SSH or with a token
+  reads the machine and warns, naming the unit, and the monitor reports it as
+  critical, the heartbeat failing with it (`monitor/README.md`). `sitesolide
+  refresh --all` writes it again. A port of the second block taken by a
+  stray socket is reported the same way, and refused to the next project.
+- A port of the first block asks nothing of the sort, on any machine.
+
+**What changes for you.**
+
+- **A port of 21000 to 29999 is accepted** in `sitesolide.json`, at the top
+  level and under `services`, and deploys on a machine that has opened the
+  second block. A port between the blocks, 3100 to 20999, or from 30000 up,
+  is refused, as any port outside 3000 to 3099 was.
+- **A machine whose first block is full** gives the next app 21000, then
+  21001. Before the steps above, the deployment that gets it is refused, the
+  port written into `sitesolide.json` all the same: it deploys once the block
+  is open, or set a port of the first block by hand.
+- **Every unit gains one line**, `SocketBindDeny=21000-29999`, and so do a
+  backup command's run and the installer's runs of `install`: a service, a
+  worker or a command that listened on a port of that block, where nobody was
+  sent, now fails with `EPERM`. Declare a service of its own, with its port
+  there.
+- **Every deployment of an app reads the machine once more**, one SSH round
+  trip, and warns, the deployment going on, when the block is open and a unit
+  may listen in it again.
+- **The monitor checks where the projects may listen**: every unit that runs
+  as a `site-` account, as systemd has it loaded, keeps every bind line it
+  should, and nothing listens on a port of the second block that no project
+  declares, or that another account holds. Critical once the second block is
+  open, and then it fails the heartbeat too, the one channel that pages on a
+  machine without a webhook; a warning before, which does not, for a unit
+  that lacks one of the earlier lines, from before the bind lines or edited
+  by hand, which nothing reported until now. It now reads each project's
+  `sitesolide.json`, 0644, when a port of the second block is listened on.
+- **The kernel's reserved ports** gain both blocks, written into
+  `/etc/sysctl.d/90-sitesolide-service-ports.conf`. A program on the machine
+  that counted on the kernel handing it one of those ports by itself gets
+  another; asked for by name, a port still binds as before.
+- **Deploy with this release's CLI once the block is open**, from every
+  workstation: an older CLI writes a new project's unit without the line, and
+  reads every unit of this release as edited by hand.
+
+**Going back.** `sitesolide upgrade` with the previous binary. Every previous
+component refuses a manifest with a port of the second block: move such a
+project into the first block before, its `port` in `sitesolide.json` and
+`sitesolide deploy --force` in its folder with this release. The previous CLI
+reads a unit with the new line as edited by hand and keeps it, and the
+previous installer stops that project's token deployments on
+`edited-by-hand`: `sitesolide deploy --force` in its folder, with the
+previous CLI, writes it without the line. The rule with both blocks may stay,
+the previous release has no use for the second; `bin/deploy-loopback.sh
+close` from the previous kit lays the first block alone again. The reserved
+ports stay, harmless; `bin/deploy-loopback.sh remove` of this release takes
+the file away, and the kernel forgets them at the next boot.
+
 ## The server's own settings, on a page of their own
 
 **What the release brings.** The heartbeat, the alert webhook, the dashboard

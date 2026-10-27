@@ -78,12 +78,13 @@ describe("deploy reads the door on the VM", () => {
     expect(r.output).toContain("check https://portal.");
     expect(r.output).toContain("forward_auth @portal_guard");
     // The site's door, what systemd knows of its unit, then every manifest
-    // for the ports they declare, and nothing else was asked of the machine:
+    // for the ports they declare, the machine's guard of the services' ports
+    // (secondBlockStateCommand), and nothing else was asked of the machine:
     // the other sites' blocks are not this deployment's business, and in a
     // dry run there is no lock. The claim on its name is a read too, which
     // the machine does not carry yet; its store is not read, the project
     // declaring no runtime secret.
-    expect(vm.logs()).toEqual(["READ sample-door", "UNITS sample-door", "READ *", "CLAIM GET sample-door"]);
+    expect(vm.logs()).toEqual(["READ sample-door", "UNITS sample-door", "READ *", "SECOND-BLOCK", "CLAIM GET sample-door"]);
   });
 
   test("the same value on both sides changes nothing", async () => {
@@ -181,14 +182,15 @@ describe("deploy reads the door on the VM", () => {
 
     // Nothing other than the readings went through, the site's door, its
     // block in service, what systemd knows of its unit, the manifests whose
-    // ports it checks and whether a token holds its name: the preparation of
+    // ports it checks, the guard of the services' ports and whether a token
+    // holds its name: the preparation of
     // the service is the first write, and the simulated VM refused it. The lock is only taken before the first
     // deposit of the manifest or of the block, much further on.
     expect(r.code).toBe(1);
     const logs = vm.logs();
-    expect(logs.slice(0, 5)).toEqual(["READ sample-door", "BLOCK sample-door", "UNITS sample-door", "READ *", "CLAIM GET sample-door"]);
-    expect(logs.slice(5).every((line) => line.startsWith("REFUSED "))).toBe(true);
-    expect(logs).toHaveLength(6);
+    expect(logs.slice(0, 6)).toEqual(["READ sample-door", "BLOCK sample-door", "UNITS sample-door", "READ *", "SECOND-BLOCK", "CLAIM GET sample-door"]);
+    expect(logs.slice(6).every((line) => line.startsWith("REFUSED "))).toBe(true);
+    expect(logs).toHaveLength(7);
   });
 });
 

@@ -9,7 +9,7 @@
  * shapes.
  */
 import type { Machine } from "../gatekeeper/machine";
-import type { LoopbackState, UnitFacts, UnitStanding } from "../../borrowed/services";
+import type { LoopbackState, SecondBlockState, UnitFacts, UnitStanding } from "../../borrowed/services";
 import type { ExtractOutcome } from "./extract";
 
 export type Execution = { code: number; output: string };
@@ -125,6 +125,15 @@ export type Host = {
   enable: (slug: string) => Promise<void>;
   /** `systemctl restart` of every unit named, then `is-active` of each. */
   restart: (units: string[]) => Promise<Execution>;
+
+  /**
+   * What the machine is read for before a project may listen in the second
+   * block of the services' ports, and at every deployment of an app after:
+   * the loaded rule, every service unit as systemd has it loaded, the backup
+   * component's build, the kernel's reserved ports. As `deploy` reads it,
+   * SecondBlockState in bin/cli/services.ts; null when a part did not read.
+   */
+  secondBlockState: () => Promise<SecondBlockState | null>;
 
   loopback: {
     state: () => Promise<LoopbackState>;

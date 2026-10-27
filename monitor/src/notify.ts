@@ -245,10 +245,16 @@ const PLATFORM_KINDS: ReadonlySet<Tracked["kind"]> = new Set(["caddy", "tunnel",
  * sees the rest. The memory and the monitor are warnings on the dashboard, yet
  * they fail the heartbeat: a machine out of memory is about to lose every
  * site, and a monitor that cannot read the machine cannot be trusted when it
- * says all is well.
+ * says all is well. And where projects may listen, when critical.
  */
 export function platformWide(tracked: Tracked, zone: string): boolean {
   if (PLATFORM_KINDS.has(tracked.kind)) return true;
+  // Where projects may listen, once the second block is open (critical): a
+  // project that can take another's visitors, the owner's password typed on
+  // a sign-in page among them, pages whoever holds the heartbeat, which is
+  // the one channel a machine without a webhook has. A warning, before the
+  // block opens, does not: nobody is sent there yet.
+  if (tracked.kind === "binds") return tracked.severity === "critical";
   return tracked.kind === "site" && (tracked.label === zone || tracked.label === `${DASHBOARD_SLUG}.${zone}`);
 }
 

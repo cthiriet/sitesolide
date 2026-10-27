@@ -214,13 +214,14 @@ deployment at most.
 
 ### `port`
 
-The loopback port the service listens on, between 3000 and 3099. Caddy
-reverse-proxies to it, and the unit hands it to the service as `PORT`. A
-worker and a scheduled service listen on nothing, declare none and are given
-none, see [`services`](#services).
+The loopback port the service listens on, in one of two blocks: 3000 to
+3099, or 21000 to 29999. Caddy reverse-proxies to it, and the unit hands it
+to the service as `PORT`. A worker and a scheduled service listen on
+nothing, declare none and are given none, see [`services`](#services).
 
 Leave it out and `deploy` picks one: the lowest the machine's other projects
-leave free, or the one the machine already gives this project. It writes it
+leave free, in the first block while one is left there, then in the second,
+or the one the machine already gives this project. It writes it
 into `sitesolide.json` and says so; commit it, so that every later deployment
 keeps it. Only a project with a single `start` gets one this way; the other
 commands refuse a manifest without a port until `deploy` has written it.
@@ -232,20 +233,42 @@ that two deployments running side by side cannot both take it. So are 3000 and
 the dashboard, 3026 for the portal and 3029 for analytics, whether they are
 deployed yet or not.
 
-That range is not arbitrary: a nftables rule reserves it to Caddy and root, so
-no service can reach another one. Outside it, a service would be reachable by
-every other project on the machine. A project of several processes declares a
-port for each service that listens, see [`services`](#services).
+Those blocks are not arbitrary: a nftables rule reserves them to Caddy and
+root, so no service can reach another one. Outside them, a service would be
+reachable by every other project on the machine, which is why a port between
+them, 3100 to 20999, is refused as well. A project of several processes
+declares a port for each service that listens, see [`services`](#services).
+
+**Why two blocks, and why there.** The first was the only one: with the
+platform's own ports taken, it held fewer than a hundred servers, and a
+project with a database takes two, so a machine ran out of ports long before
+it ran out of memory. The second adds nine thousand. It does not start right
+after 3099: Caddy's admin API sits on 2019 and the egress proxy on 3128 and
+3129, each outside the blocks on purpose, with rules of their own. Nor at
+20000: a machine behind a Cloudflare Tunnel serves the connector's metrics
+on 20240, which the monitor reads, and cloudflared takes 20241 to 20245 by
+default. It ends below 32768, where Linux's ephemeral ports begin, so that no
+outgoing connection ever takes one of its ports as its source.
+
+**A port of the second block needs a machine that has opened it.** `deploy`
+and a token's deployment refuse one, before anything is pushed, until the
+machine's loopback rule refuses other accounts on that block, every
+project's unit there denies it as systemd has the unit loaded, the backups
+and the installer carry this release's bind lines, and the kernel hands
+none of its ports out by itself; the refusal names what is missing, and the
+owner's steps are in
+[upgrading.md](upgrading.md#a-second-block-of-service-ports). The first block
+works as before on every machine.
 
 **A service listens on its own port alone of the machine's.** The rule judges
 who connects, not who listens, and Caddy connects to whoever listens on a
-port of the range: the unit therefore refuses the service Caddy's admin API,
-2019, every port of 3000 to 3099 but its own, and the egress proxy's 3128 and
-3129 (`SocketBindAllow=`, `SocketBindDeny=`). A worker and a scheduled service
-listen on none of them, nor does a backup command. A bind refused there fails
-with `EPERM`: a server that opened a second port in the range, or UDP on its
-own, and a worker that listened inside it, declare a service of their own,
-with its own `port`. A port outside those stays free, nobody being sent
+port of the blocks: the unit therefore refuses the service Caddy's admin API,
+2019, every port of 3000 to 3099 and of 21000 to 29999 but its own, and the
+egress proxy's 3128 and 3129 (`SocketBindAllow=`, `SocketBindDeny=`). A
+worker and a scheduled service listen on none of them, nor does a backup
+command. A bind refused there fails with `EPERM`: a server that opened a
+second port in the blocks, or UDP on its own, and a worker that listened
+inside them, declare a service of their own, with its own `port`. A port outside those stays free, nobody being sent
 there. systemd applies these lines only when it is built with
 `+BPF_FRAMEWORK`, which `systemctl --version` lists; without it, it ignores
 them without a word.
@@ -309,8 +332,9 @@ What an entry declares makes it one of three kinds:
 - **`internal`.** Caddy never reaches the service; only the project's other
   services do. A worker says it, and a scheduled service is internal whether
   it says it or not: neither takes `routes`.
-- **Ports.** Between 3000 and 3099, one per server; a worker and a scheduled
-  service declare none, and are given no `PORT`. The loopback rule lets each
+- **Ports.** In 3000 to 3099 or 21000 to 29999, one per server, the second
+  block on a machine that has opened it (see [`port`](#port)); a worker and a
+  scheduled service declare none, and are given no `PORT`. The loopback rule lets each
   project reach its own ports and nobody else's, so a service calls its
   siblings on `127.0.0.1:<port>`, a worker as a server does, and a neighbour
   cannot. A rule laid before this existed has no room for that: `deploy`

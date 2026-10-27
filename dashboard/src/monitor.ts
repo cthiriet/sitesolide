@@ -81,6 +81,7 @@ const KIND_LABELS: Readonly<Record<string, string>> = {
   restarts: "Caddy restarted",
   platform: "Unit failed",
   tunnel: "Tunnel down",
+  binds: "Port guard missing",
   monitor: "Monitor incomplete",
 };
 

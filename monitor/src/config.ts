@@ -46,6 +46,14 @@ export type Config = {
   tlsZoneFile: string;
   stateDir: string;
   backupFile: string;
+  /** /etc/systemd/system, whose service units are read as systemd has them loaded. */
+  unitsFolder: string;
+  /** /etc/sitesolide-loopback.nft, the loopback rule laid on the machine, which says whether the second block is open. */
+  loopbackFile: string;
+  /** /etc/passwd, which names the uid a listening socket was opened by. */
+  accountsFile: string;
+  /** /proc/net/tcp and tcp6, the kernel's sockets, the listening ones among them. */
+  procNetTcp: string[];
   /** The filesystems to watch, by a path on each; duplicates are merged by device. */
   diskPaths: string[];
   probe: ProbeConfig;
@@ -111,6 +119,10 @@ export function readConfig(
       // and is a variable the alerting file could override like any other.
       stateDir: tree.STATE_DIRECTORY ?? "/var/lib/sitesolide-monitor",
       backupFile: tree.BACKUP_STATUS_FILE ?? "/var/lib/sitesolide-backup/last-run.json",
+      unitsFolder: tree.UNITS_FOLDER ?? "/etc/systemd/system",
+      loopbackFile: tree.LOOPBACK_FILE ?? "/etc/sitesolide-loopback.nft",
+      accountsFile: tree.ACCOUNTS_FILE ?? "/etc/passwd",
+      procNetTcp: (tree.PROC_NET_TCP ?? "/proc/net/tcp,/proc/net/tcp6").split(",").filter((path) => path !== ""),
       diskPaths: (tree.DISK_PATHS ?? "/,/srv,/var").split(",").map((path) => path.trim()).filter((path) => path !== ""),
       probe: { address: tree.PROBE_ADDRESS ?? "127.0.0.1", port, ca: null, timeoutMs: PROBE_TIMEOUT_MS },
       concurrency: CONCURRENCY,

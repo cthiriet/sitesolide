@@ -7,17 +7,29 @@ import {
   adminPatterns,
   CADDY_ADMIN_PORT,
   CADDY_HTTPS_PORT,
+  autobindReachesBlocks,
+  listeningFilter,
   loopbackRule,
+  PORT_RESERVATION_FILE,
+  portReservationFile,
+  reservedPortsValue,
+  servicesPatterns,
   LOOPBACK_TABLE,
   PROJECT_PORTS_SET,
   projectPortPairs,
   projectPortsFile,
   reachesOwnPorts,
+  reservesEveryBlock,
+  servicePortsSet,
   TUNNEL_ORIGIN,
   tunnelPatterns,
 } from "../cli/loopback";
-import { SERVICE_PORTS, servicesOf, type Manifest } from "../cli/manifest";
+import { FIRST_BLOCK, isServicePort, SERVICE_PORT_RANGES, servicesOf, type Manifest } from "../cli/manifest";
+
+/** The second block, where a machine lets a project listen once it has opened it. */
+const SECOND_BLOCK = SERVICE_PORT_RANGES[1]!;
 import { PORTAL_PORT } from "../cli/portal";
+import { secondBlockStateCommand } from "../cli/services";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 
@@ -66,11 +78,16 @@ function walk(rule: string, uid: number, port: number, pairs: [number, number][]
       if (pairs.some(([p, u]) => p === port && u === uid)) return { verdict: "accepted", logged };
       continue;
     }
-    const m = line.match(/^oifname "lo"(?: ip6 saddr (\S+))? tcp dport (\d+)(?:-(\d+))?(?: meta skuid (?:\{ ([\d, ]+) \}|(\d+)))?(?: ct state new)? (.+)$/);
+    const m = line.match(/^oifname "lo"(?: ip6 saddr (\S+))? tcp dport (?:\{ ([\d, -]+) \}|(\d+(?:-\d+)?))(?: meta skuid (?:\{ ([\d, ]+) \}|(\d+)))?(?: ct state new)? (.+)$/);
     if (m === null) throw new Error(`unreadable rule: ${line}`);
-    const [, source, first, last, set, single, action] = m;
+    const [, source, intervals, interval, set, single, action] = m;
     if (source !== undefined && source !== from) continue;
-    if (port < Number(first) || port > Number(last ?? first)) continue;
+    // One port, one interval, or a set of them, as nftables reads `{ 3000-3099, 21000-29999 }`.
+    const matches = (intervals ?? interval!).split(",").some((element) => {
+      const [first, last] = element.trim().split("-");
+      return port >= Number(first) && port <= Number(last ?? first);
+    });
+    if (!matches) continue;
     const uids = set?.split(",").map((u) => Number(u.trim())) ?? (single === undefined ? null : [Number(single)]);
     if (uids !== null && !uids.includes(uid)) continue;
     if (action === "accept") return { verdict: "accepted", logged };
@@ -107,7 +124,17 @@ describe("the loopback rule", () => {
 
   test("Caddy and root go through, and only on the loopback", () => {
     const rule = loopbackRule(CADDY, "close", DASHBOARD);
-    expect(rule).toInclude('oifname "lo" tcp dport 3000-3099 meta skuid { 0, 997 } accept');
+    expect(rule).toInclude('oifname "lo" tcp dport { 3000-3099, 21000-29999 } meta skuid { 0, 997 } accept');
+  });
+
+  test("every block in one set, on the line that lets Caddy through and on the one that refuses the others", () => {
+    expect(servicePortsSet()).toBe("{ 3000-3099, 21000-29999 }");
+    for (const mode of ["close", "observe"] as const) {
+      const lines = rulesOf(loopbackRule(CADDY, mode, DASHBOARD)).filter((line) => line.includes(servicePortsSet()));
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toEndWith(`meta skuid { 0, ${CADDY} } accept`);
+      expect(lines[1]).toInclude(" ct state new counter ");
+    }
   });
 
   test("the dashboard goes through to the portal, and to no other port", () => {
@@ -129,7 +156,7 @@ describe("the loopback rule", () => {
     );
     // Outside the services range: without rules of its own, nothing would
     // cover it.
-    expect(CADDY_ADMIN_PORT < SERVICE_PORTS.first || CADDY_ADMIN_PORT > SERVICE_PORTS.last).toBe(true);
+    expect(isServicePort(CADDY_ADMIN_PORT)).toBe(false);
   });
 
   test.each(["close", "observe"] as const)("%s: walked in order, the chain decides what is expected of each account", (mode: LoopbackMode) => {
@@ -146,12 +173,19 @@ describe("the loopback rule", () => {
       [DASHBOARD, CADDY_ADMIN_PORT, other],
       [OTHER, CADDY_ADMIN_PORT, other],
       [NOBODY, CADDY_ADMIN_PORT, other],
-      // The services, at both ends of the range.
-      [0, SERVICE_PORTS.first, allowed],
-      [CADDY, SERVICE_PORTS.last, allowed],
-      [OTHER, SERVICE_PORTS.first, other],
-      [OTHER, SERVICE_PORTS.last, other],
-      [DASHBOARD, SERVICE_PORTS.first, other],
+      // The services, at both ends of each block.
+      [0, FIRST_BLOCK.first, allowed],
+      [CADDY, FIRST_BLOCK.last, allowed],
+      [OTHER, FIRST_BLOCK.first, other],
+      [OTHER, FIRST_BLOCK.last, other],
+      [DASHBOARD, FIRST_BLOCK.first, other],
+      [0, SECOND_BLOCK.first, allowed],
+      [CADDY, SECOND_BLOCK.first, allowed],
+      [CADDY, SECOND_BLOCK.last, allowed],
+      [OTHER, SECOND_BLOCK.first, other],
+      [OTHER, SECOND_BLOCK.last, other],
+      [DASHBOARD, SECOND_BLOCK.first, other],
+      [TUNNEL, SECOND_BLOCK.first, other],
       // The portal, the dashboard's only exception.
       [DASHBOARD, PORTAL_PORT, allowed],
       [CADDY, PORTAL_PORT, allowed],
@@ -169,8 +203,12 @@ describe("the loopback rule", () => {
       // Outside the rule, nothing changes for anyone.
       [OTHER, CADDY_ADMIN_PORT - 1, allowed],
       [OTHER, CADDY_ADMIN_PORT + 1, allowed],
-      [OTHER, SERVICE_PORTS.first - 1, allowed],
-      [OTHER, SERVICE_PORTS.last + 1, allowed],
+      [OTHER, FIRST_BLOCK.first - 1, allowed],
+      [OTHER, FIRST_BLOCK.last + 1, allowed],
+      [OTHER, SECOND_BLOCK.first - 1, allowed],
+      [OTHER, SECOND_BLOCK.last + 1, allowed],
+      // Between the blocks, the tunnel's metrics, which the monitor reads as its own account.
+      [OTHER, 20240, allowed],
       [OTHER, 8080, allowed],
     ];
     for (const [uid, port, issue] of expected) {
@@ -185,8 +223,9 @@ describe("the loopback rule", () => {
     expect(rule).toInclude("# Mode: close, admin API: observe.");
     const refused: Issue = { verdict: "refused", logged: false };
     const logged: Issue = { verdict: "accepted", logged: true };
-    expect(walk(rule, OTHER, SERVICE_PORTS.first)).toEqual(refused);
-    expect(walk(rule, DASHBOARD, SERVICE_PORTS.first)).toEqual(refused);
+    expect(walk(rule, OTHER, FIRST_BLOCK.first)).toEqual(refused);
+    expect(walk(rule, DASHBOARD, FIRST_BLOCK.first)).toEqual(refused);
+    expect(walk(rule, OTHER, SECOND_BLOCK.first)).toEqual(refused);
     expect(walk(rule, OTHER, CADDY_ADMIN_PORT)).toEqual(logged);
     expect(walk(rule, DASHBOARD, CADDY_ADMIN_PORT)).toEqual(logged);
     expect(walk(rule, CADDY, CADDY_ADMIN_PORT)).toEqual({ verdict: "accepted", logged: false });
@@ -246,7 +285,7 @@ describe("the loopback rule", () => {
   test("the project set is declared in the table, and consulted before the refusal", () => {
     const rule = loopbackRule(CADDY, "close", DASHBOARD);
     expect(rule).toInclude(`\tset ${PROJECT_PORTS_SET} {\n\t\ttypeof tcp dport . meta skuid\n\t}`);
-    expect(rule.indexOf(`@${PROJECT_PORTS_SET} accept`)).toBeLessThan(rule.indexOf("tcp dport 3000-3099 ct state new"));
+    expect(rule.indexOf(`@${PROJECT_PORTS_SET} accept`)).toBeLessThan(rule.indexOf(`tcp dport ${servicePortsSet()} ct state new`));
     // Emptied, the set lets nothing through: the rule is the one of before.
     expect(walk(rule, PROJECT, 3050, [])).toEqual({ verdict: "refused", logged: false });
   });
@@ -256,8 +295,8 @@ describe("the loopback rule", () => {
     expect(rule.indexOf(`table inet ${LOOPBACK_TABLE}\n`)).toBeLessThan(rule.indexOf(`delete table inet ${LOOPBACK_TABLE}`));
   });
 
-  test("every service the workstation knows listens inside the closed range", () => {
-    // A service outside the range would escape the rule without anything
+  test("every service the workstation knows listens inside the closed blocks", () => {
+    // A service outside the blocks would escape the rule without anything
     // saying so: that is what this test prevents. It reads the ports in the
     // manifests, from which the units are generated, plus the shared service's
     // unit, which has no manifest.
@@ -266,10 +305,7 @@ describe("the loopback rule", () => {
     const apiPort = api.match(/^Environment=PORT=(\d+)$/m)?.[1];
     if (apiPort !== undefined) ports.push(Number(apiPort));
     for (const manifest of knownManifests()) ports.push(...servicesOf(manifest).flatMap((service) => (service.port === null ? [] : [service.port])));
-    for (const port of ports) {
-      expect(port).toBeGreaterThanOrEqual(SERVICE_PORTS.first);
-      expect(port).toBeLessThanOrEqual(SERVICE_PORTS.last);
-    }
+    for (const port of ports) expect({ port, closed: isServicePort(port) }).toEqual({ port, closed: true });
   });
 
   test("the Caddyfile leaves the admin API on the port the rule closes", () => {
@@ -294,6 +330,107 @@ describe("the loopback rule", () => {
         address === "" || address === "{" || address === "off" || address.startsWith("unix/") || address.endsWith(`:${CADDY_ADMIN_PORT}`);
       expect({ line, covered }).toEqual({ line, covered: true });
     }
+  });
+});
+
+describe("every block reserved, as a deployment reads it before a port of the second", () => {
+  test("the rule this release writes in close reserves every block, behind a tunnel too, the API observed or not", () => {
+    expect(reservesEveryBlock(loopbackRule(CADDY, "close", DASHBOARD))).toBe(true);
+    expect(reservesEveryBlock(loopbackRule(CADDY, "close", DASHBOARD, "close", TUNNEL))).toBe(true);
+    expect(reservesEveryBlock(loopbackRule(CADDY, "close", DASHBOARD, "observe"))).toBe(true);
+  });
+
+  test("a rule in observe reserves nothing: every account still connects, the second block stays shut", () => {
+    expect(reservesEveryBlock(loopbackRule(CADDY, "observe", DASHBOARD))).toBe(false);
+    expect(reservesEveryBlock(loopbackRule(CADDY, "observe", DASHBOARD, "observe", TUNNEL))).toBe(false);
+    expect(reservesEveryBlock(loopbackRule(CADDY, "observe", DASHBOARD, "close"))).toBe(false);
+  });
+
+  test("the script's patterns recognise the services' two lines, in their mode and order, every block in the set", () => {
+    for (const mode of ["close", "observe"] as const) {
+      const found = ranks(servicesPatterns(CADDY, mode), loopbackRule(CADDY, mode, DASHBOARD));
+      expect(found.every((index) => index >= 0)).toBe(true);
+      expect(found[0]!).toBeLessThan(found[1]!);
+    }
+    expect(ranks(servicesPatterns(CADDY, "close"), loopbackRule(CADDY, "observe", DASHBOARD))[1]).toBe(-1);
+    // A rule of the release before, the first block alone, does not pass.
+    const before = loopbackRule(CADDY, "close", DASHBOARD).replaceAll(servicePortsSet(), "3000-3099");
+    expect(ranks(servicesPatterns(CADDY, "close"), before)).toEqual([-1, -1]);
+    expect(() => servicesPatterns(0, "close")).toThrow();
+  });
+
+  test("as nft list table renders it, counters and all", () => {
+    // The rendering nftables gives an anonymous set of intervals; the
+    // counters as the kernel adds them, recorded on nftables 1.1.3.
+    const listed = [
+      'table inet sitesolide_boucle {',
+      '\tchain output {',
+      '\t\toifname "lo" tcp dport { 3000-3099, 21000-29999 } meta skuid { 0, 997 } accept',
+      '\t\toifname "lo" tcp dport { 3000-3099, 21000-29999 } ct state new counter packets 2 bytes 120 reject with tcp reset',
+      '\t\toifname "lo" tcp dport 2019 ct state new counter packets 0 bytes 0 reject with tcp reset',
+      '\t}',
+      '}',
+    ].join("\n");
+    expect(reservesEveryBlock(listed)).toBe(true);
+    expect(ranks(servicesPatterns(CADDY, "close"), listed)).toEqual([2, 3]);
+    const observed = listed.replace("counter packets 2 bytes 120 reject with tcp reset", 'counter packets 0 bytes 0 limit rate 30/minute burst 5 packets log prefix "sitesolide-loopback: " flags skuid');
+    expect(reservesEveryBlock(observed)).toBe(false);
+    expect(ranks(servicesPatterns(CADDY, "observe"), observed)).toEqual([2, 3]);
+  });
+
+  test("a rule laid before the second block, or one that refuses the others on part of it, does not", () => {
+    const before = [
+      '\t\toifname "lo" tcp dport 3000-3099 meta skuid { 0, 997 } accept',
+      '\t\toifname "lo" tcp dport 3000-3099 ct state new counter packets 0 bytes 0 reject with tcp reset',
+      '\t\toifname "lo" tcp dport 2019 ct state new counter packets 0 bytes 0 reject with tcp reset',
+    ].join("\n");
+    expect(reservesEveryBlock(before)).toBe(false);
+    // Caddy let through on both blocks is not the others refused on both.
+    expect(reservesEveryBlock(before.replace("3000-3099 meta", "{ 3000-3099, 21000-29999 } meta"))).toBe(false);
+    // A block cut short is not the block.
+    expect(reservesEveryBlock(before.replace("3000-3099 ct state", "{ 3000-3099, 21000-25000 } ct state"))).toBe(false);
+    expect(reservesEveryBlock("")).toBe(false);
+  });
+
+  test("the listening sockets of every block, as ss filters them", () => {
+    expect(listeningFilter()).toBe("( sport >= :3000 and sport <= :3099 ) or ( sport >= :21000 and sport <= :29999 )");
+  });
+});
+
+describe("the ports the kernel hands out by itself", () => {
+  /**
+   * SocketBindDeny= is a BPF program on bind(2), compared with the port asked
+   * for: a bind to port 0, or a listen without bind, gets a port the kernel
+   * picks in ip_local_port_range, which the program never sees. Reserved,
+   * the blocks' ports are never picked.
+   */
+  test("every block reserved, what the machine reserved kept, written as the kernel lists it", () => {
+    expect(reservedPortsValue("")).toBe("3000-3099,21000-29999");
+    expect(reservedPortsValue("\n")).toBe("3000-3099,21000-29999");
+    expect(reservedPortsValue("8080,3050-3200,29999-30010")).toBe("3000-3200,8080,21000-30010");
+    expect(reservedPortsValue("3000-3099,21000-29999")).toBe("3000-3099,21000-29999");
+    expect(reservedPortsValue("every port")).toBeNull();
+    expect(reservedPortsValue("70000")).toBeNull();
+  });
+
+  test("the file sets the key alone, and refuses anything but ports", () => {
+    const file = portReservationFile("3000-3099,21000-29999");
+    expect(file.split("\n").filter((line) => line !== "" && !line.startsWith("#"))).toEqual(["net.ipv4.ip_local_reserved_ports = 3000-3099,21000-29999"]);
+    expect(PORT_RESERVATION_FILE).toBe("/etc/sysctl.d/90-sitesolide-service-ports.conf");
+    expect(() => portReservationFile("3000; reboot")).toThrow();
+  });
+
+  test("the kernel reaches a block only when its range meets one and a port of it is not reserved", () => {
+    // Debian's default, 32768 to 60999: clear of both blocks, reserved or not.
+    expect(autobindReachesBlocks("32768\t60999", "")).toBe(false);
+    // Widened: it meets both, until both are reserved.
+    expect(autobindReachesBlocks("1024\t65535", "")).toBe(true);
+    expect(autobindReachesBlocks("1024\t65535", "3000-3099")).toBe(true);
+    expect(autobindReachesBlocks("1024\t65535", "3000-3099,21000-29999")).toBe(false);
+    expect(autobindReachesBlocks("25000 40000", "21000-24999")).toBe(true);
+    expect(autobindReachesBlocks("25000 40000", "21000-29999")).toBe(false);
+    expect(autobindReachesBlocks("x", "")).toBeNull();
+    expect(autobindReachesBlocks("1024 65535", "x")).toBeNull();
   });
 });
 
@@ -331,9 +468,10 @@ describe("behind a tunnel", () => {
       [TUNNEL, CADDY_HTTPS_PORT, "127.0.0.1", allowed],
       // ::1 to any other port: the rule of before.
       [OTHER, 8443, TUNNEL_ORIGIN, allowed],
-      [OTHER, SERVICE_PORTS.first, TUNNEL_ORIGIN, other],
+      [OTHER, FIRST_BLOCK.first, TUNNEL_ORIGIN, other],
+      [OTHER, SECOND_BLOCK.first, TUNNEL_ORIGIN, other],
       // The connector is no exception elsewhere.
-      [TUNNEL, SERVICE_PORTS.first, "127.0.0.1", other],
+      [TUNNEL, FIRST_BLOCK.first, "127.0.0.1", other],
       [TUNNEL, CADDY_ADMIN_PORT, "127.0.0.1", other],
       [TUNNEL, PORTAL_PORT, "127.0.0.1", other],
     ];
@@ -341,7 +479,7 @@ describe("behind a tunnel", () => {
       expect({ uid, port, from, issue: walk(rule, uid, port, PROJECT_PAIRS, from) }).toEqual({ uid, port, from, issue });
     }
     // The rest walks as without the tunnel.
-    expect(walk(rule, OTHER, SERVICE_PORTS.first)).toEqual(walk(loopbackRule(CADDY, mode, DASHBOARD), OTHER, SERVICE_PORTS.first));
+    expect(walk(rule, OTHER, FIRST_BLOCK.first)).toEqual(walk(loopbackRule(CADDY, mode, DASHBOARD), OTHER, FIRST_BLOCK.first));
     expect(walk(rule, CADDY, CADDY_ADMIN_PORT)).toEqual(allowed);
   });
 
@@ -401,6 +539,8 @@ httpd -p 127.0.0.1:${PORTAL_PORT} -h /srv/www
 httpd -p 127.0.0.1:8080 -h /srv/www
 httpd -p 127.0.0.1:3050 -h /srv/www
 httpd -p 127.0.0.1:3052 -h /srv/www
+httpd -p 127.0.0.1:${SECOND_BLOCK.first} -h /srv/www
+httpd -p 127.0.0.1:${SECOND_BLOCK.last} -h /srv/www
 httpd -p [::1]:3043 -h /srv/www
 httpd -p 127.0.0.1:${CADDY_ADMIN_PORT} -h /srv/www
 httpd -p [::1]:${CADDY_ADMIN_PORT} -h /srv/www
@@ -420,6 +560,10 @@ echo "other:3022=$(code other http://127.0.0.1:3022/)"
 echo "other:v6:3043=$(code other 'http://[::1]:3043/')"
 echo "caddy:v6:3043=$(code caddy 'http://[::1]:3043/')"
 echo "other:8080=$(code other http://127.0.0.1:8080/)"
+echo "caddy:second=$(code caddy http://127.0.0.1:${SECOND_BLOCK.first}/)"
+echo "root:second=$(root http://127.0.0.1:${SECOND_BLOCK.last}/)"
+echo "other:second=$(code other http://127.0.0.1:${SECOND_BLOCK.first}/)"
+echo "other:second:last=$(code other http://127.0.0.1:${SECOND_BLOCK.last}/)"
 echo "dashboard:portal=$(code dashboard http://127.0.0.1:${PORTAL_PORT}/)"
 echo "dashboard:3022=$(code dashboard http://127.0.0.1:3022/)"
 echo "other:portal=$(code other http://127.0.0.1:${PORTAL_PORT}/)"
@@ -475,8 +619,14 @@ echo "project:3052:refilled=$(code project http://127.0.0.1:3052/)"
     expect(output).toInclude("other:3022=000");
     expect(output).toInclude("other:v6:3043=000");
     expect(output).toInclude("caddy:v6:3043=200");
-    // Outside the range, nothing changes.
+    // Outside the blocks, nothing changes.
     expect(output).toInclude("other:8080=200");
+    // The second block, as closed as the first, and read as reserved in the listing.
+    expect(output).toInclude("caddy:second=200");
+    expect(output).toInclude("root:second=200");
+    expect(output).toInclude("other:second=000");
+    expect(output).toInclude("other:second:last=000");
+    expect(reservesEveryBlock(list(output))).toBe(true);
     // The dashboard reaches the portal, and nothing else; the exception
     // benefits nobody else.
     expect(output).toInclude("dashboard:portal=200");
@@ -624,6 +774,40 @@ describe("the project set", () => {
 });
 
 describe("what the script reads from the CLI", () => {
+  test("the machine's read and the listening filter come back as the modules write them, in a terminal that forces colour too", () => {
+    const script = readFileSync(join(REPO_ROOT, "bin", "deploy-loopback.sh"), "utf8");
+    const commands = [...script.matchAll(/^(STATE_COMMAND|LISTENING_FILTER)="\$\(cd "\$REPO_ROOT" && bun -e '([^']+)'\)"$/gm)];
+    expect(commands.map((match) => match[1])).toEqual(["STATE_COMMAND", "LISTENING_FILTER"]);
+    const expected: Record<string, string> = { STATE_COMMAND: secondBlockStateCommand(), LISTENING_FILTER: listeningFilter() };
+    for (const [, name, code] of commands) {
+      const run = Bun.spawnSync(["bun", "-e", code!], { cwd: REPO_ROOT, env: { ...process.env, FORCE_COLOR: "1" }, stdout: "pipe" });
+      expect({ name, printed: run.stdout.toString() }).toEqual({ name, printed: `${expected[name!]}\n` });
+    }
+  });
+
+  test("the machine is read before anything is laid, the ports reserved before the rule, the loaded rule checked for every block", () => {
+    const script = readFileSync(join(REPO_ROOT, "bin", "deploy-loopback.sh"), "utf8");
+    // Before the rule is even generated: nothing is laid while a unit or a component may listen in the second block.
+    const read = script.indexOf('STATE_ANSWER="$(ssh');
+    expect(read).toBeGreaterThan(0);
+    expect(read).toBeLessThan(script.indexOf('> "$WORK/loopback.nft"'));
+    expect(script).toInclude("unguardedUnits(state)");
+    expect(script).toInclude('state.components[name] === "outdated"');
+    // Anything already listening on the second block that no deposited manifest accounts for, named down to its unit.
+    expect(script).toInclude("strayListeners(state.listeners, deposited.manifests)");
+    expect(script.indexOf('MANIFESTS_ANSWER="$(ssh')).toBeLessThan(script.indexOf('> "$WORK/loopback.nft"'));
+    expect(script).toInclude("ps -o pid=,unit=,args=");
+    // The reservation, laid and read back from the kernel before the safety net and the rule.
+    const reserved = script.indexOf("sudo sysctl -q -p $RESERVATION");
+    expect(reserved).toBeGreaterThan(read);
+    expect(reserved).toBeLessThan(script.indexOf("--on-active=120"));
+    expect(script.indexOf("autobindReachesBlocks(range, reserved) === false")).toBeGreaterThan(reserved);
+    expect(script).toInclude(`RESERVATION=${PORT_RESERVATION_FILE}`);
+    // The services' lines found in what the kernel loaded, in the rule's mode.
+    expect(script.indexOf('done <<< "$SERVICES_PATTERNS"')).toBeGreaterThan(script.indexOf('LOADED="$(ssh'));
+    expect(script).toInclude("ss -ltnH '( $LISTENING_FILTER )'");
+  });
+
   test("its ports come back as digits alone, in a terminal that forces colour too", () => {
     // A port printed by console.log came back as \e[33m2019\e[0m under
     // FORCE_COLOR=1, and every probe of the script asked a URL curl could

@@ -19,6 +19,10 @@
  *
  * Pure: returns text.
  */
+import { FIRST_BLOCK, servicePortsProse } from "./manifest";
+
+/** The first block of the services' ports, where a port works on every machine. */
+const FIRST_BLOCK_PROSE = `${FIRST_BLOCK.first} to ${FIRST_BLOCK.last}`;
 
 /** A read over SSH that failed, whatever it was reading. */
 const READ_FAILED =
@@ -125,7 +129,9 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   // --- the machine, read before anything is pushed
   [/no longer matches the manifest/, "do not re-run with --force on your own: show the differing lines in `details` to the owner, who decides whether the manifest or the file on the server is right"],
   [/is already the name of a service of the server/, "pick another slug in sitesolide.json; never deploy under the name of a system service, and never remove, rename or mask anything on the server to make room"],
-  [/^port already taken on the server/, "change `port` in sitesolide.json to a free port between 3000 and 3099, or delete the key and let deploy pick one"],
+  [/^port already taken on the server/, `change \`port\` in sitesolide.json to a free port of ${servicePortsProse()}, or delete the key and let deploy pick one`],
+  [/^the server has not opened the second block of service ports/, `the owner has to open it first, with the commands in \`details\`, in that order; an agent must not run them: until then, set \`port\` in sitesolide.json to a free port of ${FIRST_BLOCK_PROSE}, or tell the user`],
+  [/^cannot tell whether the server has opened the second block of service ports/, READ_FAILED],
   [/^no free port left on the server/, "the owner has to free a port by removing a project the server no longer needs; deploy cannot pick one"],
   [/^the loopback rule in service predates the project set/, "the owner has to lay the current loopback rule first (the command is in `details`); an agent must not run it"],
   [/^\/etc\/sitesolide-loopback-projects\.nft refused/, "tell the owner: the loopback rule on the server refused this project's ports; nothing more can be done from here"],
@@ -282,7 +288,8 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "access-changed": "the project's general access changed from the dashboard while the deployment ran: deploy again",
   // The same, as an installer from before the rename names it.
   "door-changed": "the project's general access changed from the dashboard while the deployment ran: deploy again",
-  "port-taken": "delete `port` from sitesolide.json and let the machine choose one, or pick a free one between 3000 and 3099",
+  "port-taken": `delete \`port\` from sitesolide.json and let the machine choose one, or pick a free one of ${servicePortsProse()}`,
+  "second-block-closed": `the owner of the machine has to open the second block of service ports first, as the message says; until then, set \`port\` in sitesolide.json to a free port of ${FIRST_BLOCK_PROSE}`,
   "domain-taken": "a domain name belongs to one project: take it out of this sitesolide.json, or ask the owner to take it out of the project that declares it",
   "no-port": "the owner has to free a port by removing a project the machine no longer needs",
   "bundle-refused": "replace symbolic links and special files with the files they point to, or exclude them in sitesolide.json, then deploy again",

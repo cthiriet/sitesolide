@@ -25,8 +25,9 @@ import {
   isValidServiceName,
   isValidSlug,
   isValidTimeout,
+  portRangeText,
   secretsOf,
-  SERVICE_PORTS,
+  SERVICE_PORT_RANGES,
   servedContact,
   servedZone,
   servicesOf,
@@ -610,14 +611,138 @@ function renderUnit(
 
 /**
  * The ports of the machine no project listens on but its own: Caddy's admin
- * API, the range Caddy sends the sites' visitors to, the platform's among
- * them, and the egress proxy with its connectors.
+ * API, each block Caddy sends the sites' visitors to, the platform's among
+ * them, and the egress proxy with its connectors. One `SocketBindDeny=` line
+ * each, in the order of their ports: the second block's comes last, so that a
+ * unit generated before it is this text without that one line
+ * (withoutLaterBlockLines).
  */
-export const DENIED_BINDS = [
-  String(CADDY_ADMIN_PORT),
-  `${SERVICE_PORTS.first}-${SERVICE_PORTS.last}`,
-  `${EGRESS_PROXY_PORT}-${CONNECTORS_PORT}`,
-];
+export const DENIED_BINDS: readonly string[] = [
+  { first: CADDY_ADMIN_PORT, last: CADDY_ADMIN_PORT },
+  ...SERVICE_PORT_RANGES,
+  { first: EGRESS_PROXY_PORT, last: CONNECTORS_PORT },
+]
+  .toSorted((a, b) => a.first - b.first)
+  .map(portRangeText);
+
+/** DENIED_BINDS as the lines a unit carries them. */
+export function deniedBindLines(): string[] {
+  return DENIED_BINDS.map((ports) => `SocketBindDeny=${ports}`);
+}
+
+/** The lines of every block but the first, which no unit generated before them carries. */
+function laterBlockLines(): Set<string> {
+  return new Set(SERVICE_PORT_RANGES.slice(1).map((range) => `SocketBindDeny=${portRangeText(range)}`));
+}
+
+/**
+ * A generated unit as the generator wrote it before the second block of the
+ * services' ports: the units of every machine in service until this release.
+ * Recognised as the generator's own, it is replaced at the next deployment or
+ * `refresh` without `--force`.
+ */
+export function withoutLaterBlockLines(text: string): string {
+  const later = laterBlockLines();
+  return text
+    .split("\n")
+    .filter((line) => !later.has(line))
+    .join("\n");
+}
+
+/**
+ * What a build that writes these bind lines carries, and an older one does
+ * not: the backup component and the installer print it (`backup.js
+ * features`, `installer.js --features`), which is what keeps it in their
+ * bundle, and a machine is searched for it before it opens the second block
+ * (secondBlockStateCommand in bin/cli/services.ts). A literal, so that a
+ * search of the built file finds it: bin/tests/cli-unit.test.ts holds it to
+ * DENIED_BINDS.
+ */
+export const BIND_LINES_FEATURE = "sitesolide-feature:denied-binds:2019,3000-3099,3128-3129,21000-29999";
+
+/** The units' properties systemd is asked for, `systemctl show -p ...`: who a unit runs as, and where it may not listen. */
+export const BIND_PROPERTIES = ["Id", "User", "SocketBindDeny", "NeedDaemonReload"] as const;
+
+/**
+ * A service unit as systemd has it loaded, not as its file reads: its
+ * drop-ins applied, an empty `SocketBindDeny=` that resets the list
+ * included, and `NeedDaemonReload` saying the file changed since.
+ */
+export type BindState = { unit: string; user: string; denied: string[]; needsReload: boolean };
+
+/**
+ * `systemctl show -p Id -p User -p SocketBindDeny -p NeedDaemonReload` of
+ * several units, one block each, blank lines between. systemd prints one
+ * `SocketBindDeny=` line per rule, `3000-3099` for a rule without family or
+ * protocol (systemctl-show.c, systemd 252 and 257 alike); a list joined by
+ * spaces reads the same. Null when a block lacks its `Id=`.
+ */
+export function readBindStates(output: string): BindState[] | null {
+  const states: BindState[] = [];
+  for (const block of output.split(/\n\s*\n/)) {
+    const lines = block.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+    if (lines.length === 0) continue;
+    let unit: string | null = null;
+    let user = "";
+    let needsReload = false;
+    const denied: string[] = [];
+    for (const line of lines) {
+      const at = line.indexOf("=");
+      if (at <= 0) return null;
+      const [key, value] = [line.slice(0, at), line.slice(at + 1).trim()];
+      if (key === "Id") unit = value;
+      else if (key === "User") user = value;
+      else if (key === "NeedDaemonReload") needsReload = value !== "no";
+      else if (key === "SocketBindDeny") denied.push(...value.split(/\s+/).filter((rule) => rule !== ""));
+    }
+    if (unit === null || unit === "") return null;
+    states.push({ unit, user, denied, needsReload });
+  }
+  return states;
+}
+
+/**
+ * Does a rule as systemd prints it deny every family's TCP on `ports`, as a
+ * generated line does? `3000-3099`, or `tcp` before it (systemd prints the
+ * protocol with no colon after it), or `any`. A rule for one family or for
+ * UDP alone leaves the rest open, and does not count.
+ */
+function deniesPorts(rule: string, ports: string): boolean {
+  const bare = rule.replace(/^tcp:?/, "");
+  return bare === ports || bare === "any";
+}
+
+/**
+ * The units among `states` that run as a project's account and may still
+ * listen on one of `needed`, ranges as DENIED_BINDS writes them: one of them
+ * not denied, or a file changed since systemd loaded it, whose new lines hold
+ * nothing until `systemctl daemon-reload` and a restart. A hand edit that
+ * adds the lines is read as systemd reads it, its drop-ins and its spaces
+ * included.
+ */
+export function unboundStates(states: readonly BindState[], needed: readonly string[] = DENIED_BINDS): string[] {
+  return states
+    .filter((state) => state.user.startsWith("site-"))
+    .filter((state) => state.needsReload || needed.some((ports) => !state.denied.some((rule) => deniesPorts(rule, ports))))
+    .map((state) => state.unit)
+    .sort();
+}
+
+/** The bind lines a machine needs before its second block opens: the first block's and the platform's, not the second's. */
+export function earlierDeniedBinds(): string[] {
+  const later = laterBlockLines();
+  return DENIED_BINDS.filter((ports) => !later.has(`SocketBindDeny=${ports}`));
+}
+
+/**
+ * The `SocketBindDeny=` lines of DENIED_BINDS a unit file lacks, read as the
+ * generator writes them: none for a unit of this release, the second
+ * block's for one of the release before.
+ */
+export function missingDeniedBinds(text: string): string[] {
+  const lines = new Set(text.split("\n").map((line) => line.trim()));
+  return deniedBindLines().filter((line) => !lines.has(line));
+}
 
 /**
  * Where a service may listen. The loopback rule judges who connects to a
@@ -642,7 +767,7 @@ function bindLines(service: ServiceView): string[] {
       ? "# Listens on none of the machine's ports: not a neighbour's, nor the platform's."
       : "# Listens on its own port, and on none of the machine's others.",
     ...(service.port === null ? [] : [`SocketBindAllow=tcp:${service.port}`]),
-    ...DENIED_BINDS.map((ports) => `SocketBindDeny=${ports}`),
+    ...deniedBindLines(),
   ];
 }
 
@@ -756,19 +881,24 @@ export function withoutStoreLines(text: string): string {
 
 /**
  * What earlier releases generated where this one generates `text`, newest
- * first: without the store's lines, as 0.7 wrote it, then also without the
- * system-call filter, as 0.6 did, then also without the bind lines, as
- * every release before; and the two this list held before the store,
- * without the filter, then without the bind lines either. A unit in service
- * that reads as one of them was never edited by hand, and is replaced at the
- * project's next deployment without `--force`, by `deploy`, `refresh` and
- * the installer alike.
+ * first: without the second block's bind line, as every release since the
+ * store's lines wrote it; then also without the store's lines, as 0.7 did, then also
+ * without the system-call filter, as 0.6 did, then also without the bind
+ * lines, as every release before; and the two this list held before the
+ * store, without the filter, then without the bind lines either. A unit in
+ * service that reads as one of them was never edited by hand, and is replaced
+ * at the project's next deployment without `--force`, by `deploy`, `refresh`
+ * and the installer alike.
+ *
+ * Every text but the first is taken without the second block's line: no
+ * release before it wrote that line.
  */
 export function earlierGenerations(text: string): string[] {
-  const beforeStore = withoutStoreLines(text);
+  const beforeBlock = withoutLaterBlockLines(text);
+  const beforeStore = withoutStoreLines(beforeBlock);
   const beforeStoreAndFilter = withoutSyscallLines(beforeStore);
-  const beforeFilter = withoutSyscallLines(text);
-  return [beforeStore, beforeStoreAndFilter, withoutBindLines(beforeStoreAndFilter), beforeFilter, withoutBindLines(beforeFilter)];
+  const beforeFilter = withoutSyscallLines(beforeBlock);
+  return [beforeBlock, beforeStore, beforeStoreAndFilter, withoutBindLines(beforeStoreAndFilter), beforeFilter, withoutBindLines(beforeFilter)];
 }
 
 /**
@@ -863,7 +993,7 @@ export function systemdRunArguments(run: ProjectRun, systemdRun = "/usr/bin/syst
     // it hold one of the machine's ports for its fifteen minutes: the
     // portal's, held, could not start again (bindLines).
     ...(run.network ? ["IPAddressDeny=localhost"] : ["PrivateNetwork=yes", "IPAddressDeny=any"]),
-    ...DENIED_BINDS.map((ports) => `SocketBindDeny=${ports}`),
+    ...deniedBindLines(),
     ...(run.workingDirectory === null ? [] : [`WorkingDirectory=${run.workingDirectory}`]),
   ];
   return [
@@ -1012,10 +1142,10 @@ export type UnitAction = "install" | "present" | "diverged";
  * hand-written unit would be declared divergent at every deployment for its
  * comments alone, while running exactly the same service. See comparison.ts.
  *
- * A unit an earlier release generated, before the store's lines, the bind
- * lines or the system-call filter, is the generator's own, not one edited by
- * hand: installed, so that every project takes them at its next deployment.
- * See earlierGenerations.
+ * A unit an earlier release generated, before the second block's bind line,
+ * the store's lines, the bind lines or the system-call filter, is the
+ * generator's own, not one edited by hand: installed, so that every project
+ * takes them at its next deployment. See earlierGenerations.
  *
  * So is a unit generated from the manifest the previous deployment left on
  * the machine, by this release or an earlier one: a changed manifest, a port,

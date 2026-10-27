@@ -29,8 +29,15 @@ import {
   unitNames,
   watchedUnits,
   withoutBindLines,
+  withoutLaterBlockLines,
   withoutStoreLines,
   withoutSyscallLines,
+  DENIED_BINDS,
+  BIND_LINES_FEATURE,
+  earlierDeniedBinds,
+  missingDeniedBinds,
+  readBindStates,
+  unboundStates,
 } from "../cli/unit";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -296,9 +303,9 @@ describe("the project's store, in every service unit", () => {
     expect(scheduled["news.sync"]!).toInclude("\nProtectProc=invisible\n");
   });
 
-  test.each(STORELESS)("%s keeps its flat file and its unit of 0.7, byte for byte (I10)", (name) => {
+  test.each(STORELESS)("%s keeps its flat file and its unit of 0.7, byte for byte but the second block's bind line (I10)", (name) => {
     const units = unitsOf(name);
-    expect(Object.fromEntries(units.map(({ unit, text }) => [unit, sha256(text)]))).toEqual(FINGERPRINTS_07[name]!);
+    expect(Object.fromEntries(units.map(({ unit, text }) => [unit, sha256(withoutLaterBlockLines(text))]))).toEqual(FINGERPRINTS_07[name]!);
     for (const { text } of units) {
       expect(text).not.toMatch(/\/projects\/|^(LoadCredential|ProtectProc|InaccessiblePaths)=/m);
       expect(text).toInclude(`\nEnvironmentFile=-/etc/sitesolide/${name}.env\n`);
@@ -482,18 +489,23 @@ describe("the units 0.7 laid, replaced without --force", () => {
     // What 0.7 lacks and this release adds, directive by directive.
     expect(compareDirectives(SHOP_07, shop!.text)).toEqual({
       lost: [],
-      added: ["EnvironmentFile=-/etc/sitesolide/projects/shop/env", "LoadCredential=files:/etc/sitesolide/projects/shop/files", "ProtectProc=invisible"],
+      added: [
+        "EnvironmentFile=-/etc/sitesolide/projects/shop/env",
+        "LoadCredential=files:/etc/sitesolide/projects/shop/files",
+        "ProtectProc=invisible",
+        "SocketBindDeny=21000-29999",
+      ],
     });
   });
 
-  test.each(Object.keys(FINGERPRINTS_07))("%s: withoutStoreLines gives back each unit of 0.7, byte for byte", (name) => {
-    expect(Object.fromEntries(unitsOf(name).map(({ unit, text }) => [unit, sha256(withoutStoreLines(text))]))).toEqual(FINGERPRINTS_07[name]!);
+  test.each(Object.keys(FINGERPRINTS_07))("%s: without the second block's line and the store's, each unit of 0.7 comes back byte for byte", (name) => {
+    expect(Object.fromEntries(unitsOf(name).map(({ unit, text }) => [unit, sha256(withoutStoreLines(withoutLaterBlockLines(text)))]))).toEqual(FINGERPRINTS_07[name]!);
   });
 
   test.each(Object.keys(FINGERPRINTS_07))("%s: each unit of 0.7, of 0.6 and from before is the generator's own", (name) => {
     for (const { unit, text } of unitsOf(name)) {
       // Byte for byte the 0.7 text, by the fingerprints above.
-      const of07 = withoutStoreLines(text);
+      const of07 = withoutStoreLines(withoutLaterBlockLines(text));
       for (const earlier of [of07, withoutSyscallLines(of07), withoutBindLines(withoutSyscallLines(of07))]) {
         // Never diverged: present when nothing changed for this unit, a timer or an anchor.
         const action = decideUnit({ installed: earlier, generated: text, replace: false });
@@ -525,18 +537,21 @@ describe("the units 0.7 laid, replaced without --force", () => {
     }
   });
 
-  test("the generations, newest first, the two of before the store last", () => {
+  test("the generations, newest first, the two of before the store last, none with the second block's line", () => {
     const [shop] = unitsOf("none");
     const text = shop!.text;
     const generations = earlierGenerations(text);
+    const beforeBlock = withoutLaterBlockLines(text);
     expect(generations).toEqual([
-      withoutStoreLines(text),
-      withoutSyscallLines(withoutStoreLines(text)),
-      withoutBindLines(withoutSyscallLines(withoutStoreLines(text))),
-      withoutSyscallLines(text),
-      withoutBindLines(withoutSyscallLines(text)),
+      beforeBlock,
+      withoutStoreLines(beforeBlock),
+      withoutSyscallLines(withoutStoreLines(beforeBlock)),
+      withoutBindLines(withoutSyscallLines(withoutStoreLines(beforeBlock))),
+      withoutSyscallLines(beforeBlock),
+      withoutBindLines(withoutSyscallLines(beforeBlock)),
     ]);
-    expect(generations[0]).toBe(SHOP_07);
+    expect(generations[1]).toBe(SHOP_07);
+    for (const generation of generations) expect(generation).not.toInclude("SocketBindDeny=21000-29999");
   });
 
   test("withoutStoreLines takes off the store's lines and nothing else, and once", () => {
@@ -806,6 +821,7 @@ describe("install over SSH, in the service's walls", () => {
       '"-p" "SocketBindDeny=2019"',
       '"-p" "SocketBindDeny=3000-3099"',
       '"-p" "SocketBindDeny=3128-3129"',
+      '"-p" "SocketBindDeny=21000-29999"',
       '"-p" "WorkingDirectory=/srv/sites/budget/app"',
       '"-p" "RuntimeMaxSec=900"',
       '"--expand-environment=no"',
@@ -1077,7 +1093,7 @@ describe("the units of servers, as they were before workers existed", () => {
   test.each(Object.keys(FINGERPRINTS_06))("projects/%s, without the store's lines and the system-call filter, is what 0.6 generated, to the byte", (fixture) => {
     const { manifest } = readManifest(readFileSync(join(REPO_ROOT, "bin", "tests", "e2e", "projects", fixture, "sitesolide.json"), "utf8"));
     const generated = generateUnits(manifest!, { slug: manifest!.slug, zone: "test-zone.invalid", contact: "sample@test-zone.invalid" });
-    const fingerprints = Object.fromEntries(generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(withoutSyscallLines(withoutStoreLines(text))).digest("hex")]));
+    const fingerprints = Object.fromEntries(generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(withoutSyscallLines(withoutStoreLines(withoutLaterBlockLines(text)))).digest("hex")]));
     expect(fingerprints).toEqual(FINGERPRINTS_06[fixture]!);
   });
 });
@@ -1086,7 +1102,7 @@ describe("the ports a service may listen on", () => {
   /**
    * A project's account may bind any free port of the loopback, and the
    * loopback rule only judges who connects, never who answers: Caddy, which
-   * may reach every port from 3000 to 3099, connects to whoever listens there.
+   * may reach every port of both blocks, connects to whoever listens there.
    * A compromised app that waits for the portal's port to come free, during an
    * upgrade, answered every forward_auth with the identity of its choosing and
    * received the owner's password typed on a sign-in page; on the egress
@@ -1103,7 +1119,82 @@ describe("the ports a service may listen on", () => {
   } as Manifest;
   const PLACEHOLDERS = { slug: "lab", zone: "test-zone.invalid", contact: "" };
   const units = Object.fromEntries(generateUnits(LAB, PLACEHOLDERS).map(({ unit, text }) => [unit, text]));
-  const DENIED = ["SocketBindDeny=2019", "SocketBindDeny=3000-3099", "SocketBindDeny=3128-3129"];
+  const DENIED = ["SocketBindDeny=2019", "SocketBindDeny=3000-3099", "SocketBindDeny=3128-3129", "SocketBindDeny=21000-29999"];
+
+  test("each block of the services' ports is its own line, in the order of the ports, the second block last", () => {
+    expect(DENIED_BINDS).toEqual(["2019", "3000-3099", "3128-3129", "21000-29999"]);
+    const web = units["lab"]!.split("\n");
+    expect(web.filter((line) => line.startsWith("SocketBindDeny="))).toEqual(DENIED);
+    // A server of the second block listens there alone, its block denied to it but its own port.
+    const late = generateUnit({ ...APP, port: 21042 });
+    expect(late).toInclude("\nSocketBindAllow=tcp:21042\n");
+    for (const line of DENIED) expect(late).toInclude(`\n${line}\n`);
+  });
+
+  test("a unit of the release before, without the second block's line, is the generator's own and replaced without --force", () => {
+    for (const text of [generateUnit(APP), ...Object.values(units).filter((text) => text.includes("SocketBindDeny="))]) {
+      const before = withoutLaterBlockLines(text);
+      expect(before.split("\n").length).toBe(text.split("\n").length - 1);
+      expect(decideUnit({ installed: before, generated: text, replace: false })).toBe("install");
+      // That line alone taken off a unit of this release's, plus anything else, is a hand edit.
+      expect(decideUnit({ installed: `${before}\nLimitNOFILE=4096\n`, generated: text, replace: false })).toBe("diverged");
+    }
+  });
+
+  test("the bind lines a generated unit lacks, as the generator writes them", () => {
+    const current = generateUnit(APP);
+    expect(missingDeniedBinds(current)).toEqual([]);
+    expect(missingDeniedBinds(withoutLaterBlockLines(current))).toEqual(["SocketBindDeny=21000-29999"]);
+    expect(missingDeniedBinds(withoutBindLines(current))).toEqual(DENIED);
+  });
+
+  test("the marker a build with these lines carries is the very list it denies", () => {
+    expect(BIND_LINES_FEATURE).toBe(`sitesolide-feature:denied-binds:${DENIED_BINDS.join(",")}`);
+    expect(earlierDeniedBinds()).toEqual(["2019", "3000-3099", "3128-3129"]);
+  });
+
+  /** `systemctl show -p Id -p User -p SocketBindDeny -p NeedDaemonReload`, as systemd 252 and 257 print it: one line per rule. */
+  const SHOWN = [
+    "Id=shop.service",
+    "User=site-shop",
+    "SocketBindDeny=2019",
+    "SocketBindDeny=3000-3099",
+    "SocketBindDeny=3128-3129",
+    "SocketBindDeny=21000-29999",
+    "NeedDaemonReload=no",
+    "",
+    "Id=old.service",
+    "User=site-old",
+    "SocketBindDeny=2019",
+    "SocketBindDeny=3000-3099",
+    "SocketBindDeny=3128-3129",
+    "NeedDaemonReload=no",
+    "",
+    "Id=edited.service",
+    "User=site-edited",
+    "SocketBindDeny=2019 3000-3099 3128-3129 21000-29999",
+    "NeedDaemonReload=yes",
+    "",
+    "Id=caddy.service",
+    "User=caddy",
+    "SocketBindDeny=",
+    "NeedDaemonReload=no",
+    "",
+  ].join("\n");
+
+  test("what systemd has loaded is read, not the file: one rule per line or a list, a file changed since", () => {
+    const states = readBindStates(SHOWN)!;
+    expect(states.map((state) => state.unit)).toEqual(["shop.service", "old.service", "edited.service", "caddy.service"]);
+    expect(states[2]).toEqual({ unit: "edited.service", user: "site-edited", denied: ["2019", "3000-3099", "3128-3129", "21000-29999"], needsReload: true });
+    expect(states[3]!.denied).toEqual([]);
+    // A project's unit lacking a line, or whose file changed and was not reloaded, may listen; a unit of the platform is not asked.
+    expect(unboundStates(states)).toEqual(["edited.service", "old.service"]);
+    // Before the second block opens, its line is not asked for yet.
+    expect(unboundStates(states, earlierDeniedBinds())).toEqual(["edited.service"]);
+    expect(readBindStates("")).toEqual([]);
+    expect(readBindStates("User=site-x\n")).toBeNull();
+    expect(readBindStates("Id=x.service\nnot a property\n")).toBeNull();
+  });
 
   test("a server listens on its own port, and on none of the machine's others", () => {
     const web = units["lab"]!;
@@ -1193,7 +1284,7 @@ describe("the system calls a service may make", () => {
 
   test("a unit 0.6 generated, with the bind lines and without the filter, is replaced without --force", () => {
     const generated = generateUnit(APP);
-    expect(decideUnit({ installed: withoutSyscallLines(generated), generated, replace: false })).toBe("install");
+    expect(decideUnit({ installed: withoutSyscallLines(withoutLaterBlockLines(generated)), generated, replace: false })).toBe("install");
   });
 
   test("a unit from before 0.6, without either, is replaced without --force", () => {
@@ -1267,6 +1358,6 @@ describe("a unit the previous manifest generated is the generator's own", () => 
     expect(decideUnit({ installed: repeated, generated: previous, replace: false })).toBe("present");
     // Untouched, it is still the generator's own.
     expect(decideUnit({ installed: previous, generated, replace: false, previous })).toBe("install");
-    expect(decideUnit({ installed: withoutStoreLines(previous), generated: previous, replace: false })).toBe("install");
+    expect(decideUnit({ installed: withoutStoreLines(withoutLaterBlockLines(previous)), generated: previous, replace: false })).toBe("install");
   });
 });

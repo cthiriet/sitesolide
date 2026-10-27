@@ -9,7 +9,7 @@
  * and says so: committed, it keeps the next deployment on the same port, which
  * is what keeps the generated unit and block equal to the ones in service.
  *
- * The choice stays inside the range the loopback rule closes, so that no other
+ * The choice stays inside the blocks the loopback rule closes, so that no other
  * project can reach the service, and avoids every port the machine's manifests
  * declare, the ports no manifest declares (RESERVED_PORTS) and those of the
  * platform's own services, even when they are not deployed yet: a project on
@@ -22,7 +22,7 @@
  *
  * Pure: returns decisions and text, touches nothing.
  */
-import { hasServices, isApp, mainPort, readManifest, SERVICE_PORTS, servicesOf, type Manifest } from "./manifest";
+import { hasServices, isApp, isServicePort, mainPort, readManifest, SERVICE_PORT_RANGES, servicesOf, type Manifest } from "./manifest";
 import { reservedPorts } from "./services";
 
 /** An app with a single `start` and no `port`: the one shape `deploy` gives a port to. */
@@ -42,13 +42,19 @@ export type PortChoice =
  * declares: its unit listens there, and moving it would leave the installed
  * unit, which `deploy` never replaces without --force, on the old port while
  * the new block points at the new one. That happens on every fresh clone of a
- * repository whose chosen port was never committed. A port outside the range
+ * repository whose chosen port was never committed. A port outside the blocks
  * is not kept: validate() refuses it, every other project reaching it, and
  * the move to a free one is the deployment with --force the refusal asks for.
  *
- * Every other project gets the lowest port of the range nothing claims. A
- * deposited manifest that no longer reads still holds the ports it can be read
- * for, as portConflicts in services.ts reads them.
+ * Every other project gets the lowest port nothing claims, the first block's
+ * while one is left there, then the second's: a machine that has not opened
+ * the second block yet is then refused by deploy, which says how to open it
+ * (secondBlockRefusal in services.ts). A port of the second block something
+ * already listens on is not skipped here: the deployment it is given to is
+ * refused, naming the socket, which a skip would leave unseen and in place;
+ * the monitor reports it too. A deposited manifest
+ * that no longer reads still holds the ports it can be read for, as
+ * portConflicts in services.ts reads them.
  */
 export function choosePort(slug: string, deposited: ReadonlyMap<string, string>): PortChoice {
   const taken = new Set<number>(reservedPorts(slug).keys());
@@ -57,15 +63,17 @@ export function choosePort(slug: string, deposited: ReadonlyMap<string, string>)
     if (manifest === undefined) continue;
     if (folder === slug) {
       const port = hasServices(manifest) ? null : mainPort(manifest);
-      if (port !== null && Number.isInteger(port) && port >= SERVICE_PORTS.first && port <= SERVICE_PORTS.last) return { kind: "kept", port };
+      if (port !== null && isServicePort(port)) return { kind: "kept", port };
       continue;
     }
     for (const service of servicesOf(manifest)) {
       if (typeof service.port === "number") taken.add(service.port);
     }
   }
-  for (let port = SERVICE_PORTS.first; port <= SERVICE_PORTS.last; port++) {
-    if (!taken.has(port)) return { kind: "free", port };
+  for (const range of SERVICE_PORT_RANGES) {
+    for (let port = range.first; port <= range.last; port++) {
+      if (!taken.has(port)) return { kind: "free", port };
+    }
   }
   return { kind: "full" };
 }

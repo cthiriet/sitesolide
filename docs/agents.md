@@ -246,8 +246,11 @@ the project after its folder, and a folder called `api` is not the only one:
 before anything is written. Pick another with `--slug`.
 
 **The port is chosen by `deploy`.** An app whose manifest has no `port` gets
-the lowest one the machine's manifests leave free between 3000 and 3099, the
-range the loopback rule closes, never one of the platform's own services.
+the lowest one the machine's manifests leave free in 3000 to 3099, then in
+21000 to 29999 once the first block is full, the blocks the loopback rule
+closes, never one of the platform's own services. A machine that has not
+opened the second block yet refuses a port there: the owner opens it, an
+agent never does, and a port of the first block still works.
 A project the machine already carries keeps the port it has there. The port is
 written into the local `sitesolide.json`, with a message: commit it, and every
 later deploy, from any workstation, keeps it. A dry run says which port it

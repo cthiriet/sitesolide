@@ -94,8 +94,8 @@ views from measured sites, aggregates them and drops a snapshot in its own data
 directory.
 
 **This service can neither open that database nor reach it.** Its unit replaces
-`/srv` with an empty mount, and the loopback rule reserves ports 3000 to 3099 to
-Caddy and root. The collector, already privileged and already passing every
+`/srv` with an empty mount, and the loopback rule reserves the services' ports
+to Caddy and root. The collector, already privileged and already passing every
 minute, is therefore the only path, and it carries two files in both directions:
 
 ```
@@ -372,8 +372,9 @@ Unlike the collector, the judgement cannot live in the unprivileged service,
 which would bypass it: the steward itself runs the pure modules of
 `src/secrets/`, tested without a machine.
 
-**A Unix socket rather than a port.** The loopback rule reserves ports 3000 to
-3099 to Caddy and root, and has only one exception, the portal. A socket is
+**A Unix socket rather than a port.** The loopback rule reserves the services'
+ports, 3000 to 3099 and 21000 to 29999, to Caddy and root, and has only one
+exception, the portal. A socket is
 guarded by its directory's permissions, with no second nftables exception, and
 the dashboard's unit opens it exactly as `bin/cli/unit.ts` generates it, without
 one extra directive. No peer identity can be read from it, `requestIP` returning
@@ -1701,7 +1702,7 @@ steward.js         root: the token registry, the scope, the slug, the request
 installer.js       root, one-shot, one project: the pipeline of `sitesolide deploy`
    |-- systemd-run as site-<slug>, no network: installer.js --extract, the archive on stdin
    |-- systemd-run as site-<slug>, network but not the loopback: the manifest's `install`
-   |       neither run listens on the machine's ports: 2019, 3000-3099, 3128-3129
+   |       neither run listens on the machine's ports: 2019, 3000-3099, 3128-3129, 21000-29999
    |-- useradd, the units, the trees moved into place, the manifest, the loopback's set
    |-- a new project refused before anything was served: its units, tree and account removed
    |-- the Caddy block through the gatekeeper's machine: lock, validate, reload, probe, restore
@@ -1851,7 +1852,9 @@ earlier by the steward and the dashboard: see
 - **Bounds**: 1G of memory per service, six services, `install` fifteen minutes
   and 1G, the archive 100 MiB compressed.
 - **Ports**: a service with no port gets the lowest free one of 3000 to 3099,
-  or the one it had; one another project declares is refused.
+  then of 21000 to 29999, or the one it had; one another project declares is
+  refused, and one of the second block too until the machine has opened it,
+  `second-block-closed` (docs/upgrading.md).
 
 ### Access by token
 
@@ -2078,7 +2081,7 @@ run `sitesolide upgrade`; its queue of writes full, or a restart's turn, a
 | A replayed request | The installer refuses a request older than ten minutes or for another slug, and writes nothing for it. |
 | A compromised dashboard | It sees the bearers that pass and can use them within their scope, a person's within the person's roles, and read deployment logs; it cannot mint a token without the password or a person's own unlock, nor deploy without one, nor hand root a file it could not read, nor name a token as the actor of a change of access it made itself: the steward journals the token it judged. It sees the values a token's change of secrets carries as it relays them, as it sees the code that token deploys, which runs with those values anyway: no escalation beyond the token. It reads none back: the steward answers names alone. |
 | A token giving access too widely | It gives Can open alone, on the projects it may deploy, a person's own only where the person is Admin now, to the company's people and domains alone, never password access to someone outside them, never public; it removes Can open entries alone. The steward judges it and writes, every change is in its journal under `token:<id>`, and the owner or an Admin takes it back from *Access*. |
-| A compromised project | Its service's unit binds `app/`, `public/` and `data/` alone, so it never sees the staging directory its next deployment is extracted into; once in place, the trees are handed to the deployment account and bound read-only, as over SSH. It listens on its own port alone of the machine's: the unit refuses it 2019, the rest of 3000 to 3099 and the egress proxy's 3128 and 3129, so that it never waits on the portal's port for the portal to restart, nor on a neighbour's. |
+| A compromised project | Its service's unit binds `app/`, `public/` and `data/` alone, so it never sees the staging directory its next deployment is extracted into; once in place, the trees are handed to the deployment account and bound read-only, as over SSH. It listens on its own port alone of the machine's: the unit refuses it 2019, the rest of 3000 to 3099 and of 21000 to 29999, and the egress proxy's 3128 and 3129, so that it never waits on the portal's port for the portal to restart, nor on a neighbour's. The installer reads every unit of the machine as systemd has it loaded at each deployment, and refuses a port of the second block until none may listen there (`second-block-closed`). |
 
 ### Where the installer is the weak point
 
@@ -2386,7 +2389,12 @@ previous generation wrote as their own, and replace it without `--force`
 (`withoutBindLines`, bin/cli/unit.ts). The order is the same all the same:
 the installer first, then the projects, since an installer from before reads
 a unit of the new generation as edited by hand, and stops that project's
-token deployments on `edited-by-hand`.
+token deployments on `edited-by-hand`. The second block of the services'
+ports went the same way, one more `SocketBindDeny=` line
+(`withoutLaterBlockLines`), with one step after the projects: the loopback
+rule laid again, which the installer reads before it lets a token's project
+listen there (`second-block-closed` until then, see
+[docs/upgrading.md](../docs/upgrading.md#a-second-block-of-service-ports)).
 
 ## Local development
 

@@ -1,6 +1,7 @@
 /**
  * The loopback rule: on the machine, only Caddy and root open a connection
- * towards the services' ports, and towards Caddy's admin API. One exception,
+ * towards the services' ports, both blocks of SERVICE_PORT_RANGES in
+ * bin/cli/manifest.ts, and towards Caddy's admin API. One exception,
  * and one only: the dashboard towards the portal, where it creates and revokes
  * guest accesses.
  *
@@ -32,7 +33,7 @@
  * checks it and removes it on its own at the slightest deviation.
  */
 
-import { SERVICE_PORTS, servicesOf, hasServices, type Manifest } from "./manifest";
+import { isServicePort, portRangeText, SERVICE_PORT_RANGES, servicesOf, hasServices, type Manifest, type PortRange } from "./manifest";
 import { PORTAL_PORT } from "./portal";
 
 export const LOOPBACK_TABLE = "sitesolide_boucle";
@@ -64,7 +65,7 @@ export const PROJECT_PORTS_FILE = "/etc/sitesolide-loopback-projects.nft";
  * gatekeeper and the repository's scripts, which only go through that
  * `systemctl reload`. No code in the repository calls it directly.
  *
- * Outside the services' range, hence its own two rules and their own counter.
+ * Outside the services' blocks, hence its own two rules and their own counter.
  * bin/tests/cli-loopback.test.ts checks that the Caddyfile does not move it onto
  * a port the rule would no longer close.
  */
@@ -98,6 +99,150 @@ export const CADDY_HTTPS_PORT = 443;
  * machine without it (bin/cli/tunnel.ts).
  */
 export const TUNNEL_ORIGIN = "::1";
+
+/**
+ * The services' ports as the rule writes them, every block in one anonymous
+ * set: `{ 3000-3099, 21000-29999 }`. nftables takes several intervals in a
+ * set, and walks it as one match.
+ */
+export function servicePortsSet(): string {
+  return `{ ${SERVICE_PORT_RANGES.map(portRangeText).join(", ")} }`;
+}
+
+/**
+ * Does a rule, as loopbackRule writes it or as `nft list table` renders it,
+ * refuse the others on every block of the services' ports? The line it
+ * looks for is the one that closes them, `ct state new` then the refusal,
+ * `reject with tcp reset`, counters or not. A rule laid before the second
+ * block names 3000-3099 alone there, and does not pass; nor does a rule in
+ * `observe`, which lets every account connect and only counts it.
+ *
+ * What `deploy`, the installer and the monitor ask before letting a project
+ * listen in the second block (secondBlockRefusal in bin/cli/services.ts). A
+ * listing that renders the set otherwise than expected reads as not
+ * reserved: the second block stays shut, never open to everyone.
+ */
+export function reservesEveryBlock(listing: string): boolean {
+  for (const line of listing.split("\n")) {
+    const match = /^\s*oifname "lo" tcp dport (?:\{ ([^}]+) \}|(\S+)) ct state new (.*)$/.exec(line);
+    if (match === null) continue;
+    if (!new RegExp(`^${verdictPattern("close")}$`).test(match[3]!.trim())) continue;
+    const listed = (match[1] ?? match[2]!).split(",").map((element) => element.trim());
+    if (SERVICE_PORT_RANGES.every((range) => listed.includes(portRangeText(range)))) return true;
+  }
+  return false;
+}
+
+/**
+ * The two lines of the services' ports, Caddy and root let through then the
+ * others refused or counted, as adminPatterns gives the API's: what
+ * bin/deploy-loopback.sh looks for in the loaded rule, every block in the
+ * set, in the rule's own mode.
+ */
+export function servicesPatterns(caddyUid: number, mode: LoopbackMode): string[] {
+  checkCaddyUid(caddyUid);
+  const ports = servicePortsSet().replace(/[{}]/g, (brace) => `\\${brace}`);
+  return [
+    `oifname "lo" tcp dport ${ports} meta skuid \\{ 0, ${caddyUid} \\} accept$`,
+    `oifname "lo" tcp dport ${ports} ct state new ${verdictPattern(mode)}$`,
+  ];
+}
+
+// --- the ports the kernel hands out by itself ----------------------------------
+
+/**
+ * Where the ports of every block are kept out of the kernel's own choice.
+ *
+ * SocketBindDeny= is a BPF program on bind(2), which compares the port the
+ * process asks for with the rules (src/core/bpf/socket_bind in systemd): a
+ * bind to port 0 asks for no port of a block and goes through, and a socket
+ * that listens or connects without bind(2) never meets the program at all.
+ * The kernel then picks a port in `net.ipv4.ip_local_port_range`, 32768 to
+ * 60999 by default, clear of both blocks; on a machine whose range was
+ * widened, it could hand a project a port of a block, or every free one in
+ * turn. `net.ipv4.ip_local_reserved_ports` keeps the listed ports out of
+ * that choice, a bind that names one still allowed; it holds for IPv6 too.
+ * bin/deploy-loopback.sh lays this file and applies it before the rule.
+ */
+export const PORT_RESERVATION_FILE = "/etc/sysctl.d/90-sitesolide-service-ports.conf";
+
+/** A list of ports as the kernel writes them, `3000-3099,21000-29999`, read into ranges; null when it does not read. */
+function readPortList(text: string): PortRange[] | null {
+  const trimmed = text.trim();
+  if (trimmed === "") return [];
+  const ranges: PortRange[] = [];
+  for (const element of trimmed.split(",")) {
+    const match = /^(\d+)(?:-(\d+))?$/.exec(element.trim());
+    if (match === null) return null;
+    const first = Number(match[1]);
+    const last = Number(match[2] ?? match[1]);
+    if (first > last || last > 65535) return null;
+    ranges.push({ first, last });
+  }
+  return ranges;
+}
+
+/** Ranges sorted and merged, as the kernel lists them. */
+function mergeRanges(ranges: readonly PortRange[]): PortRange[] {
+  const merged: { first: number; last: number }[] = [];
+  for (const range of [...ranges].sort((a, b) => a.first - b.first)) {
+    const previous = merged.at(-1);
+    if (previous !== undefined && range.first <= previous.last + 1) previous.last = Math.max(previous.last, range.last);
+    else merged.push({ ...range });
+  }
+  return merged;
+}
+
+/**
+ * The value to write: the reservations the machine already has, kept, and
+ * every block. Writing the key replaces the whole list, so what another
+ * file or person reserved is carried over. Null when the live value does not
+ * read: nothing is written then.
+ */
+export function reservedPortsValue(live: string): string | null {
+  const current = readPortList(live);
+  if (current === null) return null;
+  return mergeRanges([...current, ...SERVICE_PORT_RANGES]).map(portRangeText).join(",");
+}
+
+/** The file PORT_RESERVATION_FILE holds, for `value`. */
+export function portReservationFile(value: string): string {
+  if (!/^[0-9,-]+$/.test(value)) throw new Error(`unexpected port list: ${value}`);
+  return [
+    "# Laid by bin/deploy-loopback.sh from bin/cli/loopback.ts: the services' ports,",
+    "# kept out of the ports the kernel picks by itself, which SocketBindDeny=",
+    "# never sees. Do not edit: the next deposit overwrites it.",
+    `net.ipv4.ip_local_reserved_ports = ${value}`,
+    "",
+  ].join("\n");
+}
+
+/**
+ * Can the kernel hand a process a port of a block by itself? Not when the
+ * ephemeral range, `ip_local_port_range` as `32768\t60999`, misses a block,
+ * nor when every port of the block it meets is reserved. Null when either
+ * value does not read: then nothing opens.
+ */
+export function autobindReachesBlocks(portRange: string, reserved: string): boolean | null {
+  const bounds = portRange.trim().split(/\s+/).map(Number);
+  const list = readPortList(reserved);
+  if (bounds.length !== 2 || !bounds.every((bound) => Number.isInteger(bound) && bound >= 0 && bound <= 65535) || list === null) return null;
+  const [low, high] = bounds as [number, number];
+  return SERVICE_PORT_RANGES.some((range) => {
+    for (let port = Math.max(range.first, low); port <= Math.min(range.last, high); port++) {
+      if (!list.some((kept) => port >= kept.first && port <= kept.last)) return true;
+    }
+    return false;
+  });
+}
+
+/**
+ * The listening sockets of every block, as `ss` filters them:
+ * bin/deploy-loopback.sh tries Caddy and another account on each.
+ */
+export function listeningFilter(): string {
+  return SERVICE_PORT_RANGES.map((range) => `( sport >= :${range.first} and sport <= :${range.last} )`).join(" or ");
+}
 
 /**
  * `observe` counts and logs what `close` would refuse, refusing nothing:
@@ -168,7 +313,7 @@ export function loopbackRule(
     if (tunnelUid === caddyUid || tunnelUid === dashboardUid) throw new Error(`unexpected uid for the tunnel's connector: ${tunnelUid}`);
   }
 
-  const ports = `${SERVICE_PORTS.first}-${SERVICE_PORTS.last}`;
+  const ports = servicePortsSet();
   const others = othersVerdict(mode);
   const adminOthers = othersVerdict(adminMode);
 
@@ -191,8 +336,8 @@ export function loopbackRule(
     "\tchain output {",
     "\t\ttype filter hook output priority filter; policy accept;",
     "",
-    "\t\t# Caddy and root. The owner of an outgoing packet is that of the",
-    "\t\t# process that opened the connection.",
+    "\t\t# Caddy and root, on every block of the services' ports. The owner of",
+    "\t\t# an outgoing packet is that of the process that opened the connection.",
     `\t\toifname "lo" tcp dport ${ports} meta skuid { 0, ${caddyUid} } accept`,
     "",
     "\t\t# The dashboard to the portal, and to it alone: it creates and",
@@ -317,8 +462,8 @@ export function projectPortPairs(projects: ProjectAccount[]): string[] {
       // A worker or a scheduled service listens on nothing: it calls its
       // siblings' ports, which the pairs of the same uid already open.
       if (service.port === null) continue;
-      if (service.port < SERVICE_PORTS.first || service.port > SERVICE_PORTS.last) {
-        throw new Error(`${manifest.slug}: port ${service.port} is outside the services range`);
+      if (!isServicePort(service.port)) {
+        throw new Error(`${manifest.slug}: port ${service.port} is outside the services' blocks`);
       }
       elements.push(`${service.port} . ${uid}`);
     }

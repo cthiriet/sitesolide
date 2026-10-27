@@ -38,8 +38,10 @@ import {
   isValidMemory,
   isValidSlug,
   readManifest,
+  isServicePort,
+  servicePortsProse,
   servicesOf,
-  SERVICE_PORTS,
+  SERVICE_PORT_RANGES,
   type Manifest,
 } from "../../borrowed/manifest";
 import { reservedPorts } from "../../borrowed/services";
@@ -305,8 +307,11 @@ function wantsPort(service: unknown, kept = false): boolean {
 /**
  * Gives a port to every public service whose manifest names none: the one it
  * had on the machine if that is still free, the lowest free one of the
- * services' range otherwise. A manifest that names its ports is returned as
- * it is, and so are its workers and its scheduled services, see wantsPort.
+ * services' blocks otherwise, the first block's while one is left there. A
+ * port of the second block on a machine that has not opened it is refused
+ * afterwards by the installer, as `deploy` refuses it (secondBlockRefusal in
+ * bin/cli/services.ts). A manifest that names its ports is returned as it
+ * is, and so are its workers and its scheduled services, see wantsPort.
  *
  * Works on the parsed object, before `validate()`, which would refuse a
  * missing port. The ports chosen are written into the manifest deposited on the
@@ -323,8 +328,10 @@ export function allocatePorts(object: Record<string, unknown>, taken: ReadonlySe
   const allocated: { service: string | null; port: number }[] = [];
   const pick = (name: string | null): number | null => {
     const before = previousPorts.get(name);
-    if (before !== undefined && before >= SERVICE_PORTS.first && before <= SERVICE_PORTS.last && !used.has(before)) return before;
-    for (let port = SERVICE_PORTS.first; port <= SERVICE_PORTS.last; port++) if (!used.has(port)) return port;
+    if (before !== undefined && isServicePort(before) && !used.has(before)) return before;
+    for (const range of SERVICE_PORT_RANGES) {
+      for (let port = range.first; port <= range.last; port++) if (!used.has(port)) return port;
+    }
     return null;
   };
 
@@ -342,7 +349,7 @@ export function allocatePorts(object: Record<string, unknown>, taken: ReadonlySe
         continue;
       }
       const port = pick(name);
-      if (port === null) return { refusal: `no free port between ${SERVICE_PORTS.first} and ${SERVICE_PORTS.last} on the machine for services.${name}` };
+      if (port === null) return { refusal: `no free port of ${servicePortsProse()} on the machine for services.${name}` };
       used.add(port);
       allocated.push({ service: name, port });
       next[name] = { ...(service as Record<string, unknown>), port };
@@ -352,7 +359,7 @@ export function allocatePorts(object: Record<string, unknown>, taken: ReadonlySe
 
   if (typeof object.start === "string" && object.start.length > 0 && !("port" in object)) {
     const port = pick(null);
-    if (port === null) return { refusal: `no free port between ${SERVICE_PORTS.first} and ${SERVICE_PORTS.last} on the machine` };
+    if (port === null) return { refusal: `no free port of ${servicePortsProse()} on the machine` };
     allocated.push({ service: null, port });
     return { object: { ...object, port }, allocated };
   }

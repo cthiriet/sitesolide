@@ -23,8 +23,19 @@ import {
   readCurrentPairs,
   domainConflicts,
   portConflicts,
+  laterBlockPorts,
   readLoopbackState,
   readScheduleCheck,
+  readSecondBlockState,
+  secondBlockRefusal,
+  secondBlockStateCommand,
+  unguardedUnits,
+  unguardedWarning,
+  describeListener,
+  readAccounts,
+  readListeners,
+  strayListeners,
+  type SecondBlockState,
   readStability,
   readUidsAnswer,
   readUnitsAnswer,
@@ -35,9 +46,9 @@ import {
   uidsCommand,
   unstableUnits,
 } from "../cli/services";
-import { generateUnit, generateUnits, unitArgument, unitFileName, unitNames } from "../cli/unit";
-import { projectPortPairs, projectPortsFile } from "../cli/loopback";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { BIND_LINES_FEATURE, generateUnit, generateUnits, unitArgument, unitFileName, unitNames, withoutLaterBlockLines } from "../cli/unit";
+import { loopbackRule, projectPortPairs, projectPortsFile } from "../cli/loopback";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -133,7 +144,7 @@ describe("the services key", () => {
 
   test("every port sits in the closed range, once per project", () => {
     expect(validate(lab({ web: { start: "/x", port: 8000 } }))).toContainEqual(
-      expect.stringContaining("services.web.port: between 3000 and 3099"),
+      expect.stringContaining("services.web.port: inside 3000 to 3099 or 21000 to 29999"),
     );
     expect(validate(lab({ web: { start: "/x" } }))).toContainEqual(expect.stringContaining("services.web.port: required"));
     expect(
@@ -748,6 +759,259 @@ describe("reads behind the project set", () => {
     expect(readUidsAnswer(`lab \nshop 1006\n${MARKER_DONE}\n`, ["lab", "shop"])).toEqual({ kind: "unreadable" });
     expect(readUidsAnswer(`lab 1005\n`, ["lab"])).toEqual({ kind: "unreadable" });
     expect(readUidsAnswer(`lab 1005\n${MARKER_DONE}\n`, ["lab", "shop"])).toEqual({ kind: "unreadable" });
+  });
+});
+
+/** The header of /proc/net/tcp, and a line of it: `st` 0A for a listening socket, 01 for a connection. */
+const TCP_HEADER = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
+function tcpLine(port: number, uid: number, state = "0A"): string {
+  return `   0: 0100007F:${port.toString(16).toUpperCase().padStart(4, "0")} 00000000:0000 ${state} 00000000:00000000 00:00000000 00000000 ${String(uid).padStart(5)}        0 20311 1 0000000000000000 100 0 0 10 0\n`;
+}
+
+describe("the second block, opened on the machine before a port there", () => {
+  /**
+   * The order of an upgrade is a security property. A unit's SocketBindDeny
+   * is what keeps a project from listening on another project's port, and a
+   * unit generated before the second block denies none of it: until every
+   * such unit is gone, the components that run a project's programs carry
+   * the new lines, the kernel hands none of the block's ports out by itself
+   * and the loopback rule refuses others there, a port of the block could be
+   * taken by a neighbour, or reached by anyone. deploy and the installer read
+   * all of it at every deployment of an app.
+   */
+  const ON_SECOND: Manifest = { slug: "lab", services: { web: { start: "/x", port: 21000 }, api: { start: "/y", port: 3051, routes: ["/v1/*"] } } };
+  const PLACEHOLDERS = { slug: "lab", zone: "test-zone.invalid", contact: "" };
+  const LINES = ["2019", "3000-3099", "3128-3129", "21000-29999"];
+  const OPEN: SecondBlockState = {
+    reserved: true,
+    units: [{ unit: "shop.service", user: "site-shop", denied: LINES, needsReload: false }],
+    components: { backup: "current", installer: "current" },
+    listeners: [],
+    autobind: false,
+  };
+  const OLD_UNIT = { unit: "old.service", user: "site-old", denied: LINES.slice(0, 3), needsReload: false };
+
+  test("only the ports outside the first block ask for it", () => {
+    expect(laterBlockPorts(ON_SECOND)).toEqual([21000]);
+    expect(laterBlockPorts(LAB)).toEqual([]);
+    expect(laterBlockPorts({ slug: "shop", start: "/x", port: 29999 })).toEqual([29999]);
+    expect(laterBlockPorts({ slug: "blog", publicDir: "public" })).toEqual([]);
+    expect(secondBlockRefusal([], { ...OPEN, reserved: false }, undefined)).toBeNull();
+  });
+
+  test("open: the rule refuses others on every block, no unit may listen there, the components are current, the kernel hands none out", () => {
+    expect(secondBlockRefusal([21000], OPEN)).toBeNull();
+    // A component that is not installed runs nothing.
+    expect(secondBlockRefusal([21000], { ...OPEN, components: { backup: "absent", installer: "absent" } })).toBeNull();
+  });
+
+  test("each missing condition keeps it shut, and says which", () => {
+    const cases: [Partial<SecondBlockState>, string][] = [
+      [{ reserved: false }, "does not refuse other accounts on that block"],
+      [{ units: [...OPEN.units, OLD_UNIT] }, "units that may still listen there, taking another project's visitors: old.service"],
+      [{ components: { backup: "outdated", installer: "current" } }, "components built before that block, whose programs may listen there: backup"],
+      [{ autobind: true }, "the kernel may hand a port of that block to any process that asks for none"],
+    ];
+    for (const [change, said] of cases) {
+      const refusal = secondBlockRefusal([21001, 21000, 21000], { ...OPEN, ...change });
+      expect(refusal![0]).toBe("port 21000, 21001: the second block of the services' ports, which this machine has not opened yet");
+      expect(refusal!.join("\n")).toInclude(said);
+      expect(refusal!.join("\n")).toInclude("sitesolide upgrade, sitesolide refresh --all, then bin/deploy-loopback.sh close, in that order");
+      expect(refusal!.join("\n")).toInclude("then systemctl daemon-reload and a restart");
+      expect(refusal!.join("\n")).toInclude("3000 to 3099 works as before");
+    }
+    // The CLI names the kit's script.
+    expect(secondBlockRefusal([21000], { ...OPEN, reserved: false }, () => "/kit/bin/deploy-loopback.sh close")!.join("\n")).toInclude("then /kit/bin/deploy-loopback.sh close,");
+  });
+
+  test("a unit is read as systemd has it loaded: a file changed and not reloaded, a line for one family, keep it shut", () => {
+    for (const unit of [{ ...OPEN.units[0]!, needsReload: true }, { ...OPEN.units[0]!, denied: [...LINES.slice(0, 3), "ipv4:21000-29999"] }]) {
+      expect(secondBlockRefusal([21000], { ...OPEN, units: [unit] })).not.toBeNull();
+    }
+    // The project being deployed is not held against itself: its units are about to be written.
+    expect(secondBlockRefusal([21000], { ...OPEN, units: [...OPEN.units, { ...OLD_UNIT, unit: "lab.service" }] }, undefined, ["lab", "lab.api"])).toBeNull();
+  });
+
+  test("once the block is open, every other deployment says when a unit may listen in it again, and goes on", () => {
+    const again = { ...OPEN, units: [...OPEN.units, OLD_UNIT] };
+    expect(unguardedWarning(again)![0]).toInclude("old.service");
+    expect(unguardedWarning(again)!.join("\n")).toInclude("sitesolide refresh --all");
+    expect(unguardedWarning(OPEN)).toBeNull();
+    // Not open, nothing is sent there: nothing to say.
+    expect(unguardedWarning({ ...again, reserved: false })).toBeNull();
+    expect(unguardedWarning(again, ["old"])).toBeNull();
+    expect(unguardedUnits(again)).toEqual(["old.service"]);
+  });
+
+  /**
+   * The read run by a local sh, as root runs it on the machine: its paths
+   * swapped for the test's, nft and systemctl for stand-ins that answer from
+   * the test's files, systemctl as systemd prints `show`.
+   */
+  function machineRead(files: {
+    units?: Record<string, string>;
+    links?: Record<string, string>;
+    table?: string;
+    components?: Record<string, string>;
+    portRange?: string;
+    reserved?: string;
+    /** systemctl fails after answering for the first unit, or answers for the first one alone. */
+    systemctl?: "fails" | "cut";
+    tcp?: string;
+    passwd?: string;
+  }): SecondBlockState | null {
+    const root = mkdtempSync(join(tmpdir(), "sitesolide-machine-"));
+    try {
+      for (const folder of ["units", "lib", "proc", "bin"]) mkdirSync(join(root, folder));
+      for (const [name, text] of Object.entries(files.units ?? {})) writeFileSync(join(root, "units", name), text);
+      for (const [name, target] of Object.entries(files.links ?? {})) symlinkSync(target, join(root, "units", name));
+      for (const [name, text] of Object.entries(files.components ?? {})) writeFileSync(join(root, "lib", `${name}.js`), text);
+      writeFileSync(join(root, "proc", "ip_local_port_range"), `${files.portRange ?? "32768\t60999"}\n`);
+      writeFileSync(join(root, "proc", "ip_local_reserved_ports"), `${files.reserved ?? ""}\n`);
+      if (files.table !== undefined) writeFileSync(join(root, "table"), files.table);
+      writeFileSync(join(root, "proc", "tcp"), files.tcp ?? TCP_HEADER);
+      writeFileSync(join(root, "bin", "getent"), `#!/bin/sh\nprintf '%s' '${files.passwd ?? "root:x:0:0::/root:/bin/sh\n"}'\n`, { mode: 0o755 });
+      writeFileSync(join(root, "bin", "nft"), `#!/bin/sh\ncat "${root}/table" 2>/dev/null\n`, { mode: 0o755 });
+      writeFileSync(
+        join(root, "bin", "systemctl"),
+        [
+          "#!/bin/sh",
+          'echo "$*" >> "' + root + '/calls"',
+          'while [ "$1" != "--" ]; do shift; done; shift',
+          'for name in "$@"; do',
+          '  echo "Id=$name"',
+          `  echo "User=$(sed -n 's/^User=//p' "${root}/units/$name" | tail -1)"`,
+          `  sed -n 's/^SocketBindDeny=..*$/&/p' "${root}/units/$name"`,
+          '  echo "NeedDaemonReload=no"',
+          "  echo",
+          ...(files.systemctl === undefined ? [] : [files.systemctl === "fails" ? "  exit 1" : "  exit 0"]),
+          "done",
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const command = secondBlockStateCommand();
+      expect(command).toStartWith("sudo sh -c '");
+      const local = command
+        .replace(/^sudo sh -c '/, "")
+        .replace(/'$/, "")
+        .replaceAll("/etc/systemd/system", join(root, "units"))
+        .replaceAll("/usr/local/lib/sitesolide", join(root, "lib"))
+        .replaceAll("/proc/sys/net/ipv4", join(root, "proc"))
+        .replaceAll("/proc/net/tcp6", join(root, "proc", "tcp6"))
+        .replaceAll("/proc/net/tcp", join(root, "proc", "tcp"));
+      const run = Bun.spawnSync(["sh", "-c", local], { env: { PATH: `${join(root, "bin")}:/usr/bin:/bin` } });
+      return readSecondBlockState(run.stdout.toString());
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  const current = Object.fromEntries(generateUnits(LAB, PLACEHOLDERS).map(({ unit, text }) => [unitFileName(unit), text]));
+  const before = Object.fromEntries(
+    generateUnits({ slug: "old", services: { web: { start: "/x", port: 3060 } } }, { ...PLACEHOLDERS, slug: "old" }).map(({ unit, text }) => [unitFileName(unit), withoutLaterBlockLines(text)]),
+  );
+  const BUILT = { backup: `console.log("${BIND_LINES_FEATURE}")`, installer: `console.log("${BIND_LINES_FEATURE}")` };
+
+  test("read on the machine in one go: the rule, every unit as systemd has it, the components, the kernel's ports", () => {
+    const state = machineRead({ units: current, table: loopbackRule(997, "close", 1022), components: BUILT });
+    expect(state).toEqual({ reserved: true, units: expect.any(Array), components: { backup: "current", installer: "current" }, listeners: [], autobind: false });
+    expect(state!.units.map((unit) => unit.unit).sort()).toEqual(Object.keys(current).filter((name) => name.endsWith(".service")).sort());
+    expect(unguardedUnits(state!)).toEqual([]);
+    expect(secondBlockRefusal([21000], state!)).toBeNull();
+  });
+
+  test("a unit of the release before, one written by hand, an outdated or missing component, a widened ephemeral range: each read", () => {
+    const platform = "[Service]\nUser=sitesolide-api\nExecStart=/usr/local/bin/bun server.ts\n";
+    const byHand = "[Service]\nUser=site-landing\nExecStart=/usr/local/bin/bun server.ts\n";
+    const state = machineRead({
+      units: { ...current, ...before, "sitesolide-api.service": platform, "landing.service": byHand, "sitesolide-installer@.service": "[Service]\nUser=root\n" },
+      // A masked unit and a dangling link run nothing, and are skipped, as the installer skips them.
+      links: { "masked.service": "/dev/null", "gone.service": "/nonexistent/gone.service" },
+      table: loopbackRule(997, "observe", 1022),
+      components: { backup: "console.log('older')" },
+      portRange: "1024\t65535",
+    });
+    expect(state).not.toBeNull();
+    expect(unguardedUnits(state!)).toEqual(["landing.service", "old.service"]);
+    expect(state!.units.some((unit) => ["masked.service", "gone.service", "sitesolide-installer@.service"].includes(unit.unit))).toBe(false);
+    expect(state!.reserved).toBe(false);
+    expect(state!.components).toEqual({ backup: "outdated", installer: "absent" });
+    expect(state!.autobind).toBe(true);
+    // Every block reserved from the kernel's own choice, the widened range is harmless.
+    expect(machineRead({ units: current, portRange: "1024\t65535", reserved: "3000-3099,21000-29999" })!.autobind).toBe(false);
+  });
+
+  test("a systemctl that fails, or answers for fewer units than there are files, is no answer: never a machine with no unit at fault", () => {
+    const answers = machineRead({ units: current, table: loopbackRule(997, "close", 1022), components: BUILT });
+    expect(answers).not.toBeNull();
+    for (const systemctl of ["fails", "cut"] as const) {
+      expect({ systemctl, state: machineRead({ units: current, table: loopbackRule(997, "close", 1022), components: BUILT, systemctl }) }).toEqual({ systemctl, state: null });
+    }
+  });
+
+  test("what already listens on the second block, and as whom, from the kernel's own lines", () => {
+    const tcp = `${TCP_HEADER}${tcpLine(21000, 1600)}${tcpLine(3022, 1022)}${tcpLine(21001, 1700, "01")}`;
+    const state = machineRead({ units: current, table: loopbackRule(997, "close", 1022), components: BUILT, tcp, passwd: "site-old:x:1600:1600::/nonexistent:/usr/sbin/nologin\nsite-lab:x:1700:1700::/nonexistent:/usr/sbin/nologin\n" });
+    // 3022 is the first block's, 21001 is a connection, not a listener.
+    expect(state!.listeners).toEqual([{ port: 21000, uid: 1600, account: "site-old" }]);
+    // Another account on the port: refused, the machine open or not.
+    const refusal = secondBlockRefusal([21000], state!, undefined, ["lab"], "site-lab");
+    expect(refusal![0]).toBe("port 21000: taken on this machine");
+    expect(refusal![1]).toInclude("already listened on by another account, which Caddy would send this project's visitors to: 21000 (site-old)");
+    expect(secondBlockRefusal([21000], { ...state!, reserved: false }, undefined, ["lab"], "site-lab")!.join("\n")).toInclude("21000 (site-old)");
+    // The project's own service on its port, a redeployment: fine.
+    expect(secondBlockRefusal([21000], state!, undefined, ["old"], "site-old")).toBeNull();
+    // A port nobody listens on: fine.
+    expect(secondBlockRefusal([21002], state!, undefined, ["lab"], "site-lab")).toBeNull();
+  });
+
+  test("a listener of the second block a deposited manifest accounts for is no stray; any other is", () => {
+    const listeners = [
+      { port: 21000, uid: 1500, account: "site-shop" },
+      { port: 21001, uid: 1600, account: "site-old" },
+      { port: 25000, uid: 0, account: "root" },
+    ];
+    const deposited = new Map([
+      ["shop", JSON.stringify({ slug: "shop", start: "/x", port: 21000 })],
+      ["lab", JSON.stringify({ ...LAB, services: { web: { start: "/x", port: 21001 } } })],
+      ["broken", "{ not json"],
+    ]);
+    expect(strayListeners(listeners, deposited).map(describeListener)).toEqual(["21001 (site-old)", "25000 (root)"]);
+    expect(strayListeners([], deposited)).toEqual([]);
+  });
+
+  test("the accounts and the kernel's socket lines, read or refused whole", () => {
+    expect(readAccounts("root:0\nsite-old:1600\n")).toEqual(new Map([[0, "root"], [1600, "site-old"]]));
+    expect(readAccounts("root:x:0:0::/root:/bin/sh\n")).toEqual(new Map([[0, "root"]]));
+    expect(readAccounts("garbage\n")).toBeNull();
+    const accounts = new Map([[1600, "site-old"]]);
+    // IPv6, a listener on [::]:21000, by an account /etc/passwd does not name.
+    const v6 = "   1: 00000000000000000000000000000000:5208 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1700        0 20400 1 0000000000000000 100 0 0 10 0";
+    expect(readListeners([tcpLine(21000, 1600).trim(), v6], accounts)).toEqual([
+      { port: 21000, uid: 1600, account: "site-old" },
+      { port: 21000, uid: 1700, account: null },
+    ]);
+    expect(readListeners(["not a socket line"], accounts)).toBeNull();
+  });
+
+  test("a read that broke off, or that does not read, is no answer", () => {
+    const whole = ["== rule", "== units", "files 0", "== components", "backup absent", "installer absent", "== listeners", "== accounts", "root:0", "== ports", "32768\t60999", "", MARKER_DONE, ""].join("\n");
+    expect(readSecondBlockState(whole)).toEqual({ reserved: false, units: [], components: { backup: "absent", installer: "absent" }, listeners: [], autobind: false });
+    // The units: their count missing, or more files than blocks, or systemctl failed.
+    expect(readSecondBlockState(whole.replace("files 0\n", ""))).toBeNull();
+    expect(readSecondBlockState(whole.replace("files 0", "files 2"))).toBeNull();
+    expect(readSecondBlockState(whole.replace("files 0", "files 1\nId=a.service\nUser=site-a\nread failed"))).toBeNull();
+    expect(readSecondBlockState(whole.replace("== listeners", "== listeners\nread failed"))).toBeNull();
+    expect(readSecondBlockState(whole.replace("root:0", "read failed"))).toBeNull();
+    expect(readSecondBlockState(whole.replace(MARKER_DONE, ""))).toBeNull();
+    expect(readSecondBlockState(whole.replace("== units\n", ""))).toBeNull();
+    expect(readSecondBlockState(whole.replace("installer absent", "installer maybe"))).toBeNull();
+    expect(readSecondBlockState(whole.replace("installer absent\n", ""))).toBeNull();
+    expect(readSecondBlockState(whole.replace("32768\t60999", "every port"))).toBeNull();
+    expect(readSecondBlockState(whole.replace("== components", "User=site-x\n== components"))).toBeNull();
+    expect(readSecondBlockState(whole.replace("== accounts", "== accounts\n").replace("== listeners", "== listeners\nnot a socket"))).toBeNull();
+    expect(readSecondBlockState("")).toBeNull();
   });
 });
 

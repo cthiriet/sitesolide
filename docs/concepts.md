@@ -221,9 +221,10 @@ overwritten, and served in the clear.
 
 ## The loopback rule
 
-An nftables rule reserves ports 3000 to 3099, **and Caddy's admin API on 2019**,
-to Caddy and root. That API authenticates nobody: a service that could reach it
-would open every restricted site at once, or stop Caddy.
+An nftables rule reserves the services' ports, two blocks, 3000 to 3099 and
+21000 to 29999, **and Caddy's admin API on 2019**, to Caddy and root. That API
+authenticates nobody: a service that could reach it would open every
+restricted site at once, or stop Caddy.
 
 This is what makes a restricted project able to trust Caddy. It has no
 sign-in of its own; it trusts the header Caddy puts on the request, and that trust
@@ -235,11 +236,46 @@ whoever listens there: an app waiting on the portal's port while the portal
 restarts would answer every `forward_auth` as it liked, and receive the
 owner's password typed on a sign-in page. So each generated unit says where
 its service may listen (`SocketBindAllow=`, `SocketBindDeny=`): a server on
-its own port alone among 2019, 3000 to 3099 and the egress proxy's 3128 and
+its own port alone among 2019, both blocks and the egress proxy's 3128 and
 3129, a worker and a scheduled service on none of them, a service's backup
 command neither; a bind refused fails with `EPERM`. Ports outside those stay
 free: nobody is sent there. systemd enforces the lines through BPF, and a
 systemd built without `+BPF_FRAMEWORK` ignores them silently.
+
+**Two blocks, and why there.** 3000 to 3099 was the only block: with the
+platform's own ports taken, a machine held fewer than a hundred servers, and
+a project with a database takes two, so it ran out of ports long before it
+ran out of memory. 21000 to 29999 adds nine thousand. Not right after 3099,
+where 3128 and 3129 sit, nor at 20000: behind a Cloudflare Tunnel the
+connector serves its metrics on 20240, which the monitor reads as its own
+account, and cloudflared takes 20241 to 20245 by default. And below 32768,
+where Linux's ephemeral ports begin. `deploy` gives a port of the first block
+while one is free there, then of the second. The list lives in one place,
+`SERVICE_PORT_RANGES` in `bin/cli/manifest.ts`, and the validation, the
+choice, the units, the rule and the installer all read it.
+
+**The second block opens late, and in order.** A unit generated before it
+denies none of its ports, so its project could listen on one of them first
+and receive the visitors Caddy sends there, a neighbour's between two of its
+restarts. A machine therefore opens it in this order: its components
+upgraded (`sitesolide upgrade`), every project's unit written again with the
+new line (`sitesolide refresh --all`), then the rule laid again with both
+blocks (`bin/deploy-loopback.sh close`), which refuses to lay anything while
+a unit running as a project's account, as systemd has it loaded, still lacks
+a line, while the backups or the installer predate the line, or while the
+kernel could hand a port of a block out by itself, a bind to port 0 or a
+listen without bind, which `SocketBindDeny=` never sees; it reserves the
+blocks from that choice itself (`net.ipv4.ip_local_reserved_ports`). Until
+all of it holds and the rule refuses other accounts there, which a rule in
+`observe` does not, `deploy` and a token's deployment refuse a port of the
+second block, reading the machine each time, and refuse one another account
+already listens on: a run started under an earlier unit keeps its socket
+through any reload. A read that fails or comes back cut opens nothing. Once
+the block is open, every deployment of an app still reads the machine and
+warns when a unit may listen there again, a project deployed by an older CLI
+for one, and the monitor reports it, and what listens there unaccounted for,
+as critical, the heartbeat failing with it. See
+[upgrading.md](upgrading.md#a-second-block-of-service-ports).
 
 One exception, deliberate: the dashboard may reach the portal, where it has
 the sign-ins of people with a company account sealed and redeemed, reads how
@@ -598,7 +634,8 @@ In order, and the order is the point:
    or from the one the machine carries, or one edited by hand there, which
    stops everything without `--force`? Does systemd already run a
    service of that name that deploy did not write? Does another project already
-   declare one of its ports? For a project with several services, does the
+   declare one of its ports? For a port of the second block, has the machine
+   opened it? For a project with several services, does the
    loopback rule have room for its own ports? For a project with `egress` or
    `connectors`, does the egress proxy run? For a project with scheduled
    services, does systemd read each schedule as a time?

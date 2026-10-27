@@ -6,6 +6,7 @@ import { generateFragment, HEADLESS_ANSWER } from "../../cli/fragment";
 import { CADDY_TUNNEL_FILE, TUNNEL_CONFIG, TUNNEL_KIT_FILES, tunnelConfig as connectorConfig } from "../../cli/tunnel";
 import { readManifest } from "../../cli/manifest";
 import { generateUnits, unitFileName } from "../../cli/unit";
+import { loopbackRule } from "../../cli/loopback";
 import { SWITCHES } from "./fake-ssh";
 import { createFakeVm } from "./fake-vm";
 import { REPO, run, TESTS_ROOT } from "./run";
@@ -568,6 +569,128 @@ describe("a project with several services", () => {
       expect(r.error).toContain("port 3061 (service api) is already declared by project taken");
     } finally {
       vm.cleanup();
+    }
+  });
+});
+
+describe("the second block of the services' ports, read on every deployment of an app", () => {
+  /** A unit an earlier CLI wrote for another project: every bind line but the second block's. */
+  const OLD_UNIT = "[Service]\nUser=site-old\nSocketBindDeny=2019\nSocketBindDeny=3000-3099\nSocketBindDeny=3128-3129\n";
+
+  /** projects/bun-mixed, copied, on `port`. */
+  function onPort(port: number): string {
+    const folder = mkdtempSync(join(tmpdir(), "second-block-"));
+    cpSync(join(TESTS_ROOT, "projects/bun-mixed"), folder, { recursive: true });
+    const path = join(folder, "sitesolide.json");
+    writeFileSync(path, readFileSync(path, "utf8").replace('"port": 3031', `"port": ${port}`));
+    return folder;
+  }
+
+  test("a port of the first block, the block open and a unit that may listen in it: a warning naming the unit, the deployment goes on", async () => {
+    const vm = createFakeVm();
+    try {
+      vm.writeFile("etc/systemd/system/old.service", OLD_UNIT);
+      const r = await run("projects/bun-mixed", ["deploy", "--dry-run"], { vm });
+      expect(r.code).toBe(0);
+      expect(r.all).toContain("units on the server may listen where Caddy sends other projects' visitors");
+      expect(r.all).toContain("old.service");
+      expect(vm.logs()).toContain("SECOND-BLOCK");
+    } finally {
+      vm.cleanup();
+    }
+  });
+
+  test("a port of the second block: deployed on a machine that opened it, refused while a unit may listen there, nothing pushed", async () => {
+    const folder = onPort(21000);
+    const vm = createFakeVm();
+    try {
+      const open = await run(folder, ["deploy", "--dry-run"], { vm });
+      expect(open.code).toBe(0);
+      expect(open.all).not.toContain("second block");
+      vm.writeFile("etc/systemd/system/old.service", OLD_UNIT);
+      const shut = await run(folder, ["deploy", "--dry-run"], { vm });
+      expect(shut.code).toBe(1);
+      expect(shut.error).toContain("the server has not opened the second block of service ports");
+      expect(shut.error).toContain("units that may still listen there, taking another project's visitors: old.service");
+      expect(shut.error).toContain("deploy-loopback.sh close, in that order");
+      expect(shut.output).not.toContain("system user and directories");
+      expect(vm.logs().filter((line) => line.startsWith("REFUSED"))).toEqual([]);
+    } finally {
+      vm.cleanup();
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  /** A whole answer of the machine, open, with what the test puts in its units and listeners. */
+  function answer(units: string[], listeners: string[]): string {
+    return [
+      "== rule",
+      loopbackRule(997, "close", 1022),
+      "== units",
+      ...units,
+      "== components",
+      "backup current",
+      "installer current",
+      "== listeners",
+      ...listeners,
+      "== accounts",
+      "root:0",
+      "site-old:1600",
+      "== ports",
+      "32768\t60999",
+      "",
+      "DONE",
+      "",
+    ].join("\n");
+  }
+
+  test("a port of the second block another account already listens on: refused, naming it, nothing pushed", async () => {
+    const folder = onPort(21000);
+    const vm = createFakeVm();
+    try {
+      const squatter = "   0: 0100007F:5208 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1600        0 20311 1 0000000000000000 100 0 0 10 0";
+      vm.writeFile(SWITCHES.secondBlock, answer(["files 0"], [squatter]));
+      const r = await run(folder, ["deploy", "--dry-run"], { vm });
+      expect(r.code).toBe(1);
+      expect(r.error).toContain("the server has not opened the second block of service ports");
+      expect(r.error).toContain("port 21000: taken on this machine");
+      expect(r.error).toContain("21000 (site-old)");
+    } finally {
+      vm.cleanup();
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  test("an answer for fewer units than there are files, or a systemctl that failed, cannot tell: refused for the second block", async () => {
+    const folder = onPort(21000);
+    const vm = createFakeVm();
+    try {
+      for (const units of [["files 2", "Id=a.service", "User=site-a", "NeedDaemonReload=no", ""], ["files 1", "read failed"], ["files 1"]]) {
+        vm.writeFile(SWITCHES.secondBlock, answer(units, []));
+        const r = await run(folder, ["deploy", "--dry-run"], { vm });
+        expect({ units, code: r.code }).toEqual({ units, code: 1 });
+        expect(r.error).toContain("cannot tell whether the server has opened the second block of service ports");
+      }
+    } finally {
+      vm.cleanup();
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  test("a machine read that does not answer refuses a port of the second block, and only warns for the first", async () => {
+    const folder = onPort(21000);
+    const vm = createFakeVm();
+    try {
+      vm.writeFile(SWITCHES.secondBlock, "== rule\n");
+      const refused = await run(folder, ["deploy", "--dry-run"], { vm });
+      expect(refused.code).toBe(1);
+      expect(refused.error).toContain("cannot tell whether the server has opened the second block of service ports");
+      const first = await run("projects/bun-mixed", ["deploy", "--dry-run"], { vm });
+      expect(first.code).toBe(0);
+      expect(first.all).toContain("cannot tell whether every unit on the server still keeps to its own port");
+    } finally {
+      vm.cleanup();
+      rmSync(folder, { recursive: true, force: true });
     }
   });
 });

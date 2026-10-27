@@ -34,8 +34,8 @@ analytics                collector (root, every minute)         dashboard
 ```
 
 The dashboard cannot open this database, its unit replaces `/srv` with an empty
-mount, nor reach this service, the loopback rule reserving ports 3000 to 3099
-to Caddy and root. The collector that already reads the state of the machine is
+mount, nor reach this service, the loopback rule reserving the services'
+ports to Caddy and root. The collector that already reads the state of the machine is
 the only existing path, and it carries the two files in the right directions:
 the snapshot goes up, the allow list comes down.
 

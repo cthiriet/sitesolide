@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readSnapshotName, SERVICE_COMMANDS_FEATURE, snapshotName } from "../borrowed/backups";
 import type { Manifest } from "../borrowed/manifest";
-import { generateUnits, unitFileName, withoutStoreLines } from "../borrowed/unit";
+import { BIND_LINES_FEATURE, generateUnits, unitFileName, withoutStoreLines } from "../borrowed/unit";
 import { configFrom } from "../src/backup/config";
 import { HOOK_EXIT, removeTree } from "../src/backup/child";
 import { copyData, CopyError, LISTED_BYTES, measureCopy, undeclaredServer } from "../src/backup/copy";
@@ -345,6 +345,14 @@ describe("what sitesolide deploy looks for on the server", () => {
     const built = Bun.spawnSync([process.execPath, "build", "backup.ts", "--target=bun"], { cwd: join(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe" });
     expect(built.exitCode).toBe(0);
     expect(built.stdout.toString()).toContain(SERVICE_COMMANDS_FEATURE);
+  });
+
+  test("the component's build and the installer's carry this release's bind lines, which a machine is searched for before it opens the second block", () => {
+    for (const entry of ["backup.ts", "installer.ts"]) {
+      const built = Bun.spawnSync([process.execPath, "build", entry, "--target=bun"], { cwd: join(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe" });
+      expect({ entry, code: built.exitCode }).toEqual({ entry, code: 0 });
+      expect({ entry, carries: built.stdout.toString().includes(BIND_LINES_FEATURE) }).toEqual({ entry, carries: true });
+    }
   });
 });
 
@@ -698,6 +706,7 @@ describe("a backup command's unit", () => {
     // The loopback kept, the machine's ports stay its owners': a command run
     // every hour must not listen where a neighbour or the portal restarts.
     expect(wanted).toContain("SocketBindDeny=3000-3099");
+    expect(wanted).toContain("SocketBindDeny=21000-29999");
     expect(confinement(job).some((property) => property.startsWith("SocketBindAllow"))).toBe(false);
     expect(wanted).toContain("BindReadOnlyPaths=/srv/sites/vault/app");
     expect(wanted).toContain("MemoryMax=512M");
@@ -932,7 +941,7 @@ describe("a backup command and its project's store", () => {
     }
   });
 
-  test("its line is the one the bench ran, with the store's files and ProtectProc added, and nothing else", () => {
+  test("its line is the one the bench ran, with the store's files, ProtectProc and the second block added, and nothing else", () => {
     // The line bench/hookline.ts built with the runner of main for project
     // demo (hookline.json), which systemd 257 ran with the store's env file;
     // Q8b added LoadCredential=files:<store>/files to it, and read the files.
@@ -967,7 +976,9 @@ describe("a backup command and its project's store", () => {
       }
       return removed;
     };
-    expect(added(["LoadCredential=files:/etc/sitesolide/projects/demo/files", "ProtectProc=invisible"])).toEqual(bench);
+    // And the second block of the services' ports, denied since: the bench
+    // ran before it existed.
+    expect(added(["LoadCredential=files:/etc/sitesolide/projects/demo/files", "ProtectProc=invisible", "SocketBindDeny=21000-29999"])).toEqual(bench);
     // ${CREDENTIALS_DIRECTORY} on a command's line is systemd's to expand there:
     // the runner never turns that off, as the installer's line does.
     expect(line).not.toContain("--expand-environment=no");

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/config";
@@ -7,6 +7,7 @@ import { createMachine, type Machine } from "../src/machine";
 import { bounded, run } from "../src/run";
 import type { MonitorStatus } from "../src/status";
 import { OPENSSL, drawAuthority, drawCertificate, fakeSystemctl } from "./fixtures";
+import { loopbackRule } from "../../bin/cli/loopback";
 
 /**
  * Whole runs of the monitor, one simulated minute apart, against real
@@ -25,6 +26,7 @@ import { OPENSSL, drawAuthority, drawCertificate, fakeSystemctl } from "./fixtur
  */
 
 const ZONE = "test-zone.invalid";
+const TCP_HEADER = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
 const MINUTE = 60_000;
 const T0 = Date.UTC(2026, 9, 4, 12, 0, 0);
 
@@ -36,6 +38,9 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
   const domainsFile = join(D, "domaines.map");
   const meminfoFile = join(D, "meminfo");
   const backupFile = join(D, "last-run.json");
+  /** The machine's service units, none until a test lays one, and the loopback rule laid, none either. */
+  const unitsFolder = join(D, "units");
+  const loopbackFile = join(D, "loopback.nft");
 
   /** What the fake Caddy answers per host; absent, 200. */
   const answers = new Map<string, number>();
@@ -79,6 +84,10 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
       tlsZoneFile: join(D, "tls-zone.caddy"),
       stateDir: state,
       backupFile,
+      unitsFolder,
+      loopbackFile,
+      accountsFile: join(D, "passwd"),
+      procNetTcp: [join(D, "tcp"), join(D, "tcp6")],
       diskPaths: [D],
       probe: { address: "127.0.0.1", port: caddyPort, ca, timeoutMs: 2000 },
       concurrency: 4,
@@ -133,6 +142,9 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     for (const folder of ["cms", "shop", ZONE]) mkdirSync(join(sites, folder, "public"), { recursive: true });
     writeFileSync(domainsFile, "# generated\n\tsample-agency.example cms\n");
     writeFileSync(meminfoFile, "MemTotal:        8000000 kB\nMemAvailable:    4000000 kB\n");
+    // The kernel's sockets, none listening, and the accounts that would name them.
+    writeFileSync(join(D, "tcp"), TCP_HEADER);
+    writeFileSync(join(D, "passwd"), "root:x:0:0::/root:/bin/sh\nsite-old:x:1600:1600::/nonexistent:/usr/sbin/nologin\n");
     mkdirSync(state, { recursive: true });
 
     // systemctl, answering from files and recording each call.
@@ -180,8 +192,9 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     expect(quiet.webhook).toEqual([]);
     expect(quiet.status).toMatchObject({ down: [], heartbeat: "ok", webhook: "idle", undelivered: 0 });
     // Caddy, its restarts, five hosts, three certificates, two units, the
-    // collector, the disk, the memory and the monitor itself.
-    expect(quiet.status.checks).toBe(16);
+    // collector, the disk, the memory, the projects' units' ports, what
+    // listens on the second block and the monitor itself.
+    expect(quiet.status.checks).toBe(18);
 
     answers.set(`shop.${ZONE}`, 502);
     const first = await pass();
@@ -191,7 +204,7 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     const second = await pass();
     expect(second.heartbeat).toEqual(["/ping/5a7f"]);
     expect(second.heartbeatBody).toEqual([
-      `ok for the platform: 1 of 16 checks down, none of them platform-wide\nDOWN https://shop.${ZONE}/ answered 502`,
+      `ok for the platform: 1 of 18 checks down, none of them platform-wide\nDOWN https://shop.${ZONE}/ answered 502`,
     ]);
     expect(second.webhook).toEqual([
       `sitesolide monitor, ${ZONE}: 1 down\nDOWN https://shop.${ZONE}/ answered 502 (since 2026-10-04 12:01 UTC)`,
@@ -240,7 +253,7 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
       "sitesolide-tunnel.service loaded active running Cloudflare Tunnel",
     ]);
     const quiet = await pass({}, tunnel);
-    expect(quiet.status.checks).toBe(17);
+    expect(quiet.status.checks).toBe(19);
     expect(quiet.status.down).toEqual([]);
 
     ready = { status: 503 };
@@ -262,7 +275,7 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     let asked = 0;
     const quiet = await pass({}, { tunnelReady: async () => (asked++, { status: 200 }) });
     expect(asked).toBe(0);
-    expect(quiet.status.checks).toBe(16);
+    expect(quiet.status.checks).toBe(18);
   });
 
   test("manual DNS: the certificate of each name of the zone read under its own name, and no wildcard", async () => {
@@ -295,7 +308,7 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     expect((await pass()).heartbeat).toEqual(["/ping/5a7f"]);
     const down = await pass();
     expect(down.heartbeat).toEqual(["/ping/5a7f/fail"]);
-    expect(down.heartbeatBody).toEqual([`down: 1 of 16 checks\nDOWN https://${ZONE}/ answered 502`]);
+    expect(down.heartbeatBody).toEqual([`down: 1 of 18 checks\nDOWN https://${ZONE}/ answered 502`]);
     answers.delete(ZONE);
     expect((await pass()).heartbeat).toEqual(["/ping/5a7f/fail"]);
     expect((await pass()).heartbeat).toEqual(["/ping/5a7f"]);
@@ -405,7 +418,7 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     // two checks more, the platform's timers none.
     setUnits(units("inactive dead", "active waiting"));
     const rest = await pass();
-    expect(rest.status).toMatchObject({ checks: 18, down: [] });
+    expect(rest.status).toMatchObject({ checks: 20, down: [] });
     setUnits(units("active running", "active running"));
     expect((await pass()).webhook).toEqual([]);
 
@@ -464,6 +477,72 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
     rmSync(join(systemd, "calls"), { force: true });
     await pass();
     expect(readFileSync(join(systemd, "calls"), "utf8").trim().split("\n").some((call) => call.startsWith("show -p"))).toBe(false);
+  });
+
+  test("a project unit that may listen on another's port, once the second block is open: critical, read as systemd has it", async () => {
+    mkdirSync(unitsFolder, { recursive: true });
+    writeFileSync(join(unitsFolder, "old.service"), "[Service]\nUser=site-old\n");
+    // A masked unit and a template are not read.
+    symlinkSync("/dev/null", join(unitsFolder, "masked.service"));
+    writeFileSync(join(unitsFolder, "sitesolide-installer@.service"), "[Service]\nUser=root\n");
+    writeFileSync(join(systemd, "statuses"), "Id=old.service\nUser=site-old\nSocketBindDeny=2019\nSocketBindDeny=3000-3099\nSocketBindDeny=3128-3129\nNeedDaemonReload=no\n");
+    writeFileSync(loopbackFile, loopbackRule(997, "close", 1022));
+    rmSync(join(systemd, "calls"), { force: true });
+    try {
+      await pass();
+      const down = await pass();
+      expect(down.status.down.map((problem) => [problem.id, problem.severity])).toEqual([["binds", "critical"]]);
+      expect(down.webhook[0]).toContain("old.service may listen on the services' ports");
+      const calls = readFileSync(join(systemd, "calls"), "utf8").trim().split("\n");
+      expect(calls).toContain("show -p Id -p User -p SocketBindDeny -p NeedDaemonReload -- old.service");
+      // The rule in observe, or none: the second block's line is not asked for yet.
+      writeFileSync(loopbackFile, loopbackRule(997, "observe", 1022));
+      await pass();
+      expect((await pass()).status.down).toEqual([]);
+    } finally {
+      rmSync(unitsFolder, { recursive: true, force: true });
+      rmSync(loopbackFile, { force: true });
+      rmSync(join(systemd, "statuses"), { force: true });
+    }
+  });
+
+  test("a port of the second block held by an account no manifest gives it, once the block is open: critical, and the heartbeat fails", async () => {
+    // A scheduled run started under an earlier unit, holding 21000 through every reload.
+    writeFileSync(join(D, "tcp"), `${TCP_HEADER}   0: 0100007F:5208 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1600        0 20311 1 0000000000000000 100 0 0 10 0\n`);
+    writeFileSync(loopbackFile, loopbackRule(997, "close", 1022));
+    try {
+      await pass();
+      const down = await pass();
+      expect(down.status.down.map((problem) => [problem.id, problem.severity])).toEqual([["listeners", "critical"]]);
+      expect(down.webhook[0]).toContain("Port 21000 (site-old) listened on in the second block");
+      // The one channel a machine without a webhook has pages too.
+      expect(down.heartbeat).toEqual(["/ping/5a7f/fail"]);
+      // Before the block opens, a warning, and the heartbeat stays armed.
+      rmSync(loopbackFile, { force: true });
+      expect((await pass()).heartbeat).toEqual(["/ping/5a7f"]);
+    } finally {
+      writeFileSync(join(D, "tcp"), TCP_HEADER);
+      rmSync(loopbackFile, { force: true });
+    }
+  });
+
+  test("a systemctl that fails, or answers for fewer units than there are files, is no reading: the monitor says it is half blind", async () => {
+    mkdirSync(unitsFolder, { recursive: true });
+    writeFileSync(join(unitsFolder, "old.service"), "[Service]\nUser=site-old\n");
+    writeFileSync(join(unitsFolder, "new.service"), "[Service]\nUser=site-new\n");
+    // The fake systemctl answers one unit of the two.
+    writeFileSync(join(systemd, "statuses"), "Id=old.service\nUser=site-old\nSocketBindDeny=2019\nNeedDaemonReload=no\n");
+    writeFileSync(loopbackFile, loopbackRule(997, "close", 1022));
+    try {
+      await pass();
+      const blind = await pass();
+      expect(blind.status.down.map((problem) => problem.id)).toEqual(["monitor"]);
+      expect(blind.webhook[0]).toContain("systemctl show of the units: 1 unit(s) read of 2");
+    } finally {
+      rmSync(unitsFolder, { recursive: true, force: true });
+      rmSync(loopbackFile, { force: true });
+      rmSync(join(systemd, "statuses"), { force: true });
+    }
   });
 
   test("a webhook that refuses keeps its notices for the next run, in one message", async () => {
@@ -544,7 +623,7 @@ describe.skipIf(OPENSSL === null)("the monitor, run after run", () => {
       ["backup", "The last backup run failed for shop, 2 min ago"],
     ]);
     expect(second.journal).toContain("DOWN backup: The last backup run failed for shop, 2 min ago");
-    expect(second.journal.at(-1)).toBe("17 checks, 1 down, 0 failing; heartbeat unconfigured, webhook unconfigured");
+    expect(second.journal.at(-1)).toBe("19 checks, 1 down, 0 failing; heartbeat unconfigured, webhook unconfigured");
     const kept = JSON.parse(readFileSync(join(state, "state.json"), "utf8")) as { outbox: unknown[] };
     expect(kept.outbox).toEqual([]);
     expect(existsSync(join(state, "state.json.tmp"))).toBe(false);

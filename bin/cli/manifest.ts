@@ -163,13 +163,68 @@ export const SERVICE_KEYS = ["start", "port", "routes", "internal", "memory", "c
 /** The keys of a service's `backup`, refused beyond these for the same reason. */
 export const BACKUP_KEYS = ["folder", "command"];
 
+/** A range of ports, both ends included: a single port has `first` equal to `last`. */
+export type PortRange = { readonly first: number; readonly last: number };
+
 /**
- * The services' ports: 3000 the landing, 3001 the shared service, then the
- * sites and the projects. The loopback rule reserves them to Caddy and root,
- * see bin/cli/loopback.ts; it lives here because the manifest's validation
- * needs it too, and this file is the one the dashboard borrows.
+ * The services' ports, in two blocks. The loopback rule reserves them to
+ * Caddy and root, see bin/cli/loopback.ts, and every generated unit denies
+ * them to a service but its own port, see DENIED_BINDS in bin/cli/unit.ts.
+ * They live here because the manifest's validation needs them too, and this
+ * file is the one the dashboard borrows. Every reader goes through this list,
+ * isServicePort and the formatters below, never through a number of its own.
+ *
+ * The first, 3000 to 3099: 3000 the landing, 3001 the shared service, then
+ * the sites and the projects. The only one until the second was added, and
+ * still valid, so that every manifest and every machine in service keeps
+ * working: with the platform's own ports taken, it held fewer than a hundred
+ * servers, and a project with a database takes two.
+ *
+ * The second, 21000 to 29999, nine thousand more. Not 3100 and up: 3128 and
+ * 3129, the egress proxy's, sit right above, and 2019, Caddy's admin API,
+ * below, each outside on purpose with rules of its own. Not 20000: the
+ * tunnel's connector serves its metrics on 20240, which the monitor reads as
+ * its own account, and cloudflared takes 20241 to 20245 by default
+ * (TUNNEL_METRICS in bin/cli/tunnel.ts). And below 32768, where Linux's
+ * ephemeral ports begin, so that no outgoing connection ever takes one of its
+ * ports as its source.
+ *
+ * A machine opens the second block only once every project unit on it denies
+ * it and its loopback rule reserves it: until then `deploy` and the installer
+ * refuse a port there (secondBlockRefusal in bin/cli/services.ts).
  */
-export const SERVICE_PORTS = { first: 3000, last: 3099 };
+export const SERVICE_PORT_RANGES: readonly PortRange[] = [
+  { first: 3000, last: 3099 },
+  { first: 21000, last: 29999 },
+];
+
+/** The block every machine has reserved since the loopback rule exists. */
+export const FIRST_BLOCK: PortRange = SERVICE_PORT_RANGES[0]!;
+
+/** Is `port` one of `range`'s? */
+export function inPortRange(range: PortRange, port: number): boolean {
+  return Number.isInteger(port) && port >= range.first && port <= range.last;
+}
+
+/** Is `port` a port a service may be given: a whole number inside one of the blocks? */
+export function isServicePort(port: number): boolean {
+  return SERVICE_PORT_RANGES.some((range) => inPortRange(range, port));
+}
+
+/** Is `port` a service's port outside the first block, one a machine opens late? */
+export function inLaterBlock(port: number): boolean {
+  return isServicePort(port) && !inPortRange(FIRST_BLOCK, port);
+}
+
+/** A range as systemd's `SocketBindDeny=` and nftables write it: `3000-3099`, or `2019` alone. */
+export function portRangeText(range: PortRange): string {
+  return range.first === range.last ? String(range.first) : `${range.first}-${range.last}`;
+}
+
+/** The blocks in a sentence: `3000 to 3099 or 21000 to 29999`. */
+export function servicePortsProse(): string {
+  return SERVICE_PORT_RANGES.map((range) => `${range.first} to ${range.last}`).join(" or ");
+}
 
 /** The slug of the portal itself, which cannot put itself behind its own door. */
 export const PORTAL_SLUG = "portal";
@@ -1011,12 +1066,10 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
   } else if (isApplication) {
     if (typeof manifest.port !== "number" || !Number.isInteger(manifest.port)) {
       errors.push("port: required as soon as `start` is declared");
-    } else if (manifest.port < SERVICE_PORTS.first || manifest.port > SERVICE_PORTS.last) {
-      // The range the loopback rule closes: on any other port, every project
+    } else if (!isServicePort(manifest.port)) {
+      // The blocks the loopback rule closes: on any other port, every project
       // of the machine reaches the app directly, past its door.
-      errors.push(
-        `port: between ${SERVICE_PORTS.first} and ${SERVICE_PORTS.last}, the range only Caddy and the project itself can reach; leave it out and deploy picks a free one`,
-      );
+      errors.push(`port: inside ${servicePortsProse()}, the blocks only Caddy and the project itself can reach; leave it out and deploy picks a free one`);
     }
   } else if (manifest.port !== undefined) {
     errors.push("port: useless without `start`, Caddy serves the folder itself");
@@ -1536,10 +1589,8 @@ function serviceErrors(manifest: Manifest): string[] {
       // Refused above.
     } else if (typeof port !== "number" || !Number.isInteger(port)) {
       errors.push(`${label}.port: a whole number, the loopback port the service listens on`);
-    } else if (port < SERVICE_PORTS.first || port > SERVICE_PORTS.last) {
-      errors.push(
-        `${label}.port: between ${SERVICE_PORTS.first} and ${SERVICE_PORTS.last}, the range only Caddy and the project itself can reach`,
-      );
+    } else if (!isServicePort(port)) {
+      errors.push(`${label}.port: inside ${servicePortsProse()}, the blocks only Caddy and the project itself can reach`);
     } else if (ports.has(port)) {
       errors.push(`${label}.port: ${port} is already the port of ${ports.get(port)}`);
     } else {

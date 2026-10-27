@@ -10,6 +10,11 @@
  * standard input. One file to build and install, and the code that reads an
  * archive is the code the tests ran.
  *
+ * `installer.js --features` prints what this build does that an older one did
+ * not, which keeps it in the bundle: a machine is searched for it before it
+ * opens the second block of the services' ports (secondBlockStateCommand in
+ * bin/cli/services.ts).
+ *
  * The exit code does not carry the verdict, as for the gatekeeper: 0 as soon
  * as a result is written, a failed deployment included. Non-zero only for a
  * launch that could not produce one.
@@ -28,6 +33,7 @@ import { readLaunch, readRequest } from "./instance";
 import { runPipeline, type Outcome } from "./pipeline";
 import { createHost, realCommands, type Commands } from "./real";
 import { TLS_ZONE_PATH, ZONE_NAMES_PATH } from "../../borrowed/zone-names";
+import { BIND_LINES_FEATURE } from "../../borrowed/unit";
 
 export const LIMITS = { maxBytes: MAX_EXTRACTED_BYTES, maxEntries: MAX_ENTRIES, maxPathBytes: MAX_PATH_BYTES };
 
@@ -162,6 +168,10 @@ export function pruneResults(folder: string, now: number): number {
 export async function main(argv: string[], env: Environment, overrides: { commands?: Commands; systemctl?: Systemctl } = {}): Promise<number> {
   const { commands } = overrides;
   if (argv[0] === "--extract") return extractMain(argv[1], Bun.stdin.stream());
+  if (argv[0] === "--features" && argv.length === 1) {
+    console.log(BIND_LINES_FEATURE);
+    return 0;
+  }
 
   const launch = readLaunch(argv);
   if (!launch.ok) {

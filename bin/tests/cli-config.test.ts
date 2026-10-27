@@ -305,7 +305,7 @@ describe("what the deployment scripts do on the machine", () => {
   };
 
   test("a probe of a service port runs as root", async () => {
-    // The loopback rule lets only Caddy and root reach ports 3000 to 3099.
+    // The loopback rule lets only Caddy and root reach the services' ports.
     // deploy-api.sh probed its service from the deployment account, was
     // refused every time since the rule closed, and stopped there.
     for (const [name, script] of await scripts()) {

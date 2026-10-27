@@ -852,6 +852,11 @@ server's `backup.js` for the feature (bin/cli/backups.ts,
 when the component predates it or is missing; it refuses nothing, deploying
 changing nothing of what the backups do. The installer, which deploys for a
 token, does not ask: in the order above it is updated after the component.
+`backup.js features` prints a second line, `BIND_LINES_FEATURE` of
+bin/cli/unit.ts, the ports a backup command's unit may not listen on: a
+machine is searched for it, and the installer's build for its own, before it
+opens the second block of the services' ports
+([docs/upgrading.md](../../../docs/upgrading.md#a-second-block-of-service-ports)).
 
 The machine's loopback rule must carry the project set
 (`bin/deploy-loopback.sh close`): `deploy` refuses a project with a backup

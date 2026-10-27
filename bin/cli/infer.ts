@@ -35,7 +35,7 @@
  */
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync, type Dirent } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
-import { DEPENDENCIES, isFrameworkPublic, isSystemName, isValidSlug, KNOWN_KEYS, RESERVED_ENV, SERVICE_PORTS, SUSPICIOUS_ENV, validate, type Manifest } from "./manifest";
+import { DEPENDENCIES, FIRST_BLOCK, isFrameworkPublic, isSystemName, isValidSlug, KNOWN_KEYS, RESERVED_ENV, SUSPICIOUS_ENV, validate, type Manifest } from "./manifest";
 import { buildNameRefusal, checkKey, isVariableName, PASSWORD_VARIABLE, VALUE_LIKE_PREFIXES } from "./variables";
 import { needsPort } from "./ports";
 import { projectPaths } from "./unit";
@@ -869,7 +869,7 @@ export function inferManifest(folder: string, slug: string): Inference {
     const manifest: Manifest = about === undefined ? detection.manifest : { ...detection.manifest, description: about };
     // Never hand back a manifest deploy would refuse. An app is checked with
     // the port deploy will give it, the one key left to the machine.
-    const errors = validate(needsPort(manifest) ? { ...manifest, port: SERVICE_PORTS.last } : manifest, "");
+    const errors = validate(needsPort(manifest) ? { ...manifest, port: FIRST_BLOCK.last } : manifest, "");
     if (errors.length > 0) return { kind: "none", reasons: [`the manifest inferred does not validate: ${errors.join("; ")}`], notes: [] };
     return { ...detection, manifest };
   }

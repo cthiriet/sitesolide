@@ -5,7 +5,7 @@ import { bundle, entryBlocks, header } from "../borrowed/bundle";
 import { generateFragment, HEADLESS_ANSWER } from "../borrowed/fragment";
 import { readManifest, type Manifest } from "../borrowed/manifest";
 import { fragmentIsProtected } from "../borrowed/portal";
-import { earlierGenerations, generatedAs, generateUnits } from "../borrowed/unit";
+import { BIND_LINES_FEATURE, earlierGenerations, generatedAs, generateUnits, missingDeniedBinds, withoutLaterBlockLines } from "../borrowed/unit";
 import type { InstallRequest, Scope } from "../src/control/protocol";
 import { finalManifest, replaceable, runPipeline, STABILITY_WINDOW_MS, type Outcome } from "../src/installer/pipeline";
 import { FIRST_CERTIFICATE_MS, parseZoneNames, ZONE_NAMES_PATH } from "../borrowed/zone-names";
@@ -508,6 +508,155 @@ describe("a redeployment", () => {
   });
 });
 
+describe("a port of the second block, once the machine has opened it", () => {
+  /**
+   * A unit generated before the second block may listen on any of its ports,
+   * where Caddy would send another project's visitors, and a rule laid before
+   * it lets every account connect there; so does a backup component built
+   * before it, and a kernel that hands those ports out by itself. The
+   * installer refuses such a port until all of it is settled, as `deploy`
+   * does (secondBlockRefusal), and says so on any other deployment once the
+   * block is open and a unit may listen in it again.
+   */
+  const BOTH = [
+    "table inet sitesolide_boucle {",
+    "\tchain output {",
+    '\t\toifname "lo" tcp dport { 3000-3099, 21000-29999 } meta skuid { 0, 997 } accept',
+    '\t\toifname "lo" tcp dport { 3000-3099, 21000-29999 } ct state new counter packets 0 bytes 0 reject with tcp reset',
+    "\t}",
+    "}",
+  ].join("\n");
+  const FIRST_ONLY = BOTH.replaceAll("{ 3000-3099, 21000-29999 }", "3000-3099");
+
+  /** The unit an earlier release laid for another project: every bind line but the second block's. */
+  function layEarlierUnit(bench: Bench): void {
+    const [unit] = generateUnits({ slug: "old", start: "x", port: 3040 } as Manifest, { slug: "old", zone: ZONE, contact: "" });
+    writeFileSync(join(bench.units, "old.service"), withoutLaterBlockLines(unit!.text));
+  }
+
+  test("refused on a machine whose rule predates it: nothing laid, the first block named", async () => {
+    const bench = createBench();
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, port: 21000 }));
+    expect(outcome).toMatchObject({ ok: false, code: "second-block-closed" });
+    expect(outcome.ok === false && outcome.message).toContain("port 21000");
+    expect(outcome.ok === false && outcome.message).toContain("does not refuse other accounts on that block");
+    expect(outcome.ok === false && outcome.message).toContain("3000 to 3099 works as before");
+    expect(existsSync(join(bench.sites, "shop"))).toBe(false);
+    expect(bench.events).not.toContain("useradd site-shop");
+  });
+
+  test("refused while a project's unit may still listen there, the rule laid or not", async () => {
+    for (const table of [FIRST_ONLY, BOTH]) {
+      const bench = createBench({ loopbackTable: table });
+      layEarlierUnit(bench);
+      stageBundle(bench, APP_FILES);
+      const outcome = await run(bench, request({ ...APP, port: 21000 }));
+      expect(outcome).toMatchObject({ ok: false, code: "second-block-closed" });
+      expect(outcome.ok === false && outcome.message).toContain("old.service");
+    }
+  });
+
+  test("deployed once the rule reserves both blocks and every project's unit denies them", async () => {
+    const bench = createBench({ loopbackTable: BOTH });
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, port: 21000 }));
+    expect(outcome).toMatchObject({ ok: true });
+    const unit = readFileSync(join(bench.units, "shop.service"), "utf8");
+    expect(unit).toContain("\nSocketBindAllow=tcp:21000\n");
+    expect(unit).toContain("\nSocketBindDeny=21000-29999\n");
+    expect(missingDeniedBinds(unit)).toEqual([]);
+  });
+
+  test("a port of the first block asks nothing of the sort, on any machine", async () => {
+    const bench = createBench();
+    layEarlierUnit(bench);
+    stageBundle(bench, APP_FILES);
+    expect(await run(bench, request({ ...APP, port: 3040 }))).toMatchObject({ ok: true });
+    // The block not open, nothing is sent there: nothing said either.
+    expect(bench.events.some((event) => event.includes("may listen on the second block's ports"))).toBe(false);
+  });
+
+  test("refused while the backup component predates it, or the kernel may hand its ports out by itself", async () => {
+    const cases: [BenchOptions, string][] = [
+      [{ loopbackTable: BOTH, backupScript: "console.log('an older build')" }, "components built before that block, whose programs may listen there: backup"],
+      [{ loopbackTable: BOTH, portRange: "1024\t65535" }, "the kernel may hand a port of that block to any process that asks for none"],
+    ];
+    for (const [options, said] of cases) {
+      const bench = createBench(options);
+      stageBundle(bench, APP_FILES);
+      const outcome = await run(bench, request({ ...APP, port: 21000 }));
+      expect(outcome).toMatchObject({ ok: false, code: "second-block-closed" });
+      expect(outcome.ok === false && outcome.message).toContain(said);
+    }
+    // The current build, and every block reserved from the kernel's choice: open.
+    const bench = createBench({ loopbackTable: BOTH, backupScript: `console.log("${BIND_LINES_FEATURE}")`, portRange: "1024\t65535", reservedPorts: "3000-3099,21000-29999" });
+    stageBundle(bench, APP_FILES);
+    expect(await run(bench, request({ ...APP, port: 21000 }))).toMatchObject({ ok: true });
+  });
+
+  test("a rule laid in observe keeps it shut: every account may still connect", async () => {
+    const observed = BOTH.replace("counter packets 0 bytes 0 reject with tcp reset", 'counter packets 0 bytes 0 limit rate 30/minute burst 5 packets log prefix "sitesolide-loopback: " flags skuid');
+    const bench = createBench({ loopbackTable: observed });
+    stageBundle(bench, APP_FILES);
+    expect(await run(bench, request({ ...APP, port: 21000 }))).toMatchObject({ ok: false, code: "second-block-closed" });
+  });
+
+  test("a hand edit is read as systemd reads it: a drop-in's empty line resets the list, spaces around = count", async () => {
+    const [unit] = generateUnits({ slug: "old", start: "x", port: 3040 } as Manifest, { slug: "old", zone: ZONE, contact: "" });
+    for (const text of [`${unit!.text}SocketBindDeny=\n`, withoutLaterBlockLines(unit!.text).replace("User=site-old", "User = site-old")]) {
+      const bench = createBench({ loopbackTable: BOTH });
+      writeFileSync(join(bench.units, "old.service"), text);
+      stageBundle(bench, APP_FILES);
+      const outcome = await run(bench, request({ ...APP, port: 21000 }));
+      expect(outcome).toMatchObject({ ok: false, code: "second-block-closed" });
+      expect(outcome.ok === false && outcome.message).toContain("old.service");
+    }
+  });
+
+  test("a dangling link or a masked unit among the units runs nothing: skipped, as `deploy` skips it", async () => {
+    const bench = createBench({ loopbackTable: BOTH });
+    symlinkSync(join(bench.root, "gone.service"), join(bench.units, "gone.service"));
+    symlinkSync("/dev/null", join(bench.units, "masked.service"));
+    stageBundle(bench, APP_FILES);
+    expect(await run(bench, request({ ...APP, port: 21000 }))).toMatchObject({ ok: true });
+  });
+
+  test("a port of the second block another account already listens on is refused, the block open; the project's own is not", async () => {
+    // A run started under an earlier unit, holding 21000 through every reload.
+    const bench = createBench({ loopbackTable: BOTH, listening: [{ port: 21000, uid: 4242 }] });
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, port: 21000 }));
+    expect(outcome).toMatchObject({ ok: false, code: "second-block-closed" });
+    expect(outcome.ok === false && outcome.message).toContain("already listened on by another account, which Caddy would send this project's visitors to: 21000 (uid 4242)");
+    // The project's own service on its port, a redeployment: deployed.
+    const own = createBench({ loopbackTable: BOTH, listening: [{ port: 21000, uid: 4242 }] });
+    writeFileSync(join(own.root, "passwd"), `${readFileSync(join(own.root, "passwd"), "utf8")}site-shop:x:4242:4242::/nonexistent:/usr/sbin/nologin\n`);
+    stageBundle(own, APP_FILES);
+    expect(await run(own, request({ ...APP, port: 21000 }))).toMatchObject({ ok: true });
+  });
+
+  test("a systemctl that fails is no reading: a port of the second block refused, one of the first deployed with a warning", async () => {
+    const later = createBench({ loopbackTable: BOTH, bindStatesFail: true });
+    layEarlierUnit(later);
+    stageBundle(later, APP_FILES);
+    expect(await run(later, request({ ...APP, port: 21000 }))).toMatchObject({ ok: false, code: "machine-unreadable" });
+    const first = createBench({ loopbackTable: BOTH, bindStatesFail: true });
+    layEarlierUnit(first);
+    stageBundle(first, APP_FILES);
+    expect(await run(first, request({ ...APP, port: 3040 }))).toMatchObject({ ok: true });
+    expect(first.events).toContain("log    !! cannot tell whether every unit on the machine still keeps to its own port");
+  });
+
+  test("once the block is open, a deployment of the first block says a unit may listen in it again, and goes on", async () => {
+    const bench = createBench({ loopbackTable: BOTH });
+    layEarlierUnit(bench);
+    stageBundle(bench, APP_FILES);
+    expect(await run(bench, request({ ...APP, port: 3040 }))).toMatchObject({ ok: true });
+    expect(bench.events.some((event) => event.startsWith("log    !! units that may listen on the second block's ports") && event.includes("old.service"))).toBe(true);
+  });
+});
+
 describe("workers, scheduled services and anchors", () => {
   const BACKGROUND = {
     slug: "shop",
@@ -654,8 +803,8 @@ describe("workers, scheduled services and anchors", () => {
     expect(units(again)).toEqual(["shop.jobs.service", "shop.service"]);
   });
 
-  test("a unit an earlier release wrote, before the system-call filter or the bind lines, is replaced, the manifest changed or not: it was never edited by hand", async () => {
-    for (const generation of [0, 1]) {
+  test("a unit an earlier release wrote, before the second block, the store, the system-call filter or the bind lines, is replaced, the manifest changed or not: it was never edited by hand", async () => {
+    for (const generation of [0, 1, 2]) {
       for (const next of [{ ...APP, port: 3040, portal: true }, { ...APP, port: 3040, portal: true, memory: "512M" }]) {
         const bench = createBench();
         const previous = { ...APP, port: 3040, portal: true } as Manifest;
@@ -682,7 +831,7 @@ describe("workers, scheduled services and anchors", () => {
     const repeated = (text: string) => text.replace(STORE, `${STORE}${STORE}`);
     const added = (text: string) => text.replace(STORE, `${FLAT}${STORE}`);
     // The release before the system-call filter, its store line and all.
-    const beforeFilter = earlierGenerations(main!.text)[3]!;
+    const beforeFilter = earlierGenerations(main!.text)[4]!;
     expect(beforeFilter).toContain(STORE);
     for (const edited of [repeated(main!.text), added(main!.text), added(beforeFilter), repeated(beforeFilter)]) {
       const bench = createBench();

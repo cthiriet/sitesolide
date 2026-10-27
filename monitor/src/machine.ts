@@ -7,12 +7,16 @@
  *
  *   - systemd answers `systemctl show` and `list-units` to any account, over
  *     D-Bus; nothing here asks it to change anything;
- *   - /srv/sites is listed, by name only, and /etc/caddy/domaines.map is 0644;
+ *   - /srv/sites is listed, by name, and /etc/caddy/domaines.map is 0644;
  *   - /proc/meminfo and statfs are open to everyone;
  *   - Caddy is asked over HTTPS on the loopback's 443, like any visitor, and
  *     never through its admin API on 2019, which the loopback rule closes to
  *     this account anyway;
- *   - the backup status is read if the backup job left it readable.
+ *   - the backup status is read if the backup job left it readable;
+ *   - /etc/systemd/system is listed, and /etc/sitesolide-loopback.nft is 0644;
+ *   - /proc/net/tcp and tcp6 list every socket with the uid that opened it,
+ *     /etc/passwd names the uid, and a project's sitesolide.json is 0644 in a
+ *     folder of 0755, read only when a later block's port is listened on.
  */
 import { readdirSync, readFileSync, renameSync, statfsSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -26,6 +30,7 @@ import {
   TUNNEL_READY,
   withExitStatuses,
   type BackupReading,
+  type BindsReading,
   type CertificateReading,
   type DiskStats,
   type ListedUnit,
@@ -34,6 +39,9 @@ import {
 } from "./checks";
 import type { Config } from "./config";
 import { deliver, type Delivery } from "./notify";
+import { reservesEveryBlock } from "../../bin/cli/loopback";
+import { readAccounts, readListeners } from "../../bin/cli/services";
+import { BIND_PROPERTIES, readBindStates, type BindState } from "../../bin/cli/unit";
 
 export type Reading<T> = { value: T } | { error: string };
 
@@ -51,6 +59,8 @@ export type Machine = {
   disks(paths: readonly string[]): Array<{ path: string; stats: DiskStats | null }>;
   backup(): Promise<BackupReading>;
   probe(host: string, timeoutMs: number): Promise<ProbeResponse>;
+  /** Every service unit of /etc/systemd/system as systemd has it loaded, and whether the laid rule opens the second block. */
+  binds(): Promise<Reading<BindsReading>>;
   /** cloudflared's `/ready`, on a machine served through a tunnel. */
   tunnelReady(timeoutMs: number): Promise<ProbeResponse>;
   certificate(sni: string, timeoutMs: number): Promise<CertificateReading>;
@@ -166,6 +176,71 @@ export function createMachine(config: Config, options: MachineOptions = { system
       if (failing.length === 0) return { value: units };
       const shown = await spawn([options.systemctl, "show", "-p", "Id", "-p", "ExecMainStatus", "--", ...failing], SYSTEMCTL_TIMEOUT_MS);
       return { value: shown.code === 0 ? withExitStatuses(units, readExitStatuses(shown.stdout)) : units };
+    },
+
+    async binds() {
+      // Every service unit file, followed as systemd follows it: a dangling
+      // link or /dev/null, a masked unit, runs nothing, nor does a template,
+      // which `systemctl show` refuses. As secondBlockStateCommand of
+      // bin/cli/services.ts reads them for a deployment.
+      let names: string[];
+      try {
+        names = readdirSync(config.unitsFolder)
+          .filter((name) => name.endsWith(".service") && !name.endsWith("@.service"))
+          .filter((name) => {
+            try {
+              return statSync(join(config.unitsFolder, name)).isFile();
+            } catch {
+              return false;
+            }
+          })
+          .sort();
+      } catch (error) {
+        if (errorCode(error) === "ENOENT") names = [];
+        else return { error: `${config.unitsFolder}: ${errorCode(error)}` };
+      }
+      const rule = readOptional(config.loopbackFile);
+      if ("error" in rule) return rule;
+      const open = rule.value !== null && reservesEveryBlock(rule.value);
+      // One block per file, from a systemctl that succeeded: a failure or an
+      // answer cut off is no reading, never a machine with no unit at fault.
+      let units: BindState[] = [];
+      if (names.length > 0) {
+        const shown = await spawn([options.systemctl, "show", ...BIND_PROPERTIES.flatMap((property) => ["-p", property]), "--", ...names], SYSTEMCTL_TIMEOUT_MS);
+        const read = shown.code === 0 ? readBindStates(shown.stdout) : null;
+        if (read === null || read.length !== names.length) return { error: `systemctl show of the units: ${shown.code === 0 ? `${read?.length ?? "no"} unit(s) read of ${names.length}` : firstLine(shown)}` };
+        units = read;
+      }
+      // What listens on a port of a later block, the kernel's lines and their
+      // uid, which /proc/net shows to every account; and the manifests that
+      // declare those ports, 0644 in folders of 0755.
+      const passwd = readOptional(config.accountsFile);
+      if ("error" in passwd) return passwd;
+      const accounts = readAccounts(passwd.value ?? "");
+      const lines: string[] = [];
+      for (const [i, file] of config.procNetTcp.entries()) {
+        const text = readOptional(file);
+        if ("error" in text) return text;
+        // tcp6 is absent from a kernel booted without IPv6; tcp never is.
+        if (text.value === null && i === 0) return { error: `${file}: ENOENT` };
+        lines.push(...(text.value ?? "").split("\n").slice(1));
+      }
+      const listeners = accounts === null ? null : readListeners(lines, accounts);
+      if (listeners === null) return { error: `${config.procNetTcp.join(", ")} or ${config.accountsFile} do not read` };
+      const manifests = new Map<string, string>();
+      if (listeners.length > 0) {
+        try {
+          for (const entry of readdirSync(config.sitesDir, { withFileTypes: true })) {
+            if (!entry.isDirectory()) continue;
+            const manifest = readOptional(join(config.sitesDir, entry.name, "sitesolide.json"));
+            if ("error" in manifest) return manifest;
+            if (manifest.value !== null) manifests.set(entry.name, manifest.value);
+          }
+        } catch (error) {
+          return { error: `${config.sitesDir}: ${errorCode(error)}` };
+        }
+      }
+      return { value: { units, open, listeners, manifests } };
     },
 
     folders() {

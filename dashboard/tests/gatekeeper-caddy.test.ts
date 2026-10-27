@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateFragment } from "../borrowed/fragment";
-import { readManifest, SERVICE_PORTS, type Manifest } from "../borrowed/manifest";
+import { FIRST_BLOCK, readManifest, type Manifest } from "../borrowed/manifest";
 import { fragmentIsProtected, PORTAL_PORT } from "../borrowed/portal";
 import { installedCode } from "../borrowed/locks";
 import { DOOR_PAGE_MARKER } from "../borrowed/page";
@@ -56,9 +56,9 @@ function freePort(port = 0): number | null {
 
 const PORTAL_FREE = freePort(PORTAL_PORT) !== null;
 
-/** The site's port: a manifest names one of the services' range, never one the system picks. */
+/** The site's port: a manifest names one of the services' first block, never one the system picks. */
 function freeServicePort(): number | null {
-  for (let port = SERVICE_PORTS.first; port <= SERVICE_PORTS.last; port++) {
+  for (let port = FIRST_BLOCK.first; port <= FIRST_BLOCK.last; port++) {
     if (port !== PORTAL_PORT && freePort(port) !== null) return port;
   }
   return null;

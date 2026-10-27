@@ -24,9 +24,18 @@ import {
   RESERVED_ENV,
   secretsOf,
   STORELESS_SLUGS,
+  FIRST_BLOCK,
+  inLaterBlock,
+  isServicePort,
+  portRangeText,
+  SERVICE_PORT_RANGES,
+  servicePortsProse,
   type Manifest,
 } from "../cli/manifest";
 import { RESERVED_ENV as VARIABLES_RESERVED_ENV } from "../cli/variables";
+import { CONNECTORS_PORT, EGRESS_PROXY_PORT } from "../cli/egress";
+import { CADDY_ADMIN_PORT } from "../cli/loopback";
+import { TUNNEL_METRICS } from "../cli/tunnel";
 import { domainForms, isValidDomain as isValidDomainApi, isValidSlug as isValidSlugApi } from "../../api/src/table";
 
 /** The tests' zone: a reserved TLD, which resolves nowhere. */
@@ -122,17 +131,17 @@ describe("validation", () => {
     expect(validate({ slug: "budget", start: "bun run server.ts" })).toContainEqual(
       expect.stringContaining("port"),
     );
-    expect(validate({ ...APP, port: 80 })).toContainEqual(expect.stringContaining("between 3000 and 3099"));
+    expect(validate({ ...APP, port: 80 })).toContainEqual(expect.stringContaining("inside 3000 to 3099 or 21000 to 29999"));
   });
 
-  test("holds an app's port to the range the loopback rule closes, as a service's", () => {
-    // Outside it, every project of the machine reaches the app directly,
-    // past its portal or its code: the rule judges who connects to 3000-3099
-    // alone.
-    for (const port of [2999, 3100, 4000, 8080, 65535]) {
-      expect(validate({ ...APP, port })).toEqual([expect.stringContaining("port: between 3000 and 3099")]);
+  test("holds an app's port to the blocks the loopback rule closes, as a service's", () => {
+    // Outside them, every project of the machine reaches the app directly,
+    // past its portal or its code: the rule judges who connects to the
+    // blocks alone. Between them included: 3100 to 20999 is nobody's.
+    for (const port of [2999, 3100, 3128, 4000, 8080, 19999, 20000, 20240, 20999, 30000, 32768, 65535]) {
+      expect(validate({ ...APP, port })).toEqual([expect.stringContaining("port: inside 3000 to 3099 or 21000 to 29999")]);
     }
-    for (const port of [3000, 3099]) expect(validate({ ...APP, port })).toEqual([]);
+    for (const port of [3000, 3099, 21000, 25000, 29999]) expect(validate({ ...APP, port })).toEqual([]);
   });
 
   test("refuses a port without a start", () => {
@@ -1008,5 +1017,53 @@ describe("the build's env", () => {
   test("tolerant of what validate refuses", () => {
     for (const env of [null, "x", ["A=b"], 3]) expect(buildEnvOf({ ...APP, env } as unknown as Manifest)).toEqual([]);
     expect(buildEnvOf({ ...APP, env: { A: "b", B: 3 } } as unknown as Manifest)).toEqual([["A", "b"]]);
+  });
+});
+
+describe("the services' blocks", () => {
+  test("two, the first the one every machine in service has, in order and apart", () => {
+    expect(SERVICE_PORT_RANGES).toEqual([
+      { first: 3000, last: 3099 },
+      { first: 21000, last: 29999 },
+    ]);
+    expect(FIRST_BLOCK).toBe(SERVICE_PORT_RANGES[0]!);
+    for (const [index, range] of SERVICE_PORT_RANGES.entries()) {
+      expect(range.first).toBeLessThanOrEqual(range.last);
+      if (index > 0) expect(range.first).toBeGreaterThan(SERVICE_PORT_RANGES[index - 1]!.last + 1);
+    }
+    expect(SERVICE_PORT_RANGES.map(portRangeText)).toEqual(["3000-3099", "21000-29999"]);
+    expect(servicePortsProse()).toBe("3000 to 3099 or 21000 to 29999");
+  });
+
+  test("a port of either block is a service's, one of the second block a late one", () => {
+    for (const port of [3000, 3050, 3099, 21000, 25000, 29999]) expect(isServicePort(port)).toBe(true);
+    for (const port of [2019, 2999, 3100, 3128, 3129, 19999, 20999, 30000, 3000.5, Number.NaN]) expect(isServicePort(port)).toBe(false);
+    expect([3000, 3099].map(inLaterBlock)).toEqual([false, false]);
+    expect([21000, 29999].map(inLaterBlock)).toEqual([true, true]);
+    expect([3100, 30000].map(inLaterBlock)).toEqual([false, false]);
+  });
+
+  test("the ports with rules of their own stay outside: Caddy's admin API, the egress proxy, the tunnel's metrics", () => {
+    // Inside a block, the API would be reachable by whoever the block lets
+    // through, and the proxy unreachable by the projects that need it.
+    for (const port of [CADDY_ADMIN_PORT, EGRESS_PROXY_PORT, CONNECTORS_PORT]) expect(isServicePort(port)).toBe(false);
+    // The monitor reads the connector's metrics as its own account, which a
+    // block would refuse it; cloudflared takes 20241 to 20245 by default.
+    const metrics = Number(TUNNEL_METRICS.split(":")[1]);
+    for (let port = 20240; port <= 20245; port++) expect(isServicePort(port)).toBe(false);
+    expect(isServicePort(metrics)).toBe(false);
+  });
+
+  test("below Linux's ephemeral ports, which an outgoing connection takes as its source", () => {
+    for (const range of SERVICE_PORT_RANGES) expect(range.last).toBeLessThan(32768);
+  });
+
+  test("a service's port of the second block is accepted, one between the blocks refused", () => {
+    const lab = (port: number): Manifest => ({ slug: "lab", services: { web: { start: "/x", port }, api: { start: "/y", port: 3051, routes: ["/v1/*"] } } });
+    expect(validate(lab(21000))).toEqual([]);
+    expect(validate(lab(29999))).toEqual([]);
+    for (const port of [3100, 3128, 19999, 30000]) {
+      expect(validate(lab(port))).toEqual([expect.stringContaining("services.web.port: inside 3000 to 3099 or 21000 to 29999")]);
+    }
   });
 });

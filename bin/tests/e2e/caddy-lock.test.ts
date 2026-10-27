@@ -631,7 +631,7 @@ describe("sitesolide deploy leaves the other sites' blocks alone", () => {
     // Its manifest is read with every other one, for the ports it declares;
     // its block is not.
     // The claim on its name, whether a token holds it, the machine not carrying it.
-    expect(vm.logs()).toEqual(["READ sample-door", "UNITS sample-door", "READ *", "CLAIM GET sample-door"]);
+    expect(vm.logs()).toEqual(["READ sample-door", "UNITS sample-door", "READ *", "SECOND-BLOCK", "CLAIM GET sample-door"]);
   });
 
   test("the site in progress, whose door the dashboard changed, follows it", async () => {

@@ -6,6 +6,8 @@ import {
   ago,
   bytes,
   judgeBackup,
+  judgeBinds,
+  judgeListeners,
   BACKUP_CHECK_MAX_AGE_MS,
   judgeCaddy,
   judgeCertificate,
@@ -678,5 +680,59 @@ describe("the tunnel, on a machine served through one", () => {
   test("never judged a second time among the platform's units", () => {
     const results = judgeUnits([unit("failed", "failed"), { name: "sitesolide-steward.service", load: "loaded", active: "failed", sub: "failed" }], new Map());
     expect(results.map((result) => result.label)).toEqual(["sitesolide-steward.service"]);
+  });
+});
+
+describe("where the projects may listen", () => {
+  const NONE = new Map<string, string>();
+  const LINES = ["2019", "3000-3099", "3128-3129", "21000-29999"];
+  const unit = (name: string, user: string, denied: string[], needsReload = false) => ({ unit: name, user, denied, needsReload });
+
+  test("every project unit with every line: fine, critical once the second block is open", () => {
+    const units = [unit("shop.service", "site-shop", LINES), unit("caddy.service", "caddy", [])];
+    const open = judgeBinds({ units, open: true, listeners: [], manifests: NONE });
+    expect(open).toMatchObject({ id: "binds", kind: "binds", severity: "critical", verdict: "ok", summary: "Every project unit keeps to its own port, 1 unit" });
+    expect(judgeBinds({ units, open: false, listeners: [], manifests: NONE })).toMatchObject({ severity: "warning", verdict: "ok" });
+  });
+
+  test("a unit an older CLI wrote, without the second block's line: down once the block is open, not before", () => {
+    const units = [unit("shop.service", "site-shop", LINES), unit("old.service", "site-old", LINES.slice(0, 3))];
+    const open = judgeBinds({ units, open: true, listeners: [], manifests: NONE });
+    expect(open).toMatchObject({ severity: "critical", verdict: "fail" });
+    expect(open.summary).toStartWith("old.service may listen on the services' ports");
+    expect(open.summary).toInclude("daemon-reload and a restart");
+    expect(judgeBinds({ units, open: false, listeners: [], manifests: NONE }).verdict).toBe("ok");
+  });
+
+  test("a unit with no bind line at all is said before the block opens, as a warning", () => {
+    const before = judgeBinds({ units: [unit("legacy.service", "site-legacy", [])], open: false, listeners: [], manifests: NONE });
+    expect(before).toMatchObject({ severity: "warning", verdict: "fail" });
+  });
+
+  test("read as systemd has it: a file changed and not reloaded, a line for one family or UDP alone, do not count", () => {
+    expect(judgeBinds({ units: [unit("shop.service", "site-shop", LINES, true)], open: true, listeners: [], manifests: NONE }).verdict).toBe("fail");
+    expect(judgeBinds({ units: [unit("shop.service", "site-shop", [...LINES.slice(0, 3), "ipv4:21000-29999"])], open: true, listeners: [], manifests: NONE }).verdict).toBe("fail");
+    expect(judgeBinds({ units: [unit("shop.service", "site-shop", [...LINES.slice(0, 3), "udp21000-29999"])], open: true, listeners: [], manifests: NONE }).verdict).toBe("fail");
+    // The protocol as systemd prints it, with no colon, and `any`, deny it all.
+    expect(judgeBinds({ units: [unit("shop.service", "site-shop", [...LINES.slice(0, 3), "tcp21000-29999"])], open: true, listeners: [], manifests: NONE }).verdict).toBe("ok");
+    expect(judgeBinds({ units: [unit("shop.service", "site-shop", ["any"])], open: true, listeners: [], manifests: NONE }).verdict).toBe("ok");
+  });
+});
+
+describe("what already listens on the second block", () => {
+  const MANIFESTS = new Map([["shop", JSON.stringify({ slug: "shop", start: "/x", port: 21000 })]]);
+  const reading = (listeners: { port: number; uid: number; account: string | null }[], open: boolean) => ({ units: [], open, listeners, manifests: MANIFESTS });
+
+  test("the project that declares the port, on it: fine", () => {
+    expect(judgeListeners(reading([{ port: 21000, uid: 1500, account: "site-shop" }], true))).toMatchObject({ id: "listeners", kind: "binds", severity: "critical", verdict: "ok" });
+  });
+
+  test("another account on a declared port, or anything on a port no project declares: down, critical once the block is open", () => {
+    const squatter = judgeListeners(reading([{ port: 21000, uid: 1600, account: "site-old" }], true));
+    expect(squatter).toMatchObject({ severity: "critical", verdict: "fail" });
+    expect(squatter.summary).toStartWith("Port 21000 (site-old) listened on in the second block");
+    const undeclared = judgeListeners(reading([{ port: 25000, uid: 0, account: "root" }], false));
+    expect(undeclared).toMatchObject({ severity: "warning", verdict: "fail" });
+    expect(undeclared.summary).toInclude("25000 (root)");
   });
 });

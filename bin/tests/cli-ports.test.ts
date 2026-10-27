@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readManifest, SERVICE_PORTS, validate } from "../cli/manifest";
+import { FIRST_BLOCK, readManifest, SERVICE_PORT_RANGES, validate } from "../cli/manifest";
 import { choosePort, needsPort, setPort } from "../cli/ports";
 import { PLATFORM_PORTS, RESERVED_PORTS } from "../cli/services";
 
@@ -69,9 +69,15 @@ describe("the port chosen", () => {
     expect(choosePort("shop", machine({ shop: app("shop", 3057), blog: app("blog", 3002) }))).toEqual({ kind: "kept", port: 3057 });
   });
 
-  test("not a port outside the range, which every other project reaches: it moves to a free one", () => {
-    expect(validate(app("legacy", 8080) as never)).toContainEqual(expect.stringContaining("port: between 3000 and 3099"));
+  test("not a port outside the blocks, which every other project reaches: it moves to a free one", () => {
+    expect(validate(app("legacy", 8080) as never)).toContainEqual(expect.stringContaining("port: inside 3000 to 3099 or 21000 to 29999"));
     expect(choosePort("legacy", machine({ legacy: app("legacy", 8080) }))).toEqual({ kind: "free", port: 3002 });
+    // Between the blocks too: nothing closes 3100 to 20999.
+    expect(choosePort("legacy", machine({ legacy: app("legacy", 3100) }))).toEqual({ kind: "free", port: 3002 });
+  });
+
+  test("a project the machine gives a port of the second block keeps it", () => {
+    expect(choosePort("shop", machine({ shop: app("shop", 21007), blog: app("blog", 3002) }))).toEqual({ kind: "kept", port: 21007 });
   });
 
   test("a project that used to run several services is given a port of its own", () => {
@@ -86,9 +92,25 @@ describe("the port chosen", () => {
     expect(choosePort("shop", machine({ broken: "{ not json" }))).toEqual({ kind: "free", port: 3002 });
   });
 
-  test("a full range says so, rather than leaving it", () => {
+  test("the first block first, while one of its ports is free, even with the second block's taken", () => {
+    const taken: Record<string, object> = { early: app("early", 21000) };
+    for (let port = FIRST_BLOCK.first; port < FIRST_BLOCK.last; port++) taken[`p${port}`] = app(`p${port}`, port);
+    expect(choosePort("shop", machine(taken))).toEqual({ kind: "free", port: FIRST_BLOCK.last });
+  });
+
+  test("a full first block moves on to the lowest free port of the second", () => {
     const taken: Record<string, object> = {};
-    for (let port = SERVICE_PORTS.first; port <= SERVICE_PORTS.last; port++) taken[`p${port}`] = app(`p${port}`, port);
+    for (let port = FIRST_BLOCK.first; port <= FIRST_BLOCK.last; port++) taken[`p${port}`] = app(`p${port}`, port);
+    expect(choosePort("shop", machine(taken))).toEqual({ kind: "free", port: 21000 });
+    taken.early = app("early", 21000);
+    expect(choosePort("shop", machine(taken))).toEqual({ kind: "free", port: 21001 });
+  });
+
+  test("every block full says so, rather than leaving them", () => {
+    const taken: Record<string, object> = {};
+    for (const range of SERVICE_PORT_RANGES) {
+      for (let port = range.first; port <= range.last; port++) taken[`p${port}`] = app(`p${port}`, port);
+    }
     expect(choosePort("shop", machine(taken))).toEqual({ kind: "full" });
   });
 });

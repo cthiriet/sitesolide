@@ -82,7 +82,8 @@ import {
   type Who,
 } from "../../cli/caddy-lock";
 import { MARKER_ABSENT, MARKER_PRESENT, unitFileName } from "../../cli/unit";
-import { GENERATOR_MARK, listUnitsCommand, loopbackStateCommand, MARKER_DONE, scheduleCheckCommand, stabilityCommand, unitOriginsCommand } from "../../cli/services";
+import { GENERATOR_MARK, listUnitsCommand, loopbackStateCommand, MARKER_DONE, scheduleCheckCommand, secondBlockStateCommand, stabilityCommand, unitOriginsCommand } from "../../cli/services";
+import { loopbackRule } from "../../cli/loopback";
 import { egressStateCommand, EGRESS_MARKER } from "../../cli/egress";
 import { backupComponentCommand, BACKUP_COMPONENT_MARKER } from "../../cli/backups";
 import { ownerGeneralCommand, ownerReadCommand, ownerWriteCommand, type EntryView, type PersonView, type Role } from "../../cli/access";
@@ -103,6 +104,8 @@ export const SWITCHES = {
   answers: "answers.json",
   unitWithoutZone: "unit-without-zone",
   loopbackState: "loopback-state",
+  /** The whole answer to secondBlockStateCommand, in place of the one read from the VM's units. */
+  secondBlock: "second-block",
   egressState: "egress-state",
   backupComponent: "backup-component",
   firstInstall: "first-install",
@@ -421,6 +424,48 @@ if (import.meta.main) {
     const laid = join(vm, SWITCHES.loopbackState);
     const state = existsSync(laid) ? readFileSync(laid, "utf8").trim() : "set";
     process.stdout.write(`${state}\n${MARKER_DONE}\n`);
+    process.exit(0);
+  }
+  // What a deployment of an app reads before a port of the second block, and
+  // after it: this repository's rule in close, the VM's service units as
+  // systemctl show prints them, current components, nothing listening on
+  // the second block, Debian's ephemeral ports; unless the test lays the
+  // answer it wants.
+  if (command === secondBlockStateCommand()) {
+    record("SECOND-BLOCK");
+    const laid = join(vm, SWITCHES.secondBlock);
+    if (existsSync(laid)) {
+      process.stdout.write(readFileSync(laid, "utf8"));
+      process.exit(0);
+    }
+    const folder = join(vm, "etc", "systemd", "system");
+    const names = existsSync(folder) ? readdirSync(folder).filter((name) => name.endsWith(".service") && !name.endsWith("@.service")).sort() : [];
+    const units = names.map((name) => {
+      const lines = readFileSync(join(folder, name), "utf8").split("\n");
+      const user = lines.findLast((line) => line.startsWith("User="))?.slice("User=".length) ?? "";
+      const denied = lines.filter((line) => line.startsWith("SocketBindDeny=") && line !== "SocketBindDeny=");
+      return [`Id=${name}`, `User=${user}`, ...denied, "NeedDaemonReload=no", ""].join("\n");
+    });
+    process.stdout.write(
+      [
+        "== rule",
+        loopbackRule(997, "close", 1022),
+        "== units",
+        `files ${names.length}`,
+        ...units,
+        "== components",
+        "backup current",
+        "installer current",
+        "== listeners",
+        "== accounts",
+        "root:0",
+        "== ports",
+        "32768\t60999",
+        "",
+        MARKER_DONE,
+        "",
+      ].join("\n"),
+    );
     process.exit(0);
   }
   // Where the egress proxy stands, read before a project that declares

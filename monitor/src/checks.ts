@@ -14,6 +14,8 @@
  * "every site failed" on top of the one alert that matters.
  */
 import { BACKUP_SEVERITY } from "../../bin/cli/backups";
+import { DENIED_BINDS, earlierDeniedBinds, unboundStates, type BindState } from "../../bin/cli/unit";
+import { describeListener, strayListeners, type Listener } from "../../bin/cli/services";
 import { CREDENTIALS_EXIT_STATUS, credentialsFailure, slugHasStore } from "../../bin/cli/store";
 
 export type Severity = "critical" | "warning";
@@ -34,6 +36,7 @@ export type Kind =
   | "memory"
   | "backup"
   | "tunnel"
+  | "binds"
   | "monitor";
 
 export type Verdict = "ok" | "fail" | "unknown";
@@ -662,6 +665,71 @@ export function judgeBackup(reading: BackupReading, now: number): Result | null 
   }
   const count = `${projects.length} project${projects.length === 1 ? "" : "s"}`;
   return { ...base, verdict: "ok", summary: `The last backup run finished ${age} ago, ${count}` };
+}
+
+// --- where the projects may listen ---------------------------------------------------
+
+/**
+ * What the reading of where projects may listen gives: each service unit as
+ * systemd has it loaded, whether the second block is open, what already
+ * listens on a port of a later block, and the manifests that declare ports
+ * (read only when something listens there).
+ */
+export type BindsReading = { units: BindState[]; open: boolean; listeners: Listener[]; manifests: ReadonlyMap<string, string> };
+
+/**
+ * Every unit that runs as a project's account, and denies a port of the
+ * machine's services it should, as systemd has it loaded. The loopback rule
+ * judges who connects, never who listens: a unit without those lines lets
+ * its project listen on another project's port first, between two restarts
+ * of its owner, and Caddy sends it that project's visitors, with nothing
+ * else to say so. A project deployed by an older CLI writes such a unit,
+ * and so does a `--force` with one.
+ *
+ * Once the rule laid on the machine refuses the others on the second block
+ * (`open`, reservesEveryBlock in bin/cli/loopback.ts), every line counts and
+ * the check is critical: projects listen there. Before, the second block's
+ * line is not asked for yet, nobody being sent there, and a unit that lacks
+ * one of the others is a warning, as it was before this check: a unit from
+ * before the bind lines, or edited by hand.
+ */
+export function judgeBinds(reading: BindsReading): Result {
+  const needed = reading.open ? DENIED_BINDS : earlierDeniedBinds();
+  const base = { id: "binds", kind: "binds", label: "project units", severity: reading.open ? "critical" : "warning", slug: null } as const;
+  const unbound = unboundStates(reading.units, needed);
+  const projects = reading.units.filter((unit) => unit.user.startsWith("site-")).length;
+  if (unbound.length === 0) {
+    return { ...base, verdict: "ok", summary: `Every project unit keeps to its own port, ${projects} unit${projects === 1 ? "" : "s"}` };
+  }
+  const named = unbound.slice(0, MAX_NAMED).join(", ");
+  const more = unbound.length > MAX_NAMED ? ` and ${unbound.length - MAX_NAMED} more` : "";
+  return {
+    ...base,
+    verdict: "fail",
+    summary: `${named}${more} may listen on the services' ports, where Caddy sends other projects' visitors: sitesolide refresh --all, or the missing SocketBindDeny= lines, daemon-reload and a restart`,
+  };
+}
+
+/**
+ * What listens on a port of a later block that no project on the machine
+ * accounts for: a port no manifest declares, or one a project declares and
+ * another account holds. A run started under a unit of the release before,
+ * a scheduled one up to 24 hours long, can hold such a port through any
+ * reload, and takes the visitors of the project the port is given to. As
+ * critical as the units once the block is open; a warning before, the block
+ * refusing to open over it anyway (bin/deploy-loopback.sh).
+ */
+export function judgeListeners(reading: BindsReading): Result {
+  const base = { id: "listeners", kind: "binds", label: "second block of ports", severity: reading.open ? "critical" : "warning", slug: null } as const;
+  const stray = strayListeners(reading.listeners, reading.manifests).map(describeListener);
+  if (stray.length === 0) return { ...base, verdict: "ok", summary: "Nothing listens on the second block's ports but the projects that declare them" };
+  const named = stray.slice(0, MAX_NAMED).join(", ");
+  const more = stray.length > MAX_NAMED ? ` and ${stray.length - MAX_NAMED} more` : "";
+  return {
+    ...base,
+    verdict: "fail",
+    summary: `Port ${named}${more} listened on in the second block, declared by no project or held by another account: it would take the visitors of the project given the port; stop what holds it`,
+  };
 }
 
 // --- the monitor itself ------------------------------------------------------------

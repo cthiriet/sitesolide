@@ -104,7 +104,7 @@ if ! ssh "$SITESOLIDE_SERVER" "$ZONE_NAMES_COMMAND" | sed 's/^/   /'; then
   echo "   !! /etc/caddy/zone-names could not be written again: with manual DNS, the ask endpoint allows only the sites it lists" >&2
 fi
 
-# sudo: the loopback rule only lets Caddy and root reach ports 3000 to 3099.
+# sudo: the loopback rule only lets Caddy and root reach the services' ports.
 # Without it, this check failed after a successful reload and announced a
 # failure that was not one. Measured on 15 September 2026, while removing three
 # sites.

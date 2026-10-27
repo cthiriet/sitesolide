@@ -34,6 +34,8 @@ did before, and no worse.
 | disk | `statfs` on `/`, `/srv` and `/var`, merged by device | critical | 90 % used, cleared below 85 % |
 | memory | `MemAvailable` in `/proc/meminfo` | warning | less than 10 % available, cleared at 15 % |
 | backups | `/var/lib/sitesolide-backup/last-run.json`, when it exists | warning | the last run failed, a project failed, or it finished more than 26 hours ago; a repository's daily check failed, or none came for 72 hours, counted from the last check or, before the first, from when checks were first due |
+| where the projects may listen | `systemctl show -p Id -p User -p SocketBindDeny -p NeedDaemonReload` of every service unit file in `/etc/systemd/system`, masked units and templates aside, and `/etc/sitesolide-loopback.nft` | critical once the laid rule refuses other accounts on the second block of the services' ports, and then it fails the heartbeat as the platform's checks do; a warning before | a unit that runs as a `site-` account lacks a `SocketBindDeny=` line of `DENIED_BINDS` (bin/cli/unit.ts), the second block's counted only once that block is open, or its file changed and was never reloaded: its project could listen on another project's port first, a project deployed by an older CLI for one. A `systemctl` that fails or answers for fewer units than there are files is no reading: the monitor says it is half blind |
+| what listens on the second block | `/proc/net/tcp` and `tcp6`, the listening sockets on a port of 21000 to 29999 and the uid that opened each, named by `/etc/passwd`, against each project's `sitesolide.json` | as above | a socket on a port no project declares, or one a project declares held by another account: a run started under an earlier unit keeps its socket through any reload, and takes the visitors of the project given the port |
 | the monitor itself | what it could not read, an alerting address that is not one | warning | any of those |
 
 **The served sites come from what the machine declares**, never from inside a
@@ -280,7 +282,9 @@ unit, Caddy included, on any pass. Everything it reads is open to any account:
 | What | Why |
 |---|---|
 | `systemctl show`, `systemctl list-units` | systemd answers readings to anyone over D-Bus; the monitor asks for nothing else |
-| the names under `/srv/sites` | which sites exist; nothing inside a project is opened |
+| the names under `/etc/systemd/system`, `/etc/sitesolide-loopback.nft`, 0644 | the service units to ask systemd about, and whether the laid loopback rule opens the second block of the services' ports |
+| `/proc/net/tcp` and `tcp6`, `/etc/passwd`, `/srv/sites/<slug>/sitesolide.json`, 0644 | what listens on the second block and as whom, and which project declares the port; a manifest is read only when such a port is listened on, and names nothing secret |
+| the names under `/srv/sites` | which sites exist; inside a project, its `sitesolide.json` alone, below |
 | `/etc/caddy/domaines.map`, 0644 | the customer domains |
 | `/proc/meminfo`, `statfs` | memory and disk |
 | `127.0.0.1:443` | Caddy, over HTTPS, like a visitor; never the admin API on 2019, which the loopback rule closes to it anyway |

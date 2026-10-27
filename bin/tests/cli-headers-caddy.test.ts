@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateFragment, ZONE_HOST } from "../cli/fragment";
-import { readManifest, SERVICE_PORTS, validate, type Manifest } from "../cli/manifest";
+import { FIRST_BLOCK, readManifest, validate, type Manifest } from "../cli/manifest";
 import { block, freePort } from "./caddy-lab";
 
 /**
@@ -43,9 +43,9 @@ const LEGITIMATE: Record<string, string> = {
   "X-Note": "100% #1 & more ~ | ^ [ok] ! ? @ = + < > ;",
 };
 
-/** The service's port: a manifest names one of the services' range, never one the system picks. */
+/** The service's port: a manifest names one of the services' first block, never one the system picks. */
 function freeServicePort(): number {
-  for (let port = SERVICE_PORTS.first; port <= SERVICE_PORTS.last; port++) {
+  for (let port = FIRST_BLOCK.first; port <= FIRST_BLOCK.last; port++) {
     try {
       Bun.serve({ port, hostname: "127.0.0.1", fetch: () => new Response() }).stop(true);
       return port;
@@ -53,11 +53,11 @@ function freeServicePort(): number {
       // Taken on this workstation: the next one.
     }
   }
-  throw new Error(`no free port between ${SERVICE_PORTS.first} and ${SERVICE_PORTS.last} on this workstation`);
+  throw new Error(`no free port between ${FIRST_BLOCK.first} and ${FIRST_BLOCK.last} on this workstation`);
 }
 
 /** The app the values are judged on: only an app's block carries headers, validate() refuses them elsewhere. */
-const FUZZ_APP: Manifest = { slug: "x", port: SERVICE_PORTS.first, start: "/usr/local/bin/bun run server.ts" };
+const FUZZ_APP: Manifest = { slug: "x", port: FIRST_BLOCK.first, start: "/usr/local/bin/bun run server.ts" };
 
 /** Values validate() accepts, drawn from every printable character with a fixed seed. */
 function acceptedValues(count: number): string[] {

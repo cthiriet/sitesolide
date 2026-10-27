@@ -45,6 +45,10 @@ describe.skipIf(CADDY === null || OPENSSL === null)("the probes in front of a re
       tlsZoneFile: join(D, "tls-zone.caddy"),
       stateDir: join(D, "state"),
       backupFile: join(D, "last-run.json"),
+      unitsFolder: join(D, "units"),
+      loopbackFile: join(D, "loopback.nft"),
+      accountsFile: join(D, "passwd"),
+      procNetTcp: [join(D, "tcp"), join(D, "tcp6")],
       diskPaths: [D],
       probe: { address: "127.0.0.1", port: httpsPort, ca, timeoutMs: 3000 },
       concurrency: 4,
@@ -71,6 +75,8 @@ describe.skipIf(CADDY === null || OPENSSL === null)("the probes in front of a re
   }
 
   beforeAll(async () => {
+    // The kernel's sockets, none listening on the second block.
+    writeFileSync(join(D, "tcp"), "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n");
     drawAuthority(D);
     drawCertificate(D, "apex", [ZONE, `www.${ZONE}`], 60);
     drawCertificate(D, "wildcard", [`*.${ZONE}`], 4);

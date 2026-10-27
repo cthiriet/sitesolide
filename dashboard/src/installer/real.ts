@@ -42,6 +42,7 @@ import {
   renameSync,
   rmdirSync,
   rmSync,
+  statSync,
   unlinkSync,
   writeFileSync,
   type Stats,
@@ -49,12 +50,12 @@ import {
 import { join } from "node:path";
 import type { Machine } from "../gatekeeper/machine";
 import { readAccount, readBounded, writeAtomically } from "../secrets/system";
-import { LOOPBACK_TABLE, PROJECT_PORTS_SET } from "../../borrowed/loopback";
+import { autobindReachesBlocks, LOOPBACK_TABLE, PROJECT_PORTS_SET, reservesEveryBlock } from "../../borrowed/loopback";
 import { isValidFileName, isValidSchedule, isValidSlug } from "../../borrowed/manifest";
 import { keys, parseEnvBytes } from "../../borrowed/envfile";
 import { MAX_STORE_ENV_BYTES, STORE_FOLDER_MODE, STORE_PREVIOUS_ROOT, storePaths } from "../../borrowed/store";
-import { GENERATOR_MARK, MARKER_DONE, readCurrentPairs, readStability } from "../../borrowed/services";
-import { isTimerUnit, systemdRunArguments, systemUser, unitArgument, unitFileName, type ProjectRun } from "../../borrowed/unit";
+import { COMPONENTS_FOLDER, GENERATOR_MARK, MARKER_DONE, readAccounts, readCurrentPairs, readListeners, readStability, type ComponentState, type Listener } from "../../borrowed/services";
+import { BIND_LINES_FEATURE, BIND_PROPERTIES, isTimerUnit, readBindStates, systemdRunArguments, systemUser, unitArgument, unitFileName, type BindState, type ProjectRun } from "../../borrowed/unit";
 import { zoneNamesScript } from "../../borrowed/zone-names";
 import { BUNDLE_NAME, DEPLOYMENT_ID_SHAPE, MAX_BUNDLE_BYTES } from "../control/protocol";
 import type { ExtractOutcome } from "./extract";
@@ -99,6 +100,12 @@ export type HostConfig = {
   accountsFile: string;
   /** /etc/sitesolide-loopback-projects.nft */
   projectPortsFile: string;
+  /** /usr/local/lib/sitesolide/backup.js, searched for this release's bind lines; absent, no backup runs. */
+  backupScript?: string;
+  /** /proc/sys/net/ipv4, where the kernel's ephemeral range and reserved ports are read. */
+  procNetFolder?: string;
+  /** /proc/net/tcp and tcp6, the kernel's listening sockets and the uid of each. */
+  procNetTcp?: string[];
   /** /etc/caddy/tls-zone.caddy, whose policy says whether the zone is certified on demand. */
   tlsZoneFile: string;
   /** /etc/caddy/zone-names, the zone's sites the ask endpoint allows on demand. */
@@ -277,6 +284,77 @@ export function createHost(config: HostConfig): Host {
     },
 
     unitsFolder: config.unitsFolder,
+
+    async secondBlockState() {
+      const table = await config.commands.nft(["list", "table", "inet", LOOPBACK_TABLE], 10_000);
+      if (table.code === 127) return null;
+      // Every service unit file, followed as systemd follows it: a dangling
+      // link or /dev/null, a masked unit, is no file and runs nothing, and a
+      // template runs nothing by itself. As secondBlockStateCommand skips them.
+      let names: string[];
+      try {
+        names = readdirSync(config.unitsFolder)
+          .filter((name) => name.endsWith(".service") && !name.endsWith("@.service"))
+          .filter((name) => {
+            try {
+              return statSync(join(config.unitsFolder, name)).isFile();
+            } catch (error) {
+              if (code(error) === "ENOENT" || code(error) === "ELOOP") return false;
+              throw error;
+            }
+          })
+          .sort();
+      } catch {
+        return null;
+      }
+      let units: BindState[] = [];
+      if (names.length > 0) {
+        // One block per file, from a systemctl that succeeded: a failure, a
+        // timeout or an answer cut off is no answer, never a machine with no
+        // unit at fault.
+        const shown = await config.commands.systemctl(["show", ...BIND_PROPERTIES.flatMap((property) => ["-p", property]), "--", ...names], 10_000);
+        if (shown.code !== 0) return null;
+        const read = readBindStates(shown.output);
+        if (read === null || read.length !== names.length) return null;
+        units = read;
+      }
+      // What already listens on a port of a later block, and as whom.
+      let listeners: Listener[] | null;
+      try {
+        const accounts = readAccounts(readFileSync(config.accountsFile, "utf8"));
+        const lines: string[] = [];
+        for (const [i, file] of (config.procNetTcp ?? ["/proc/net/tcp", "/proc/net/tcp6"]).entries()) {
+          try {
+            lines.push(...readFileSync(file, "utf8").split("\n").slice(1));
+          } catch (error) {
+            // tcp6 is absent from a kernel booted without IPv6; tcp never is.
+            if (i === 0 || code(error) !== "ENOENT") throw error;
+          }
+        }
+        listeners = accounts === null ? null : readListeners(lines, accounts);
+      } catch {
+        return null;
+      }
+      if (listeners === null) return null;
+      // This installer is the current one, by being the one that runs.
+      let backup: ComponentState;
+      try {
+        backup = readFileSync(config.backupScript ?? `${COMPONENTS_FOLDER}/backup.js`, "utf8").includes(BIND_LINES_FEATURE) ? "current" : "outdated";
+      } catch (error) {
+        if (code(error) !== "ENOENT") return null;
+        backup = "absent";
+      }
+      const proc = config.procNetFolder ?? "/proc/sys/net/ipv4";
+      let autobind: boolean | null;
+      try {
+        // readFileSync: procfs announces a size of zero bytes.
+        autobind = autobindReachesBlocks(readFileSync(join(proc, "ip_local_port_range"), "utf8"), readFileSync(join(proc, "ip_local_reserved_ports"), "utf8"));
+      } catch {
+        return null;
+      }
+      if (autobind === null) return null;
+      return { reserved: table.code === 0 && reservesEveryBlock(table.output), units, components: { backup, installer: "current" }, listeners, autobind };
+    },
 
     async unitFacts(slug, unit) {
       if (!isValidSlug(slug) || (unit !== slug && !(unit.startsWith(`${slug}.`) && /^[a-z0-9.-]+$/.test(unit)))) throw new Error("invalid unit");

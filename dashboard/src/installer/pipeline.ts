@@ -24,7 +24,8 @@
  *      secret files it would read or take from another site (claims.ts);
  *   2. the machine read: the block in service, the unit names systemd already
  *      gives to a unit of the machine, the schedules systemd reads, the ports,
- *      the loopback rule, the portal's readiness, before anything is written;
+ *      the loopback rule, the second block of ports opened for a port there,
+ *      the portal's readiness, before anything is written;
  *   3. the build happened on the client: the archive carries its result;
  *   4. the account and the directories, the project's store of secrets for
  *      an app, then the archive extracted as the project's account into a
@@ -85,9 +86,11 @@ import {
   domainHosts,
   hasStore,
   isApp,
+  isServicePort,
   readManifest,
   scheduledServices,
   secretsOf,
+  servicePortsProse,
   servicesOf,
   setDomainActive,
   setLock,
@@ -97,8 +100,8 @@ import {
 import { credentialsFailure, CREDENTIALS_EXIT_STATUS } from "../../borrowed/store";
 import type { StoreMissing } from "../../borrowed/store-protocol";
 import { confirmDoorUnderLock, portalFromManifest, type DepositedRead } from "../../borrowed/portal-vm";
-import { domainConflicts, foreignUnit, portConflicts, staleUnits, unstableUnits, type UnitStanding } from "../../borrowed/services";
-import { decideUnit, earlierGenerations, generatedAs, generateUnits, runningUnits, unitArgument, unitFileName, watchedUnits } from "../../borrowed/unit";
+import { domainConflicts, foreignUnit, laterBlockPorts, portConflicts, secondBlockRefusal, staleUnits, unguardedWarning, unstableUnits, type UnitStanding } from "../../borrowed/services";
+import { decideUnit, earlierGenerations, generatedAs, generateUnits, runningUnits, systemUser, unitArgument, unitFileName, unitNames, watchedUnits } from "../../borrowed/unit";
 import { compareDirectives, summariseDivergence } from "../../borrowed/comparison";
 import { FIRST_CERTIFICATE_MS, readZoneNamesAnswer, ZONE_NAMES_PATH } from "../../borrowed/zone-names";
 import { isPortalReady, portalHost, fromPortal, answers, describe, type ProbeResponse } from "../gatekeeper/probe";
@@ -287,7 +290,7 @@ export function finalManifest(
     throw new Stop("invalid-manifest", `sitesolide.json is refused once the machine's portal and lock are applied: ${final.errors.join("; ")}`);
   }
   const conflicts = portConflicts(final.manifest, deposited);
-  if (conflicts.length > 0) throw new Stop("port-taken", `${conflicts.join("; ")}: pick a free port between 3000 and 3099, or leave the port out and the machine chooses one`);
+  if (conflicts.length > 0) throw new Stop("port-taken", `${conflicts.join("; ")}: pick a free port of ${servicePortsProse()}, or leave the port out and the machine chooses one`);
   const names = domainConflicts(final.manifest, deposited);
   if (names.length > 0) throw new Stop("domain-taken", `${names.join("; ")}: a name belongs to one project`);
   return { text, manifest: final.manifest, portal: door.portal, allocated: allocation.allocated, doorConfirmed: onMachine.kind === "present" };
@@ -399,6 +402,25 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
       if (state === "unreadable") throw new Stop("machine-unreadable", "cannot tell whether the loopback rule is in place: nothing was changed");
       if (state === "table") {
         throw new Stop("loopback-outdated", "the loopback rule on the machine predates the project set: the owner must run bin/deploy-loopback.sh close; nothing was changed");
+      }
+    }
+    // A port of the second block, only once the machine has opened it; and
+    // on every other deployment of an app, said when the block is open and a
+    // unit may listen in it again, a project deployed by an older CLI for
+    // one. As `deploy` does, see secondBlockRefusal in bin/cli/services.ts.
+    if (application) {
+      const later = laterBlockPorts(manifest);
+      const own = unitNames(manifest);
+      const state = await host.secondBlockState();
+      if (later.length > 0) {
+        if (state === null) throw new Stop("machine-unreadable", "cannot tell whether the machine has opened the second block of service ports: nothing was changed");
+        const refusal = secondBlockRefusal(later, state, undefined, own, systemUser(slug));
+        if (refusal !== null) throw new Stop("second-block-closed", `${refusal.join("; ")}; nothing was changed`);
+      } else if (state === null) {
+        host.log("   !! cannot tell whether every unit on the machine still keeps to its own port");
+      } else {
+        const warning = unguardedWarning(state, own);
+        if (warning !== null) host.log(`   !! ${warning.join("; ")}`);
       }
     }
     if ((await host.machine.interruptedTransaction()) !== null) {
@@ -874,7 +896,7 @@ async function rebuildProjectPorts(host: Host, strict: boolean): Promise<void> {
     if (manifest === undefined || !reachesOwnPorts(manifest)) continue;
     // A worker or a scheduled service declares no port, and has none to check.
     const ports = servicesOf(manifest).flatMap((service) => (service.port === null ? [] : [service.port]));
-    if (manifest.slug !== folder || !ports.every((port) => Number.isInteger(port) && port >= 3000 && port <= 3099)) continue;
+    if (manifest.slug !== folder || !ports.every(isServicePort)) continue;
     projects.push(manifest);
   }
   const slugs = projects.map((manifest) => manifest.slug);

@@ -51,9 +51,10 @@ egress proxy
        Authorization set from the file, the app's own credential headers removed
 ```
 
-**Two ports**, 3128 and 3129, outside the 3000-3099 range the loopback rule
-closes (see [concepts](../docs/concepts.md#the-loopback-rule)): inside it, the
-projects could not reach the proxy at all. On 3128 the proxy pipes bytes it
+**Two ports**, 3128 and 3129, outside the blocks the loopback rule closes,
+3000 to 3099 and 21000 to 29999 (see
+[concepts](../docs/concepts.md#the-loopback-rule)): inside one, the projects
+could not reach the proxy at all. On 3128 the proxy pipes bytes it
 never reads ([src/proxy.ts](src/proxy.ts)); on 3129 it reads every request and
 every answer to rewrite them ([src/connectors.ts](src/connectors.ts)), and two
 ports keep a tunnel from ever being read as a connector call. Both are raw
