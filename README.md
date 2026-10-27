@@ -1,8 +1,5 @@
 <h1>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
-    <img alt="sitesolide" src="docs/assets/logo-light.svg" height="56">
-  </picture>
+  <img alt="sitesolide" src="docs/assets/logo.svg" height="56">
 </h1>
 
 **A small cloud for the software your company and its agents write, on one

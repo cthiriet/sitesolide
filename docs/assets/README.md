@@ -2,7 +2,8 @@
 
 | File | Use |
 |---|---|
-| `logo-light.svg` | The logo on a light background: the README, documentation. The mark and the name, as the landing page's header draws them. |
+| `logo.svg` | The logo the README shows, on any background: the name in the mark's teal, `#14899a`, which reads on white and on GitHub's dark alike. GitHub picks a `<picture>` source from the system's colour scheme, not from the theme set on GitHub, so a pair of files showed the pale name on a white page whenever the two disagreed. |
+| `logo-light.svg` | The logo on a light background, for documentation that knows its background. The mark and the name, as the landing page's header draws them. |
 | `logo-dark.svg` | The same on a dark background, where the name turns pale; the mark does not change. |
 | `mark.svg` | The mark alone, square, for an avatar or an icon. |
 | `social-preview.png` | The repository's social card, 1280 × 640: the landing page's share card, its title and its command, with the repository's address in place of the site's. GitHub does not read it from here: a new one is uploaded by hand under *Settings → Social preview*. |
@@ -17,7 +18,7 @@ corner to `#0a5560` at its bottom right, the same in light and in dark. The
 landing page's header draws it so, and so do the dashboard
 (`dashboard/web/src/components/logo.tsx`, its `mark-hi` and `mark-lo`
 tokens), the portal's sign-in, the door page of locked previews and the
-portal's own root (`portal/src/page.ts`), `mark.svg` and both logo files. The
+portal's own root (`portal/src/page.ts`), `mark.svg` and the three logo files. The
 favicons of all three are the same block, its gradient `#138896` to
 `#0a5560`, and `#5cc8d3` to `#2c98a4` in a dark browser, where the deep end
 would sink into the tab strip.
