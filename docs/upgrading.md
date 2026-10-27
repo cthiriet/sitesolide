@@ -120,6 +120,53 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## The server's own settings, on a page of their own
+
+**What the release brings.** The heartbeat, the alert webhook, the dashboard
+and portal passwords, company sign-in and the offsite copy of the backups
+belong to no site, yet the only way to change them was the dashboard site's
+Secrets, as variables of files named by their file. The owner now finds them
+on a Server page, in the sidebar: one row per setting, its state, when a
+change applies, and a Change or Set up button. The Sites page shows what is
+still missing as a "Set up this server" guide with the same rows, which goes
+once everything is set or skipped, and which its viewer may hide.
+
+Each setting has a step-by-step guide: the steps to take outside, at
+healthchecks.io or a bucket's provider for instance, the value typed into the
+dashboard and sent to the steward as typed, the unlock asked for just in time,
+then what the server makes of it. For the heartbeat, that is the monitor's
+first ping after the change, which the dashboard learns from the monitor's
+status, never from the file that holds the address. No file or variable name
+reaches the screen, and no value is read back from the server: a field left
+empty keeps what is there.
+
+**What `sitesolide upgrade` brings**: the dashboard. Caddy is not reloaded,
+and nothing on the machine changes by itself: the settings stay where they
+are, in the same files.
+
+**What changes for you.**
+
+- **A change of the heartbeat or the webhook no longer offers a restart.**
+  The monitor rereads its file every minute, and the backups read theirs at
+  each run: "Save & restart" on those files said the dashboard would read
+  them at its next start, which was wrong, and restarted it for nothing. A
+  project's own file still offers it.
+- **A save cut partway says so.** A setting made of several values, an
+  offsite bucket for instance, is written one value after another: a refusal
+  or an expired unlock in the middle now names what went through and what did
+  not, and the unlock is asked before the first write when it would not last
+  the save.
+- **Hiding the guide and skipping an item stay in the browser**, as the names
+  of the settings only: another browser shows the guide again.
+- **Server carries a dot in the sidebar** while no heartbeat is set: nothing
+  outside the machine would notice it go down.
+- The dashboard site's Secrets page still lists those files, and now says
+  when each of them is read.
+
+**Going back.** `sitesolide upgrade` with the previous binary. The settings
+saved from the Server page are the same variables in the same files, and the
+previous dashboard reads them as it did.
+
 ## A domain switched off stops answering
 
 **What the release brings.** `sitesolide domain --deactivate` takes a
