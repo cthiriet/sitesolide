@@ -15,7 +15,7 @@ import {
   tokenPage,
   TTL,
 } from "../cli/dns/ovh";
-import { ProviderError, realClock } from "../cli/providers/provider";
+import { ProviderError, realClock } from "../../clouds/src/provider";
 import { tlsZoneContent } from "../cli/tls";
 import { createFakeOvhDns, FAKE_APPLICATION_KEY, FAKE_APPLICATION_SECRET, FAKE_CONSUMER_KEY, SKEW, ZONE, type FakeOvhDns } from "./fake-dns-ovh";
 

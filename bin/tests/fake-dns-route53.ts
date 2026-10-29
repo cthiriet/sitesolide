@@ -25,11 +25,11 @@
  * the next matching requests answer an error instead; `denied` and
  * `readable`/`writable` stand for the key's IAM policy, answering AccessDenied.
  */
-import { parseAuthorization, signature, signingParts } from "../cli/providers/aws-sigv4";
-import { at, escapeXml, parseXml, textAt, XmlError, type XmlElement } from "../cli/providers/aws-xml";
+import { parseAuthorization, signature, signingParts } from "../../clouds/src/aws-sigv4";
+import { at, escapeXml, parseXml, textAt, XmlError, type XmlElement } from "../../clouds/src/aws-xml";
 import { ACCESS_KEY_VARIABLE, ROUTE53_API_VARIABLE, SECRET_KEY_VARIABLE, SET_ORDER } from "../cli/dns/route53";
 import type { FakeDns } from "./fake-dns";
-import type { FakeRequest } from "./fake-provider";
+import type { FakeRequest } from "../../clouds/fakes/fake-provider";
 
 export const FAKE_ACCESS_KEY = "AKIAFAKEROUTE53DNS01";
 export const FAKE_SECRET_KEY = "fakeRoute53SecretKey0123456789abcdefgh/+";

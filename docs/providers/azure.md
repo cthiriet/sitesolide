@@ -208,5 +208,5 @@ address Azure will give to someone else.
 `https://management.azure.com`, `SITESOLIDE_AZURE_LOGIN` at another than
 `https://login.microsoftonline.com`, and `SITESOLIDE_AZURE_PRICES` at another
 than `https://prices.azure.com`, for a local fake of all three
-(`bin/tests/fake-azure.ts`). Each takes https, or http on the loopback only, so
+(`clouds/fakes/azure.ts`). Each takes https, or http on the loopback only, so
 that no credential ever travels in the clear.

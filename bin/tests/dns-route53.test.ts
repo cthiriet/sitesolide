@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { DnsError, detectDns, ensureZoneRecords, zoneRecords, type DnsRecord, type ZoneApi } from "../cli/dns/dns";
 import { ACCESS_KEY_VARIABLE, decodeName, DEFAULT_ROUTE53_API, ROUTE53, ROUTE53_API_VARIABLE, SECRET_KEY_VARIABLE } from "../cli/dns/route53";
-import { ProviderError, type Fetch } from "../cli/providers/provider";
+import { ProviderError, type Fetch } from "../../clouds/src/provider";
 import { createFakeRoute53, FAKE_ACCESS_KEY, FAKE_SECRET_KEY } from "./fake-dns-route53";
 
 /**

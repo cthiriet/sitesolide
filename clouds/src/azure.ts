@@ -2,9 +2,10 @@
  * Microsoft Azure, through Azure Resource Manager's REST API, with nothing of
  * Azure's installed on the workstation: https://learn.microsoft.com/rest/api/azure/
  *
- * A machine is a resource group of its own, `sitesolide-<name>`, at the
+ * A machine is a resource group of its own, `<owner>-<name>`, at the
  * machine's location, and what it holds. The group and every resource in it
- * carry the tags `managed-by=sitesolide` and `sitesolide-machine=<name>`:
+ * carry the tags `managed-by=<owner>` and `<owner>-machine=<name>`, so that
+ * two owners' machines of one name live side by side, in two groups:
  *
  *   - a network security group `<name>-nsg`: inbound TCP 22, 80 and 443 and
  *     ICMP from the Internet; Azure's own DenyAllInBound, under every rule
@@ -13,14 +14,14 @@
  *   - a Standard public IPv4 `<name>-ip`, static: Azure keeps it while the
  *     machine is stopped or deallocated, so the DNS records stay right;
  *   - a network interface `<name>-nic` with the address and the security group;
- *   - the virtual machine `<name>`, Debian 13, the workstation's key for the
- *     account `sitesolide`, password logins off, and no custom data:
- *     `sitesolide setup` hardens it over SSH, which a run can repeat. Its OS
- *     disk `<name>-osdisk` is created by Azure with it, untagged, and tagged
- *     right after.
+ *   - the virtual machine `<name>`, Debian 13, the workstation's key for an
+ *     account named after the owner, password logins off, and no custom
+ *     data: the program's own setup reaches it over SSH, which a run can
+ *     repeat. Its OS disk `<name>-osdisk` is created by Azure with it,
+ *     untagged, and tagged right after.
  *
  * The group is the unit. `destroy` deletes it, which deletes everything in
- * it, and refuses when it holds anything sitesolide did not create; a group
+ * it, and refuses when it holds anything the owner did not create; a group
  * of that name without the tags is never touched. There is no SSH key
  * resource: the key is written into the machine, and goes with it.
  *
@@ -31,7 +32,7 @@
  * sources from the Internet tag, which a dual-stack network would extend.
  *
  * Everything that can refuse is read before the first write: the group and
- * what it holds (a resource sitesolide did not create is never adopted), the
+ * what it holds (a resource the owner did not create is never adopted), the
  * location, the size against what Azure sells there to this subscription,
  * the vCPU quota of its family, and the image. The one write that can come
  * before a refusal is the registration of the Microsoft.Compute and
@@ -53,7 +54,7 @@
  * is never sent any.
  *
  * Every call follows no redirect and fails with a ProviderError whose code
- * bin/cli/hints.ts knows. The API's error format is `{"error": {"code",
+ * is one of FAILURE_CODES. The API's error format is `{"error": {"code",
  * "message", "details"}}`; `failureFrom` reads it. Lists follow `nextLink` to
  * the end. Long operations are followed through the Azure-AsyncOperation or
  * Location address the answer gives, every few seconds as Retry-After asks,
@@ -62,13 +63,10 @@
  */
 import {
   apiAddress,
+  checkRequest,
   DEBIAN,
   formatPrice,
-  isManaged,
-  labelsFor,
-  MACHINE_LABEL,
   MANAGED_LABEL,
-  MANAGED_VALUE,
   patiently,
   ProviderError,
   retryAfter,
@@ -79,15 +77,17 @@ import {
   type DestroyOutcome,
   type Discovery,
   type Machine,
+  type Owner,
   type Provider,
   type ProviderContext,
   type ProviderEntry,
   type PublicKey,
   type Report,
   type Resource,
+  type Supports,
   type Workstation,
 } from "./provider";
-import type { Failure } from "../remote";
+import type { Failure } from "./provider";
 
 export const DEFAULT_API = "https://management.azure.com";
 export const DEFAULT_LOGIN = "https://login.microsoftonline.com";
@@ -146,8 +146,23 @@ export const WAITS = {
   longestPollMs: 60_000,
 };
 
-/** The account Debian's image creates with the key, with passwordless sudo: Azure refuses `root` as a name. */
-export const LOGIN = "sitesolide";
+/**
+ * Nothing beyond what every provider takes: the key is written for the
+ * login's account, and the security group holds SECURITY_RULES, WEB_SERVER's
+ * rules.
+ */
+export const SUPPORTS: Supports = {};
+
+/**
+ * The account Debian's image creates with the key, with passwordless sudo,
+ * is named after the owner: Azure makes the request name one, and refuses
+ * `root`. Nor does it take these, which an owner's name could be.
+ * https://learn.microsoft.com/rest/api/compute/virtual-machines/create-or-update#osprofile
+ */
+export const RESERVED_LOGINS: ReadonlySet<string> = new Set([
+  "administrator", "admin", "user", "user1", "test", "user2", "test1", "user3", "admin1", "1", "123", "a", "actuser", "adm", "admin2", "aspnet",
+  "backup", "console", "david", "guest", "john", "owner", "root", "server", "sql", "support", "support_388945a0", "sys", "test2", "test3", "user4", "user5",
+]);
 
 /**
  * Debian's own images on Azure, published by Debian:
@@ -224,9 +239,9 @@ export const SECURITY_RULES = [
 /** The resource providers a machine needs registered on the subscription. */
 export const NAMESPACES = ["Microsoft.Compute", "Microsoft.Network"] as const;
 
-/** The names of what makes a machine. */
-export function namesFor(name: string) {
-  return { group: `sitesolide-${name}`, nsg: `${name}-nsg`, vnet: `${name}-vnet`, subnet: `${name}-subnet`, ip: `${name}-ip`, nic: `${name}-nic`, vm: name, disk: `${name}-osdisk` };
+/** The names of what makes a machine: the group's carries the owner's, what it holds the machine's alone. */
+export function namesFor(name: string, owner: Owner) {
+  return { group: `${owner.name}-${name}`, nsg: `${name}-nsg`, vnet: `${name}-vnet`, subnet: `${name}-subnet`, ip: `${name}-ip`, nic: `${name}-nic`, vm: name, disk: `${name}-osdisk` };
 }
 
 // --- shapes --------------------------------------------------------------------------------
@@ -238,7 +253,7 @@ const TENANT = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 const CLIENT_SECRET = /^[!#-&(-[\]-_a-~]{8,256}$/;
 /** A JWT, or the five parts of an encrypted one: a few thousand characters of base64url. */
 const ACCESS_TOKEN = /^(?=.{100,16384}$)[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){2,4}$/;
-/** What a machine's name is (bin/cli/machine.ts checks it), and therefore what can go in a path. */
+/** What a machine's name is (the program checks it), and therefore what can go in a path. */
 const MACHINE_NAME = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const LOCATION = /^[a-z0-9]{2,40}$/;
 const SIZE = /^[A-Za-z0-9_]{2,80}$/;
@@ -358,7 +373,7 @@ export function failureFrom(status: number, body: unknown, headers: Headers, wha
 
   if (status === 401) {
     const why: Record<string, string> = {
-      ExpiredAuthenticationToken: "an access token lasts about an hour: sign in again with az login, or give a service principal's secret, which sitesolide exchanges at each run",
+      ExpiredAuthenticationToken: "an access token lasts about an hour: sign in again with az login, or give a service principal's secret, which is exchanged for a token at each run",
       InvalidAuthenticationTokenTenant: "the token belongs to another tenant than the subscription's: sign in to that tenant (az login --tenant), or set AZURE_TENANT_ID to it",
     };
     return make({
@@ -377,7 +392,7 @@ export function failureFrom(status: number, body: unknown, headers: Headers, wha
     return make({
       error: "provider-invalid",
       message: `Azure refused to ${what} (${answer}): ${said}`,
-      details: ["`sitesolide machine create` registers Microsoft.Compute and Microsoft.Network itself; or run az provider register --namespace with the namespace Azure names"],
+      details: ["creating a machine registers Microsoft.Compute and Microsoft.Network itself; or run az provider register --namespace with the namespace Azure names"],
     });
   }
   if (isLimit(code, said)) {
@@ -449,8 +464,8 @@ export function loginFailure(status: number, body: unknown, headers: Headers): P
 
 // --- what the answers mean --------------------------------------------------------------------
 
-function ownedBy(tags: Tags | undefined | null, name: string): boolean {
-  return isManaged(tags) && tags?.[MACHINE_LABEL] === name;
+function ownedBy(tags: Tags | undefined | null, name: string, owner: Owner): boolean {
+  return owner.manages(tags) && tags?.[owner.machineLabel] === name;
 }
 
 function capability(sku: AzureSku, name: string): string | undefined {
@@ -547,8 +562,8 @@ export function powerState(vm: AzureVm): string {
   return (vm.properties?.provisioningState ?? "unknown").toLowerCase();
 }
 
-export function toMachine(name: string, group: AzureGroup, vm: AzureVm | null, ip: AzurePublicIp | null): Machine {
-  const managed = ownedBy(group.tags, name);
+export function toMachine(name: string, group: AzureGroup, vm: AzureVm | null, ip: AzurePublicIp | null, owner: Owner): Machine {
+  const managed = ownedBy(group.tags, name, owner);
   const groupState = (group.properties?.provisioningState ?? "unknown").toLowerCase();
   return {
     provider: "azure",
@@ -567,7 +582,7 @@ export function toMachine(name: string, group: AzureGroup, vm: AzureVm | null, i
     backups: false,
     managed,
     labels: group.tags ?? {},
-    login: LOGIN,
+    login: owner.name,
   };
 }
 
@@ -704,7 +719,9 @@ export function azure(context: ProviderContext): Provider {
   const loginBase = apiAddress(context.environment, LOGIN_VARIABLE, DEFAULT_LOGIN);
   const pricesBase = apiAddress(context.environment, PRICES_VARIABLE, DEFAULT_PRICES);
   const host = new URL(base).host;
-  const { clock, fetcher } = context;
+  const { clock, fetcher, owner } = context;
+  /** The account the key is written for: see RESERVED_LOGINS. */
+  const login = owner.name;
   const credentials = signIn(context.credentials);
   const subscriptionPath = `/subscriptions/${credentials.subscription}`;
 
@@ -961,7 +978,7 @@ export function azure(context: ProviderContext): Provider {
   const groupPath = (group: string) => `${subscriptionPath}/resourcegroups/${group}`;
   const inGroup = (group: string, provider: string, type: string, name: string) => `${subscriptionPath}/resourceGroups/${group}/providers/${provider}/${type}/${name}`;
   const paths = (name: string) => {
-    const names = namesFor(name);
+    const names = namesFor(name, owner);
     return {
       names,
       group: groupPath(names.group),
@@ -1030,7 +1047,7 @@ export function azure(context: ProviderContext): Provider {
     return prices;
   }
 
-  /** The sizes sitesolide offers that Azure sells at a location to this subscription, the cheapest first. */
+  /** The sizes of OFFERED_SIZES that Azure sells at a location to this subscription, the cheapest first. */
   function offered(skus: AzureSku[], location: string, prices: Map<string, number>, except?: string): AzureSku[] {
     const price = (sku: AzureSku) => prices.get(sku.name) ?? Number.POSITIVE_INFINITY;
     return OFFERED_SIZES.map((name) => skus.find((sku) => sku.name === name))
@@ -1040,8 +1057,8 @@ export function azure(context: ProviderContext): Provider {
 
   function suggestions(skus: AzureSku[], location: string, prices: Map<string, number>, except?: string): string[] {
     const sizes = offered(skus, location, prices, except).slice(0, 6);
-    if (sizes.length === 0) return [`Azure sells this subscription none of the sizes sitesolide offers at ${location}: try another --location`];
-    return [`the sizes sitesolide offers that Azure sells at ${location}, the cheapest first:`, ...sizes.map((sku) => `${sku.name.padEnd(18)} ${describeSize(sku, prices.get(sku.name))}`)];
+    if (sizes.length === 0) return [`Azure sells this subscription none of the sizes ${owner.name} offers at ${location}: try another --location`];
+    return [`the sizes ${owner.name} offers that Azure sells at ${location}, the cheapest first:`, ...sizes.map((sku) => `${sku.name.padEnd(18)} ${describeSize(sku, prices.get(sku.name))}`)];
   }
 
   async function checkLocation(location: string): Promise<void> {
@@ -1147,26 +1164,26 @@ export function azure(context: ProviderContext): Provider {
   }
 
   async function machineOf(name: string, group: AzureGroup): Promise<Machine> {
-    if (!ownedBy(group.tags, name) || (group.properties?.provisioningState ?? "") === "Deleting") return toMachine(name, group, null, null);
+    if (!ownedBy(group.tags, name, owner) || (group.properties?.provisioningState ?? "") === "Deleting") return toMachine(name, group, null, null, owner);
     const where = paths(name);
     const vm = await readVm(where.vm, name);
     const ip = await read<AzurePublicIp>(where.ip, VERSIONS.network, `read the public IPv4 ${where.names.ip}`);
-    return toMachine(name, group, vm, ip !== null && ownedBy(ip.tags, name) ? ip : null);
+    return toMachine(name, group, vm, ip !== null && ownedBy(ip.tags, name, owner) ? ip : null, owner);
   }
 
   /**
    * What a group of ours already holds, read before anything is written: a
-   * resource of one of the names sitesolide gives that it did not create is
+   * resource of one of the names the owner gives that it did not create is
    * never adopted nor changed, and stops everything.
    */
   async function readParts(name: string): Promise<{ nsg: AzureResource | null; vnet: AzureResource | null; ip: AzurePublicIp | null; nic: AzureResource | null; vm: AzureVm | null }> {
     const where = paths(name);
     const guard = <T extends { tags?: Tags }>(kind: string, resourceName: string, found: T | null, code: string): T | null => {
-      if (found !== null && !ownedBy(found.tags, name)) {
+      if (found !== null && !ownedBy(found.tags, name, owner)) {
         throw new ProviderError({
           error: code,
-          message: `a ${kind} named ${resourceName} exists in the resource group ${where.names.group}, and sitesolide did not create it`,
-          details: [`it lacks the tag ${MANAGED_LABEL}=${MANAGED_VALUE}: it is never adopted nor changed`, "nothing was created, nothing was changed"],
+          message: `a ${kind} named ${resourceName} exists in the resource group ${where.names.group}, and ${owner.name} did not create it`,
+          details: [`it lacks the tag ${owner.mark}: it is never adopted nor changed`, "nothing was created, nothing was changed"],
         });
       }
       return found;
@@ -1196,7 +1213,7 @@ export function azure(context: ProviderContext): Provider {
             {
               error: "action-failed",
               message: `Azure failed to provision the virtual machine ${name}${said === undefined ? "" : `: ${said}`}`,
-              details: [`\`sitesolide machine destroy ${name} --provider azure\` removes it; then create it again`],
+              details: [`\`${owner.name} machine destroy ${name} --provider azure\` removes it; then create it again`],
             },
             200,
             "ProvisioningFailed",
@@ -1207,7 +1224,7 @@ export function azure(context: ProviderContext): Provider {
         last = state;
         if (state === "running") return vm;
         if ((state === "deallocated" || state === "stopped") && !justCreated) {
-          throw new ProviderError({ error: "machine-off", message: `${name} exists but is ${state}`, details: ["sitesolide never starts or stops a machine by itself"] });
+          throw new ProviderError({ error: "machine-off", message: `${name} exists but is ${state}`, details: [`${owner.name} never starts or stops a machine by itself`] });
         }
       }
       if (clock.now() >= deadline) {
@@ -1220,7 +1237,7 @@ export function azure(context: ProviderContext): Provider {
   /** Tags the OS disk Azure created with the machine, untagged; reads its tags first, so that a second run writes nothing. */
   async function tagDisk(name: string, vm: AzureVm, report: Report): Promise<void> {
     const id = vm.properties?.storageProfile?.osDisk?.managedDisk?.id;
-    const diskName = vm.properties?.storageProfile?.osDisk?.name ?? namesFor(name).disk;
+    const diskName = vm.properties?.storageProfile?.osDisk?.name ?? namesFor(name, owner).disk;
     report(`-> OS disk ${diskName}`);
     if (id === undefined || !/^\/subscriptions\/[A-Za-z0-9._()/-]+$/.test(id) || id.includes("..")) {
       report("!! Azure names no managed disk for the machine: it carries no tags");
@@ -1228,11 +1245,11 @@ export function azure(context: ProviderContext): Provider {
     }
     const scope = `${id}/providers/Microsoft.Resources/tags/default`;
     const current = await read<{ properties?: { tags?: Tags } }>(scope, VERSIONS.resources, `read the tags of the disk ${diskName}`);
-    if (ownedBy(current?.properties?.tags, name)) {
+    if (ownedBy(current?.properties?.tags, name, owner)) {
       report("   tagged");
       return;
     }
-    await call("PATCH", scope, VERSIONS.resources, `tag the disk ${diskName}`, { body: { operation: "Merge", properties: { tags: labelsFor(name) } } });
+    await call("PATCH", scope, VERSIONS.resources, `tag the disk ${diskName}`, { body: { operation: "Merge", properties: { tags: owner.labels(name) } } });
     report("   tagged, as Azure creates it without the machine's tags");
   }
 
@@ -1258,7 +1275,7 @@ export function azure(context: ProviderContext): Provider {
         said.push(`deleted the ${target.kind} ${target.name} this run had created${whole}`);
       } catch (error) {
         if (error instanceof AzureError && error.status === 404) said.push(`deleted the ${target.kind} ${target.name} this run had created${whole}`);
-        else said.push(`left the ${target.kind} ${target.name}: the next run finds it and reuses it, or \`sitesolide machine destroy\` removes it`);
+        else said.push(`left the ${target.kind} ${target.name}: the next run finds it and reuses it, or \`${owner.name} machine destroy\` removes it`);
       }
       report(`   ${said.at(-1)}`);
     }
@@ -1275,38 +1292,44 @@ export function azure(context: ProviderContext): Provider {
 
     async find(name) {
       checkName(name);
-      const group = await read<AzureGroup>(groupPath(namesFor(name).group), VERSIONS.resources, `read the resource group ${namesFor(name).group}`);
+      const group = await read<AzureGroup>(groupPath(namesFor(name, owner).group), VERSIONS.resources, `read the resource group ${namesFor(name, owner).group}`);
       return group === null ? null : machineOf(name, group);
     },
 
     async create(request, report): Promise<CreateOutcome> {
+      checkRequest("Azure", request, SUPPORTS);
+      // Not null: checkRequest refuses a request without a key, SUPPORTS not being keyless.
+      const key = request.key!;
       checkName(request.name);
-      const keyRefused = keyRefusal(request.key);
+      const keyRefused = keyRefusal(key);
       if (keyRefused !== null) throw new ProviderError(keyRefused);
+      if (RESERVED_LOGINS.has(login)) {
+        throw new ProviderError({ error: "provider-unsupported", message: `Azure refuses ${login} as the name of the machine's account, which is the owner's name`, details: ["nothing was created"] });
+      }
       if (request.backups) {
-        throw new ProviderError({ error: "provider-invalid", message: "sitesolide does not turn on Azure's own backups", details: ["run the same command without --backups"] });
+        throw new ProviderError({ error: "provider-invalid", message: `${owner.name} does not turn on Azure's own backups`, details: ["run the same command without --backups"] });
       }
       const where = paths(request.name);
       const names = where.names;
       const resources: Resource[] = [];
-      const tags = labelsFor(request.name);
+      const tags = owner.labels(request.name);
 
       report(`-> resource group ${names.group}`);
       const group = await read<AzureGroup>(where.group, VERSIONS.resources, `read the resource group ${names.group}`);
       let location = request.location;
       if (group !== null) {
-        if (!ownedBy(group.tags, request.name)) {
+        if (!ownedBy(group.tags, request.name, owner)) {
           throw new ProviderError({
             error: "machine-exists",
-            message: `a resource group named ${names.group} exists in the subscription, and sitesolide did not create it for ${request.name}`,
-            details: [`at ${group.location}, ${(group.properties?.provisioningState ?? "unknown").toLowerCase()}`, `it lacks the tags ${MANAGED_LABEL}=${MANAGED_VALUE} and ${MACHINE_LABEL}=${request.name}: nothing was created, nothing was changed`],
+            message: `a resource group named ${names.group} exists in the subscription, and ${owner.name} did not create it for ${request.name}`,
+            details: [`at ${group.location}, ${(group.properties?.provisioningState ?? "unknown").toLowerCase()}`, `it lacks the tags ${owner.mark} and ${owner.machineLabel}=${request.name}: nothing was created, nothing was changed`],
           });
         }
         if (group.properties?.provisioningState === "Deleting") {
-          throw new ProviderError({ error: "provider-busy", message: `Azure is deleting the resource group ${names.group}`, details: ["run the same command again once it has gone: `sitesolide machine list --provider azure` stops listing it"] });
+          throw new ProviderError({ error: "provider-busy", message: `Azure is deleting the resource group ${names.group}`, details: [`run the same command again once it has gone: \`${owner.name} machine list --provider azure\` stops listing it`] });
         }
         location = group.location;
-        report(`   already created by sitesolide, at ${location}`);
+        report(`   already created by ${owner.name}, at ${location}`);
         resources.push({ kind: "resource group", name: names.group, id: shortId(group.id, where.group), reused: true });
       } else {
         report("   none of that name yet");
@@ -1326,7 +1349,7 @@ export function azure(context: ProviderContext): Provider {
       if (found.vm !== null) {
         const size = found.vm.properties?.hardwareProfile?.vmSize ?? "unknown";
         report(`-> virtual machine ${names.vm}`);
-        report(`   already created by sitesolide: ${size} at ${location}, ${powerState(found.vm)}`);
+        report(`   already created by ${owner.name}: ${size} at ${location}, ${powerState(found.vm)}`);
         if (size.toLowerCase() !== request.type.toLowerCase()) report(`!! it is ${size}: --type only applies to a machine being created`);
         resources.push({ kind: "virtual machine", name: names.vm, id: shortId(found.vm.id, where.vm), reused: true });
         vm = await waitRunning(request.name, report, false);
@@ -1345,7 +1368,7 @@ export function azure(context: ProviderContext): Provider {
             report(`-> ${kind} ${name}`);
             if (existing !== null) {
               const state = existing.properties?.provisioningState ?? "Succeeded";
-              report(`   already created by sitesolide, reused${state === "Succeeded" ? "" : `; Azure is still at it (${state.toLowerCase()})`}`);
+              report(`   already created by ${owner.name}, reused${state === "Succeeded" ? "" : `; Azure is still at it (${state.toLowerCase()})`}`);
               // An earlier run stopped while Azure made it: referenced before it is done, Azure would refuse.
               if (state !== "Succeeded") await settle({ status: 200, headers: new Headers(), body: existing }, `creation of the ${kind} ${name}`, report, { path, version });
               resources.push({ kind, name, id: shortId(existing.id, path), reused: true });
@@ -1392,7 +1415,7 @@ export function azure(context: ProviderContext): Provider {
           });
 
           ordering = true;
-          const keyData = [request.key.algorithm, request.key.blob, /^[\x20-\x7e]*$/.test(request.key.comment) ? request.key.comment : ""].filter((part) => part !== "").join(" ");
+          const keyData = [key.algorithm, key.blob, /^[\x20-\x7e]*$/.test(key.comment) ? key.comment : ""].filter((part) => part !== "").join(" ");
           await ensure(
             "virtual machine",
             names.vm,
@@ -1410,8 +1433,8 @@ export function azure(context: ProviderContext): Provider {
                 },
                 osProfile: {
                   computerName: request.name,
-                  adminUsername: LOGIN,
-                  linuxConfiguration: { disablePasswordAuthentication: true, ssh: { publicKeys: [{ path: `/home/${LOGIN}/.ssh/authorized_keys`, keyData }] } },
+                  adminUsername: login,
+                  linuxConfiguration: { disablePasswordAuthentication: true, ssh: { publicKeys: [{ path: `/home/${login}/.ssh/authorized_keys`, keyData }] } },
                 },
                 networkProfile: { networkInterfaces: [{ id: nic.id, properties: { primary: true } }] },
               },
@@ -1425,7 +1448,7 @@ export function azure(context: ProviderContext): Provider {
             // Azure is still at it: what it is making is the next run's to pick up, not to delete.
             throw new ProviderError({
               ...error.failure,
-              details: [...(error.failure.details ?? []), `nothing was undone: the next run picks it up where it stands, and \`sitesolide machine destroy ${request.name} --provider azure\` removes it all`],
+              details: [...(error.failure.details ?? []), `nothing was undone: the next run picks it up where it stands, and \`${owner.name} machine destroy ${request.name} --provider azure\` removes it all`],
             });
           }
           if (ordering && error instanceof AzureError && error.status === 412) {
@@ -1458,18 +1481,18 @@ export function azure(context: ProviderContext): Provider {
       await tagDisk(request.name, vm, report);
       const finalGroup = await call<AzureGroup>("GET", where.group, VERSIONS.resources, `read the resource group ${names.group}`);
       const ip = await read<AzurePublicIp>(where.ip, VERSIONS.network, `read the public IPv4 ${names.ip}`);
-      return { machine: toMachine(request.name, finalGroup, vm, ip), created, resources };
+      return { machine: toMachine(request.name, finalGroup, vm, ip, owner), created, resources };
     },
 
     async list() {
       const groups = await listAll<AzureGroup>(`${subscriptionPath}/resourcegroups`, VERSIONS.resources, "read the resource groups", {
-        $filter: `tagName eq '${MANAGED_LABEL}' and tagValue eq '${MANAGED_VALUE}'`,
+        $filter: `tagName eq '${MANAGED_LABEL}' and tagValue eq '${owner.name}'`,
       });
       const machines: Machine[] = [];
       for (const group of groups) {
-        const name = group.tags?.[MACHINE_LABEL];
-        // Only the groups sitesolide names after the machine they hold.
-        if (!isManaged(group.tags) || name === undefined || !MACHINE_NAME.test(name) || group.name.toLowerCase() !== namesFor(name).group) continue;
+        const name = group.tags?.[owner.machineLabel];
+        // Only the groups the owner names after the machine they hold.
+        if (!owner.manages(group.tags) || name === undefined || !MACHINE_NAME.test(name) || group.name.toLowerCase() !== namesFor(name, owner).group) continue;
         machines.push(await machineOf(name, group));
       }
       return machines;
@@ -1485,26 +1508,26 @@ export function azure(context: ProviderContext): Provider {
         report("   already gone");
         return { removed: [], kept: [] };
       }
-      if (!ownedBy(group.tags, machine.name)) {
+      if (!ownedBy(group.tags, machine.name, owner)) {
         throw new ProviderError({
           error: "machine-not-managed",
-          message: `the resource group ${names.group} was not created by sitesolide for ${machine.name}`,
-          details: [`it lacks the tags ${MANAGED_LABEL}=${MANAGED_VALUE} and ${MACHINE_LABEL}=${machine.name}: nothing was deleted`],
+          message: `the resource group ${names.group} was not created by ${owner.name} for ${machine.name}`,
+          details: [`it lacks the tags ${owner.mark} and ${owner.machineLabel}=${machine.name}: nothing was deleted`],
         });
       }
       const contents = await listAll<AzureResource>(`${subscriptionPath}/resourceGroups/${names.group}/resources`, VERSIONS.resources, `read what the resource group ${names.group} holds`);
-      // The OS disk Azure created with the machine counts as sitesolide's,
+      // The OS disk Azure created with the machine counts as the owner's,
       // tagged or not yet; that disk alone, named by the machine itself. A
       // data disk attached since, in the portal, is its owner's, and stops
       // the deletion like anything else untagged.
       const vm = await read<AzureVm>(where.vm, VERSIONS.compute, `read the virtual machine ${names.vm}`);
-      const systemDiskId = vm !== null && ownedBy(vm.tags, machine.name) ? vm.properties?.storageProfile?.osDisk?.managedDisk?.id?.toLowerCase() : undefined;
+      const systemDiskId = vm !== null && ownedBy(vm.tags, machine.name, owner) ? vm.properties?.storageProfile?.osDisk?.managedDisk?.id?.toLowerCase() : undefined;
       const systemDisk = (resource: AzureResource) => (resource.type ?? "").toLowerCase() === "microsoft.compute/disks" && systemDiskId !== undefined && resource.id.toLowerCase() === systemDiskId;
-      const foreign = contents.filter((resource) => !ownedBy(resource.tags, machine.name) && !systemDisk(resource));
+      const foreign = contents.filter((resource) => !ownedBy(resource.tags, machine.name, owner) && !systemDisk(resource));
       if (foreign.length > 0) {
         throw new ProviderError({
           error: "machine-not-managed",
-          message: `the resource group ${names.group} holds resources sitesolide did not create`,
+          message: `the resource group ${names.group} holds resources ${owner.name} did not create`,
           details: [
             ...foreign.map((resource) => describeResource(resource, null)),
             "nothing was deleted: deleting the group would delete them too",

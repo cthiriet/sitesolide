@@ -170,5 +170,5 @@ naming an address Akamai will give to someone else.
 
 `SITESOLIDE_LINODE_API` points the command at another address than
 `https://api.linode.com/v4`, for a local fake of the API
-(`bin/tests/fake-linode.ts`). It takes https, or http on the loopback only, so
+(`clouds/fakes/linode.ts`). It takes https, or http on the loopback only, so
 that the token never travels in the clear.

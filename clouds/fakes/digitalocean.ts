@@ -3,7 +3,7 @@
  * loopback: the tests of the DigitalOcean provider never reach the real one.
  *
  * It keeps an account in memory (SSH keys, tags, firewalls, Droplets,
- * actions) and answers the calls bin/cli/providers/digitalocean.ts makes, in
+ * actions) and answers the calls src/digitalocean.ts makes, in
  * the shapes of https://docs.digitalocean.com/reference/api/reference/ and of
  * its OpenAPI source, https://github.com/digitalocean/openapi: the
  * `{"id", "message", "request_id"}` errors, `links.pages` and `meta.total` on

@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { REMOTE_HINTS } from "../cli/hints";
-import { ProviderError, realClock, type CreateRequest, type Machine, type Provider, type PublicKey, type Workstation } from "../cli/providers/provider";
+import { FAILURE_CODES, ownerNamed, ProviderError, realClock, WEB_SERVER, type CreateRequest, type Machine, type Owner, type Provider, type PublicKey, type Workstation } from "../src/provider";
 import {
   apiKeyOfConfig,
   discover,
@@ -14,13 +13,13 @@ import {
   isKeyNameFor,
   ownsFirewall,
   priceAt,
+  ruleFor,
   sameRule,
   VULTR,
   WAITS,
   type VultrPlan,
-} from "../cli/providers/vultr";
-import { REPO } from "./e2e/run";
-import { createFake, createFakeVultr, DEBIAN_13_ID, FAKE_KEY, PLANS, SYSTEMS, type FakeFirewall, type FakeInstance, type FakeVultr } from "./fake-vultr";
+} from "../src/vultr";
+import { createFake, createFakeVultr, DEBIAN_13_ID, FAKE_KEY, PLANS, SYSTEMS, type FakeFirewall, type FakeInstance, type FakeVultr } from "../fakes/vultr";
 
 /**
  * The Vultr provider, through `VULTR.open(...)`, against a local fake of the
@@ -30,7 +29,13 @@ import { createFake, createFakeVultr, DEBIAN_13_ID, FAKE_KEY, PLANS, SYSTEMS, ty
  * The API key must never appear in a URL, a request's body, a line the
  * provider reports or a refusal: every one of them is added to `printed`,
  * read by the last tests.
+ *
+ * The provider is opened for sitesolide unless a test says otherwise, so
+ * that every name, tag and description below reads as sitesolide's.
  */
+
+/** The repository's root, where the docs an entry names are. */
+const REPO = join(import.meta.dir, "..", "..");
 
 /** Generated with ssh-keygen for bin/tests/cli-machine.test.ts; the private half was deleted at once. */
 const ED25519 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICezpiOyiQWMYqOeL4S4OgE0T7Fq2bLHWUJ1afO4cczN ada@workstation.test-zone.invalid";
@@ -40,6 +45,9 @@ const KEY: PublicKey = {
   comment: "ada@workstation.test-zone.invalid",
   fingerprint: "a4:46:30:d5:fd:7e:1a:77:e5:ad:8d:21:4f:9a:3e:9e",
 };
+const SITESOLIDE = ownerNamed("sitesolide");
+const DEVBOX = ownerNamed("devbox");
+
 /** A key no test uploads: the same key under another comment proves the comment does not count. */
 const SAME_KEY_OTHER_COMMENT = `${KEY.algorithm} ${KEY.blob} laptop`;
 
@@ -86,11 +94,12 @@ function fakeClock() {
 
 type Opened = { provider: Provider; lines: string[]; secrets: string[]; clock: ReturnType<typeof fakeClock>; report: (line: string) => void };
 
-function open(options: { key?: string; api?: string; fetcher?: (input: string, init?: RequestInit) => Promise<Response> } = {}): Opened {
+function open(options: { key?: string; api?: string; fetcher?: (input: string, init?: RequestInit) => Promise<Response>; owner?: Owner } = {}): Opened {
   const lines: string[] = [];
   const secrets: string[] = [];
   const clock = fakeClock();
   const provider = VULTR.open({
+    owner: options.owner ?? SITESOLIDE,
     credentials: { VULTR_API_KEY: options.key ?? FAKE_KEY },
     environment: { SITESOLIDE_VULTR_API: options.api ?? fake.url },
     fetcher: options.fetcher ?? ((input, init) => fetch(input, init)),
@@ -105,7 +114,7 @@ function open(options: { key?: string; api?: string; fetcher?: (input: string, i
 }
 
 function request(extra: Partial<CreateRequest> = {}): CreateRequest {
-  return { name: "web", type: "vc2-1c-2gb", location: "fra", image: "debian-13", backups: false, key: KEY, ...extra };
+  return { name: "web", type: "vc2-1c-2gb", location: "fra", image: "debian-13", backups: false, key: KEY, inbound: WEB_SERVER, ...extra };
 }
 
 /** The refusal a call ends with; a call that does not refuse fails the test. */
@@ -115,7 +124,7 @@ async function refusal(promise: Promise<unknown>): Promise<ProviderError> {
   } catch (error) {
     if (!(error instanceof ProviderError)) throw error;
     printed.push(JSON.stringify(error.failure), error.message);
-    expect(REMOTE_HINTS[error.failure.error]).toBeDefined();
+    expect(FAILURE_CODES.has(error.failure.error)).toBe(true);
     return error;
   }
   throw new Error("expected a refusal");
@@ -133,8 +142,8 @@ function bodyOf(method: string, path: string): unknown {
 const MANAGED = (name: string) => ["managed-by:sitesolide", `sitesolide-machine:${name}`];
 
 /** The rules of FIREWALL_RULES as the API answers them, ICMP's port written `port`. */
-function withRules(firewall: FakeFirewall, icmpPort = ""): FakeFirewall {
-  for (const rule of FIREWALL_RULES) {
+function withRules(firewall: FakeFirewall, icmpPort = "", owner = SITESOLIDE): FakeFirewall {
+  for (const rule of FIREWALL_RULES.map((each) => ruleFor(each, owner))) {
     firewall.rules.push({
       id: firewall.nextRule++,
       type: rule.ip_type,
@@ -153,7 +162,7 @@ function withRules(firewall: FakeFirewall, icmpPort = ""): FakeFirewall {
 
 /** An instance sitesolide made earlier, with its group, rules complete, and its key, as the API holds them. */
 function managedMachine(name: string, extra: Partial<FakeInstance> = {}) {
-  const firewall = withRules(fake.addFirewall({ description: firewallDescription(name) }));
+  const firewall = withRules(fake.addFirewall({ description: firewallDescription(name, SITESOLIDE) }));
   const key = fake.addKey({ name: `sitesolide-${name}`, ssh_key: otherKey(name.length) });
   const instance = fake.addInstance({ label: name, tags: [...MANAGED(name), `sitesolide-key:${key.id}`], firewall_group_id: firewall.id, ...extra });
   return { firewall, key, instance };
@@ -178,6 +187,7 @@ describe("create, on an empty account", () => {
     expect(writes()).toEqual(["POST /ssh-keys", "POST /firewalls", ...FIREWALL_RULES.map(() => `POST /firewalls/${firewall.id}/rules`), "POST /instances"]);
     expect(bodyOf("POST", "/ssh-keys")).toEqual({ name: "sitesolide-web", ssh_key: ED25519 });
     expect(bodyOf("POST", "/firewalls")).toEqual({ description: "managed-by:sitesolide sitesolide-machine:web" });
+    expect(firewall.rules.map((rule) => rule.notes)).toEqual(["sitesolide ssh", "sitesolide http", "sitesolide https", "sitesolide ping", "sitesolide ssh", "sitesolide http", "sitesolide https", "sitesolide ping"]);
     expect(bodyOf("POST", "/instances")).toEqual({
       region: "fra",
       plan: "vc2-1c-2gb",
@@ -317,7 +327,7 @@ describe("create, on an empty account", () => {
   });
 
   test("the group an interrupted run made is reused, and only its missing rules are added", async () => {
-    const firewall = fake.addFirewall({ description: firewallDescription("web") });
+    const firewall = fake.addFirewall({ description: firewallDescription("web", SITESOLIDE) });
     for (const rule of FIREWALL_RULES.slice(0, 3)) {
       firewall.rules.push({ id: firewall.nextRule++, type: rule.ip_type, ip_type: rule.ip_type, action: "accept", protocol: rule.protocol, port: rule.port ?? "", subnet: rule.subnet, subnet_size: 0, source: "", notes: rule.notes });
     }
@@ -414,7 +424,7 @@ describe("what refuses, refuses before anything is written", () => {
     const error = await refusal(provider.create(request({ image: "debian-99" }), report));
     expect(error.failure).toMatchObject({ error: "provider-invalid", message: "no Vultr image matches debian-99" });
     expect(error.failure.details).toEqual([
-      "--image takes debian-<release>, or an os_id Vultr lists; sitesolide setup is verified on Debian 13 only",
+      "--image takes debian-<release>, or an os_id Vultr lists",
       "477    Debian 11 x64 (bullseye)",
       "2136   Debian 12 x64 (bookworm)",
       `${DEBIAN_13_ID}   Debian 13 x64 (trixie)`,
@@ -451,7 +461,7 @@ describe("an order Vultr refuses", () => {
 
   test("what an earlier run made, or the account held, is not undone", async () => {
     fake.addKey({ name: "laptop", ssh_key: ED25519 });
-    const firewall = fake.addFirewall({ description: firewallDescription("web") });
+    const firewall = fake.addFirewall({ description: firewallDescription("web", SITESOLIDE) });
     fake.fail("POST", /^\/instances$/, 400, "Invalid hostname.");
     const { provider, report } = open();
     const error = await refusal(provider.create(request(), report));
@@ -802,6 +812,7 @@ describe("the credentials", () => {
       expect(shared.environment.SITESOLIDE_VULTR_API).toStartWith("http://127.0.0.1:");
       let slept = 0;
       const provider = VULTR.open({
+        owner: SITESOLIDE,
         credentials: { VULTR_API_KEY: shared.environment.VULTR_API_KEY! },
         environment: shared.environment,
         fetcher: (input, init) => fetch(input, init),
@@ -886,23 +897,23 @@ describe("what the wizard offers", () => {
 
 describe("the marks Vultr has room for", () => {
   test("a firewall group is sitesolide's for a machine when its description says both tags", () => {
-    expect(firewallDescription("web")).toBe("managed-by:sitesolide sitesolide-machine:web");
-    expect(ownsFirewall({ id: "1", description: "managed-by:sitesolide sitesolide-machine:web", instance_count: 0 }, "web")).toBe(true);
-    expect(ownsFirewall({ id: "1", description: "managed-by:sitesolide sitesolide-machine:web", instance_count: 0 }, "db")).toBe(false);
-    expect(ownsFirewall({ id: "1", description: "sitesolide-machine:web", instance_count: 0 }, "web")).toBe(false);
-    expect(ownsFirewall({ id: "1", description: "web", instance_count: 0 }, "web")).toBe(false);
+    expect(firewallDescription("web", SITESOLIDE)).toBe("managed-by:sitesolide sitesolide-machine:web");
+    expect(ownsFirewall({ id: "1", description: "managed-by:sitesolide sitesolide-machine:web", instance_count: 0 }, "web", SITESOLIDE)).toBe(true);
+    expect(ownsFirewall({ id: "1", description: "managed-by:sitesolide sitesolide-machine:web", instance_count: 0 }, "db", SITESOLIDE)).toBe(false);
+    expect(ownsFirewall({ id: "1", description: "sitesolide-machine:web", instance_count: 0 }, "web", SITESOLIDE)).toBe(false);
+    expect(ownsFirewall({ id: "1", description: "web", instance_count: 0 }, "web", SITESOLIDE)).toBe(false);
   });
 
   test("a key is sitesolide's for a machine by the names it gives, the suffix being its own fingerprint's", () => {
     expect(fingerprintOf(ED25519)).toBe(KEY.fingerprint);
     expect(fingerprintOf("ssh-ed25519 not*base64")).toBe("");
-    expect(isKeyNameFor("sitesolide-web", "web", KEY.fingerprint)).toBe(true);
-    expect(isKeyNameFor("sitesolide-web-a44630d5", "web", KEY.fingerprint)).toBe(true);
-    expect(isKeyNameFor("sitesolide-web-deadbeef", "web", KEY.fingerprint)).toBe(false);
-    expect(isKeyNameFor("sitesolide-web-a44630d5", "web", "")).toBe(false);
-    expect(isKeyNameFor("sitesolide-web-db", "web", KEY.fingerprint)).toBe(false);
-    expect(isKeyNameFor("sitesolide-webapp", "web", KEY.fingerprint)).toBe(false);
-    expect(isKeyNameFor("laptop", "web", KEY.fingerprint)).toBe(false);
+    expect(isKeyNameFor("sitesolide-web", "web", KEY.fingerprint, SITESOLIDE)).toBe(true);
+    expect(isKeyNameFor("sitesolide-web-a44630d5", "web", KEY.fingerprint, SITESOLIDE)).toBe(true);
+    expect(isKeyNameFor("sitesolide-web-deadbeef", "web", KEY.fingerprint, SITESOLIDE)).toBe(false);
+    expect(isKeyNameFor("sitesolide-web-a44630d5", "web", "", SITESOLIDE)).toBe(false);
+    expect(isKeyNameFor("sitesolide-web-db", "web", KEY.fingerprint, SITESOLIDE)).toBe(false);
+    expect(isKeyNameFor("sitesolide-webapp", "web", KEY.fingerprint, SITESOLIDE)).toBe(false);
+    expect(isKeyNameFor("laptop", "web", KEY.fingerprint, SITESOLIDE)).toBe(false);
   });
 });
 
@@ -974,11 +985,11 @@ describe("a machine found already created is behind its firewall group", () => {
     expect(lines).toContain("!! web has no firewall group: every port of it is open");
     expect(lines).toContain(`   ${firewall.id}, attached to web`);
     expect(outcome.created).toBe(false);
-    expect(outcome.resources.at(-1)).toEqual({ kind: "firewall group", name: firewallDescription("web"), id: firewall.id, reused: false });
+    expect(outcome.resources.at(-1)).toEqual({ kind: "firewall group", name: firewallDescription("web", SITESOLIDE), id: firewall.id, reused: false });
   });
 
   test("the group an earlier run left is reused and attached", async () => {
-    const left = withRules(fake.addFirewall({ description: firewallDescription("web") }));
+    const left = withRules(fake.addFirewall({ description: firewallDescription("web", SITESOLIDE) }));
     const instance = fake.addInstance({ label: "web", tags: MANAGED("web") });
     const { provider, report } = open();
     await provider.create(request(), report);
@@ -1097,7 +1108,7 @@ describe("prices, the region's", () => {
 
 describe("the rules a group already has", () => {
   test("ICMP answered with port 0, an empty port or none is the same rule, and a re-run adds nothing", async () => {
-    const firewall = withRules(fake.addFirewall({ description: firewallDescription("web") }), "0");
+    const firewall = withRules(fake.addFirewall({ description: firewallDescription("web", SITESOLIDE) }), "0");
     const { provider, report } = open();
     await provider.create(request(), report);
     expect(writes().filter((write) => write.startsWith("POST /firewalls"))).toEqual([]);
@@ -1106,6 +1117,97 @@ describe("the rules a group already has", () => {
     for (const port of [undefined, "", "0"]) expect(sameRule({ id: 1, ip_type: "v4", protocol: "ICMP", port, subnet: "0.0.0.0", subnet_size: 0 }, icmp)).toBe(true);
     const ssh = FIREWALL_RULES[0]!;
     expect(sameRule({ id: 1, ip_type: "v4", protocol: "tcp", port: "0", subnet: "0.0.0.0", subnet_size: 0 }, ssh)).toBe(false);
+  });
+});
+
+// --- what the request may ask --------------------------------------------------------------
+
+describe("what Vultr is never asked", () => {
+  test("no key, a user-data, other firewall rules, a disk, nested virtualization or a login: refused before anything leaves", async () => {
+    // A machine of that name already there changes nothing: the request is refused before it is looked for.
+    managedMachine("web");
+    const cases: [Partial<CreateRequest>, string][] = [
+      [{ key: null }, "no-ssh-key"],
+      [{ userData: "#cloud-config\n" }, "provider-unsupported"],
+      [{ inbound: WEB_SERVER.filter((rule) => rule.protocol !== "icmp") }, "provider-unsupported"],
+      [{ inbound: [...WEB_SERVER, { protocol: "tcp", port: 8080, sources: ["0.0.0.0/0", "::/0"] }] }, "provider-unsupported"],
+      [{ inbound: WEB_SERVER.map((rule) => ({ ...rule, sources: ["198.51.100.0/24"] })) }, "provider-unsupported"],
+      [{ disk: { gb: 80 } }, "provider-unsupported"],
+      [{ nestedVirtualization: true }, "provider-unsupported"],
+      [{ login: "linuxuser" }, "provider-unsupported"],
+    ];
+    for (const [extra, code] of cases) {
+      const { provider, report } = open();
+      const error = await refusal(provider.create(request(extra), report));
+      expect({ extra, code: error.failure.error, details: error.failure.details }).toEqual({ extra, code, details: ["nothing was created"] });
+    }
+    expect(fake.requests).toEqual([]);
+  });
+
+  test("the rules of WEB_SERVER are taken in any order", async () => {
+    const { provider, report } = open();
+    await provider.create(request({ inbound: [...WEB_SERVER].reverse() }), report);
+    expect(writes().filter((write) => write.endsWith("/rules"))).toHaveLength(FIREWALL_RULES.length);
+  });
+});
+
+// --- two owners, one account ---------------------------------------------------------------
+
+describe("two owners sharing one account", () => {
+  test("devbox neither lists, adopts nor destroys sitesolide's instance", async () => {
+    const made = open();
+    const theirs = await made.provider.create(request(), made.report);
+    fake.requests.length = 0;
+    const { provider, report } = open({ owner: DEVBOX });
+    expect(await provider.list()).toEqual([]);
+    expect(await provider.find("web")).toMatchObject({ id: theirs.machine.id, managed: false });
+    const taken = await refusal(provider.create(request(), report));
+    expect(taken.failure).toMatchObject({ error: "machine-exists", message: "an instance labelled web exists in the account, and devbox did not create it" });
+    expect(taken.failure.details).toContain("it lacks the tag managed-by:devbox: nothing was created, nothing was changed");
+    // Handed sitesolide's machine as its own, it reads the tags again and refuses.
+    const destroyed = await refusal(provider.destroy(theirs.machine, { deleteKey: true }, report));
+    expect(destroyed.failure).toMatchObject({ error: "machine-not-managed", message: "the instance web lacks the tag managed-by:devbox", details: ["devbox did not create it: nothing was destroyed"] });
+    expect(writes()).toEqual([]);
+    expect({ instances: fake.instances.length, firewalls: fake.firewalls.length, keys: fake.keys.length }).toEqual({ instances: 1, firewalls: 1, keys: 1 });
+  });
+
+  test("devbox's instance carries devbox's names, and sitesolide neither lists nor destroys it", async () => {
+    const made = open({ owner: DEVBOX });
+    const ours = await made.provider.create(request({ name: "db" }), made.report);
+    const key = fake.keys[0]!;
+    const firewall = fake.firewalls[0]!;
+    expect(key.name).toBe("devbox-db");
+    expect(firewall.description).toBe("managed-by:devbox devbox-machine:db");
+    expect(firewall.rules.map((rule) => rule.notes).slice(0, 4)).toEqual(["devbox ssh", "devbox http", "devbox https", "devbox ping"]);
+    expect((bodyOf("POST", "/instances") as { tags: string[] }).tags).toEqual(["managed-by:devbox", "devbox-machine:db", `devbox-key:${key.id}`]);
+    expect(ours.machine).toMatchObject({ managed: true, labels: { "managed-by": "devbox", "devbox-machine": "db", "devbox-key": key.id } });
+
+    fake.requests.length = 0;
+    const { provider, report } = open();
+    expect(await provider.list()).toEqual([]);
+    expect(await provider.find("db")).toMatchObject({ managed: false });
+    expect((await refusal(provider.destroy(ours.machine, { deleteKey: true }, report))).failure.error).toBe("machine-not-managed");
+    expect(writes()).toEqual([]);
+  });
+
+  test("the group and the key sitesolide left for a machine of that name are neither adopted nor deleted by devbox", async () => {
+    const leftGroup = withRules(fake.addFirewall({ description: firewallDescription("db", SITESOLIDE) }));
+    const leftKey = fake.addKey({ name: "sitesolide-db", ssh_key: ED25519 });
+    const made = open({ owner: DEVBOX });
+    const ours = await made.provider.create(request({ name: "db" }), made.report);
+    const group = fake.firewalls.find((candidate) => candidate !== leftGroup)!;
+    expect(group.description).toBe(firewallDescription("db", DEVBOX));
+    // The key is reused, being the same key, but not claimed: its name is sitesolide's.
+    expect(bodyOf("POST", "/instances")).toMatchObject({ firewall_group_id: group.id, sshkey_id: [leftKey.id], tags: ["managed-by:devbox", "devbox-machine:db"] });
+
+    fake.requests.length = 0;
+    const { provider, lines, report } = open({ owner: DEVBOX });
+    const outcome = await provider.destroy(ours.machine, { deleteKey: true }, report);
+    expect(writes()).toEqual([`DELETE /instances/${ours.machine.id}`, `DELETE /firewalls/${group.id}`]);
+    expect(outcome.removed).toEqual([`instance db (${ours.machine.ipv4}, ${ours.machine.ipv6})`, `firewall group ${group.id}`]);
+    expect(lines).toContain("   none was uploaded for db: the key it used was already in the account");
+    expect(fake.firewalls).toEqual([leftGroup]);
+    expect(fake.keys).toEqual([leftKey]);
   });
 });
 

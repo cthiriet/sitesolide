@@ -44,7 +44,7 @@
  * Errors are `{"type", "message", ...}`, the `details` of a refused argument or
  * permission read too.
  */
-import { apiAddress } from "../providers/provider";
+import { apiAddress } from "../../../clouds/src/provider";
 import { DnsError, zoneCandidates, type DnsContext, type DnsEntry, type DnsRecord, type ZoneApi, type ZoneRef } from "./dns";
 
 export const DEFAULT_API = "https://api.scaleway.com";

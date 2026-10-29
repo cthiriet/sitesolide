@@ -260,7 +260,7 @@ import {
 import { tunnelRecordLines } from "./cli/cloudflare";
 import { shellQuote } from "./cli/harden";
 import { askAddress, VERIFY_RETRY_MS, WARM_UP_MS } from "./cli/verify";
-import { realClock } from "./cli/providers/provider";
+import { realClock } from "../clouds/src/provider";
 import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
 import { machine, sshLogin } from "./cli/machine";
 import { DNS_PROVIDERS, dnsEntry, MANUAL } from "./cli/dns/registry";

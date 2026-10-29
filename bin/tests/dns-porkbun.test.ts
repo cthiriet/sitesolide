@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { DnsError, detectDns, ensureZoneRecords, zoneRecords, type DnsContext, type ZoneApi } from "../cli/dns/dns";
 import { API_KEY_SHAPE, API_KEY_VARIABLE, API_VARIABLE, DEFAULT_API, PORKBUN_DNS, SECRET_KEY_SHAPE, SECRET_KEY_VARIABLE, TTL } from "../cli/dns/porkbun";
-import { ProviderError } from "../cli/providers/provider";
+import { ProviderError } from "../../clouds/src/provider";
 import { tlsZoneContent } from "../cli/tls";
 import { createFakePorkbun, FAKE_API_KEY, FAKE_SECRET_KEY, ZONE, type FakePorkbun } from "./fake-dns-porkbun";
 

@@ -44,7 +44,7 @@
  * `{"code", "message", "object", "cause"}`, `errors` added on a 400, or
  * `{"message"}` alone on a 401.
  */
-import { apiAddress } from "../providers/provider";
+import { apiAddress } from "../../../clouds/src/provider";
 import { DnsError, zoneCandidates, type DnsContext, type DnsEntry, type DnsRecord, type ZoneApi, type ZoneRef } from "./dns";
 
 export const DEFAULT_API = "https://api.gandi.net/v5";

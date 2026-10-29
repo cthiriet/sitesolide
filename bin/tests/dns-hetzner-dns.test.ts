@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { DnsError, detectDns, ensureZoneRecords, zoneRecords, type DnsContext, type ZoneApi } from "../cli/dns/dns";
 import { API_VARIABLE, DEFAULT_API, HETZNER_DNS, parseRecordId, recordId, TOKEN_SHAPE, TOKEN_VARIABLE, TTL, WAITS } from "../cli/dns/hetzner-dns";
-import { ProviderError, type Clock } from "../cli/providers/provider";
+import { ProviderError, type Clock } from "../../clouds/src/provider";
 import { tlsZoneContent } from "../cli/tls";
 import { createFakeHetznerDns, FAKE_TOKEN, ZONE, type FakeHetznerDns } from "./fake-dns-hetzner-dns";
 

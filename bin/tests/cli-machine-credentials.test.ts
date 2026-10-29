@@ -13,7 +13,7 @@ import {
   type MachineDependencies,
 } from "../cli/machine";
 import { REMOTE_HINTS } from "../cli/hints";
-import type { Machine, ProviderEntry, Workstation } from "../cli/providers/provider";
+import type { Machine, ProviderEntry, Workstation } from "../../clouds/src/provider";
 import type { OutputEvent } from "../cli/output";
 import { eventOutput } from "../cli/remote";
 

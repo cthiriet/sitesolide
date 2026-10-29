@@ -34,7 +34,7 @@
  */
 import { resolveNs } from "node:dns/promises";
 import { describePlan, desiredRecords, planRecords, planTunnelRecords, recordLine, zoneCandidates, type DnsRecord, type RecordAction } from "../cloudflare";
-import type { Clock, CredentialField, Credentials, Fetch } from "../providers/provider";
+import type { Clock, CredentialField, Credentials, Fetch } from "../../../clouds/src/provider";
 
 export type { DnsRecord, RecordAction };
 export { describePlan, desiredRecords, planRecords, recordLine, zoneCandidates };
@@ -109,7 +109,7 @@ export type DnsEntry = {
   title: string;
   /** What it needs, scoped to the zone; read from the environment, standard input, or typed at the wizard. */
   credentials: readonly CredentialField[];
-  /** The forms credentials come in, as for a cloud provider (bin/cli/providers/provider.ts). */
+  /** The forms credentials come in, as for a cloud provider (clouds/src/provider.ts). */
   alternatives?: readonly (readonly string[])[];
   /** Where those credentials are made, with the least permission that works, one line each. */
   credentialHelp: string[];

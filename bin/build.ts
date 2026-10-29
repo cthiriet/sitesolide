@@ -40,6 +40,9 @@ export function binaryName(target: Target): string {
 }
 
 /** The folders the kit is made of: what the CLI and its scripts read, build and upload. */
+// Not clouds/: only the CLI imports the providers, and the binary bundles them.
+// No script of the kit reaches them (settings.ts, tls.ts and portal-guard.ts,
+// which the scripts run with `bun`, import nothing from there).
 export const KIT_FOLDERS = ["analytics", "api", "bin", "dashboard", "egress", "infra", "monitor", "portal"] as const;
 
 /**

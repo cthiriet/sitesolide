@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { absoluteName, API_VARIABLE, DEFAULT_API, DIGITALOCEAN_DNS, relativeName, TOKEN_SHAPE, TOKEN_VARIABLE, TTL } from "../cli/dns/digitalocean-dns";
 import { CLOUDFLARE } from "../cli/dns/cloudflare";
 import { detectDns, DnsError, ensureZoneRecords, zoneRecords, type DnsContext } from "../cli/dns/dns";
-import { ProviderError } from "../cli/providers/provider";
+import { ProviderError } from "../../clouds/src/provider";
 import { createFakeDigitalOceanDns, FAKE_TOKEN, LINK_ORIGIN, ZONE, type FakeDigitalOceanDns } from "./fake-dns-digitalocean-dns";
 
 /**

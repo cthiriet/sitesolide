@@ -27,7 +27,7 @@
  */
 import { accessRules, signature } from "../cli/dns/ovh";
 import type { FakeDns } from "./fake-dns";
-import type { FakeRequest } from "./fake-provider";
+import type { FakeRequest } from "../../clouds/fakes/fake-provider";
 
 /** Shaped as OVHcloud's are, 16 and 32 letters and digits; nobody's. */
 export const FAKE_APPLICATION_KEY = "Hq4Lm8Rt2Vb6Nw9K";

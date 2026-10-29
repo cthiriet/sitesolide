@@ -30,7 +30,7 @@
  * read from SITESOLIDE_DNS_AZURE_*, never from the AZURE_* variables Azure's
  * own tools read, which usually hold a broad identity (bin/cli/dns/dns.ts
  * says why). The secret is exchanged at Microsoft Entra for an access token
- * with the client credentials grant, as bin/cli/providers/azure.ts does: in
+ * with the client credentials grant, as clouds/src/azure.ts does: in
  * the Authorization header of the token request (client_secret_basic, RFC
  * 6749 2.3.1), or, should Entra refuse it there, in that request's form body
  * (client_secret_post), as MSAL sends it. The token goes through
@@ -51,7 +51,7 @@
  * a local fake.
  */
 import { canonicalAddress } from "../cloudflare";
-import { apiAddress, retryAfter, type CredentialField, type Credentials } from "../providers/provider";
+import { apiAddress, retryAfter, type CredentialField, type Credentials } from "../../../clouds/src/provider";
 import { DnsError, zoneCandidates, type DnsContext, type DnsEntry, type DnsRecord, type ZoneApi, type ZoneRef } from "./dns";
 
 export const DEFAULT_API = "https://management.azure.com";

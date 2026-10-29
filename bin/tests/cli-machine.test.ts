@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REMOTE_HINTS } from "../cli/hints";
@@ -20,13 +20,13 @@ import {
   type ChosenKey,
   type MachineDependencies,
 } from "../cli/machine";
-import type { Workstation } from "../cli/providers/provider";
-import { apiBase, cheapestTypes, failureFrom, hostAddress, offerWarnings, suggestedTypes, typeOffer, WAITS, type HetznerServerType } from "../cli/providers/hetzner";
+import { FAILURE_CODES, WEB_SERVER, type Workstation } from "../../clouds/src/provider";
+import { apiBase, cheapestTypes, failureFrom, firewallRules, hostAddress, offerWarnings, suggestedTypes, typeOffer, WAITS, type HetznerServerType } from "../../clouds/src/hetzner";
 import type { OutputEvent } from "../cli/output";
 import { eventOutput, humanOutput, type Output } from "../cli/remote";
 import { createFakeVm, type FakeVm } from "./e2e/fake-vm";
 import { CLI, REPO } from "./e2e/run";
-import { createFakeHetzner, FAKE_TOKEN, SERVER_TYPES, type FakeHetzner } from "./fake-hetzner";
+import { createFakeHetzner, FAKE_TOKEN, SERVER_TYPES, type FakeHetzner } from "../../clouds/fakes/hetzner";
 
 /**
  * `sitesolide machine`, against a local fake of the Hetzner Cloud API
@@ -445,7 +445,7 @@ describe("machine create", () => {
     const [key] = fake.keys.filter((candidate) => candidate.name.startsWith("sitesolide-"));
     expect(key).toMatchObject({ name: "sitesolide-web", fingerprint: ED25519_MD5, public_key: ED25519, labels: { "managed-by": "sitesolide", "sitesolide-machine": "web" } });
     const firewall = fake.firewalls[0]!;
-    expect(firewall.name).toBe("web");
+    expect(firewall.name).toBe("sitesolide-web");
     expect(firewall.labels).toEqual({ "managed-by": "sitesolide", "sitesolide-machine": "web" });
     expect(firewall.rules).toEqual([
       { direction: "in", protocol: "tcp", port: "22", source_ips: ["0.0.0.0/0", "::/0"], description: "ssh" },
@@ -476,7 +476,7 @@ describe("machine create", () => {
     });
     expect(result.resources).toEqual([
       { kind: "ssh key", name: "sitesolide-web", id: String(key!.id), reused: false },
-      { kind: "firewall", name: "web", id: String(firewall.id), reused: false },
+      { kind: "firewall", name: "sitesolide-web", id: String(firewall.id), reused: false },
       { kind: "server", name: "web", id: String(fake.servers[0]!.id), reused: false },
     ]);
     expect(fake.servers[0]!.backup_window).not.toBeNull();
@@ -522,16 +522,16 @@ describe("machine create", () => {
 
   test("a firewall sitesolide created is reused, found on any page", async () => {
     for (const name of ["a", "b", "c", "d"]) fake.addFirewall({ name });
-    fake.addFirewall({ name: "web", labels: { "managed-by": "sitesolide", "sitesolide-machine": "web" } });
+    fake.addFirewall({ name: "sitesolide-web", labels: { "managed-by": "sitesolide", "sitesolide-machine": "web" }, rules: firewallRules(WEB_SERVER) });
     resultOf(await run(CREATE));
     expect(writes()).not.toContain("POST /firewalls");
     expect(fake.requests.filter((request) => request.path === "/firewalls")).toHaveLength(3);
   });
 
   test("a firewall of that name sitesolide did not create stops everything before the server", async () => {
-    fake.addFirewall({ name: "web" });
+    fake.addFirewall({ name: "sitesolide-web" });
     const refusal = errorOf(await run(CREATE));
-    expect(refusal.message).toBe("a firewall named web exists in the project, and sitesolide did not create it");
+    expect(refusal.message).toBe("a firewall named sitesolide-web exists in the project, and sitesolide did not create it");
     expect(refusal.hint).toBe(REMOTE_HINTS["firewall-taken"]!);
     expect(writes()).toEqual([]);
   });
@@ -610,7 +610,7 @@ describe("machine create", () => {
       "cx33     4 vCPU, 8 GB RAM, 80 GB disk, x86, 5.49 EUR a month before VAT",
       "ccx13    2 vCPU, 8 GB RAM, 80 GB disk, x86, 12.49 EUR a month before VAT",
       "or try another --location",
-      "deleted the firewall web this run had created",
+      "deleted the firewall sitesolide-web this run had created",
       "deleted the SSH key sitesolide-web this run had created",
     ]);
     expect(refusal.hint).toBe(REMOTE_HINTS["type-unavailable"]!);
@@ -637,14 +637,14 @@ describe("machine create", () => {
     fake.fail("POST", /^\/servers$/, 422, "invalid_input", "invalid input in field 'image'", { details: { fields: [{ name: "image", messages: ["image not found"] }] } });
     const image = errorOf(await run(CREATE));
     expect(image.hint).toBe(REMOTE_HINTS["provider-invalid"]!);
-    expect(image.details).toEqual(["image: image not found", "deleted the firewall web this run had created", "deleted the SSH key sitesolide-web this run had created"]);
+    expect(image.details).toEqual(["image: image not found", "deleted the firewall sitesolide-web this run had created", "deleted the SSH key sitesolide-web this run had created"]);
   });
 
   test("an order whose outcome is unknown undoes nothing: a server may be booting behind it", async () => {
     fake.fail("POST", /^\/servers$/, 502, "", "bad gateway");
     const refusal = errorOf(await run(CREATE));
     expect(refusal.details).toContain("the order's outcome is unknown: nothing was undone, and the same command run again picks up what was made");
-    expect(fake.firewalls.map((firewall) => firewall.name)).toEqual(["web"]);
+    expect(fake.firewalls.map((firewall) => firewall.name)).toEqual(["sitesolide-web"]);
   });
 
   test("a volume or a floating IP attached by hand is said kept and billed after a destroy", async () => {
@@ -655,7 +655,7 @@ describe("machine create", () => {
 
   test("what an earlier run made, or the project held, is never undone", async () => {
     fake.addKey({ name: "laptop", public_key: ED25519 });
-    const firewall = fake.addFirewall({ name: "web", labels: { "managed-by": "sitesolide", "sitesolide-machine": "web" } });
+    const firewall = fake.addFirewall({ name: "sitesolide-web", labels: { "managed-by": "sitesolide", "sitesolide-machine": "web" }, rules: firewallRules(WEB_SERVER) });
     fake.fail("POST", /^\/servers$/, 412, "resource_unavailable", "not available");
     const refusal = errorOf(await run(CREATE));
     expect(refusal.details.at(-1)).toBe("nothing had been created yet");
@@ -668,7 +668,7 @@ describe("machine create", () => {
     fake.fail("POST", /^\/servers$/, 412, "resource_unavailable", "not available");
     fake.fail("DELETE", /^\/firewalls\//, 500, "server_error", "internal error");
     const refusal = errorOf(await run(CREATE));
-    expect(refusal.details.slice(-2)).toEqual(["left the firewall web: the next run finds it and reuses it", "deleted the SSH key sitesolide-web this run had created"]);
+    expect(refusal.details.slice(-2)).toEqual(["left the firewall sitesolide-web: the next run finds it and reuses it", "deleted the SSH key sitesolide-web this run had created"]);
     expect(fake.firewalls).toHaveLength(1);
 
     // The next run, with a type that can be had, reuses it.
@@ -1110,9 +1110,9 @@ describe("bin/sitesolide.ts machine", () => {
 
 describe("the hints and the documentation", () => {
   test("every code machine.ts and the providers report has a hint", () => {
-    const providers = readdirSync(join(REPO, "bin", "cli", "providers")).map((file) => `providers/${file}`);
-    const sources = ["machine.ts", "wizard.ts", ...providers].map((file) => readFileSync(join(REPO, "bin", "cli", file), "utf8"));
-    const codes = new Set(sources.flatMap((source) => [...source.matchAll(/error: "([a-z0-9-]+)"/g)].map((match) => match[1]!)));
+    // The providers' codes are the package's list, which clouds/tests checks every provider against.
+    const sources = ["machine.ts", "wizard.ts"].map((file) => readFileSync(join(REPO, "bin", "cli", file), "utf8"));
+    const codes = new Set([...FAILURE_CODES, ...sources.flatMap((source) => [...source.matchAll(/error: "([a-z0-9-]+)"/g)].map((match) => match[1]!))]);
     expect(codes.size).toBeGreaterThan(25);
     expect([...codes].filter((code) => !Object.hasOwn(REMOTE_HINTS, code))).toEqual([]);
     // A destroy is the owner's decision, said in the hints an agent reads.

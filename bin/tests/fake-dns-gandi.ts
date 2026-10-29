@@ -24,7 +24,7 @@
  * `fail()` makes the next matching request answer something else instead.
  */
 import type { FakeDns } from "./fake-dns";
-import type { FakeRequest } from "./fake-provider";
+import type { FakeRequest } from "../../clouds/fakes/fake-provider";
 
 /** Forty hexadecimal digits, the shape of the token in Gandi's own example. */
 export const FAKE_TOKEN = "0123456789abcdef0123456789abcdef01234567";

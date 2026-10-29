@@ -26,7 +26,7 @@
  * followed a link as given, fails a test.
  */
 import type { FakeDns } from "./fake-dns";
-import type { FakeRequest } from "./fake-provider";
+import type { FakeRequest } from "../../clouds/fakes/fake-provider";
 
 /** A personal access token's shape: `dop_v1_` and 64 hexadecimal digits. */
 export const FAKE_TOKEN = `dop_v1_${"5e1f0d2c3b4a6978".repeat(4)}`;

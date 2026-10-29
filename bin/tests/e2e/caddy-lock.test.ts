@@ -95,6 +95,9 @@ function testRepo(blocks: Manifest[]): string {
   for (const name of ["cli", "config.sh", "deploy-caddy.sh", "portal-guard.ts", "generate-domains.sh", "deploy-gatekeeper.sh"]) {
     symlinkSync(join(REPO, "bin", name), join(repo, "bin", name));
   }
+  // The copied sitesolide.ts imports the providers' package from beside bin/, as the
+  // repository holds it.
+  symlinkSync(join(REPO, "clouds"), join(repo, "clouds"));
   mkdirSync(join(repo, "infra", "caddy"), { recursive: true });
   writeFileSync(join(repo, "infra", "caddy", "Caddyfile"), CADDYFILE);
   mkdirSync(join(repo, "blocks"));

@@ -219,7 +219,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
  * bin/cli/access.ts this table lacks, and on one of bin/cli/remote.ts, whose
  * `secrets` and `restart` add their own. So does `machine`, which talks to a cloud provider's API rather
  * than to the dashboard: bin/tests/cli-machine.test.ts fails on a code of
- * bin/cli/machine.ts or bin/cli/providers/ this table lacks.
+ * bin/cli/machine.ts or of FAILURE_CODES (clouds/src/provider.ts) this table lacks.
  */
 export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   // --- refused before a request leaves
@@ -335,6 +335,7 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "provider-not-found": "a resource disappeared during the run: run `sitesolide machine list --provider <provider>`, then the same command again",
   "no-default-vpc": "the region has no default VPC, or it has no default subnet: the owner creates them in the AWS console (VPC, Your VPCs, Actions, Create default VPC), then runs the same command again, or picks another --location; never create network resources in the account yourself",
   "no-default-network": "the project or region has no default network for the machine: its owner creates one as `details` says, or picks another --location or project, then runs the same command again; never create or change a network yourself",
+  "provider-unsupported": "the provider cannot do what the command asked of it, said in the message: nothing was created; run the command without that option or pick another --provider, never work around it by hand",
   "provider-api-disabled": "the provider's API is not enabled for the account or project the message names: its owner enables it as `details` says, waits a few minutes, then runs the same command again; never enable it with other credentials",
   "invalid-image": "pass --image debian-13, the default, or an image of that location with the type's architecture; sitesolide setup is only verified on Debian 13",
   "machine-ambiguous": "several machines sitesolide created carry that name: nothing was changed; the owner removes the extra one from the provider's console; never pick one yourself",

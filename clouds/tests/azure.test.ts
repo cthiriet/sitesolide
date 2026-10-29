@@ -1,5 +1,4 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { REMOTE_HINTS } from "../cli/hints";
 import {
   AZURE,
   DEFAULTS,
@@ -16,14 +15,14 @@ import {
   WAITS,
   type AzureSku,
   type RetailPrice,
-} from "../cli/providers/azure";
-import { ProviderError, type Clock, type CreateRequest, type Provider, type ProviderContext, type PublicKey, type Report, type Workstation } from "../cli/providers/provider";
-import { CLI_TOKEN, CLIENT, CLIENT_SECRET, createFake, SUBSCRIPTION, TENANT, type FakeAzure } from "./fake-azure";
+} from "../src/azure";
+import { FAILURE_CODES, ownerNamed, ProviderError, WEB_SERVER, type Clock, type CreateRequest, type Provider, type ProviderContext, type PublicKey, type Report, type Workstation } from "../src/provider";
+import { CLI_TOKEN, CLIENT, CLIENT_SECRET, createFake, SUBSCRIPTION, TENANT, type FakeAzure } from "../fakes/azure";
 
 /**
  * The Azure provider, through `AZURE.open(...)`, against a local fake of
  * Microsoft Entra, Resource Manager and the retail price list
- * (fake-azure.ts): the real ones are never called. The clock does not wait.
+ * (fakes/azure.ts): the real ones are never called. The clock does not wait.
  *
  * Whatever the path, neither the client secret nor a token may appear in a
  * URL, a line reported, or a refusal: every run of this file adds what it
@@ -54,6 +53,9 @@ function rsaBlob(bits: number): string {
 }
 
 let fake: FakeAzure;
+/** The owner every test opens the provider for, unless it says another: its expectations are sitesolide's names. */
+const SITESOLIDE = ownerNamed("sitesolide");
+const DEVBOX = ownerNamed("devbox");
 /** Everything reported and refused, read by the last test. */
 const printed: string[] = [];
 /** Every token the fake handed out, across resets, and every value given to `context.secret`. */
@@ -87,7 +89,7 @@ function credentialsOf(environment: Record<string, string>): Record<string, stri
 }
 
 function open(environment: Record<string, string> = fake.environment, extra: Partial<ProviderContext> = {}): Provider {
-  return AZURE.open({ credentials: credentialsOf(environment), environment, fetcher: fetch, clock: fakeClock(), secret: (value) => void scrubbed.add(value), ...extra });
+  return AZURE.open({ owner: SITESOLIDE, credentials: credentialsOf(environment), environment, fetcher: fetch, clock: fakeClock(), secret: (value) => void scrubbed.add(value), ...extra });
 }
 
 /** The service principal's path, through the CLI's token instead. */
@@ -97,7 +99,7 @@ function cliEnvironment(): Record<string, string> {
 }
 
 function request(extra: Partial<CreateRequest> = {}): CreateRequest {
-  return { name: "web", type: DEFAULTS.type, location: DEFAULTS.location, image: DEFAULTS.image, backups: false, key: ED25519, ...extra };
+  return { name: "web", type: DEFAULTS.type, location: DEFAULTS.location, image: DEFAULTS.image, backups: false, key: ED25519, inbound: WEB_SERVER, ...extra };
 }
 
 type Outcome<T> = { value: T | null; error: ProviderError | null; lines: string[] };
@@ -121,7 +123,7 @@ function create(extra: Partial<CreateRequest> = {}, provider = open()) {
 
 function refused<T>(outcome: Outcome<T>): ProviderError {
   expect(outcome.error).not.toBeNull();
-  expect(Object.hasOwn(REMOTE_HINTS, outcome.error!.failure.error)).toBe(true);
+  expect(FAILURE_CODES.has(outcome.error!.failure.error)).toBe(true);
   return outcome.error!;
 }
 
@@ -158,7 +160,7 @@ describe("the addresses", () => {
 describe("the credentials", () => {
   const opening = (credentials: Record<string, string>) => {
     try {
-      AZURE.open({ credentials, environment: fake.environment, fetcher: fetch, clock: fakeClock(), secret: () => {} });
+      AZURE.open({ owner: SITESOLIDE, credentials, environment: fake.environment, fetcher: fetch, clock: fakeClock(), secret: () => {} });
       return null;
     } catch (error) {
       return (error as ProviderError).failure;
@@ -252,7 +254,7 @@ describe("the API's errors", () => {
   const said = (status: number, code: string, message = `the API says ${code}`, headers: Record<string, string> = {}) =>
     failureFrom(status, { error: { code, message } }, new Headers(headers), "create the virtual machine web").failure;
 
-  test("each code gets its own, which hints.ts knows", () => {
+  test("each code gets its own, one of FAILURE_CODES", () => {
     const cases: [number, string, string, string][] = [
       [401, "InvalidAuthenticationToken", "The access token is invalid.", "provider-unauthenticated"],
       [401, "ExpiredAuthenticationToken", "The access token expiry UTC time is earlier than current UTC time.", "provider-unauthenticated"],
@@ -275,7 +277,7 @@ describe("the API's errors", () => {
     for (const [status, code, message, ours] of cases) {
       const failure = said(status, code, message);
       expect({ status, code, ours: failure.error }).toEqual({ status, code, ours });
-      expect(Object.hasOwn(REMOTE_HINTS, failure.error)).toBe(true);
+      expect(FAILURE_CODES.has(failure.error)).toBe(true);
     }
   });
 
@@ -1128,6 +1130,86 @@ describe("the wizard's lists", () => {
     }
     expect(failure?.failure.error).toBe("invalid-location");
   });
+});
+
+// --- two owners ---------------------------------------------------------------------------------
+
+describe("two owners in one subscription", () => {
+  const devbox = () => open(fake.environment, { owner: DEVBOX });
+  const DEVBOX_TAGS = { "managed-by": "devbox", "devbox-machine": "web" };
+
+  test("a machine of one name for each owner, side by side in two groups, each listed by its owner alone", async () => {
+    fake.addMachine("web");
+    const outcome = await create({}, devbox());
+    expect(outcome.error).toBeNull();
+    expect(fake.groups.get("devbox-web")).toMatchObject({ tags: DEVBOX_TAGS });
+    expect(writes().length).toBeGreaterThan(0);
+    expect(writes().every((write) => /\/resource[gG]roups\/devbox-web(\/|$)/.test(write))).toBe(true);
+    const vm = fake.requests.find((entry) => entry.method === "PUT" && entry.path.endsWith("/devbox-web/providers/Microsoft.Compute/virtualMachines/web"))!.body as { tags: unknown; properties: { osProfile: { adminUsername: string } } };
+    expect(vm.tags).toEqual(DEVBOX_TAGS);
+    expect(vm.properties.osProfile.adminUsername).toBe("devbox");
+    expect(outcome.value!.machine).toMatchObject({ id: "devbox-web", managed: true, labels: DEVBOX_TAGS, login: "devbox" });
+
+    expect((await devbox().list()).map((machine) => machine.id)).toEqual(["devbox-web"]);
+    expect((await open().list()).map((machine) => machine.id)).toEqual(["sitesolide-web"]);
+    const filters = fake.requests.filter((entry) => short(entry.path) === "/resourcegroups").map((entry) => new URLSearchParams(entry.search).get("$filter"));
+    expect(new Set(filters)).toEqual(new Set(["tagName eq 'managed-by' and tagValue eq 'devbox'", "tagName eq 'managed-by' and tagValue eq 'sitesolide'"]));
+  });
+
+  test("another owner's machine is out of reach: not listed, not found, not destroyed", async () => {
+    fake.addMachine("web");
+    const provider = devbox();
+    expect(await provider.list()).toEqual([]);
+    expect(await provider.find("web")).toBeNull();
+    // Handed the other owner's machine, it looks for a group of its own, which is not there.
+    const theirs = (await open().find("web"))!;
+    const outcome = await attempt((report) => provider.destroy(theirs, { deleteKey: true }, report));
+    expect(outcome.value).toEqual({ removed: [], kept: [] });
+    expect(writes()).toEqual([]);
+    expect(fake.groups.has("sitesolide-web")).toBe(true);
+  });
+
+  test("a group of its name that another owner tagged is never adopted, changed nor deleted", async () => {
+    fake.addGroup("devbox-web", { tags: TAGS });
+    const error = refused(await create({}, devbox()));
+    expect(error.failure).toMatchObject({ error: "machine-exists", message: "a resource group named devbox-web exists in the subscription, and devbox did not create it for web" });
+    expect(error.failure.details?.[1]).toBe("it lacks the tags managed-by=devbox and devbox-machine=web: nothing was created, nothing was changed");
+    const provider = devbox();
+    expect(await provider.list()).toEqual([]);
+    const found = (await provider.find("web"))!;
+    expect(found).toMatchObject({ id: "devbox-web", managed: false });
+    const destroyed = refused(await attempt((report) => provider.destroy({ ...found, managed: true }, { deleteKey: false }, report)));
+    expect(destroyed.failure).toMatchObject({ error: "machine-not-managed", message: "the resource group devbox-web was not created by devbox for web" });
+    expect(writes()).toEqual([]);
+    expect(fake.groups.get("devbox-web")?.tags).toEqual(TAGS);
+  });
+
+  test("an owner whose name Azure refuses for an account is refused before any request", async () => {
+    const error = refused(await create({}, open(fake.environment, { owner: ownerNamed("admin") })));
+    expect(error.failure).toMatchObject({ error: "provider-unsupported", message: "Azure refuses admin as the name of the machine's account, which is the owner's name" });
+    expect(fake.requests).toEqual([]);
+  });
+});
+
+// --- what this provider is not asked --------------------------------------------------------------
+
+describe("what Azure is not asked here is refused before any request", () => {
+  const cases: [string, Partial<CreateRequest>, string][] = [
+    ["no key", { key: null }, "no-ssh-key"],
+    ["a user-data", { userData: "#cloud-config\n" }, "provider-unsupported"],
+    ["inbound rules other than a web server's", { inbound: [{ protocol: "tcp", port: 22, sources: ["0.0.0.0/0", "::/0"] }] }, "provider-unsupported"],
+    ["the size of the disk", { disk: { gb: 50 } }, "provider-unsupported"],
+    ["nested virtualization", { nestedVirtualization: true }, "provider-unsupported"],
+    ["the account the key logs into", { login: "dev" }, "provider-unsupported"],
+  ];
+  for (const [what, extra, code] of cases) {
+    test(what, async () => {
+      const error = refused(await create(extra));
+      expect(error.failure.error).toBe(code);
+      expect(error.failure.details).toContain("nothing was created");
+      expect(fake.requests).toEqual([]);
+    });
+  }
 });
 
 // --- the credentials never leave their headers --------------------------------------------------

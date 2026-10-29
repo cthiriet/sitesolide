@@ -40,7 +40,7 @@
  * rate limit: what decides is `code`, never the message, which is only
  * quoted, scrubbed of both keys.
  */
-import { apiAddress } from "../providers/provider";
+import { apiAddress } from "../../../clouds/src/provider";
 import { DnsError, zoneCandidates, type DnsContext, type DnsEntry, type DnsRecord, type ZoneApi, type ZoneRef } from "./dns";
 
 export const DEFAULT_API = "https://api.porkbun.com/api/json/v3";

@@ -1,8 +1,8 @@
 /**
  * A local stand-in for Azure, on a random port of the loopback: Microsoft
  * Entra's token endpoint, Resource Manager, and the public retail price list,
- * all three at one address. The tests of bin/cli/providers/azure.ts never
- * reach the real ones.
+ * all three at one address. The tests of src/azure.ts never reach the real
+ * ones.
  *
  * It keeps a subscription in memory (resource groups, the resources in them,
  * the registration of resource providers, the sizes sold, the quotas, the
@@ -743,10 +743,11 @@ export function createFakeAzure(options: { pageSize?: number } = {}) {
       return group;
     },
     addResource,
-    /** A whole machine sitesolide created earlier, every resource tagged, running. */
-    addMachine(name: string, extra: { location?: string; size?: string; power?: string; diskTagged?: boolean } = {}): void {
-      const tags = { "managed-by": "sitesolide", "sitesolide-machine": name };
-      const group = `sitesolide-${name}`;
+    /** A whole machine an owner, sitesolide unless said, created earlier, every resource tagged, running. */
+    addMachine(name: string, extra: { owner?: string; location?: string; size?: string; power?: string; diskTagged?: boolean } = {}): void {
+      const owner = extra.owner ?? "sitesolide";
+      const tags = { "managed-by": owner, [`${owner}-machine`]: name };
+      const group = `${owner}-${name}`;
       groups.set(group.toLowerCase(), { name: group, location: extra.location ?? "germanywestcentral", tags, state: "Succeeded" });
       const ip = `203.0.113.${serial++}`;
       addResource(group, "Microsoft.Network", "networkSecurityGroups", `${name}-nsg`, { tags });

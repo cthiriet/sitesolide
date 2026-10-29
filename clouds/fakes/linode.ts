@@ -3,7 +3,7 @@
  * loopback: the tests of the Linode provider never reach the real one.
  *
  * It keeps an account in memory (Linodes, Cloud Firewalls, the account's
- * interface setting) and answers the calls bin/cli/providers/linode.ts makes,
+ * interface setting) and answers the calls src/linode.ts makes,
  * in the shapes of https://techdocs.akamai.com/linode-api/reference/api: the
  * `{"errors": [{"reason", "field"}]}` errors, `data`, `page`, `pages` and
  * `results` on every list, filters in the `X-Filter` header, labels unique in
@@ -134,7 +134,7 @@ function error(status: number, reason: string, field?: string, headers: Record<s
   return Response.json({ errors: [{ reason, ...(field === undefined ? {} : { field }) }] }, { status, headers });
 }
 
-/** `{"label": "web"}` and `{"tags": "managed-by:sitesolide"}`: as much of X-Filter as the client uses. */
+/** `{"label": "web"}` and `{"tags": "managed-by:<owner>"}`: as much of X-Filter as the client uses. */
 function matches(item: { label: string; tags: string[] }, filter: Record<string, unknown> | null): boolean {
   if (filter === null) return true;
   if (typeof filter.label === "string" && item.label !== filter.label) return false;

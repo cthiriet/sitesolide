@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { machine, PROVIDERS, type MachineDependencies } from "../cli/machine";
 import type { OutputEvent } from "../cli/output";
-import type { ProviderEntry, Workstation } from "../cli/providers/provider";
+import type { ProviderEntry, Workstation } from "../../clouds/src/provider";
 import { eventOutput } from "../cli/remote";
-import type { FakeProvider } from "./fake-provider";
+import type { FakeProvider } from "../../clouds/fakes/fake-provider";
 
 /**
  * `sitesolide machine create`, `list` and `destroy` through the command
  * itself, for every provider but Hetzner, which cli-machine.test.ts covers in
- * depth: each against its own local fake (bin/tests/fake-<provider>.ts). What
+ * depth: each against its own local fake (clouds/fakes/<provider>.ts). What
  * is checked is what the command promises whatever the cloud: the order, the
  * labels, the waits, the account `next` names, a second run that writes
  * nothing, a destroy that leaves nothing of sitesolide's, and credentials that
@@ -47,7 +47,7 @@ for (const name of NAMES) {
 
     beforeAll(async () => {
       entry = PROVIDERS[name]!;
-      fake = ((await import(`./fake-${name}`)) as { createFake: () => FakeProvider }).createFake();
+      fake = ((await import(`../../clouds/fakes/${name}`)) as { createFake: () => FakeProvider }).createFake();
     });
     afterAll(() => {
       fake.stop();

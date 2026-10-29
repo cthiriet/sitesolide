@@ -9,7 +9,7 @@
  * included. A request it does not recognise answers 404 and is recorded all
  * the same.
  */
-import type { FakeProvider } from "./fake-provider";
+import type { FakeProvider } from "../../clouds/fakes/fake-provider";
 
 export type FakeDns = FakeProvider & {
   /** The zone the fake holds, which the credentials of `environment` may edit. */

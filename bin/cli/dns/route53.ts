@@ -50,9 +50,9 @@
  * text comes back from outside. `SITESOLIDE_ROUTE53_DNS_API` points the module
  * at another address, a local fake in the tests.
  */
-import { signRequest, uriEncode, type AwsCredentials } from "../providers/aws-sigv4";
-import { at, escapeXml, parseXml, textAt, XmlError, type XmlElement } from "../providers/aws-xml";
-import { apiAddress, type Clock, type Fetch } from "../providers/provider";
+import { signRequest, uriEncode, type AwsCredentials } from "../../../clouds/src/aws-sigv4";
+import { at, escapeXml, parseXml, textAt, XmlError, type XmlElement } from "../../../clouds/src/aws-xml";
+import { apiAddress, type Clock, type Fetch } from "../../../clouds/src/provider";
 import { DnsError, zoneCandidates, type DnsContext, type DnsEntry, type DnsFailure, type DnsRecord, type ZoneApi, type ZoneRef } from "./dns";
 
 export const ACCESS_KEY_VARIABLE = "SITESOLIDE_DNS_ROUTE53_ACCESS_KEY_ID";

@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { DnsError, detectDns, ensureZoneRecords, zoneRecords, type DnsContext, type ZoneApi } from "../cli/dns/dns";
 import { API_VARIABLE, DEFAULT_API, GANDI_DNS, parseRecordId, recordId, TOKEN_SHAPE, TOKEN_VARIABLE, TTL } from "../cli/dns/gandi";
-import { ProviderError } from "../cli/providers/provider";
+import { ProviderError } from "../../clouds/src/provider";
 import { tlsZoneContent } from "../cli/tls";
 import { createFakeGandi, FAKE_TOKEN, ZONE, type FakeGandi } from "./fake-dns-gandi";
 

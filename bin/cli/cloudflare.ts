@@ -29,7 +29,7 @@
  * `sites.example.com` and `*.sites.example.com` in that parent zone.
  */
 
-import { apiAddress } from "./providers/provider";
+import { apiAddress } from "../../clouds/src/provider";
 
 export const DEFAULT_CLOUDFLARE_API = "https://api.cloudflare.com/client/v4";
 export const CLOUDFLARE_API_VARIABLE = "SITESOLIDE_CLOUDFLARE_API";

@@ -276,7 +276,7 @@ address Google will give to someone else.
 `SITESOLIDE_GCP_API` points the command at another address than
 `https://compute.googleapis.com/compute/v1`, and `SITESOLIDE_GCP_OAUTH` at
 another token endpoint than `https://oauth2.googleapis.com/token`, for a local
-fake of both (`bin/tests/fake-gcp.ts`). The fake checks a service account's
+fake of both (`clouds/fakes/gcp.ts`). The fake checks a service account's
 JWT as Google does, its RS256 signature, scope, audience and lifetime. Each
 takes https, or http on the loopback only, so that the credentials never travel
 in the clear.

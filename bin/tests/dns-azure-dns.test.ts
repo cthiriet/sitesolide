@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { AZURE_DNS, API_VARIABLE, LOGIN_VARIABLE, TTL } from "../cli/dns/azure-dns";
 import { CLOUDFLARE } from "../cli/dns/cloudflare";
 import { detectDns, DnsError, ensureZoneRecords, zoneRecords, type DnsContext, type ZoneApi } from "../cli/dns/dns";
-import { ProviderError, type Clock } from "../cli/providers/provider";
+import { ProviderError, type Clock } from "../../clouds/src/provider";
 import { CLIENT, CLIENT_SECRET, createFake, GROUP, SUBSCRIPTION, TENANT, type FakeAzureDns } from "./fake-dns-azure-dns";
 
 /**

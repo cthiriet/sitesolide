@@ -5,7 +5,7 @@
  *
  * It keeps a project in memory (zones, machine types, the default network and
  * its four pre-populated firewall rules, addresses, instances, operations)
- * and answers the calls bin/cli/providers/gcp.ts makes, in the shapes of
+ * and answers the calls clouds/src/gcp.ts makes, in the shapes of
  * https://cloud.google.com/compute/docs/reference/rest/v1: errors as
  * `{"error": {"code", "message", "errors": [{"domain", "reason", "message"}]}}`,
  * `items` and `nextPageToken` on every list, `items` keyed by scope on an
@@ -15,7 +15,9 @@
  * up at once, PROVISIONING, and is gone again if its operation fails.
  *
  * Address labels are ignored on insert by default: the reference says they
- * are set through setLabels, which the provider must then call.
+ * are set through setLabels, which the provider must then call. A firewall
+ * rule that mixes IPv4 and IPv6 sources is refused, as Google refuses it; so
+ * is nested virtualization outside the Intel series it is documented on.
  *
  * Lists come back `pageSize` items a page whatever `maxResults` asks, two by
  * default, so that a client that reads only the first page fails a test.
@@ -113,25 +115,39 @@ function typesOf(zoneName: string) {
   return MACHINE_TYPES.filter((item) => !item.name.startsWith("c4-") || zoneName.startsWith("europe-west4-")).map((item) => ({ ...item, zone: zoneName, selfLink: `${LINK}/projects/${FAKE_PROJECT}/zones/${zoneName}/machineTypes/${item.name}` }));
 }
 
-const image = (name: string, family: string, architecture: string) => ({
+const image = (project: string, name: string, family: string, architecture: string) => ({
   kind: "compute#image",
   id: String(4000 + name.length),
+  project,
   name,
   family,
   architecture,
   status: "READY",
   sourceType: "RAW",
   diskSizeGb: "10",
-  selfLink: `${LINK}/projects/debian-cloud/global/images/${name}`,
+  selfLink: `${LINK}/projects/${project}/global/images/${name}`,
 });
 
 export const IMAGES = [
-  image("debian-13-trixie-v20261014", "debian-13", "X86_64"),
-  image("debian-13-trixie-arm64-v20261014", "debian-13-arm64", "ARM64"),
-  image("debian-12-bookworm-v20261014", "debian-12", "X86_64"),
+  image("debian-cloud", "debian-13-trixie-v20261014", "debian-13", "X86_64"),
+  image("debian-cloud", "debian-13-trixie-arm64-v20261014", "debian-13-arm64", "ARM64"),
+  image("debian-cloud", "debian-12-bookworm-v20261014", "debian-12", "X86_64"),
+  image("ubuntu-os-cloud", "ubuntu-2404-noble-amd64-v20261015", "ubuntu-2404-lts-amd64", "X86_64"),
+  image("ubuntu-os-cloud", "ubuntu-2404-noble-arm64-v20261015", "ubuntu-2404-lts-arm64", "ARM64"),
 ];
 
+/** An image by its path: `projects/<project>/global/images/<name>`, or `.../family/<family>`, its latest. */
+const IMAGE_PATH = /^\/?projects\/([a-z0-9.:-]+)\/global\/images\/(family\/)?([a-z0-9-]+)$/;
+function imageAt(path: string) {
+  const match = IMAGE_PATH.exec(path);
+  if (match === null) return undefined;
+  return IMAGES.find((candidate) => candidate.project === match[1] && (match[2] === undefined ? candidate.name : candidate.family) === match[3]);
+}
+
 const HYPERDISK_ONLY = ["n4", "n4d", "n4a", "c4", "c4a", "c4d"];
+const DISK_TYPES = ["pd-standard", "pd-balanced", "pd-ssd", "pd-extreme", "hyperdisk-balanced", "hyperdisk-extreme", "hyperdisk-throughput"];
+/** The series the fake nests virtualization on: the Intel ones Google documents it for. */
+const NESTING = ["n1", "n2", "c2", "c3"];
 
 export type FakeFirewall = Json & { id: string; name: string; description?: string; network: string; targetTags?: string[]; priority: number };
 export type FakeAddress = Json & {
@@ -160,6 +176,7 @@ export type FakeInstance = {
   network: string;
   subnetwork: string | null;
   disk: { sourceImage: string; diskType: string; diskSizeGb: string; autoDelete: boolean; labels: Labels };
+  nestedVirtualization?: boolean;
   description?: string;
   stagingReads: number;
   /** Disks a person attached besides the boot disk. */
@@ -402,6 +419,7 @@ export function createFakeGcp(options: { pageSize?: number; operationPolls?: num
     selfLink: instanceLink(instance),
     scheduling: { onHostMaintenance: "MIGRATE", automaticRestart: true, preemptible: false, provisioningModel: "STANDARD" },
     cpuPlatform: "Intel Broadwell",
+    ...(instance.nestedVirtualization === true ? { advancedMachineFeatures: { enableNestedVirtualization: true } } : {}),
     labels: instance.labels,
     labelFingerprint: fingerprint(instance.labels),
     startRestricted: false,
@@ -475,11 +493,10 @@ export function createFakeGcp(options: { pageSize?: number; operationPolls?: num
       return googleError(injected.status, injected.reason, injected.message, injected.headers ?? {}, injected.extra ?? {});
     }
 
-    // --- Google's images
-    const imagePath = /^\/projects\/debian-cloud\/global\/images\/(family\/)?([a-z0-9-]+)$/.exec(path);
-    if (method === "GET" && imagePath !== null) {
-      const found = IMAGES.find((candidate) => (imagePath[1] === undefined ? candidate.name : candidate.family) === imagePath[2]);
-      return found === undefined ? googleError(404, "notFound", `The resource 'projects/debian-cloud/global/images/${imagePath[1] ?? ""}${imagePath[2]}' was not found`) : Response.json(found);
+    // --- Google's images, in its image projects
+    if (method === "GET" && IMAGE_PATH.test(path)) {
+      const found = imageAt(path);
+      return found === undefined ? googleError(404, "notFound", `The resource '${path.slice(1)}' was not found`) : Response.json(found);
     }
 
     const prefix = `/projects/${FAKE_PROJECT}`;
@@ -501,6 +518,11 @@ export function createFakeGcp(options: { pageSize?: number; operationPolls?: num
     if (method === "GET" && (match = /^\/zones\/([a-z0-9-]+)\/machineTypes\/([a-z0-9-]+)$/.exec(rest)) !== null) {
       const found = ZONES.some((candidate) => candidate.name === match![1]) ? typesOf(match[1]!).find((candidate) => candidate.name === match![2]) : undefined;
       return found === undefined ? notFound(rest) : Response.json(found);
+    }
+
+    if (method === "GET" && (match = /^\/zones\/([a-z0-9-]+)\/diskTypes\/([a-z0-9-]+)$/.exec(rest)) !== null) {
+      if (!ZONES.some((candidate) => candidate.name === match![1]) || !DISK_TYPES.includes(match[2]!)) return notFound(rest);
+      return Response.json({ kind: "compute#diskType", name: match[2], zone: `${projectLink}/zones/${match[1]}`, validDiskSize: "10GB-65536GB", defaultDiskSizeGb: "100", selfLink: `${projectLink}${rest}` });
     }
 
     // --- the network
@@ -536,8 +558,10 @@ export function createFakeGcp(options: { pageSize?: number; operationPolls?: num
       }
     }
     if (method === "POST" && rest === "/global/firewalls") {
-      const input = (body ?? {}) as Json & { name?: string; network?: string; targetTags?: string[]; priority?: number };
+      const input = (body ?? {}) as Json & { name?: string; network?: string; targetTags?: string[]; priority?: number; sourceRanges?: string[] };
       if (typeof input.name !== "string" || !NAME.test(input.name)) return googleError(400, "invalid", `Invalid value for field 'resource.name': '${String(input.name)}'. Must be a match of regex '(?:[a-z](?:[-a-z0-9]{0,61}[a-z0-9])?)'`);
+      const families = new Set((input.sourceRanges ?? []).map((range) => (range.includes(":") ? 6 : 4)));
+      if (families.size > 1) return googleError(400, "invalid", "Invalid value for field 'resource.sourceRanges': IPv4 and IPv6 source ranges cannot be mixed in a single rule.");
       if (firewalls.some((candidate) => candidate.name === input.name)) return googleError(409, "alreadyExists", `The resource 'projects/${FAKE_PROJECT}/global/firewalls/${input.name}' already exists`);
       if (input.network !== networkLink && input.network !== "global/networks/default") return googleError(400, "invalid", `Invalid value for field 'resource.network': '${String(input.network)}'. The referenced network resource cannot be found.`);
       const id = String(nextId++);
@@ -659,16 +683,22 @@ export function createFakeGcp(options: { pageSize?: number; operationPolls?: num
     const disks = input.disks as { boot?: boolean; autoDelete?: boolean; initializeParams?: { sourceImage?: string; diskSizeGb?: string; diskType?: string; labels?: Labels } }[] | undefined;
     const boot = disks?.[0];
     if (disks?.length !== 1 || boot?.boot !== true) return invalid("disks", "exactly one boot disk is expected by this fake");
-    const source = /^projects\/debian-cloud\/global\/images\/(family\/)?([a-z0-9-]+)$/.exec(boot.initializeParams?.sourceImage ?? "");
-    const sourceImage = source === null ? undefined : IMAGES.find((candidate) => (source[1] === undefined ? candidate.name : candidate.family) === source[2]);
+    const sourceImage = imageAt(boot.initializeParams?.sourceImage ?? "");
     if (sourceImage === undefined) return invalid("disks[0].initializeParams.sourceImage", `'${String(boot.initializeParams?.sourceImage)}'. The referenced image resource cannot be found.`);
     if (sourceImage.architecture !== machineType.architecture) return invalid("disks[0].initializeParams.sourceImage", `the image's architecture ${sourceImage.architecture} does not match the machine type's ${machineType.architecture}.`);
     const diskType = boot.initializeParams?.diskType ?? "";
-    if (!diskType.startsWith(`zones/${zoneName}/diskTypes/`)) return invalid("disks[0].initializeParams.diskType", `'${diskType}'.`);
-    const series = typeName.split("-")[0]!;
     const diskName = diskType.split("/").pop()!;
-    if (HYPERDISK_ONLY.includes(series) !== (diskName === "hyperdisk-balanced")) {
+    if (!diskType.startsWith(`zones/${zoneName}/diskTypes/`) || !DISK_TYPES.includes(diskName)) return invalid("disks[0].initializeParams.diskType", `'${diskType}'.`);
+    const series = typeName.split("-")[0]!;
+    if (HYPERDISK_ONLY.includes(series) !== diskName.startsWith("hyperdisk-")) {
       return googleError(400, "invalid", `[${diskName}] disk type cannot be used by [${typeName}] machine type.`);
+    }
+    if (Number(boot.initializeParams?.diskSizeGb ?? sourceImage.diskSizeGb) < Number(sourceImage.diskSizeGb)) {
+      return invalid("disks[0].initializeParams.diskSizeGb", `Requested disk size cannot be smaller than the image size (${sourceImage.diskSizeGb} GB)`);
+    }
+    const nested = (input.advancedMachineFeatures as { enableNestedVirtualization?: boolean } | undefined)?.enableNestedVirtualization === true;
+    if (nested && !NESTING.includes(series)) {
+      return invalid("advancedMachineFeatures.enableNestedVirtualization", `'true'. Nested virtualization is not supported for machine type '${typeName}'.`);
     }
 
     const nic = (input.networkInterfaces as { network?: string; subnetwork?: string; accessConfigs?: { type?: string; natIP?: string; networkTier?: string }[] }[] | undefined)?.[0];
@@ -698,6 +728,7 @@ export function createFakeGcp(options: { pageSize?: number; operationPolls?: num
       networkTier: address.networkTier,
       network: networkLink,
       subnetwork: nic.subnetwork ?? null,
+      ...(nested ? { nestedVirtualization: true } : {}),
       disk: {
         sourceImage: boot.initializeParams?.sourceImage ?? "",
         diskType,
@@ -777,7 +808,8 @@ export function createFakeGcp(options: { pageSize?: number; operationPolls?: num
         priority: 1000,
         direction: "INGRESS",
         sourceRanges: ["0.0.0.0/0"],
-        allowed: [{ IPProtocol: "tcp", ports: ["8080"] }],
+        // A rule allows or denies, never both.
+        ...(input.denied === undefined ? { allowed: [{ IPProtocol: "tcp", ports: ["8080"] }] } : {}),
         selfLink: `${projectLink}/global/firewalls/${input.name}`,
         ...input,
       };

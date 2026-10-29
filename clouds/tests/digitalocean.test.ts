@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { REMOTE_HINTS } from "../cli/hints";
 import {
   DEFAULTS,
   DIGITALOCEAN,
@@ -13,14 +12,15 @@ import {
   refusesTheOffer,
   TOKEN_SHAPE,
   WAITS,
-} from "../cli/providers/digitalocean";
-import { ProviderError, type CreateRequest, type Machine, type ProviderContext, type PublicKey, type Workstation } from "../cli/providers/provider";
-import { createFake, createFakeDigitalOcean, FAKE_TOKEN, LINK_ORIGIN, type FakeDigitalOcean, type FakeDroplet } from "./fake-digitalocean";
+} from "../src/digitalocean";
+import { FAILURE_CODES, ownerNamed, ProviderError, WEB_SERVER, type CreateRequest, type Machine, type ProviderContext, type PublicKey, type Workstation } from "../src/provider";
+import { createFake, createFakeDigitalOcean, FAKE_TOKEN, LINK_ORIGIN, type FakeDigitalOcean, type FakeDroplet } from "../fakes/digitalocean";
 
 /**
  * The DigitalOcean provider, through `DIGITALOCEAN.open(...)`, against a local
  * fake of its API (fake-digitalocean.ts): the real one is never called, and
- * the clock never waits.
+ * the clock never waits. It is opened for sitesolide unless a test says
+ * otherwise, so that every name and tag below reads as sitesolide's.
  *
  * Whatever the path, the token must never appear in a URL, a line reported or
  * a refusal: every line and every refusal of this file is kept in `printed`,
@@ -35,6 +35,9 @@ const KEY: PublicKey = {
   comment: "ada@workstation.test-zone.invalid",
   fingerprint: "a4:46:30:d5:fd:7e:1a:77:e5:ad:8d:21:4f:9a:3e:9e",
 };
+
+const SITESOLIDE = ownerNamed("sitesolide");
+const DEVBOX = ownerNamed("devbox");
 
 /** Another key, for the account's other machines: any ed25519 blob of the right shape. */
 function otherKey(seed: number): string {
@@ -69,6 +72,7 @@ function fakeClock() {
 function open(extra: Partial<ProviderContext> = {}) {
   const clock = fakeClock();
   const provider = DIGITALOCEAN.open({
+    owner: SITESOLIDE,
     credentials: { DIGITALOCEAN_TOKEN: FAKE_TOKEN },
     environment: { SITESOLIDE_DIGITALOCEAN_API: fake.url },
     fetcher: (input, init) => {
@@ -83,7 +87,7 @@ function open(extra: Partial<ProviderContext> = {}) {
 }
 
 function request(overrides: Partial<CreateRequest> = {}): CreateRequest {
-  return { name: "web", type: DEFAULTS.type, location: DEFAULTS.location, image: DEFAULTS.image, backups: false, key: KEY, ...overrides };
+  return { name: "web", type: DEFAULTS.type, location: DEFAULTS.location, image: DEFAULTS.image, backups: false, key: KEY, inbound: WEB_SERVER, ...overrides };
 }
 
 function reporter() {
@@ -105,7 +109,7 @@ async function refusal(promise: Promise<unknown>): Promise<ProviderError> {
     expect(error).toBeInstanceOf(ProviderError);
     const failure = (error as ProviderError).failure;
     printed.push(failure.message, ...(failure.details ?? []));
-    expect(Object.hasOwn(REMOTE_HINTS, failure.error)).toBe(true);
+    expect(FAILURE_CODES.has(failure.error)).toBe(true);
     return error as ProviderError;
   }
   throw new Error("expected a refusal");
@@ -747,7 +751,7 @@ describe("the API's errors", () => {
   const said = (status: number, id: string, message = `the API says ${id}`, headers: Record<string, string> = {}) =>
     failureFrom(status, { id, message, request_id: "4d9d8375-3c56-4925-a3e7-eb137fed17e9" }, new Headers(headers), "create the droplet web", now).failure;
 
-  test("each status gets its own code, which hints.ts knows", () => {
+  test("each status gets its own code, one of FAILURE_CODES", () => {
     const cases: [number, string, string, string][] = [
       [400, "bad_request", "error parsing request body", "provider-invalid"],
       [401, "unauthorized", "Unable to authenticate you", "provider-unauthenticated"],
@@ -766,7 +770,7 @@ describe("the API's errors", () => {
     for (const [status, id, message, ours] of cases) {
       const failure = said(status, id, message);
       expect({ status, message, ours: failure.error }).toEqual({ status, message, ours });
-      expect(Object.hasOwn(REMOTE_HINTS, failure.error)).toBe(true);
+      expect(FAILURE_CODES.has(failure.error)).toBe(true);
       expect(failure.details).toContain("DigitalOcean's request id, for its support: 4d9d8375-3c56-4925-a3e7-eb137fed17e9");
     }
   });
@@ -862,6 +866,92 @@ describe("what the answers mean", () => {
   test("tags read as labels", () => {
     expect(labelsOfTags(["managed-by:sitesolide", "sitesolide-machine:web", "prod"])).toEqual({ "managed-by": "sitesolide", "sitesolide-machine": "web", prod: "" });
     expect(labelsOfTags(null)).toEqual({});
+  });
+});
+
+// --- what the request may ask ------------------------------------------------------------------------
+
+describe("what DigitalOcean is never asked", () => {
+  test("no key, a user-data, other firewall rules, a disk, nested virtualization or a login: refused before anything leaves", async () => {
+    // A machine of that name already there changes nothing: the request is refused before it is looked for.
+    earlierRun();
+    const cases: [Partial<CreateRequest>, string][] = [
+      [{ key: null }, "no-ssh-key"],
+      [{ userData: "#cloud-config\n" }, "provider-unsupported"],
+      [{ inbound: WEB_SERVER.filter((rule) => rule.protocol !== "icmp") }, "provider-unsupported"],
+      [{ inbound: [...WEB_SERVER, { protocol: "tcp", port: 8080, sources: ["0.0.0.0/0", "::/0"] }] }, "provider-unsupported"],
+      [{ inbound: WEB_SERVER.map((rule) => ({ ...rule, sources: ["198.51.100.0/24"] })) }, "provider-unsupported"],
+      [{ disk: { gb: 80 } }, "provider-unsupported"],
+      [{ nestedVirtualization: true }, "provider-unsupported"],
+      [{ login: "admin" }, "provider-unsupported"],
+    ];
+    for (const [overrides, code] of cases) {
+      const error = await refusal(open().provider.create(request(overrides), reporter().report));
+      expect({ overrides, code: error.failure.error, details: error.failure.details }).toEqual({ overrides, code, details: ["nothing was created"] });
+    }
+    expect(fake.requests).toEqual([]);
+  });
+
+  test("the rules of WEB_SERVER are taken in any order", async () => {
+    await open().provider.create(request({ inbound: [...WEB_SERVER].reverse() }), reporter().report);
+    expect(bodyOf("POST", "/firewalls").inbound_rules).toEqual(INBOUND_RULES);
+  });
+});
+
+// --- two owners, one account -----------------------------------------------------------------------
+
+describe("two owners sharing one account", () => {
+  test("devbox neither lists, adopts nor destroys sitesolide's droplet", async () => {
+    const theirs = await open().provider.create(request(), reporter().report);
+    fake.requests.length = 0;
+    const devbox = open({ owner: DEVBOX }).provider;
+    expect(await devbox.list()).toEqual([]);
+    expect(new URLSearchParams(fake.requests[0]!.search).get("tag_name")).toBe("managed-by:devbox");
+    expect(await devbox.find("web")).toMatchObject({ id: theirs.machine.id, managed: false });
+    const taken = await refusal(devbox.create(request(), reporter().report));
+    expect(taken.failure).toMatchObject({ error: "machine-exists", message: "a droplet named web exists in the account, and devbox did not create it" });
+    expect(taken.failure.details?.[1]).toBe("it lacks the tag managed-by:devbox: nothing was created, nothing was changed");
+    // Handed sitesolide's machine as its own, it reads the tags again and refuses.
+    const destroyed = await refusal(devbox.destroy(theirs.machine, { deleteKey: true }, reporter().report));
+    expect(destroyed.failure).toMatchObject({ error: "machine-not-managed", message: "the droplet web lacks the tag managed-by:devbox" });
+    expect(writes()).toEqual([]);
+    expect({ droplets: fake.droplets.length, firewalls: fake.firewalls.length, keys: fake.keys.length }).toEqual({ droplets: 1, firewalls: 1, keys: 1 });
+  });
+
+  test("devbox's droplet carries devbox's names, and sitesolide neither lists nor destroys it", async () => {
+    const ours = await open({ owner: DEVBOX }).provider.create(request({ name: "db" }), reporter().report);
+    const key = fake.keys[0]!;
+    expect(key.name).toBe("devbox-db");
+    expect(bodyOf("POST", "/tags")).toEqual({ name: "devbox-machine:db" });
+    expect(fake.firewalls[0]).toMatchObject({ name: "devbox-db", tags: ["devbox-machine:db"] });
+    expect(bodyOf("POST", "/droplets").tags).toEqual(["managed-by:devbox", "devbox-machine:db", `devbox-key:${key.id}`]);
+    expect(ours.machine).toMatchObject({ managed: true, labels: { "managed-by": "devbox", "devbox-machine": "db", "devbox-key": String(key.id) } });
+
+    fake.requests.length = 0;
+    const sitesolide = open().provider;
+    expect(await sitesolide.list()).toEqual([]);
+    expect(await sitesolide.find("db")).toMatchObject({ managed: false });
+    const destroyed = await refusal(sitesolide.destroy(ours.machine, { deleteKey: true }, reporter().report));
+    expect(destroyed.failure.error).toBe("machine-not-managed");
+    expect(writes()).toEqual([]);
+  });
+
+  test("destroying one owner's droplet leaves the other's firewall, tags and key, --delete-key included", async () => {
+    await open().provider.create(request(), reporter().report);
+    const ours = await open({ owner: DEVBOX }).provider.create(request({ name: "db" }), reporter().report);
+    // The same key: devbox reuses the one sitesolide uploaded and, not having named it, never claims it.
+    const key = fake.keys[0]!;
+    expect(fake.keys.map((candidate) => candidate.name)).toEqual(["sitesolide-web"]);
+    expect(fake.droplets.find((droplet) => droplet.name === "db")!.tags).toEqual(["managed-by:devbox", "devbox-machine:db"]);
+
+    fake.requests.length = 0;
+    const outcome = await open({ owner: DEVBOX }).provider.destroy(ours.machine, { deleteKey: true }, reporter().report);
+    expect(writes()).toEqual(["DELETE /droplets/:id", "DELETE /firewalls/:id", "DELETE /tags/devbox-machine:db"]);
+    expect(outcome.removed.slice(1)).toEqual(["firewall devbox-db", "tag devbox-machine:db"]);
+    expect(fake.droplets.map((droplet) => droplet.name)).toEqual(["web"]);
+    expect(fake.firewalls.map((firewall) => firewall.name)).toEqual(["sitesolide-web"]);
+    expect(fake.keys).toEqual([key]);
+    expect([...fake.tags].sort()).toEqual(["managed-by:devbox", "managed-by:sitesolide", `sitesolide-key:${key.id}`, "sitesolide-machine:web"]);
   });
 });
 

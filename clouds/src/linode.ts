@@ -2,16 +2,18 @@
  * Akamai Cloud, formerly Linode, through its API v4:
  * https://techdocs.akamai.com/linode-api/reference/api
  *
- * A machine is two resources, each tagged `managed-by:sitesolide` and
- * `sitesolide-machine:<name>`. Akamai has no key-value labels: a resource's
- * `label` is its name, and its tags are plain strings, hence tagsFor.
+ * A machine is two resources, each tagged `managed-by:<owner>` and
+ * `<owner>-machine:<name>`, `<owner>` being the name of the program that
+ * opened the provider (ProviderContext.owner). Akamai has no key-value
+ * labels: a resource's `label` is its name, and its tags are plain strings,
+ * hence owner.tags.
  *
- *   - a Cloud Firewall labelled `sitesolide-<name>`, inbound TCP 22, 80 and
+ *   - a Cloud Firewall labelled `<owner>-<name>`, inbound TCP 22, 80 and
  *     443 and ICMP from everywhere, IPv4 and IPv6, everything else inbound
  *     dropped;
  *   - the Linode labelled `<name>`, the firewall attached from its creation,
- *     the workstation's key in root's authorized_keys, and no user_data:
- *     `sitesolide setup` hardens it over SSH, which a run can be repeated
+ *     the request's key in root's authorized_keys, and no user_data: the
+ *     program's own setup hardens it over SSH, which a run can be repeated
  *     against, where cloud-init only ever ran once.
  *
  * There is no SSH key resource: the create request carries the key, which
@@ -21,7 +23,7 @@
  * No root password is sent. The API asks for at least one way into the disk,
  * a root password, authorized_keys or authorized_users, and the key is
  * enough: a Linode without a root password has no password login open in the
- * moments before `sitesolide setup` turns them off.
+ * moments before the program's own setup turns them off.
  *
  * A Linode's network comes in two generations. Linode interfaces, generally
  * available since April 2026 and the default of new accounts, carry
@@ -38,48 +40,45 @@
  * derives from the interface, as stable.
  *
  * Everything that can refuse is read before the first write, so that a
- * refusal leaves nothing behind: the Linode, by label (one sitesolide did not
+ * refusal leaves nothing behind: the Linode, by label (one the owner did not
  * create is never touched), the region and the type against what Akamai sells
  * there, the firewall's label. When the order is refused all the same, the
  * firewall this run created for it is deleted again, unless a Linode of that
  * name turned up after all.
  *
  * Every call carries the token in the Authorization header and nowhere else,
- * follows no redirect, and fails with a ProviderError whose code
- * bin/cli/hints.ts knows. The API's error format is `{"errors": [{"reason",
+ * follows no redirect, and fails with a ProviderError whose code is one of
+ * FAILURE_CODES. The API's error format is `{"errors": [{"reason",
  * "field"}]}`. Lists are paginated, `data`, `page` and `pages`, followed to
  * the last page at 500 items a page, the most the API returns. Filters go in
  * the `X-Filter` header, and are checked again on what comes back.
  */
 import {
   apiAddress,
+  checkRequest,
   DEBIAN,
   formatPrice,
-  isManagedTags,
   labelsOfTags,
-  machineOfTags,
-  MANAGED_LABEL,
-  MANAGED_VALUE,
-  MACHINE_LABEL,
   patiently,
   ProviderError,
   retryAfter,
   statusFailure,
-  tagsFor,
   type Choice,
   type CreateOutcome,
   type CreateRequest,
   type DestroyOutcome,
   type Discovery,
   type Machine,
+  type Owner,
   type Provider,
   type ProviderContext,
   type ProviderEntry,
   type Report,
   type Resource,
+  type Supports,
   type Workstation,
 } from "./provider";
-import type { Failure } from "../remote";
+import type { Failure } from "./provider";
 
 export const DEFAULT_API = "https://api.linode.com/v4";
 
@@ -130,17 +129,29 @@ export const FIREWALL_RULES = {
   outbound: [],
 };
 
-/** A firewall's label is 32 characters at most: `sitesolide-` leaves 21 to the name. */
-export const FIREWALL_PREFIX = "sitesolide-";
+/**
+ * Nothing beyond the fields every provider takes: a key is required, the
+ * firewall is FIREWALL_RULES alone, and no user-data, disk, nested
+ * virtualization or login is asked for.
+ */
+export const SUPPORTS: Supports = {};
+
+/** A firewall's label is 32 characters at most: `<owner>-` leaves the rest to the name, 21 characters for `sitesolide-`. */
 const FIREWALL_LABEL_MAX = 32;
 
-export function firewallLabel(name: string): string {
-  return `${FIREWALL_PREFIX}${name}`;
+/** The firewall's label, `<owner>-<name>`. */
+export function firewallLabel(name: string, owner: Owner): string {
+  return `${owner.name}-${name}`;
+}
+
+/** The longest name whose firewall's label still fits. */
+function longestName(owner: Owner): number {
+  return FIREWALL_LABEL_MAX - firewallLabel("", owner).length;
 }
 
 /** The shared CPU classes the wizard offers: the current generation, g6, holds them all. */
 const WIZARD_CLASSES = new Set(["nanode", "standard"]);
-/** What sitesolide needs at the least, in MB: the wizard offers nothing smaller. */
+/** The defaults' memory, in MB: the wizard offers nothing smaller. */
 const WIZARD_MEMORY = 2048;
 
 // --- the API's objects, as far as this file reads them ---------------------------------
@@ -277,13 +288,13 @@ export function apiBase(environment: Record<string, string | undefined>): string
 /**
  * Why Akamai would refuse that name, or null. A Linode's label starts with a
  * letter and never holds two dashes in a row; the firewall's, the name behind
- * `sitesolide-`, is 32 characters at most. The CLI's own rule already keeps
+ * `<owner>-`, is 32 characters at most. The CLI's own rule already keeps
  * names to lowercase letters, digits and dashes.
  */
-export function nameProblem(name: string): string | null {
-  const longest = FIREWALL_LABEL_MAX - FIREWALL_PREFIX.length;
+export function nameProblem(name: string, owner: Owner): string | null {
+  const longest = longestName(owner);
   if (name.length < 3) return "it is shorter than 3 characters, the least a Linode's label holds";
-  if (name.length > longest) return `it is longer than ${longest} characters: the firewall's label, ${FIREWALL_PREFIX}<name>, holds ${FIREWALL_LABEL_MAX} at most`;
+  if (name.length > longest) return `it is longer than ${longest} characters: the firewall's label, ${firewallLabel("<name>", owner)}, holds ${FIREWALL_LABEL_MAX} at most`;
   if (!/^[a-zA-Z]/.test(name)) return "it does not start with a letter, which a Linode's label must";
   if (/--|__|\.\./.test(name)) return "it holds two dashes in a row, which a Linode's label never does";
   if (!/^[a-zA-Z]((?!--|__|\.\.)[a-zA-Z0-9-_.])+$/.test(name)) return "it holds a character a Linode's label never does";
@@ -329,7 +340,7 @@ function isPrivate(address: string): boolean {
   return /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.)/.test(address);
 }
 
-export function toMachine(instance: LinodeInstance, types: LinodeType[] | null): Machine {
+export function toMachine(instance: LinodeInstance, types: LinodeType[] | null, owner: Owner): Machine {
   const type = types?.find((candidate) => candidate.id === instance.type);
   const monthly = type === undefined ? null : priceAt(type, instance.region).monthly;
   return {
@@ -348,7 +359,7 @@ export function toMachine(instance: LinodeInstance, types: LinodeType[] | null):
     // net, for want of a figure.
     monthlyPrice: typeof monthly === "number" ? { net: monthly.toFixed(2), gross: monthly.toFixed(2), currency: "USD" } : null,
     backups: instance.backups?.enabled === true,
-    managed: isManagedTags(instance.tags),
+    managed: owner.managesTags(instance.tags),
     labels: labelsOfTags(instance.tags),
     // Akamai's images take the key for root, and only for root.
     login: "root",
@@ -384,7 +395,7 @@ function unavailablePlans(availability: Availability[] | null, region: string): 
 
 /**
  * The cheapest shared types sold at a region, one line each, cheapest first,
- * none with less memory than sitesolide needs.
+ * none with less memory than the defaults.
  */
 export function cheapestTypes(types: LinodeType[], region: string, unavailable: Set<string>, except?: string, count = 6): string[] {
   return types
@@ -414,7 +425,7 @@ export function refusesTheOffer(error: LinodeError): boolean {
 export function linode(context: ProviderContext): Provider {
   const base = apiBase(context.environment);
   const host = new URL(base).host;
-  const { clock, fetcher } = context;
+  const { clock, fetcher, owner } = context;
   const token = context.credentials[TOKEN_VARIABLE] ?? "";
 
   /** One call: the token in its header, a filter in another, JSON both ways, every failure said in the CLI's words. */
@@ -433,7 +444,7 @@ export function linode(context: ProviderContext): Provider {
       });
     } catch (error) {
       // The message of a failed fetch names the address at most; it is
-      // scrubbed all the same, on the way out, by bin/cli/machine.ts.
+      // scrubbed all the same, on the way out, by the program that prints it.
       throw new LinodeError({ error: "provider-unreachable", message: `${host} unreachable while trying to ${what}: ${(error as Error).message}` }, 0);
     }
     const text = await response.text().catch(() => null);
@@ -516,7 +527,7 @@ export function linode(context: ProviderContext): Provider {
         last = read.status;
         if (read.status === "running") return read;
         if ((read.status === "offline" || read.status === "stopped") && !justCreated) {
-          throw new ProviderError({ error: "machine-off", message: `${name} exists but is powered off`, details: ["sitesolide never powers a machine on or off by itself"] });
+          throw new ProviderError({ error: "machine-off", message: `${name} exists but is powered off`, details: [`${owner.name} never powers a machine on or off by itself`] });
         }
       }
       if (clock.now() >= deadline) {
@@ -571,29 +582,34 @@ export function linode(context: ProviderContext): Provider {
     return { region, types, unavailable };
   }
 
-  /** The firewall of that label, when sitesolide created it; read before anything is created, so that a refusal leaves nothing. */
+  /** Whether a firewall carries the owner's tags for that machine, which is what makes it the owner's. */
+  function ownsFirewall(firewall: LinodeFirewall, name: string): boolean {
+    return owner.managesTags(firewall.tags) && owner.machineOfTags(firewall.tags) === name;
+  }
+
+  /** The firewall of that label, when its owner created it; read before anything is created, so that a refusal leaves nothing. */
   async function findFirewall(name: string): Promise<LinodeFirewall | null> {
-    const label = firewallLabel(name);
+    const label = firewallLabel(name, owner);
     const same = await findFirewallByLabel(label);
-    if (same !== null && (!isManagedTags(same.tags) || machineOfTags(same.tags) !== name)) {
+    if (same !== null && !ownsFirewall(same, name)) {
       throw new ProviderError({
         error: "firewall-taken",
-        message: `a firewall labelled ${same.label} exists in the account, and sitesolide did not create it for ${name}`,
-        details: [`it lacks the tags ${MANAGED_LABEL}:${MANAGED_VALUE} and ${MACHINE_LABEL}:${name}: it is never adopted nor changed`],
+        message: `a firewall labelled ${same.label} exists in the account, and ${owner.name} did not create it for ${name}`,
+        details: [`it lacks the tags ${owner.tagMark} and ${owner.machineLabel}:${name}: it is never adopted nor changed`],
       });
     }
     return same;
   }
 
   async function ensureFirewall(name: string, found: LinodeFirewall | null, report: Report): Promise<LinodeFirewall & { reused: boolean }> {
-    const label = firewallLabel(name);
+    const label = firewallLabel(name, owner);
     report(`-> firewall ${label}`);
     if (found !== null) {
-      report("   already created by sitesolide, reused");
+      report(`   already created by ${owner.name}, reused`);
       return { ...found, reused: true };
     }
     const created = await call<LinodeFirewall>("POST", "/networking/firewalls", `create the firewall ${label}`, {
-      body: { label, tags: tagsFor(name), rules: FIREWALL_RULES },
+      body: { label, tags: owner.tags(name), rules: FIREWALL_RULES },
     });
     report("   created: inbound tcp 22, 80, 443 and icmp from everywhere, everything else dropped");
     return { ...created, reused: false };
@@ -601,8 +617,8 @@ export function linode(context: ProviderContext): Provider {
 
   /**
    * Deletes the firewall this run created before an order Akamai refused: it
-   * was made for a Linode that does not exist, and nothing else in sitesolide
-   * would ever list or remove it, since `list` and `destroy` start from a
+   * was made for a Linode that does not exist, and nothing else here would
+   * ever list or remove it, since `list` and `destroy` start from a
    * Linode. Deleting a firewall strips its rules from whatever it protects,
    * so it is kept when anything uses it, or when a Linode of that name
    * appeared all the same (an order that failed on the way back may have
@@ -667,16 +683,19 @@ export function linode(context: ProviderContext): Provider {
 
     async find(name) {
       const instance = await findInstance(name);
-      return instance === null ? null : toMachine(instance, await knownTypes());
+      return instance === null ? null : toMachine(instance, await knownTypes(), owner);
     },
 
     async create(request, report): Promise<CreateOutcome> {
-      const problem = nameProblem(request.name);
+      checkRequest(TITLE, request, SUPPORTS);
+      // SUPPORTS is not keyless: checkRequest refused a request without one.
+      const publicKey = request.key!;
+      const problem = nameProblem(request.name, owner);
       if (problem !== null) {
         throw new ProviderError({
           error: "provider-invalid",
           message: `${TITLE} cannot take the name ${request.name}: ${problem}`,
-          details: [`a name for ${TITLE} is 3 to ${FIREWALL_LABEL_MAX - FIREWALL_PREFIX.length} characters, starts with a letter, and never holds two dashes in a row`, "nothing was created"],
+          details: [`a name for ${TITLE} is 3 to ${longestName(owner)} characters, starts with a letter, and never holds two dashes in a row`, "nothing was created"],
         });
       }
       const resources: Resource[] = [];
@@ -685,18 +704,18 @@ export function linode(context: ProviderContext): Provider {
       let instance: LinodeInstance;
       let created: boolean;
       if (existing !== null) {
-        const found = toMachine(existing, null);
-        if (!found.managed || machineOfTags(existing.tags) !== request.name) {
+        const found = toMachine(existing, null, owner);
+        if (!found.managed || owner.machineOfTags(existing.tags) !== request.name) {
           throw new ProviderError({
             error: "machine-exists",
-            message: `a Linode labelled ${existing.label} exists in the account, and sitesolide did not create it`,
+            message: `a Linode labelled ${existing.label} exists in the account, and ${owner.name} did not create it`,
             details: [
               `${found.type} at ${found.location}, ${found.status}, ${[found.ipv4, found.ipv6].filter(Boolean).join(", ") || "no public address"}`,
-              `it lacks the tags ${MANAGED_LABEL}:${MANAGED_VALUE} and ${MACHINE_LABEL}:${request.name}: nothing was created, nothing was changed`,
+              `it lacks the tags ${owner.tagMark} and ${owner.machineLabel}:${request.name}: nothing was created, nothing was changed`,
             ],
           });
         }
-        report(`   already created by sitesolide: ${found.type} at ${found.location}, ${found.status}`);
+        report(`   already created by ${owner.name}: ${found.type} at ${found.location}, ${found.status}`);
         if (found.type !== request.type || found.location !== request.location) {
           report(`!! it is ${found.type} at ${found.location}: --type and --location only apply to a machine being created`);
         }
@@ -719,7 +738,7 @@ export function linode(context: ProviderContext): Provider {
           const image = imageFor(request.image);
           report(`-> Linode ${request.name}: ${request.type} at ${request.location}, ${image}`);
           report("   root: your key only, no password");
-          const key = [request.key.algorithm, request.key.blob, request.key.comment].filter((part) => part !== "").join(" ");
+          const key = [publicKey.algorithm, publicKey.blob, publicKey.comment].filter((part) => part !== "").join(" ");
           ordering = true;
           instance = await call<LinodeInstance>("POST", "/linode/instances", `create the Linode ${request.name}`, {
             body: {
@@ -728,7 +747,7 @@ export function linode(context: ProviderContext): Provider {
               type: request.type,
               image,
               authorized_keys: [key],
-              tags: tagsFor(request.name),
+              tags: owner.tags(request.name),
               booted: true,
               backups_enabled: request.backups,
               ...network(offer.region, firewall.id),
@@ -766,16 +785,16 @@ export function linode(context: ProviderContext): Provider {
       if (request.backups && !created) await ensureBackups(instance, report);
       report(`-> ${request.name} running`);
       const running = await waitRunning(instance.id, request.name, report, created);
-      return { machine: toMachine(running, await knownTypes()), created, resources };
+      return { machine: toMachine(running, await knownTypes(), owner), created, resources };
     },
 
     async list() {
       // Every Linode, filtered here: the tags are checked on what comes
       // back, whatever a filter on them would have matched.
       const instances = await listAll<LinodeInstance>("/linode/instances", "read the Linodes");
-      const managed = instances.filter((instance) => isManagedTags(instance.tags));
+      const managed = instances.filter((instance) => owner.managesTags(instance.tags));
       const types = managed.length === 0 ? null : await knownTypes();
-      return managed.map((instance) => toMachine(instance, types));
+      return managed.map((instance) => toMachine(instance, types, owner));
     },
 
     async destroy(machine, _options, report): Promise<DestroyOutcome> {
@@ -785,13 +804,13 @@ export function linode(context: ProviderContext): Provider {
       const addresses = [machine.ipv4, machine.ipv6].filter(Boolean).join(", ");
 
       report(`-> Linode ${machine.name}`);
-      // Read again, so that only a Linode carrying sitesolide's tags, under
+      // Read again, so that only a Linode carrying its owner's tags, under
       // that label, is ever deleted, whatever the caller was handed.
       const current = await call<LinodeInstance>("GET", `/linode/instances/${id}`, `read the Linode ${machine.name}`);
-      if (!isManagedTags(current.tags) || current.label !== machine.name) {
+      if (!owner.managesTags(current.tags) || current.label !== machine.name) {
         throw new ProviderError({
           error: "machine-not-managed",
-          message: `the Linode ${current.label} does not carry the tag ${MANAGED_LABEL}:${MANAGED_VALUE}: sitesolide did not create it`,
+          message: `the Linode ${current.label} does not carry the tag ${owner.tagMark}: ${owner.name} did not create it`,
           details: ["nothing was deleted"],
         });
       }
@@ -807,12 +826,12 @@ export function linode(context: ProviderContext): Provider {
         report(`!! volume ${volume.label} (${volume.size} GB) is only detached: it stays billed until it is deleted from Cloud Manager`);
       }
 
-      const label = firewallLabel(machine.name);
+      const label = firewallLabel(machine.name, owner);
       report(`-> firewall ${label}`);
       const firewall = await findFirewallByLabel(label);
-      if (firewall === null || !isManagedTags(firewall.tags) || machineOfTags(firewall.tags) !== machine.name) {
-        report("   none created by sitesolide for it");
-        if (firewall !== null) kept.push(`firewall ${firewall.label}: sitesolide did not create it for ${machine.name}`);
+      if (firewall === null || !ownsFirewall(firewall, machine.name)) {
+        report(`   none created by ${owner.name} for it`);
+        if (firewall !== null) kept.push(`firewall ${firewall.label}: ${owner.name} did not create it for ${machine.name}`);
       } else {
         // Deleting a firewall strips its rules from all it protects: it goes
         // only when it protects nothing but the Linode just deleted.

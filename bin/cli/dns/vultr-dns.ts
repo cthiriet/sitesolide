@@ -37,7 +37,7 @@
  * plan never does: it creates a record only where none of that name and type
  * exists, and updates one only once the others beside it are deleted.
  */
-import { apiAddress } from "../providers/provider";
+import { apiAddress } from "../../../clouds/src/provider";
 import { DnsError, zoneCandidates, type DnsContext, type DnsEntry, type DnsRecord, type ZoneApi, type ZoneRef } from "./dns";
 
 export const DEFAULT_API = "https://api.vultr.com/v2";

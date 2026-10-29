@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { DnsError, detectDns, ensureZoneRecords, zoneRecords, type DnsContext, type ZoneApi } from "../cli/dns/dns";
 import { API_VARIABLE, DEFAULT_API, ORGANIZATION_VARIABLE, SCALEWAY_DNS, SECRET_VARIABLE, TTL, UUID, zoneName } from "../cli/dns/scaleway-dns";
-import { ProviderError, realClock } from "../cli/providers/provider";
+import { ProviderError, realClock } from "../../clouds/src/provider";
 import { tlsZoneContent } from "../cli/tls";
 import { createFakeScalewayDns, FAKE_ORGANIZATION, FAKE_SECRET, ZONE, type FakeScalewayDns } from "./fake-dns-scaleway-dns";
 

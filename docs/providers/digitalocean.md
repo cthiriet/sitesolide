@@ -183,6 +183,6 @@ The command ends by listing what it removed and what it kept.
 
 `SITESOLIDE_DIGITALOCEAN_API` points the command at another address than
 `https://api.digitalocean.com/v2`, for a local fake of the API
-(`bin/tests/fake-digitalocean.ts`). It takes https, or http on the loopback
+(`clouds/fakes/digitalocean.ts`). It takes https, or http on the loopback
 only, so that the token never travels in the clear. The provider's own tests are
-`bin/tests/provider-digitalocean.test.ts`.
+`clouds/tests/digitalocean.test.ts`.

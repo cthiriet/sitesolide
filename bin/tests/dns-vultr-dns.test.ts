@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { CLOUDFLARE } from "../cli/dns/cloudflare";
 import { detectDns, DnsError, ensureZoneRecords, zoneRecords, type DnsContext } from "../cli/dns/dns";
 import { absoluteName, API_VARIABLE, DEFAULT_API, KEY_SHAPE, KEY_VARIABLE, relativeName, TTL, VULTR_DNS } from "../cli/dns/vultr-dns";
-import { ProviderError } from "../cli/providers/provider";
+import { ProviderError } from "../../clouds/src/provider";
 import { createFakeVultrDns, FAKE_KEY, ZONE, type FakeVultrDns } from "./fake-dns-vultr-dns";
 
 /**

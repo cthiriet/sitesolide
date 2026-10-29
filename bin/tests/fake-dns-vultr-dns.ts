@@ -26,7 +26,7 @@
  * client that reads one page fails a test.
  */
 import type { FakeDns } from "./fake-dns";
-import type { FakeRequest } from "./fake-provider";
+import type { FakeRequest } from "../../clouds/fakes/fake-provider";
 
 /** 36 uppercase letters and digits, the shape of Vultr's keys. */
 export const FAKE_KEY = "VULTRDNSFAKEKEY0123456789ABCDEFGHIJK";

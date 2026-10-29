@@ -23,7 +23,7 @@
  * error instead.
  */
 import type { FakeDns } from "./fake-dns";
-import type { FakeRequest } from "./fake-provider";
+import type { FakeRequest } from "../../clouds/fakes/fake-provider";
 
 /** Shaped as a Cloud API token is, 64 letters and digits; nobody's. */
 export const FAKE_TOKEN = "Tq7mZ2xK9pLw4Rv8Nc3Hb6Yd1Fs5Gj0Ae2Ui7Ok4Pl9Qz3Xw8Cv5Bn1Mt6Ry0SxW";

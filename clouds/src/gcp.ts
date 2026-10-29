@@ -2,60 +2,72 @@
  * Google Cloud Compute Engine, through its REST API v1:
  * https://cloud.google.com/compute/docs/reference/rest/v1
  *
- * A machine is four resources of the project, all named after it:
+ * A machine is resources of the project, all named after it and after the
+ * owner that creates it, `<owner>-<name>`:
  *
- *   - two VPC firewall rules on the project's `default` network, applied to
- *     the instances that carry the network tag `sitesolide-<name>`:
- *     `sitesolide-<name>` allows TCP 22, 80 and 443 and ICMP from everywhere,
- *     and `sitesolide-<name>-deny`, one step below it in priority, drops
- *     everything else. The second is what makes "everything else is dropped"
+ *   - VPC firewall rules on the project's `default` network, applied to the
+ *     instances that carry the network tag `<owner>-<name>`: one that allows
+ *     what the request's rules open, a rule for each set of sources they
+ *     name, `<owner>-<name>` then `<owner>-<name>-2` and on, since a rule of
+ *     Google's has one list of sources for all it allows; and
+ *     `<owner>-<name>-deny`, one step below them in priority, which drops
+ *     everything else. The last is what makes "everything else is dropped"
  *     true on Google Cloud: the default network comes with rules of its own,
  *     `default-allow-rdp` and `default-allow-internal` among them, which
- *     apply to every instance of the network and which sitesolide never
- *     changes. They sit at priority 65534, far below these two;
- *   - a static regional IPv4 address, `sitesolide-<name>`: the ephemeral
+ *     apply to every instance of the network and which are never changed
+ *     here. They sit at priority 65534, far below these;
+ *   - a static regional IPv4 address, `<owner>-<name>`: the ephemeral
  *     address an instance gets otherwise may change when it is stopped and
  *     started, and the DNS records point at it;
- *   - the instance, with the tag, the address, a 20 GB boot disk of Debian
- *     that goes when the instance goes, no service account (the machine
- *     holds no Google credentials), and the workstation's key in its
- *     metadata for the account `sitesolide`, which Google's guest agent
- *     creates and puts in its `google-sudoers` group. Google's documentation
- *     says such a key cannot be root's unless the image is changed to allow
- *     it, hence that account. The project's own keys are blocked on the
- *     instance, and OS Login is turned off for it, so that the key is the
- *     one way in.
+ *   - the instance, with the tag, the address, a boot disk that goes when
+ *     the instance goes (20 GB of Debian unless the request says otherwise),
+ *     no service account (the machine holds no Google credentials), and the
+ *     request's key in its metadata for the account the request names, the
+ *     owner's name otherwise, which Google's guest agent creates and puts in
+ *     its `google-sudoers` group. Google's documentation says such a key
+ *     cannot be root's unless the image is changed to allow it, hence that
+ *     account. The project's own keys are blocked on the instance, and OS
+ *     Login is turned off for it: on, at the project or the instance, it
+ *     makes the guest agent ignore the metadata's keys, silently, and every
+ *     key is refused. The user-data goes in the metadata as `user-data`, the
+ *     key cloud-init reads on Google's images; nested virtualization, when
+ *     asked, is one of the instance's advanced features, which Google offers
+ *     on its Intel series alone.
  *
- * The default network's subnets are IPv4 only: the machine has no IPv6
- * address, and the rules no IPv6 range.
+ * The default network's subnets are IPv4 only, and the instance asks for no
+ * IPv6 address: the rules are written for the IPv4 sources of the request,
+ * one family per rule as Google requires, and its IPv6 sources, which could
+ * reach nothing, are left out and said so.
  *
- * Firewall rules carry no labels on Google Cloud. sitesolide's mark is
- * written in their description instead, `managed-by=sitesolide
- * sitesolide-machine=<name>`, and a rule only counts as sitesolide's when its
+ * Firewall rules carry no labels on Google Cloud. The owner's mark is
+ * written in their description instead, `managed-by=<owner>
+ * <owner>-machine=<name>`, and a rule only counts as the owner's when its
  * name, its description and its single target tag all say so (see ownRule).
  * The address carries the labels and the same description: the API reference
  * says an address's labels are set through setLabels, after the address
  * exists, and a run interrupted between the two still recognises the address
- * by its description.
+ * by its description. A provider opened for one owner never adopts, changes
+ * or deletes what carries another's mark.
  *
  * Everything that can refuse is read before the first write: an instance of
- * that name anywhere in the project (one sitesolide did not create is never
- * touched), the zone, the machine type in that zone, the image, the default
- * network and its subnet in the region, the two rules and the address by
- * name. The order itself can still be refused, by its operation above all:
- * an instance is accepted at once and fails later when the zone has no room
- * for it (ZONE_RESOURCE_POOL_EXHAUSTED). When Google says no, the rules and
- * the address this run created are deleted again, and the refusal says so.
- * When the answer is unknown, an order that timed out or a network that
- * failed after it left, nothing is undone: the next run finds what exists.
- * What an earlier run left without an instance, its address and its rules,
- * is a machine for `find` and `list` all the same, status `incomplete`, since
- * the address is billed: `destroy` removes it, `create` reuses it, and every
+ * that name anywhere in the project (one the owner did not create is never
+ * touched), the zone, the machine type in that zone, the image, the disk
+ * type when one is named, the default network and its subnet in the region,
+ * the rules and the address. The order itself can still be refused, by its
+ * operation above all: an instance is accepted at once and fails later when
+ * the zone has no room for it (ZONE_RESOURCE_POOL_EXHAUSTED). When Google
+ * says no, the rules and the address this run created are deleted again,
+ * and the refusal says so. When the answer is unknown, an order that timed
+ * out or a network that failed after it left, nothing is undone: the next
+ * run finds what exists. What an earlier run left without an instance, its
+ * address and its rules, is a machine for `find` and `list` all the same,
+ * status `incomplete`, since the address is billed: `destroy` removes it,
+ * `create` reuses it, its rules where they do what is asked, and every
  * refusal of a create that found it names it and says how it goes.
  *
  * Every call carries the access token in the Authorization header and nowhere
- * else, follows no redirect, and fails with a ProviderError whose code
- * bin/cli/hints.ts knows. The API's errors are
+ * else, follows no redirect, and fails with a ProviderError whose code is one
+ * of FAILURE_CODES. The API's errors are
  * `{"error": {"code", "message", "errors": [{"reason"}], "status"}}`;
  * `failureFrom` reads them. Lists follow `nextPageToken` to the end, five
  * hundred items a page, the most the API returns. Operations are polled every
@@ -71,12 +83,9 @@
  */
 import {
   apiAddress,
+  checkRequest,
   DEBIAN,
-  isManaged,
-  labelsFor,
-  MACHINE_LABEL,
-  MANAGED_LABEL,
-  MANAGED_VALUE,
+  describeInbound,
   patiently,
   ProviderError,
   retryAfter,
@@ -87,15 +96,19 @@ import {
   type Credentials,
   type DestroyOutcome,
   type Discovery,
+  type Inbound,
   type Machine,
+  type Owner,
   type Provider,
   type ProviderContext,
   type ProviderEntry,
+  type PublicKey,
   type Report,
   type Resource,
+  type Supports,
   type Workstation,
 } from "./provider";
-import type { Failure } from "../remote";
+import type { Failure } from "./provider";
 
 export const DEFAULT_API = "https://compute.googleapis.com/compute/v1";
 /** Where a signed assertion is exchanged for an access token; also the JWT's audience. */
@@ -130,8 +143,32 @@ export const KEY_SHAPE = /^\s*-----BEGIN PRIVATE KEY-----(?:\\n|[\sA-Za-z0-9+/=]
 /** Read and write on Compute Engine, nothing else of the project. */
 export const SCOPE = "https://www.googleapis.com/auth/compute";
 
-/** The account Google's guest agent creates from the `ssh-keys` metadata entry. */
-export const LOGIN = "sitesolide";
+const TITLE = "Google Cloud";
+
+/** What a request may ask here beyond what every provider takes. Not keyless: the key is what the `ssh-keys` entry lets in. */
+export const SUPPORTS: Supports = { inbound: true, userData: true, disk: true, nestedVirtualization: true, login: true };
+
+/**
+ * The account Google's guest agent creates from the `ssh-keys` metadata
+ * entry, `<login>:<key>`: lower case, as useradd takes it on every image, a
+ * subset of what the agent itself accepts. The owner's name fits it, and is
+ * the account when the request names none.
+ */
+export const LOGIN_SHAPE = /^[a-z_][a-z0-9_-]{0,31}$/;
+
+/** Why the guest agent would not let the key in as that account, or null. */
+export function loginProblem(login: string): string | null {
+  if (login === "root") return "Google's images let no key in as root";
+  if (!LOGIN_SHAPE.test(login)) return "an account there is 32 lowercase letters, digits, dashes and underscores at most, starting with a letter or an underscore";
+  return null;
+}
+
+/** The most one metadata value holds, per Compute Engine's limits: the user-data is one. */
+export const METADATA_VALUE_BYTES = 256 * 1024;
+
+/** The largest disk Persistent Disk and Hyperdisk Balanced take, 64 TB. */
+export const MAX_DISK_GB = 65_536;
+const DISK_TYPE_SHAPE = /^[a-z][a-z0-9-]{0,62}$/;
 
 /**
  * e2-small: 2 shared vCPUs and 2 GB, the cheapest x86 type of the current
@@ -152,21 +189,30 @@ export const WAITS = {
   addressTries: 5,
 };
 
-/** The rule that allows sits at the API's default priority; the one that denies right after it. */
+/** The rules that allow sit at the API's default priority; the one that denies right after them. */
 export const ALLOW_PRIORITY = 1000;
 export const DENY_PRIORITY = 1001;
 
 /**
- * GCP's names start with a letter and hold at most 63 characters; the longest
- * one sitesolide makes is `sitesolide-<name>-deny`, hence 47 for the name.
+ * The sets of sources a request's rules may name, one rule of Google's each:
+ * nine keeps their names, `<owner>-<name>-9` at most, shorter than the deny
+ * rule's, which is what bounds a machine's name.
  */
-export const NAME_SHAPE = /^[a-z](?:[a-z0-9-]{0,45}[a-z0-9])?$/;
-export const MAX_NAME = 47;
+export const MAX_SOURCE_SETS = 9;
 
-/** Why Google Cloud would refuse a name the CLI accepts, or null: asked before anything leaves. */
-export function nameProblem(name: string): string | null {
+/** GCP's names start with a letter and hold at most 63 characters; the length is the owner's to bound, see maxName. */
+export const NAME_SHAPE = /^[a-z](?:[a-z0-9-]*[a-z0-9])?$/;
+
+/** The longest machine name: the longest name made from it is `<owner>-<name>-deny`, and Google takes 63, hence 47 for sitesolide. */
+export function maxName(owner: Owner): number {
+  return 63 - `${owner.name}--deny`.length;
+}
+
+/** Why Google Cloud would refuse a name the program accepts, or null: asked before anything leaves. */
+export function nameProblem(name: string, owner: Owner): string | null {
   if (!/^[a-z]/.test(name)) return "a name there starts with a letter";
-  if (name.length > MAX_NAME) return `${MAX_NAME} characters at most: sitesolide derives sitesolide-<name>-deny from it, and Google takes 63`;
+  const max = maxName(owner);
+  if (name.length > max) return `${max} characters at most: ${owner.name} derives ${owner.name}-<name>-deny from it, and Google takes 63`;
   if (!NAME_SHAPE.test(name)) return "lowercase letters, digits and dashes, ending with a letter or a digit";
   return null;
 }
@@ -192,6 +238,9 @@ const OFFERED_SERIES = ["e2", "n4", "n4d", "c4", "c4d", "c3", "c3d", "n2", "n2d"
 const HYPERDISK_ONLY = new Set(["n4", "n4d", "n4a", "c4", "c4a", "c4d"]);
 /** The Arm series, which boot the arm64 image. */
 const ARM_SERIES = new Set(["c4a", "n4a", "t2a"]);
+/** The AMD series, `n2d`, `c3d`: Google nests virtualization on its Intel series alone. */
+const AMD_SERIES = /^[a-z][0-9]+d$/;
+const NESTED = "Google Cloud nests virtualization on its Intel series alone, N1, N2, C2 and C3 among them: never on E2, an AMD series or Arm";
 
 /** Where each region is, from https://cloud.google.com/compute/docs/regions-zones; a region missing here shows its name alone. */
 export const REGIONS: Readonly<Record<string, readonly [city: string, country: string]>> = {
@@ -274,6 +323,7 @@ export type GcpInstance = {
     ipv6AccessConfigs?: { externalIpv6?: string; externalIpv6PrefixLength?: number }[];
   }[];
   disks?: { boot?: boolean; autoDelete?: boolean; deviceName?: string; source?: string }[];
+  metadata?: { items?: { key: string; value?: string }[] };
 };
 
 export type GcpAddress = {
@@ -301,6 +351,7 @@ export type GcpFirewall = {
   targetServiceAccounts?: string[];
   allowed?: { IPProtocol: string; ports?: string[] }[];
   denied?: { IPProtocol: string; ports?: string[] }[];
+  disabled?: boolean;
 };
 
 export type GcpZone = { name: string; region?: string; status?: string; deprecated?: { state?: string } };
@@ -316,7 +367,7 @@ export type GcpMachineType = {
 };
 
 type GcpNetwork = { name: string; selfLink: string; autoCreateSubnetworks?: boolean; subnetworks?: string[]; IPv4Range?: string };
-type GcpImage = { name: string; family?: string; architecture?: string; status?: string; deprecated?: { state?: string } };
+type GcpImage = { name: string; family?: string; architecture?: string; status?: string; diskSizeGb?: string; deprecated?: { state?: string } };
 
 type ErrorBody = {
   error?: {
@@ -330,27 +381,45 @@ type ErrorBody = {
 
 // --- names and marks -------------------------------------------------------------------------
 
-/** What sitesolide writes where labels cannot go: in a firewall rule's description, and an address's. */
-export function markOf(name: string): string {
-  return `${MANAGED_LABEL}=${MANAGED_VALUE} ${MACHINE_LABEL}=${name}`;
+/** What the owner writes where labels cannot go: in a firewall rule's description, and an address's. */
+export function markOf(name: string, owner: Owner): string {
+  return `${owner.mark} ${owner.machineLabel}=${name}`;
 }
 
-function marked(description: string | undefined, name: string): boolean {
-  const mark = markOf(name);
+function marked(description: string | undefined, name: string, owner: Owner): boolean {
+  const mark = markOf(name, owner);
   return description === mark || (description ?? "").startsWith(`${mark}:`);
 }
 
 /** The network tag the rules target, which the instance carries. */
-export function tagOf(name: string): string {
-  return `sitesolide-${name}`;
+export function tagOf(name: string, owner: Owner): string {
+  return `${owner.name}-${name}`;
 }
 
-export function addressNameOf(name: string): string {
-  return `sitesolide-${name}`;
+export function addressNameOf(name: string, owner: Owner): string {
+  return `${owner.name}-${name}`;
 }
 
-export function ruleNamesOf(name: string): { allow: string; deny: string } {
-  return { allow: `sitesolide-${name}`, deny: `sitesolide-${name}-deny` };
+/** The names a machine's rules take: one per set of sources, `<owner>-<name>` first, and the deny rule's. */
+export function ruleNamesOf(name: string, owner: Owner): { allow: string[]; deny: string } {
+  const base = `${owner.name}-${name}`;
+  return { allow: Array.from({ length: MAX_SOURCE_SETS }, (_, index) => (index === 0 ? base : `${base}-${index + 1}`)), deny: `${base}-deny` };
+}
+
+/** Every name a rule of the machine may carry, in the order they are made, listed and deleted. */
+function ruleNameList(name: string, owner: Owner): string[] {
+  const names = ruleNamesOf(name, owner);
+  return [...names.allow, names.deny];
+}
+
+function byRuleName(name: string, owner: Owner): (a: GcpFirewall, b: GcpFirewall) => number {
+  const order = ruleNameList(name, owner);
+  return (a, b) => order.indexOf(a.name) - order.indexOf(b.name);
+}
+
+/** `a`, `a and b`, `a, b and c`. */
+function listed(items: readonly string[]): string {
+  return items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 }
 
 /** The last segment of one of the API's URLs: the name it points at. */
@@ -376,84 +445,152 @@ function isArm(type: GcpMachineType): boolean {
   return type.architecture === "ARM64" || (type.architecture === undefined && ARM_SERIES.has(seriesOf(type.name)));
 }
 
+/** Whether Google would nest virtualization on the type: not on Arm, not on an AMD series. E2 is left to Google to refuse. */
+export function nestsVirtualization(type: GcpMachineType): boolean {
+  return !isArm(type) && !AMD_SERIES.test(seriesOf(type.name));
+}
+
 /** Debian 13 from Google's own image project, the family so that an order gets its latest build. */
 export function debianImage(arm: boolean): string {
   return `projects/debian-cloud/global/images/family/${arm ? "debian-13-arm64" : "debian-13"}`;
 }
 
-/** A sourceImage given with --image: Google's path to an image or an image family. */
+/** A sourceImage as Google's path to an image or an image family. */
 const IMAGE_PATH = /^projects\/[a-z0-9.:-]+\/global\/images\/(?:family\/)?[a-z0-9-]+$/;
+/** An image as gcloud and Terraform take it, `<project>/<image or family>`: `ubuntu-os-cloud/ubuntu-2404-lts-amd64`. */
+const IMAGE_SHORT = /^([a-z0-9.:-]+)\/([a-z][a-z0-9-]{0,62})$/;
 
-/** The two rules of a machine: what they let in, then everything else dropped. */
-export function firewallRules(name: string, network: string) {
-  const { allow, deny } = ruleNamesOf(name);
-  const common = { network, direction: "INGRESS", sourceRanges: ["0.0.0.0/0"], targetTags: [tagOf(name)] };
+/** An IPv4 address or network, as a rule's sourceRanges takes it. */
+export function isIpv4Source(source: string): boolean {
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/.exec(source);
+  return match !== null && match.slice(1, 5).every((octet) => Number(octet) <= 255) && (match[5] === undefined || Number(match[5]) <= 32);
+}
+
+/**
+ * The request's rules as Google's rules take them: grouped by their IPv4
+ * sources, one rule of Google's each, in the order the request first names
+ * them; and the IPv6 sources, which reach nothing on this machine.
+ */
+export function sourceSets(inbound: readonly Inbound[]): { sets: { sources: string[]; rules: Inbound[] }[]; ipv6: string[] } {
+  const sets = new Map<string, { sources: string[]; rules: Inbound[] }>();
+  const ipv6 = new Set<string>();
+  for (const rule of inbound) {
+    for (const source of rule.sources) if (source.includes(":")) ipv6.add(source);
+    const sources = [...new Set(rule.sources.filter((source) => !source.includes(":")))].sort();
+    if (sources.length === 0) continue;
+    const key = sources.join(" ");
+    const set = sets.get(key) ?? sets.set(key, { sources, rules: [] }).get(key)!;
+    set.rules.push({ ...rule, sources });
+  }
+  return { sets: [...sets.values()], ipv6: [...ipv6] };
+}
+
+/** What a set of rules allows, a protocol each, its ports in the order the request gave them. */
+function allowedOf(rules: readonly Inbound[]): { IPProtocol: string; ports?: string[] }[] {
+  const ports = new Map<string, string[]>();
+  for (const rule of rules) {
+    const list = ports.get(rule.protocol) ?? [];
+    if (rule.port !== undefined && !list.includes(String(rule.port))) list.push(String(rule.port));
+    ports.set(rule.protocol, list);
+  }
+  return [...ports].map(([protocol, list]) => (protocol === "icmp" ? { IPProtocol: protocol } : { IPProtocol: protocol, ports: list }));
+}
+
+export type FirewallRule = {
+  name: string;
+  description: string;
+  priority: number;
+  network: string;
+  direction: "INGRESS";
+  sourceRanges: string[];
+  targetTags: string[];
+  allowed?: { IPProtocol: string; ports?: string[] }[];
+  denied?: { IPProtocol: string; ports?: string[] }[];
+};
+
+/** The rules of a machine: what each set of sources may reach, then everything else dropped. */
+export function firewallRules(name: string, network: string, inbound: readonly Inbound[], owner: Owner): FirewallRule[] {
+  const names = ruleNamesOf(name, owner);
+  const common = { network, direction: "INGRESS" as const, targetTags: [tagOf(name, owner)] };
+  const allows = sourceSets(inbound).sets.map((set, index) => ({
+    name: names.allow[index]!,
+    description: `${markOf(name, owner)}: ${describeInbound(set.rules)}`,
+    priority: ALLOW_PRIORITY,
+    ...common,
+    sourceRanges: set.sources,
+    allowed: allowedOf(set.rules),
+  }));
   return [
+    ...allows,
     {
-      name: allow,
-      description: `${markOf(name)}: inbound tcp 22, 80, 443 and icmp, from everywhere`,
-      priority: ALLOW_PRIORITY,
-      ...common,
-      // Ping serves diagnosis and external monitoring.
-      allowed: [{ IPProtocol: "tcp", ports: ["22", "80", "443"] }, { IPProtocol: "icmp" }],
-    },
-    {
-      name: deny,
-      description: `${markOf(name)}: every other inbound packet dropped, before the default network's own rules`,
+      name: names.deny,
+      description: `${markOf(name, owner)}: every other inbound packet dropped, before the default network's own rules`,
       priority: DENY_PRIORITY,
       ...common,
+      sourceRanges: ["0.0.0.0/0"],
       denied: [{ IPProtocol: "all" }],
     },
   ];
 }
 
+/** What a rule does, whatever the order Google lists its parts in. */
+function ruleKey(rule: GcpFirewall | FirewallRule): string {
+  const entries = (list: { IPProtocol: string; ports?: string[] }[] | undefined) => (list ?? []).map((item) => `${item.IPProtocol}:${[...(item.ports ?? [])].sort().join(",")}`).sort();
+  const disabled = "disabled" in rule && rule.disabled === true;
+  return JSON.stringify([rule.direction ?? "INGRESS", rule.priority ?? ALLOW_PRIORITY, disabled, [...(rule.sourceRanges ?? [])].sort(), [...(rule.targetTags ?? [])].sort(), entries(rule.allowed), entries(rule.denied)]);
+}
+
+/** Whether a rule found does what the request wants of it: an earlier run's rule for other rules, or one disabled by hand, does not. */
+export function sameRule(found: GcpFirewall, wanted: FirewallRule): boolean {
+  return ruleKey(found) === ruleKey(wanted);
+}
+
 /**
- * Whether a rule is sitesolide's for that machine: its name, the mark in its
+ * Whether a rule is the owner's for that machine: its name, the mark in its
  * description, and a target that is the machine's tag and nothing else. One
  * that fails any of the three is left as it is, whatever its name says.
  */
-export function ownRule(rule: GcpFirewall, name: string): boolean {
-  const names = ruleNamesOf(name);
+export function ownRule(rule: GcpFirewall, name: string, owner: Owner): boolean {
   const tags = rule.targetTags ?? [];
   return (
-    (rule.name === names.allow || rule.name === names.deny) &&
-    marked(rule.description, name) &&
+    ruleNameList(name, owner).includes(rule.name) &&
+    marked(rule.description, name, owner) &&
     tags.length === 1 &&
-    tags[0] === tagOf(name) &&
+    tags[0] === tagOf(name, owner) &&
     (rule.targetServiceAccounts ?? []).length === 0
   );
 }
 
-/** Whether an address is sitesolide's for that machine: by its labels, or, for one whose labels a run did not get to set, by its name and description. */
-export function ownAddress(address: GcpAddress, name: string): boolean {
-  if (isManaged(address.labels)) return address.labels?.[MACHINE_LABEL] === name;
+/** Whether an address is the owner's for that machine: by its labels, or, for one whose labels a run did not get to set, by its name and description. */
+export function ownAddress(address: GcpAddress, name: string, owner: Owner): boolean {
+  if (owner.manages(address.labels)) return address.labels?.[owner.machineLabel] === name;
   const unlabelled = Object.keys(address.labels ?? {}).length === 0;
-  return unlabelled && address.name === addressNameOf(name) && marked(address.description, name);
+  return unlabelled && address.name === addressNameOf(name, owner) && marked(address.description, name, owner);
 }
 
 /** The machine a description's mark names, `managed-by=sitesolide sitesolide-machine=web: ...`, or null. */
-export function machineOfMark(description: string | undefined): string | null {
-  const match = new RegExp(`^${MANAGED_LABEL}=${MANAGED_VALUE} ${MACHINE_LABEL}=([a-z0-9-]+)(?::|$)`).exec(description ?? "");
+export function machineOfMark(description: string | undefined, owner: Owner): string | null {
+  const match = new RegExp(`^${owner.mark} ${owner.machineLabel}=([a-z0-9-]+)(?::|$)`).exec(description ?? "");
   return match?.[1] ?? null;
 }
 
-/** The machine an address was reserved for, when sitesolide reserved it. */
-export function machineOfAddress(address: GcpAddress): string | null {
-  const name = isManaged(address.labels) ? (address.labels?.[MACHINE_LABEL] ?? null) : machineOfMark(address.description);
-  return name !== null && ownAddress(address, name) ? name : null;
+/** The machine an address was reserved for, when the owner reserved it. */
+export function machineOfAddress(address: GcpAddress, owner: Owner): string | null {
+  const name = owner.manages(address.labels) ? (address.labels?.[owner.machineLabel] ?? null) : machineOfMark(address.description, owner);
+  return name !== null && ownAddress(address, name, owner) ? name : null;
 }
 
-/** The machine a rule was created for, when sitesolide created it. */
-export function machineOfRule(rule: GcpFirewall): string | null {
-  const name = machineOfMark(rule.description);
-  return name !== null && ownRule(rule, name) ? name : null;
+/** The machine a rule was created for, when the owner created it. */
+export function machineOfRule(rule: GcpFirewall, owner: Owner): string | null {
+  const name = machineOfMark(rule.description, owner);
+  return name !== null && ownRule(rule, name, owner) ? name : null;
 }
 
 /** What remains of a machine besides its instance: what a refusal names, and what `destroy` removes once the instance is gone. */
 export type Leftovers = { addresses: GcpAddress[]; rules: GcpFirewall[] };
 
 /** A machine without its instance, as `find` and `list` show it: managed, so that `destroy` takes it. */
-export function incompleteMachine(name: string, left: Leftovers): Machine {
+export function incompleteMachine(name: string, left: Leftovers, owner: Owner): Machine {
   const address = left.addresses[0];
   return {
     provider: "gcp",
@@ -468,8 +605,9 @@ export function incompleteMachine(name: string, left: Leftovers): Machine {
     monthlyPrice: null,
     backups: false,
     managed: true,
-    labels: labelsFor(name),
-    login: LOGIN,
+    labels: owner.labels(name),
+    // No instance, no account: the one a create gives when the request names none.
+    login: owner.name,
   };
 }
 
@@ -479,8 +617,8 @@ export function leftoverLines(name: string, left: Leftovers): string[] {
   const rules = left.rules.map((rule) => rule.name);
   return [
     ...left.addresses.map((address) => `the address ${address.name} (${address.address ?? "no address"}, ${lastSegment(address.region)}) an earlier run reserved is still there, billed by the hour while it is`),
-    ...(rules.length === 0 ? [] : [`the firewall ${rules.length === 1 ? "rule" : "rules"} ${rules.join(" and ")} an earlier run created ${rules.length === 1 ? "is" : "are"} still there`]),
-    `the same create reuses them; to give the machine up, \`sitesolide machine destroy ${name} --provider gcp\` removes them`,
+    ...(rules.length === 0 ? [] : [`the firewall ${rules.length === 1 ? "rule" : "rules"} ${listed(rules)} an earlier run created ${rules.length === 1 ? "is" : "are"} still there`]),
+    `the same create reuses them; to give the machine up, a destroy of ${name} removes them`,
   ];
 }
 
@@ -489,10 +627,59 @@ function diskName(disk: { deviceName?: string; source?: string }): string {
   return lastSegment(disk.source) || disk.deviceName || "a disk";
 }
 
-/** The `ssh-keys` entry: `user:key`. A comment that Google would read as an expiry is left out. */
-export function sshKeysEntry(key: CreateRequest["key"]): string {
-  const comment = key.comment.startsWith("google-ssh") ? "" : key.comment;
-  return `${LOGIN}:${[key.algorithm, key.blob, comment].filter((part) => part !== "").join(" ")}`;
+const KEY_ALGORITHM = /^[a-z0-9][a-z0-9@.-]{0,63}$/;
+const KEY_BLOB = /^[A-Za-z0-9+/]+={0,3}$/;
+
+/** Whether the key can go in the `ssh-keys` entry: one line of it, made of an algorithm and its base64. */
+export function writableKey(key: PublicKey): boolean {
+  return KEY_ALGORITHM.test(key.algorithm) && KEY_BLOB.test(key.blob);
+}
+
+/**
+ * The `ssh-keys` entry: `<login>:<key>`. A comment that Google would read as
+ * an expiry is left out, and so is one that would break the line: the agent
+ * reads one key a line, and a second line is a second account.
+ */
+export function sshKeysEntry(key: PublicKey, login: string): string {
+  const comment = key.comment.startsWith("google-ssh") || /[\u0000-\u001f\u007f]/.test(key.comment) ? "" : key.comment.trim();
+  return `${login}:${[key.algorithm, key.blob, comment].filter((part) => part !== "").join(" ")}`;
+}
+
+/** The account an instance's key logs into, read from its `ssh-keys` entry; the owner's name when it says none. */
+export function loginOf(instance: GcpInstance, owner: Owner): string {
+  const entry = instance.metadata?.items?.find((item) => item.key === "ssh-keys")?.value ?? "";
+  const first = entry.split("\n").find((line) => line.trim() !== "") ?? "";
+  const login = first.slice(0, Math.max(0, first.indexOf(":")));
+  return LOGIN_SHAPE.test(login) ? login : owner.name;
+}
+
+/**
+ * What Google Cloud would refuse in a request, or what would break the
+ * machine it makes, said as what it cannot be asked; null when nothing.
+ * Nothing is read: this is asked before anything leaves.
+ */
+export function requestProblem(request: CreateRequest, key: PublicKey): string | null {
+  if (!writableKey(key)) return "a key that is not an OpenSSH public key, an algorithm then its base64";
+  if (request.login !== undefined) {
+    const problem = loginProblem(request.login);
+    if (problem !== null) return `the account ${JSON.stringify(request.login)} for the key: ${problem}`;
+  }
+  if (request.userData !== undefined) {
+    const bytes = Buffer.byteLength(request.userData);
+    if (bytes > METADATA_VALUE_BYTES) return `a user-data of ${bytes} bytes: a metadata value holds ${METADATA_VALUE_BYTES / 1024} KB at most`;
+  }
+  if (request.disk !== undefined) {
+    const { gb, type } = request.disk;
+    if (!Number.isInteger(gb) || gb < 1 || gb > MAX_DISK_GB) return `a boot disk of ${gb} GB: a whole number from 1 to ${MAX_DISK_GB}`;
+    if (type !== undefined && !DISK_TYPE_SHAPE.test(type)) return `the disk type ${JSON.stringify(type)}, which is not the name of one`;
+  }
+  for (const rule of request.inbound) {
+    const wrong = rule.sources.find((source) => !source.includes(":") && !isIpv4Source(source));
+    if (wrong !== undefined) return `the source ${JSON.stringify(wrong)}, neither an IPv4 nor an IPv6 network`;
+  }
+  const sets = sourceSets(request.inbound).sets.length;
+  if (sets > MAX_SOURCE_SETS) return `rules from ${sets} sets of sources: ${MAX_SOURCE_SETS} at most, a firewall rule each`;
+  return null;
 }
 
 // --- reading the API's answers ----------------------------------------------------------
@@ -595,9 +782,25 @@ export function operationFailure(operation: GcpOperation, what: string): Operati
   return new OperationError({ error: "action-failed", message: `Google Cloud could not ${what} (${answer}): ${said}`, details: [`operation ${operation.name}`] }, codes, said);
 }
 
+/**
+ * The refusal of an order that asked for nested virtualization, which Google
+ * gives on its Intel series alone: said outright when Google's own words
+ * point at it, and noted beside any other refusal of the request, since its
+ * words for it are not documented.
+ */
+export function nestedFailure(error: ProviderError, type: string): Failure {
+  const said = error instanceof GcpError || error instanceof OperationError ? error.said : "";
+  const refusal = (error instanceof GcpError && error.status === 400) || (error instanceof OperationError && error.failure.error === "action-failed");
+  if (!refusal) return error.failure;
+  if (/nested|virtuali[sz]ation/i.test(said)) {
+    return { ...error.failure, message: `Google Cloud refused nested virtualization on ${type}: ${said}`, details: [NESTED, ...(error.failure.details ?? [])] };
+  }
+  return { ...error.failure, details: [...(error.failure.details ?? []), `nested virtualization was asked: ${NESTED}`] };
+}
+
 // --- what the answers mean -------------------------------------------------------------------
 
-export function toMachine(instance: GcpInstance): Machine {
+export function toMachine(instance: GcpInstance, owner: Owner): Machine {
   const nic = instance.networkInterfaces?.[0];
   const ipv6 = nic?.ipv6AccessConfigs?.[0];
   return {
@@ -613,9 +816,9 @@ export function toMachine(instance: GcpInstance): Machine {
     // The API gives no price; the Cloud Billing catalogue needs credentials of its own.
     monthlyPrice: null,
     backups: false,
-    managed: isManaged(instance.labels),
+    managed: owner.manages(instance.labels),
     labels: instance.labels ?? {},
-    login: LOGIN,
+    login: loginOf(instance, owner),
   };
 }
 
@@ -713,7 +916,7 @@ export async function signedAssertion(email: string, privateKey: string, now: nu
   return `${header}.${claims}.${base64url(new Uint8Array(signature))}`;
 }
 
-/** The fields of a service account key file sitesolide uses; null for anything else, an authorized_user file included. */
+/** The fields of a service account key file the provider uses; null for anything else, an authorized_user file included. */
 export function readKeyFile(text: string | null): { email: string; privateKey: string; project: string | null } | null {
   if (text === null) return null;
   let parsed: unknown;
@@ -773,7 +976,7 @@ export function gcp(context: ProviderContext): Provider {
   const base = apiAddress(context.environment, API_VARIABLE, DEFAULT_API);
   const oauth = apiAddress(context.environment, OAUTH_VARIABLE, DEFAULT_OAUTH);
   const host = new URL(base).host;
-  const { clock, fetcher } = context;
+  const { clock, fetcher, owner } = context;
   const credentials: Credentials = context.credentials;
   const project = credentials[PROJECT_VARIABLE]?.trim() ?? "";
   const given = credentials[TOKEN_VARIABLE]?.trim() ?? "";
@@ -986,7 +1189,7 @@ export function gcp(context: ProviderContext): Provider {
         last = status;
         if (instance.status === "RUNNING") return instance;
         if (!justCreated && (instance.status === "TERMINATED" || instance.status === "STOPPED" || instance.status === "SUSPENDED")) {
-          throw new ProviderError({ error: "machine-off", message: `${name} exists but is ${status}`, details: ["sitesolide never starts or stops a machine by itself"] });
+          throw new ProviderError({ error: "machine-off", message: `${name} exists but is ${status}`, details: ["a create never starts or stops a machine"] });
         }
       }
       if (clock.now() >= deadline) {
@@ -1040,21 +1243,70 @@ export function gcp(context: ProviderContext): Provider {
     return found;
   }
 
-  /** The image `create` asks for, checked: Debian 13 for the type's architecture, or a path to an image of Google's. */
-  async function checkImage(image: string, type: GcpMachineType, report: Report): Promise<string> {
-    const source = image === DEBIAN ? debianImage(isArm(type)) : image;
-    report(`-> image ${image === DEBIAN ? `${DEBIAN}, ${source}` : source}`);
-    if (!IMAGE_PATH.test(source)) {
+  /**
+   * The image `create` asks for, checked: Debian 13 for the type's
+   * architecture, an image or a family of a project, `ubuntu-os-cloud/
+   * ubuntu-2404-lts-amd64`, looked up as an image first then as a family as
+   * gcloud and Terraform do, or Google's path to either. An image of another
+   * architecture than the type's is refused here rather than by the order,
+   * once the rules and the address are made.
+   */
+  async function checkImage(image: string, type: GcpMachineType, report: Report): Promise<{ source: string; gb: number | null }> {
+    const short = IMAGE_SHORT.exec(image);
+    const candidates =
+      image === DEBIAN
+        ? [debianImage(isArm(type))]
+        : short !== null && PROJECT_SHAPE.test(short[1]!)
+          ? [`projects/${short[1]}/global/images/${short[2]}`, `projects/${short[1]}/global/images/family/${short[2]}`]
+          : IMAGE_PATH.test(image)
+            ? [image]
+            : [];
+    report(`-> image ${image === DEBIAN ? `${DEBIAN}, ${candidates[0]}` : image}`);
+    if (candidates.length === 0) {
       throw new ProviderError({
         error: "provider-invalid",
-        message: `${image} is not an image sitesolide can order on Google Cloud`,
-        details: [`--image takes ${DEBIAN}, or a path to an image or an image family: projects/debian-cloud/global/images/family/debian-13`],
+        message: `${image} is not an image to order on Google Cloud`,
+        details: [`an image is ${DEBIAN}, an image or a family of a project, ubuntu-os-cloud/ubuntu-2404-lts-amd64, or Google's path to either: projects/debian-cloud/global/images/family/debian-13`],
       });
     }
-    const found = await read<GcpImage>(`/${source}`, `read the image ${source}`);
-    if (found === null) throw new ProviderError({ error: "provider-invalid", message: `Google Cloud has no image ${source}`, details: ["the image or its family does not exist, or the account may not read it"] });
-    report(`   ${found.name}${found.architecture === undefined ? "" : `, ${found.architecture.toLowerCase()}`}`);
-    return source;
+    for (const source of candidates) {
+      const found = await read<GcpImage>(`/${source}`, `read the image ${source}`);
+      if (found === null) continue;
+      report(`   ${found.name}${found.architecture === undefined ? "" : `, ${found.architecture.toLowerCase()}`}`);
+      if (found.architecture !== undefined && (found.architecture === "ARM64") !== isArm(type)) {
+        throw new ProviderError({
+          error: "provider-invalid",
+          message: `the image ${found.name} is ${found.architecture.toLowerCase()}, and ${type.name} is ${isArm(type) ? "arm64" : "x86_64"}`,
+          details: ["pick an image of the type's architecture, or a type of the image's"],
+        });
+      }
+      const gb = Number(found.diskSizeGb);
+      return { source, gb: Number.isFinite(gb) && gb > 0 ? gb : null };
+    }
+    throw new ProviderError({ error: "provider-invalid", message: `Google Cloud has no image ${candidates.at(-1)}`, details: ["the image or its family does not exist, or the account may not read it"] });
+  }
+
+  /**
+   * The boot disk: the request's size and type, else 20 GB of the type the
+   * series boots from. What Google would refuse at the order is refused
+   * here: a disk smaller than the image, a type the zone does not have, a
+   * series that boots from Hyperdisk alone given another.
+   */
+  async function checkDisk(request: CreateRequest, zone: string, imageGb: number | null, report: Report): Promise<{ type: string; gb: number }> {
+    const type = request.disk?.type ?? bootDiskType(request.type);
+    const gb = request.disk?.gb ?? DISK_GB;
+    report(`-> boot disk: ${gb} GB, ${type}`);
+    if (HYPERDISK_ONLY.has(seriesOf(request.type)) && !type.startsWith("hyperdisk-")) {
+      throw new ProviderError({ error: "provider-invalid", message: `${request.type} boots from Hyperdisk alone, not from ${type}`, details: ["hyperdisk-balanced is the disk type it takes"] });
+    }
+    if (imageGb !== null && gb < imageGb) {
+      throw new ProviderError({ error: "provider-invalid", message: `a boot disk of ${gb} GB is smaller than its image, ${imageGb} GB`, details: [`${imageGb} GB at least`] });
+    }
+    if (request.disk?.type !== undefined) {
+      const found = await read<{ name: string }>(own(`/zones/${zone}/diskTypes/${type}`), `read the disk type ${type}`);
+      if (found === null) throw new ProviderError({ error: "provider-invalid", message: `${type} is not a disk type of the zone ${zone}`, details: ["pd-balanced, pd-ssd and hyperdisk-balanced are the usual ones"] });
+    }
+    return { type, gb };
   }
 
   /** The default network, and the subnet of the region the instance is attached to. */
@@ -1074,38 +1326,60 @@ export function gcp(context: ProviderContext): Provider {
     return { network: network.selfLink, subnetwork };
   }
 
-  /** The two rules, when sitesolide created them; one of their names that is not sitesolide's refuses the run. */
-  async function findRules(name: string): Promise<(GcpFirewall | null)[]> {
-    const rules: (GcpFirewall | null)[] = [];
-    for (const ruleName of Object.values(ruleNamesOf(name))) {
-      const rule = await read<GcpFirewall>(own(`/global/firewalls/${ruleName}`), `read the firewall rule ${ruleName}`);
-      if (rule !== null && !ownRule(rule, name)) {
-        throw new ProviderError({
-          error: "firewall-taken",
-          message: `a firewall rule named ${ruleName} exists in the project, and sitesolide did not create it`,
-          details: [`its description does not start with ${markOf(name)}, or it targets more than the tag ${tagOf(name)}: it is never adopted nor changed`],
-        });
-      }
-      rules.push(rule);
+  /** Every rule of the project that is the owner's for that machine, in the order of their names. */
+  async function rulesOf(name: string, all?: GcpFirewall[]): Promise<GcpFirewall[]> {
+    const rules = all ?? (await listAll<GcpFirewall>(own("/global/firewalls"), "read the firewall rules"));
+    return rules.filter((rule) => ownRule(rule, name, owner)).sort(byRuleName(name, owner));
+  }
+
+  /**
+   * The rules the machine wants, against the project's: one of their names
+   * held by a rule that is not the owner's for this machine refuses the run;
+   * the owner's that do what is wanted are reused, and those an earlier run
+   * made for other rules are to go, since nothing the request did not ask
+   * may stay open.
+   */
+  async function planRules(name: string, wanted: FirewallRule[]): Promise<{ reuse: Map<string, GcpFirewall>; stale: GcpFirewall[] }> {
+    const all = await listAll<GcpFirewall>(own("/global/firewalls"), "read the firewall rules");
+    for (const rule of wanted) {
+      const holder = all.find((candidate) => candidate.name === rule.name);
+      if (holder === undefined || ownRule(holder, name, owner)) continue;
+      const other = machineOfRule(holder, owner);
+      throw new ProviderError({
+        error: "firewall-taken",
+        message: `a firewall rule named ${rule.name} exists in the project, and ${other === null ? `${owner.name} did not create it` : `${owner.name} created it for the machine ${other}`}`,
+        details: [
+          other === null
+            ? `its description does not start with ${markOf(name, owner)}, or it targets more than the tag ${tagOf(name, owner)}: it is never adopted nor changed`
+            : `pick another name for this machine: ${other}'s rules keep theirs`,
+        ],
+      });
     }
-    return rules;
+    const reuse = new Map<string, GcpFirewall>();
+    const stale: GcpFirewall[] = [];
+    for (const rule of await rulesOf(name, all)) {
+      const match = wanted.find((candidate) => candidate.name === rule.name);
+      if (match !== undefined && sameRule(rule, match)) reuse.set(rule.name, rule);
+      else stale.push(rule);
+    }
+    return { reuse, stale };
   }
 
   async function findAddress(region: string, name: string): Promise<GcpAddress | null> {
-    const addressName = addressNameOf(name);
+    const addressName = addressNameOf(name, owner);
     const address = await read<GcpAddress>(own(`/regions/${region}/addresses/${addressName}`), `read the address ${addressName}`);
     if (address === null) return null;
-    if (!ownAddress(address, name)) {
+    if (!ownAddress(address, name, owner)) {
       throw new ProviderError({
         error: "provider-name-taken",
-        message: `an address named ${addressName} exists in ${region}, and sitesolide did not reserve it`,
-        details: [`it lacks the label ${MANAGED_LABEL}=${MANAGED_VALUE}: it is never adopted nor changed`],
+        message: `an address named ${addressName} exists in ${region}, and ${owner.name} did not reserve it`,
+        details: [`it lacks the label ${owner.mark}: it is never adopted nor changed`],
       });
     }
     if ((address.users ?? []).length > 0) {
       throw new ProviderError({
         error: "provider-name-taken",
-        message: `the address ${addressName}, reserved by sitesolide, is in use by something else`,
+        message: `the address ${addressName}, reserved by ${owner.name}, is in use by something else`,
         details: (address.users ?? []).map((user) => `used by ${user.replace(/^.*\/projects\//, "projects/")}`),
       });
     }
@@ -1114,10 +1388,10 @@ export function gcp(context: ProviderContext): Provider {
 
   // --- what is written
 
-  async function ensureRule(rule: ReturnType<typeof firewallRules>[number], found: GcpFirewall | null, report: Report, made: Made[]): Promise<Resource> {
+  async function ensureRule(rule: FirewallRule, found: GcpFirewall | null, report: Report, made: Made[]): Promise<Resource> {
     report(`-> firewall rule ${rule.name}`);
     if (found !== null) {
-      report("   already created by sitesolide, reused");
+      report(`   already created by ${owner.name}, reused`);
       return { kind: "firewall rule", name: found.name, id: String(found.id), reused: true };
     }
     const operation = await call<GcpOperation>("POST", own("/global/firewalls"), `create the firewall rule ${rule.name}`, rule);
@@ -1129,7 +1403,7 @@ export function gcp(context: ProviderContext): Provider {
   }
 
   async function ensureAddress(region: string, name: string, found: GcpAddress | null, report: Report, made: Made[]): Promise<{ address: GcpAddress; resource: Resource }> {
-    const addressName = addressNameOf(name);
+    const addressName = addressNameOf(name, owner);
     const path = own(`/regions/${region}/addresses/${addressName}`);
     report(`-> static address ${addressName} in ${region}`);
     let address = found;
@@ -1137,36 +1411,35 @@ export function gcp(context: ProviderContext): Provider {
     if (address === null) {
       const operation = await call<GcpOperation>("POST", own(`/regions/${region}/addresses`), `reserve the address ${addressName}`, {
         name: addressName,
-        description: `${markOf(name)}: the machine's public IPv4, kept across a stop and a start`,
+        description: `${markOf(name, owner)}: the machine's public IPv4, kept across a stop and a start`,
         addressType: "EXTERNAL",
         networkTier: "PREMIUM",
-        labels: labelsFor(name),
+        labels: owner.labels(name),
       });
       made.push({ kind: "address", name: addressName, path });
       await waitFor(operation, `reserve the address ${addressName}`, report);
       address = await call<GcpAddress>("GET", path, `read the address ${addressName}`);
       reused = false;
     }
-    if (!isManaged(address.labels)) {
+    if (!owner.manages(address.labels)) {
       // The reference sets an address's labels through setLabels, with the
       // fingerprint of those it has: whether insert took them or not, they
       // are there after this.
-      const operation = await call<GcpOperation>("POST", `${path}/setLabels`, `label the address ${addressName}`, { labels: labelsFor(name), labelFingerprint: address.labelFingerprint ?? "" });
+      const operation = await call<GcpOperation>("POST", `${path}/setLabels`, `label the address ${addressName}`, { labels: owner.labels(name), labelFingerprint: address.labelFingerprint ?? "" });
       await waitFor(operation, `label the address ${addressName}`, report);
       address = await call<GcpAddress>("GET", path, `read the address ${addressName}`);
     }
     if (typeof address.address !== "string" || address.address === "") {
       throw new GcpError({ error: "provider-unreadable", message: `${host} answered without the address of ${addressName}` }, 200, []);
     }
-    report(reused ? `   ${address.address}, already reserved by sitesolide, reused` : `   reserved: ${address.address}`);
+    report(reused ? `   ${address.address}, already reserved by ${owner.name}, reused` : `   reserved: ${address.address}`);
     return { address, resource: { kind: "address", name: addressName, id: String(address.id), reused } };
   }
 
   /**
    * Deletes what this run created before an order Google refused: the rules
-   * and the address were made for an instance that does not exist, and
-   * nothing in sitesolide would ever list or remove them, since `list` and
-   * `destroy` start from an instance. What an earlier run made, or the
+   * and the address were made for an instance that does not exist, and are
+   * billed or open for nothing. What an earlier run made, or the
    * project already held, is left as it was. A deletion that fails leaves the
    * resource marked, where the next run finds and reuses it. Returns what
    * happened, one line each, for the refusal's details.
@@ -1181,7 +1454,7 @@ export function gcp(context: ProviderContext): Provider {
         await waitFor(operation, `delete the ${resource.kind} ${resource.name}`, () => {});
       },
       report,
-      (resource) => `left the ${resource.kind} ${resource.name}: the next run reuses it, or \`sitesolide machine destroy ${machine} --provider gcp\` removes it`,
+      (resource) => `left the ${resource.kind} ${resource.name}: the next run reuses it, or a destroy of ${machine} removes it`,
     );
   }
 
@@ -1205,38 +1478,51 @@ export function gcp(context: ProviderContext): Provider {
    * can refuse is read, then the rules, the address and the instance are
    * made, or reused when an earlier run made them.
    */
-  async function order(request: CreateRequest, resources: Resource[], report: Report): Promise<CreateOutcome> {
+  async function order(request: CreateRequest, key: PublicKey, resources: Resource[], report: Report): Promise<CreateOutcome> {
     const { zone, region, zones } = await checkZone(request.location, report);
     const type = await checkType(request.type, zone, report);
+    if (request.nestedVirtualization === true && !nestsVirtualization(type)) {
+      throw new ProviderError({ error: "provider-invalid", message: `${request.type} cannot nest virtualization`, details: [NESTED] });
+    }
     const image = await checkImage(request.image, type, report);
+    const disk = await checkDisk(request, zone, image.gb, report);
     const { network, subnetwork } = await checkNetwork(region, report);
-    const foundRules = await findRules(request.name);
+    const rules = firewallRules(request.name, network, request.inbound, owner);
+    const { reuse, stale } = await planRules(request.name, rules);
     const foundAddress = await findAddress(region, request.name);
+    const login = request.login ?? owner.name;
 
     // What this run creates before the instance, undone if the order is refused.
     const made: Made[] = [];
     let ordering = false;
     let accepted = false;
     try {
-      const rules = firewallRules(request.name, network);
-      for (const [index, rule] of rules.entries()) resources.push(await ensureRule(rule, foundRules[index] ?? null, report, made));
+      const ipv6 = sourceSets(request.inbound).ipv6;
+      if (ipv6.length > 0) report(`-> IPv6: none on this machine, the default network's subnets being IPv4 only; ${listed(ipv6)} left out of its rules`);
+      for (const rule of stale) {
+        report(`-> firewall rule ${rule.name}`);
+        const deletion = await call<GcpOperation>("DELETE", own(`/global/firewalls/${rule.name}`), `delete the firewall rule ${rule.name}`);
+        await waitFor(deletion, `delete the firewall rule ${rule.name}`, report);
+        report("   an earlier run made it for other rules: deleted");
+      }
+      for (const rule of rules) resources.push(await ensureRule(rule, reuse.get(rule.name) ?? null, report, made));
       const { address, resource } = await ensureAddress(region, request.name, foundAddress, report, made);
       resources.push(resource);
 
-      report(`-> instance ${request.name}: ${request.type} at ${zone}, ${request.image}`);
+      report(`-> instance ${request.name}: ${request.type} at ${zone}, ${request.image}, logged into as ${login}`);
       // A token that needs renewing is renewed before the order leaves, so
       // that a refusal of the renewal is not mistaken for an order in flight.
       await bearer();
       ordering = true;
       const operation = await call<GcpOperation>("POST", own(`/zones/${zone}/instances`), `create the instance ${request.name}`, {
         name: request.name,
-        description: `${markOf(request.name)}: created by sitesolide machine create`,
+        description: `${markOf(request.name, owner)}: created by ${owner.name}`,
         machineType: `zones/${zone}/machineTypes/${request.type}`,
-        labels: labelsFor(request.name),
-        tags: { items: [tagOf(request.name)] },
+        labels: owner.labels(request.name),
+        tags: { items: [tagOf(request.name, owner)] },
         metadata: {
           items: [
-            { key: "ssh-keys", value: sshKeysEntry(request.key) },
+            { key: "ssh-keys", value: sshKeysEntry(key, login) },
             // An organization may turn OS Login on for the whole project,
             // and the guest agent then ignores the key above. The
             // instance's own value wins over the project's.
@@ -1244,18 +1530,21 @@ export function gcp(context: ProviderContext): Provider {
             // The guest agent makes a sudoer of every key in the project's
             // metadata too: this machine takes its own keys only.
             { key: "block-project-ssh-keys", value: "TRUE" },
+            ...(request.userData === undefined ? [] : [{ key: "user-data", value: request.userData }]),
           ],
         },
+        // Absent unless asked: Google takes it on its Intel series alone.
+        ...(request.nestedVirtualization === true ? { advancedMachineFeatures: { enableNestedVirtualization: true } } : {}),
         disks: [
           {
             boot: true,
             autoDelete: true,
             type: "PERSISTENT",
             initializeParams: {
-              sourceImage: image,
-              diskSizeGb: String(DISK_GB),
-              diskType: `zones/${zone}/diskTypes/${bootDiskType(request.type)}`,
-              labels: labelsFor(request.name),
+              sourceImage: image.source,
+              diskSizeGb: String(disk.gb),
+              diskType: `zones/${zone}/diskTypes/${disk.type}`,
+              labels: owner.labels(request.name),
             },
           },
         ],
@@ -1280,32 +1569,28 @@ export function gcp(context: ProviderContext): Provider {
       // have lost its rules.
       const refused = error instanceof OperationError || (!accepted && error instanceof GcpError && error.status >= 400 && error.status < 500);
       if (ordering && !refused) {
-        throw new ProviderError({ ...error.failure, details: [...(error.failure.details ?? []), "the order may still go through: nothing was undone, and the next run picks up what exists", `to give the machine up instead, \`sitesolide machine destroy ${request.name} --provider gcp\` removes what exists`] });
+        throw new ProviderError({ ...error.failure, details: [...(error.failure.details ?? []), "the order may still go through: nothing was undone, and the next run picks up what exists", `to give the machine up instead, a destroy of ${request.name} removes what exists`] });
       }
+      const failure = ordering && request.nestedVirtualization === true ? nestedFailure(error, request.type) : error.failure;
       const undone = await undo(made, request.name, report);
-      if (error.failure.error === "type-unavailable") {
+      if (failure.error === "type-unavailable") {
         throw new ProviderError({
           error: "type-unavailable",
-          message: error.failure.message,
+          message: failure.message,
           details: [...(await alternatives(request.type, zone, region, zones)), ...undone],
         });
       }
-      throw new ProviderError({ ...error.failure, details: [...(error.failure.details ?? []), ...undone] });
+      throw new ProviderError({ ...failure, details: [...(failure.details ?? []), ...undone] });
     }
     report(`-> ${request.name} running`);
     const running = await waitRunning(zone, request.name, report, true);
-    return { machine: toMachine(running), created: true, resources };
+    return { machine: toMachine(running, owner), created: true, resources };
   }
 
-  /** What an earlier run made for a machine besides its instance: its address in any region, its two rules. */
+  /** What an earlier run made for a machine besides its instance: its address in any region, its rules. */
   async function leftoversOf(name: string): Promise<Leftovers> {
-    const addresses = (await aggregated<GcpAddress>("addresses", "read the addresses")).filter((address) => ownAddress(address, name));
-    const rules: GcpFirewall[] = [];
-    for (const ruleName of Object.values(ruleNamesOf(name))) {
-      const rule = await read<GcpFirewall>(own(`/global/firewalls/${ruleName}`), `read the firewall rule ${ruleName}`);
-      if (rule !== null && ownRule(rule, name)) rules.push(rule);
-    }
-    return { addresses, rules };
+    const addresses = (await aggregated<GcpAddress>("addresses", "read the addresses")).filter((address) => ownAddress(address, name, owner));
+    return { addresses, rules: await rulesOf(name) };
   }
 
   return {
@@ -1313,44 +1598,49 @@ export function gcp(context: ProviderContext): Provider {
 
     async find(name) {
       const instances = await instancesNamed(name);
-      const ours = instances.find((instance) => isManaged(instance.labels));
-      if (ours !== undefined) return toMachine(ours);
+      const ours = instances.find((instance) => owner.manages(instance.labels));
+      if (ours !== undefined) return toMachine(ours, owner);
       // Without an instance, what an earlier run made for it is still a
-      // machine of sitesolide's: one a destroy finishes, a create reuses.
+      // machine of the owner's: one a destroy finishes, a create reuses.
       const left = await leftoversOf(name);
-      if (left.addresses.length > 0 || left.rules.length > 0) return incompleteMachine(name, left);
-      return instances[0] === undefined ? null : toMachine(instances[0]);
+      if (left.addresses.length > 0 || left.rules.length > 0) return incompleteMachine(name, left, owner);
+      return instances[0] === undefined ? null : toMachine(instances[0], owner);
     },
 
     async create(request, report): Promise<CreateOutcome> {
-      const problem = nameProblem(request.name);
+      checkRequest(TITLE, request, SUPPORTS);
+      // checkRequest refuses a request without a key: Google's images take no other way in.
+      const key = request.key!;
+      const problem = nameProblem(request.name, owner);
       if (problem !== null) throw new ProviderError({ error: "provider-invalid", message: `Google Cloud would not take the name ${request.name}: ${problem}`, details: ["pick another --name"] });
       if (request.backups) {
-        throw new ProviderError({ error: "provider-invalid", message: "--backups is not implemented on Google Cloud", details: ["Google's snapshot schedules are not created by sitesolide; the machine's own backups are `sitesolide backups`"] });
+        throw new ProviderError({ error: "provider-invalid", message: "backups are not implemented on Google Cloud", details: [`Google's snapshot schedules are not created by ${owner.name}`] });
       }
+      const refused = requestProblem(request, key);
+      if (refused !== null) throw new ProviderError({ error: "provider-invalid", message: `Google Cloud cannot be asked ${refused}`, details: ["nothing was created"] });
       const resources: Resource[] = [];
       report(`-> an instance named ${request.name} in the project ${project}`);
       const existing = await instancesNamed(request.name);
-      const ours = existing.find((instance) => isManaged(instance.labels));
+      const ours = existing.find((instance) => owner.manages(instance.labels));
       if (ours !== undefined) {
-        const found = toMachine(ours);
-        report(`   already created by sitesolide: ${found.type} at ${found.location}, ${found.status}`);
+        const found = toMachine(ours, owner);
+        report(`   already created by ${owner.name}: ${found.type} at ${found.location}, ${found.status}`);
         if (found.type !== request.type || found.location !== request.location) {
           report(`!! it is ${found.type} at ${found.location}: --type and --location only apply to a machine being created`);
         }
         resources.push({ kind: "instance", name: ours.name, id: String(ours.id), reused: true });
         report(`-> ${request.name} running`);
         const running = await waitRunning(found.location, request.name, report, false);
-        return { machine: toMachine(running), created: false, resources };
+        return { machine: toMachine(running, owner), created: false, resources };
       }
       if (existing.length > 0) {
-        const found = toMachine(existing[0]!);
+        const found = toMachine(existing[0]!, owner);
         throw new ProviderError({
           error: "machine-exists",
-          message: `an instance named ${request.name} exists in the project, and sitesolide did not create it`,
+          message: `an instance named ${request.name} exists in the project, and ${owner.name} did not create it`,
           details: [
             `${found.type} at ${found.location}, ${found.status}, ${found.ipv4 ?? "no public address"}`,
-            `it lacks the label ${MANAGED_LABEL}=${MANAGED_VALUE}: nothing was created, nothing was changed`,
+            `it lacks the label ${owner.mark}: nothing was created, nothing was changed`,
           ],
         });
       }
@@ -1369,7 +1659,7 @@ export function gcp(context: ProviderContext): Provider {
         }
       }
       try {
-        return await order(request, resources, report);
+        return await order(request, key, resources, report);
       } catch (error) {
         // Whatever stopped the run, what an earlier run left is still there,
         // and its address still billed: the refusal says so, and how it goes.
@@ -1380,36 +1670,36 @@ export function gcp(context: ProviderContext): Provider {
     },
 
     async list() {
-      const machines = (await aggregated<GcpInstance>("instances", "read the instances")).filter((instance) => isManaged(instance.labels)).map(toMachine);
+      const machines = (await aggregated<GcpInstance>("instances", "read the instances")).filter((instance) => owner.manages(instance.labels)).map((instance) => toMachine(instance, owner));
       // The machines whose instance is gone, or never came, while their
       // address or their rules remain: billed, and destroyed like the others.
       const present = new Set(machines.map((machine) => machine.name));
       const left = new Map<string, Leftovers>();
       const entry = (name: string) => left.get(name) ?? left.set(name, { addresses: [], rules: [] }).get(name)!;
       for (const address of await aggregated<GcpAddress>("addresses", "read the addresses")) {
-        const name = machineOfAddress(address);
+        const name = machineOfAddress(address, owner);
         if (name !== null && !present.has(name)) entry(name).addresses.push(address);
       }
       for (const rule of await listAll<GcpFirewall>(own("/global/firewalls"), "read the firewall rules")) {
-        const name = machineOfRule(rule);
+        const name = machineOfRule(rule, owner);
         if (name !== null && !present.has(name)) entry(name).rules.push(rule);
       }
-      return [...machines, ...[...left.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, leftovers]) => incompleteMachine(name, leftovers))];
+      return [...machines, ...[...left.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, leftovers]) => incompleteMachine(name, leftovers, owner))];
     },
 
     async destroy(machine, options, report): Promise<DestroyOutcome> {
       const removed: string[] = [];
       const kept: string[] = [];
       const incomplete = machine.status === INCOMPLETE;
-      if (!NAME_SHAPE.test(machine.name) || (!incomplete && !ZONE_SHAPE.test(machine.location))) {
-        throw new ProviderError({ error: "provider-invalid", message: `${machine.name} at ${machine.location} is not an instance sitesolide can name on Google Cloud` });
+      if (nameProblem(machine.name, owner) !== null || (!incomplete && !ZONE_SHAPE.test(machine.location))) {
+        throw new ProviderError({ error: "provider-invalid", message: `${machine.name} at ${machine.location} is not an instance ${owner.name} can name on Google Cloud` });
       }
 
       report(`-> instance ${machine.name}`);
       // The zone of the instance deleted here; null when there was none.
       let zone: string | null = null;
       if (incomplete) {
-        if ((await instancesNamed(machine.name)).some((instance) => isManaged(instance.labels))) {
+        if ((await instancesNamed(machine.name)).some((instance) => owner.manages(instance.labels))) {
           throw new ProviderError({
             error: "provider-busy",
             message: `an instance named ${machine.name} appeared since the machine was read`,
@@ -1423,8 +1713,8 @@ export function gcp(context: ProviderContext): Provider {
         const instance = await call<GcpInstance>("GET", path, `read the instance ${machine.name}`);
         // Read again here, never trusted from the caller: only an instance
         // carrying the label is deleted, and only the one that was listed.
-        if (!isManaged(instance.labels)) {
-          throw new ProviderError({ error: "machine-not-managed", message: `the instance ${machine.name} lacks the label ${MANAGED_LABEL}=${MANAGED_VALUE}: sitesolide did not create it`, details: ["nothing was deleted"] });
+        if (!owner.manages(instance.labels)) {
+          throw new ProviderError({ error: "machine-not-managed", message: `the instance ${machine.name} lacks the label ${owner.mark}: ${owner.name} did not create it`, details: ["nothing was deleted"] });
         }
         if (String(instance.id) !== machine.id) {
           throw new ProviderError({ error: "provider-not-found", message: `the instance ${machine.name} at ${zone} is not the one that was read: it was replaced in the meantime`, details: ["nothing was deleted"] });
@@ -1433,7 +1723,7 @@ export function gcp(context: ProviderContext): Provider {
         const staying = disks.filter((disk) => disk.autoDelete !== true);
         // A disk a person attached goes too when it is set to: said by name.
         const going = disks.filter((disk) => disk.boot !== true && disk.autoDelete === true);
-        const ipv4 = toMachine(instance).ipv4;
+        const ipv4 = toMachine(instance, owner).ipv4;
         const operation = await call<GcpOperation>("DELETE", path, `delete the instance ${machine.name}`);
         await waitFor(operation, `delete the instance ${machine.name}`, report);
         removed.push(`instance ${machine.name}${ipv4 === null ? "" : ` (${ipv4})`}, with its boot disk`);
@@ -1447,10 +1737,10 @@ export function gcp(context: ProviderContext): Provider {
         }
       }
 
-      report(`-> static address ${addressNameOf(machine.name)}`);
+      report(`-> static address ${addressNameOf(machine.name, owner)}`);
       // Every region, in case an interrupted run reserved one elsewhere.
-      const addresses = (await aggregated<GcpAddress>("addresses", "read the addresses")).filter((address) => ownAddress(address, machine.name));
-      if (addresses.length === 0) report("   none reserved by sitesolide for this machine");
+      const addresses = (await aggregated<GcpAddress>("addresses", "read the addresses")).filter((address) => ownAddress(address, machine.name, owner));
+      if (addresses.length === 0) report(`   none reserved by ${owner.name} for this machine`);
       for (const address of addresses) {
         const where = lastSegment(address.region) || "unknown";
         const label = `address ${address.name} (${address.address ?? "no address"}, ${where})`;
@@ -1482,21 +1772,21 @@ export function gcp(context: ProviderContext): Provider {
 
       report("-> firewall rules");
       const rules: GcpFirewall[] = [];
-      for (const ruleName of Object.values(ruleNamesOf(machine.name))) {
-        const rule = await read<GcpFirewall>(own(`/global/firewalls/${ruleName}`), `read the firewall rule ${ruleName}`);
-        if (rule === null) {
-          report(`   ${ruleName}: none`);
-        } else if (!ownRule(rule, machine.name)) {
-          kept.push(`firewall rule ${ruleName}: sitesolide did not create it, it is left as it is`);
-          report(`   ${ruleName}: not sitesolide's, left as it is`);
-        } else {
+      const names = ruleNameList(machine.name, owner);
+      const named = (await listAll<GcpFirewall>(own("/global/firewalls"), "read the firewall rules")).filter((rule) => names.includes(rule.name)).sort(byRuleName(machine.name, owner));
+      if (named.length === 0) report(`   none created by ${owner.name} for this machine`);
+      for (const rule of named) {
+        if (ownRule(rule, machine.name, owner)) {
           rules.push(rule);
+        } else {
+          kept.push(`firewall rule ${rule.name}: ${owner.name} did not create it, it is left as it is`);
+          report(`   ${rule.name}: not ${owner.name}'s, left as it is`);
         }
       }
       if (rules.length > 0) {
         // A rule still matters to any other instance that carries the tag:
         // deleting it would open or close ports on it.
-        const tag = tagOf(machine.name);
+        const tag = tagOf(machine.name, owner);
         const carriers = (await aggregated<GcpInstance>("instances", "read the instances")).filter((other) => (other.tags?.items ?? []).includes(tag));
         for (const rule of rules) {
           if (carriers.length > 0) {
@@ -1533,7 +1823,7 @@ export function gcp(context: ProviderContext): Provider {
 /** The credentials, the help to make them, and what `create` orders when nothing else is said. */
 export const GCP: ProviderEntry = {
   name: "gcp",
-  title: "Google Cloud",
+  title: TITLE,
   credentials: [
     { variable: PROJECT_VARIABLE, label: "project ID", secret: false, shape: PROJECT_SHAPE },
     // Either the token, or the service account's email and key: see `alternatives`.

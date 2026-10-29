@@ -29,7 +29,7 @@
  * the first page fails a test.
  */
 import type { FakeDns } from "./fake-dns";
-import type { FakeRequest } from "./fake-provider";
+import type { FakeRequest } from "../../clouds/fakes/fake-provider";
 
 /** `pk1_` and `sk1_`, then 64 hexadecimal digits: the shape of Porkbun's keys. */
 export const FAKE_API_KEY = "pk1_00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";

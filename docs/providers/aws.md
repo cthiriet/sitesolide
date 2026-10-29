@@ -293,6 +293,6 @@ address AWS will give to someone else.
 
 `SITESOLIDE_AWS_API` points every region at another address than
 `https://ec2.<region>.amazonaws.com`, for a local fake of the API
-(`bin/tests/fake-aws.ts`). Requests are still signed for their region and for
+(`clouds/fakes/aws.ts`). Requests are still signed for their region and for
 `ec2`, and the fake checks each signature as AWS does. It takes https, or http
 on the loopback only, so that the credentials never travel in the clear.

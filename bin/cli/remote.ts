@@ -228,7 +228,8 @@ function readVaultFile(path: string): VaultRead {
 
 // --- talking to the API ------------------------------------------------------------
 
-export type Failure = { error: string; message: string; details?: string[]; wait?: number };
+export type { Failure } from "../../clouds/src/provider";
+import type { Failure } from "../../clouds/src/provider";
 export type Answer<T> = { ok: true; status: number; body: T } | { ok: false; status: number; failure: Failure };
 
 export type Fetch = (input: string, init?: BunFetchRequestInit) => Promise<Response>;

@@ -1,10 +1,4 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { REMOTE_HINTS } from "../cli/hints";
-import { machine } from "../cli/machine";
-import { eventOutput } from "../cli/remote";
 import {
   addressNameOf,
   bootDiskType,
@@ -12,6 +6,7 @@ import {
   failureFrom,
   firewallRules,
   GCP,
+  loginOf,
   markOf,
   offeredTypes,
   operationFailure,
@@ -22,16 +17,20 @@ import {
   WAITS,
   type GcpAddress,
   type GcpFirewall,
+  type GcpInstance,
   type GcpMachineType,
   type GcpOperation,
-} from "../cli/providers/gcp";
-import { ProviderError, type CreateRequest, type Provider, type PublicKey, type Workstation } from "../cli/providers/provider";
-import { createFakeGcp, FAKE_EMAIL, FAKE_EXCHANGED, FAKE_PROJECT, FAKE_TOKEN, MACHINE_TYPES, type FakeGcp } from "./fake-gcp";
+} from "../src/gcp";
+import { FAILURE_CODES, ownerNamed, ProviderError, WEB_SERVER, type CreateRequest, type Owner, type Provider, type PublicKey, type Workstation } from "../src/provider";
+import { createFakeGcp, FAKE_EMAIL, FAKE_EXCHANGED, FAKE_PROJECT, FAKE_TOKEN, MACHINE_TYPES, type FakeGcp } from "../fakes/gcp";
 
 /**
  * The gcp provider, opened directly against a local fake of Compute Engine
- * and of Google's token endpoint (fake-gcp.ts): the real ones are never
- * called. The clock does not wait.
+ * and of Google's token endpoint (fakes/gcp.ts): the real ones are never
+ * called. The clock does not wait. Most tests open it for sitesolide, the
+ * program it was written for; those at the end, for devbox, which orders
+ * what sitesolide never asks: its own account, rules, disk, user-data and
+ * nested virtualization.
  *
  * Whatever the path, a credential must never appear in an address, a line
  * reported or a refusal: every line and every refusal of this file is kept
@@ -47,8 +46,8 @@ const KEY: PublicKey = {
   fingerprint: "a4:46:30:d5:fd:7e:1a:77:e5:ad:8d:21:4f:9a:3e:9e",
 };
 
-/** The codes this provider adds, proposed for bin/cli/hints.ts. */
-const PROPOSED = new Set(["provider-api-disabled", "no-default-network"]);
+const SITESOLIDE = ownerNamed("sitesolide");
+const DEVBOX = ownerNamed("devbox");
 
 let fake: FakeGcp;
 const printed: string[] = [];
@@ -75,8 +74,9 @@ function fakeClock() {
 
 const TOKEN_CREDENTIALS = { GOOGLE_CLOUD_PROJECT: FAKE_PROJECT, GOOGLE_OAUTH_ACCESS_TOKEN: FAKE_TOKEN };
 
-function open(credentials: Record<string, string> = TOKEN_CREDENTIALS, clock = fakeClock(), environment: Record<string, string> = {}): Provider {
+function open(credentials: Record<string, string> = TOKEN_CREDENTIALS, clock = fakeClock(), environment: Record<string, string> = {}, owner: Owner = SITESOLIDE): Provider {
   return GCP.open({
+    owner,
     credentials,
     environment: { SITESOLIDE_GCP_API: fake.url, SITESOLIDE_GCP_OAUTH: fake.oauthUrl, ...environment },
     fetcher: (input, init) => {
@@ -99,7 +99,7 @@ beforeEach(() => {
 });
 
 function request(extra: Partial<CreateRequest> = {}): CreateRequest {
-  return { name: "web", type: "e2-small", location: "europe-west4-a", image: "debian-13", backups: false, key: KEY, ...extra };
+  return { name: "web", type: "e2-small", location: "europe-west4-a", image: "debian-13", backups: false, key: KEY, inbound: WEB_SERVER, ...extra };
 }
 
 /** The requests that changed something, as `METHOD /path`, the project's prefix left out. */
@@ -137,7 +137,7 @@ function refusalSync(attempt: () => unknown): ProviderError {
 
 /** A rule as sitesolide creates it, for a test that needs it there already. */
 function ourRule(name: string, which: 0 | 1) {
-  const rule = firewallRules(name, `https://www.googleapis.com/compute/v1/projects/${FAKE_PROJECT}/global/networks/default`)[which]!;
+  const rule = firewallRules(name, `https://www.googleapis.com/compute/v1/projects/${FAKE_PROJECT}/global/networks/default`, WEB_SERVER, SITESOLIDE)[which]!;
   return fake.addFirewall({ ...rule, id: String(9_000 + which) });
 }
 
@@ -179,7 +179,7 @@ describe("create", () => {
     const network = `https://www.googleapis.com/compute/v1/projects/${FAKE_PROJECT}/global/networks/default`;
     expect(bodyOf("POST", /\/global\/firewalls$/, 0)).toEqual({
       name: "sitesolide-web",
-      description: "managed-by=sitesolide sitesolide-machine=web: inbound tcp 22, 80, 443 and icmp, from everywhere",
+      description: "managed-by=sitesolide sitesolide-machine=web: inbound tcp 22, tcp 80, tcp 443, icmp, from 0.0.0.0/0",
       priority: 1000,
       network,
       direction: "INGRESS",
@@ -214,13 +214,18 @@ describe("create", () => {
       ],
       networkInterfaces: [{ network, subnetwork: `https://www.googleapis.com/compute/v1/projects/${FAKE_PROJECT}/regions/europe-west4/subnetworks/default`, accessConfigs: [{ type: "ONE_TO_ONE_NAT", natIP: "203.0.113.10", networkTier: "PREMIUM" }] }],
     });
-    // No service account: the machine holds no Google credentials.
+    // No service account: the machine holds no Google credentials. No
+    // nested virtualization either, which is asked or absent.
     expect(instance.serviceAccounts).toBeUndefined();
+    expect(instance.advancedMachineFeatures).toBeUndefined();
 
     // The default network's own rules are left as they were.
     expect(fake.firewalls.map((rule) => rule.name).sort()).toEqual(["default-allow-icmp", "default-allow-internal", "default-allow-rdp", "default-allow-ssh", "sitesolide-web", "sitesolide-web-deny"]);
     expect(fake.addresses).toMatchObject([{ name: "sitesolide-web", status: "IN_USE", labels: { "managed-by": "sitesolide" } }]);
-    expect(lines).toContain("   created: inbound tcp 22, 80, 443 and icmp, from everywhere");
+    expect(lines).toContain("   created: inbound tcp 22, tcp 80, tcp 443, icmp, from 0.0.0.0/0");
+    // WEB_SERVER opens to ::/0 too, which the machine has no address for.
+    expect(lines).toContain("-> IPv6: none on this machine, the default network's subnets being IPv4 only; ::/0 left out of its rules");
+    expect(lines).toContain("-> boot disk: 20 GB, pd-balanced");
     expect(lines).toContain("   reserved: 203.0.113.10");
     expect(lines.at(-1)).toBe("   status: running");
   });
@@ -245,7 +250,7 @@ describe("create", () => {
   test("what an interrupted run made is reused, the address it could not label included", async () => {
     ourRule("web", 0);
     ourRule("web", 1);
-    fake.addAddress({ name: "sitesolide-web", region: "europe-west4", description: `${markOf("web")}: the machine's public IPv4` });
+    fake.addAddress({ name: "sitesolide-web", region: "europe-west4", description: `${markOf("web", SITESOLIDE)}: the machine's public IPv4` });
     const outcome = await open().create(request(), report);
     expect(writes()).toEqual(["POST /regions/europe-west4/addresses/sitesolide-web/setLabels", "POST /zones/europe-west4-a/instances"]);
     expect(outcome.resources.map((resource) => resource.reused)).toEqual([true, true, true, false]);
@@ -282,34 +287,14 @@ describe("create", () => {
 // --- refusals ---------------------------------------------------------------------------------
 
 describe("what refuses a create, before anything is written", () => {
-  test("nameProblem says why Google Cloud would not take a name, one reason each", () => {
-    expect(GCP.nameProblem?.("web")).toBeNull();
-    expect(GCP.nameProblem?.("a".repeat(47))).toBeNull();
-    expect(GCP.nameProblem?.("1web")).toBe("a name there starts with a letter");
-    expect(GCP.nameProblem?.("a".repeat(48))).toBe("47 characters at most: sitesolide derives sitesolide-<name>-deny from it, and Google takes 63");
-  });
-
-  test("the command refuses such a name before anything leaves", async () => {
-    const home = mkdtempSync(join(tmpdir(), "machine-gcp-"));
-    try {
-      mkdirSync(join(home, ".ssh"));
-      writeFileSync(join(home, ".ssh", "id_ed25519.pub"), `ssh-ed25519 ${KEY.blob} ${KEY.comment}\n`);
-      const out: string[] = [];
-      const code = await machine(["machine", "create", "--provider", "gcp", "--name", "1web", "--json"], {
-        environment: fake.environment,
-        home,
-        output: eventOutput((line) => out.push(line)),
-        clock: fakeClock(),
-        workstation: { environment: {}, run: async () => ({ code: 127, stdout: "", stderr: "" }), readFile: () => null },
-        interactive: false,
-      });
-      printed.push(...out);
-      expect(code).toBe(1);
-      expect(JSON.parse(out.at(-1)!)).toMatchObject({ type: "error", message: "Google Cloud would not take the name 1web: a name there starts with a letter", hint: REMOTE_HINTS["machine-name"]! });
-      expect(fake.requests).toEqual([]);
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
+  test("nameProblem says why Google Cloud would not take a name, one reason each, the length the owner's", () => {
+    expect(GCP.nameProblem?.("web", SITESOLIDE)).toBeNull();
+    expect(GCP.nameProblem?.("a".repeat(47), SITESOLIDE)).toBeNull();
+    expect(GCP.nameProblem?.("1web", SITESOLIDE)).toBe("a name there starts with a letter");
+    expect(GCP.nameProblem?.("a".repeat(48), SITESOLIDE)).toBe("47 characters at most: sitesolide derives sitesolide-<name>-deny from it, and Google takes 63");
+    expect(GCP.nameProblem?.("a".repeat(51), DEVBOX)).toBeNull();
+    expect(GCP.nameProblem?.("a".repeat(52), DEVBOX)).toBe("51 characters at most: devbox derives devbox-<name>-deny from it, and Google takes 63");
+    expect(GCP.nameProblem?.("web-", DEVBOX)).toBe("lowercase letters, digits and dashes, ending with a letter or a digit");
   });
 
   test("a name Google Cloud cannot hold, before any request", async () => {
@@ -333,7 +318,7 @@ describe("what refuses a create, before anything is written", () => {
     expect((await refusal(open().create(request(), report))).failure.error).toBe("firewall-taken");
     fake.reset();
     // sitesolide's mark, but a target beyond the machine's tag.
-    fake.addFirewall({ ...firewallRules("web", "global/networks/default")[1]!, targetTags: ["sitesolide-web", "db"] });
+    fake.addFirewall({ ...firewallRules("web", "global/networks/default", WEB_SERVER, SITESOLIDE)[1]!, targetTags: ["sitesolide-web", "db"] });
     expect((await refusal(open().create(request(), report))).failure.error).toBe("firewall-taken");
     expect(writes()).toEqual([]);
   });
@@ -429,7 +414,7 @@ describe("an order Google refuses", () => {
     expect(refused.failure.details).toEqual([
       "deleted the address sitesolide-web this run had created",
       "the firewall rules sitesolide-web and sitesolide-web-deny an earlier run created are still there",
-      "the same create reuses them; to give the machine up, `sitesolide machine destroy web --provider gcp` removes them",
+      "the same create reuses them; to give the machine up, a destroy of web removes them",
     ]);
     expect(fake.firewalls.map((rule) => rule.name)).toContain("sitesolide-web-deny");
   });
@@ -447,7 +432,7 @@ describe("an order Google refuses", () => {
     expect(refused.failure.error).toBe("provider-failure");
     expect(refused.failure.details?.slice(-2)).toEqual([
       "the order may still go through: nothing was undone, and the next run picks up what exists",
-      "to give the machine up instead, `sitesolide machine destroy web --provider gcp` removes what exists",
+      "to give the machine up instead, a destroy of web removes what exists",
     ]);
     expect(writes().filter((write) => write.startsWith("DELETE"))).toEqual([]);
   });
@@ -485,7 +470,7 @@ describe("what an earlier run left without an instance", () => {
   const LEFT = [
     "the address sitesolide-web (203.0.113.10, europe-west4) an earlier run reserved is still there, billed by the hour while it is",
     "the firewall rules sitesolide-web and sitesolide-web-deny an earlier run created are still there",
-    "the same create reuses them; to give the machine up, `sitesolide machine destroy web --provider gcp` removes them",
+    "the same create reuses them; to give the machine up, a destroy of web removes them",
   ];
 
   test("a refused order after it names the billed address and the rules, and how they go", async () => {
@@ -700,7 +685,7 @@ describe("the API's errors", () => {
   const said = (status: number, reason: string, headers: Record<string, string> = {}) =>
     failureFrom(status, { error: { code: status, message: `the API says ${reason}`, errors: [{ reason, domain: "global", message: "" }] } }, new Headers(headers), "create the instance web", FAKE_PROJECT).failure;
 
-  test("each status and reason gets its own code, which hints.ts knows or this provider proposes", () => {
+  test("each status and reason gets its own code, one of FAILURE_CODES", () => {
     const cases: [number, string, string][] = [
       [401, "authError", "provider-unauthenticated"],
       [403, "accessNotConfigured", "provider-api-disabled"],
@@ -722,7 +707,7 @@ describe("the API's errors", () => {
     for (const [status, reason, ours] of cases) {
       const failure = said(status, reason);
       expect({ status, reason, ours: failure.error }).toEqual({ status, reason, ours });
-      expect(Object.hasOwn(REMOTE_HINTS, failure.error) || PROPOSED.has(failure.error)).toBe(true);
+      expect(FAILURE_CODES.has(failure.error)).toBe(true);
     }
     expect(said(429, "", { "Retry-After": "7" }).wait).toBe(7);
   });
@@ -736,7 +721,7 @@ describe("the API's errors", () => {
 
   test("an answer that is not Google's API, and one that says later in HTML", async () => {
     const answering = (response: Response) =>
-      GCP.open({ credentials: TOKEN_CREDENTIALS, environment: { SITESOLIDE_GCP_API: fake.url }, fetcher: async () => response, clock: fakeClock(), secret: () => {} });
+      GCP.open({ owner: SITESOLIDE, credentials: TOKEN_CREDENTIALS, environment: { SITESOLIDE_GCP_API: fake.url }, fetcher: async () => response, clock: fakeClock(), secret: () => {} });
     expect((await refusal(answering(new Response("<html>login</html>", { status: 200 })).list())).failure.error).toBe("provider-unreadable");
     expect((await refusal(answering(new Response("<html>bad gateway</html>", { status: 502 })).list())).failure.error).toBe("provider-failure");
     expect((await refusal(answering(Response.json({ items: [] })).list())).failure.error).toBe("provider-unreadable");
@@ -744,11 +729,11 @@ describe("the API's errors", () => {
 
   test("the API's address: Google's by default, another only over https or http on the loopback", () => {
     for (const refused of ["http://compute.test-zone.invalid/v1", "https://user:secret@compute.test-zone.invalid/v1", "https://compute.test-zone.invalid/v1?key=1"]) {
-      expect(refusalSync(() => GCP.open({ credentials: TOKEN_CREDENTIALS, environment: { SITESOLIDE_GCP_API: refused }, fetcher: fetch, clock: fakeClock(), secret: () => {} })).failure.error).toBe("provider-endpoint");
-      expect(refusalSync(() => GCP.open({ credentials: TOKEN_CREDENTIALS, environment: { SITESOLIDE_GCP_OAUTH: refused }, fetcher: fetch, clock: fakeClock(), secret: () => {} })).failure.error).toBe("provider-endpoint");
+      expect(refusalSync(() => GCP.open({ owner: SITESOLIDE, credentials: TOKEN_CREDENTIALS, environment: { SITESOLIDE_GCP_API: refused }, fetcher: fetch, clock: fakeClock(), secret: () => {} })).failure.error).toBe("provider-endpoint");
+      expect(refusalSync(() => GCP.open({ owner: SITESOLIDE, credentials: TOKEN_CREDENTIALS, environment: { SITESOLIDE_GCP_OAUTH: refused }, fetcher: fetch, clock: fakeClock(), secret: () => {} })).failure.error).toBe("provider-endpoint");
     }
     const seen: string[] = [];
-    const provider = GCP.open({ credentials: TOKEN_CREDENTIALS, environment: {}, fetcher: async (input) => (seen.push(input), Response.json({})), clock: fakeClock(), secret: () => {} });
+    const provider = GCP.open({ owner: SITESOLIDE, credentials: TOKEN_CREDENTIALS, environment: {}, fetcher: async (input) => (seen.push(input), Response.json({})), clock: fakeClock(), secret: () => {} });
     return provider.list().then(() => expect(seen[0]).toStartWith(`https://compute.googleapis.com/compute/v1/projects/${FAKE_PROJECT}/aggregated/instances?`));
   });
 });
@@ -912,29 +897,286 @@ describe("locations and types", () => {
 // --- marks -----------------------------------------------------------------------------------
 
 describe("what counts as sitesolide's", () => {
-  test("a rule: its name, its mark and the machine's tag alone", () => {
-    const [allow, deny] = firewallRules("web", "global/networks/default");
+  test("a rule: its name, its mark and the machine's tag alone, the owner's in each", () => {
+    const [allow, deny] = firewallRules("web", "global/networks/default", WEB_SERVER, SITESOLIDE);
     const as = (rule: object) => ({ id: "1", ...rule }) as GcpFirewall;
-    expect(ownRule(as(allow!), "web")).toBe(true);
-    expect(ownRule(as(deny!), "web")).toBe(true);
-    expect(ownRule(as(allow!), "db")).toBe(false);
-    expect(ownRule(as({ ...allow, description: "managed-by=sitesolide sitesolide-machine=webby: x" }), "web")).toBe(false);
-    expect(ownRule(as({ ...allow, targetTags: [] }), "web")).toBe(false);
-    expect(ownRule(as({ ...allow, targetServiceAccounts: ["x@test-zone.invalid"] }), "web")).toBe(false);
+    expect(ownRule(as(allow!), "web", SITESOLIDE)).toBe(true);
+    expect(ownRule(as(deny!), "web", SITESOLIDE)).toBe(true);
+    expect(ownRule(as(allow!), "db", SITESOLIDE)).toBe(false);
+    expect(ownRule(as(allow!), "web", DEVBOX)).toBe(false);
+    expect(ownRule(as({ ...allow, description: "managed-by=sitesolide sitesolide-machine=webby: x" }), "web", SITESOLIDE)).toBe(false);
+    expect(ownRule(as({ ...allow, targetTags: [] }), "web", SITESOLIDE)).toBe(false);
+    expect(ownRule(as({ ...allow, targetServiceAccounts: ["x@test-zone.invalid"] }), "web", SITESOLIDE)).toBe(false);
+    // devbox's rule of the same machine name carries devbox's name, mark and tag.
+    const [theirs] = firewallRules("web", "global/networks/default", WEB_SERVER, DEVBOX);
+    expect(theirs).toMatchObject({ name: "devbox-web", targetTags: ["devbox-web"], description: "managed-by=devbox devbox-machine=web: inbound tcp 22, tcp 80, tcp 443, icmp, from 0.0.0.0/0" });
+    expect(ownRule(as(theirs!), "web", DEVBOX)).toBe(true);
+    expect(ownRule(as(theirs!), "web", SITESOLIDE)).toBe(false);
   });
 
   test("an address: its labels, or its name and mark while it has no labels", () => {
-    const as = (address: Partial<GcpAddress>) => ({ id: "1", name: addressNameOf("web"), ...address }) as GcpAddress;
-    expect(ownAddress(as({ labels: { "managed-by": "sitesolide", "sitesolide-machine": "web" } }), "web")).toBe(true);
-    expect(ownAddress(as({ labels: { "managed-by": "sitesolide", "sitesolide-machine": "db" } }), "web")).toBe(false);
-    expect(ownAddress(as({ description: `${markOf("web")}: x` }), "web")).toBe(true);
-    expect(ownAddress(as({ description: `${markOf("web")}: x`, labels: { team: "data" } }), "web")).toBe(false);
-    expect(ownAddress(as({}), "web")).toBe(false);
+    const as = (address: Partial<GcpAddress>) => ({ id: "1", name: addressNameOf("web", SITESOLIDE), ...address }) as GcpAddress;
+    expect(ownAddress(as({ labels: { "managed-by": "sitesolide", "sitesolide-machine": "web" } }), "web", SITESOLIDE)).toBe(true);
+    expect(ownAddress(as({ labels: { "managed-by": "sitesolide", "sitesolide-machine": "db" } }), "web", SITESOLIDE)).toBe(false);
+    expect(ownAddress(as({ labels: { "managed-by": "sitesolide", "sitesolide-machine": "web" } }), "web", DEVBOX)).toBe(false);
+    expect(ownAddress(as({ description: `${markOf("web", SITESOLIDE)}: x` }), "web", SITESOLIDE)).toBe(true);
+    expect(ownAddress(as({ description: `${markOf("web", SITESOLIDE)}: x` }), "web", DEVBOX)).toBe(false);
+    expect(ownAddress(as({ description: `${markOf("web", SITESOLIDE)}: x`, labels: { team: "data" } }), "web", SITESOLIDE)).toBe(false);
+    expect(ownAddress(as({}), "web", SITESOLIDE)).toBe(false);
   });
 
-  test("the ssh-keys entry, a comment Google would read as an expiry left out", () => {
-    expect(sshKeysEntry(KEY)).toBe(`sitesolide:ssh-ed25519 ${KEY.blob} ada@workstation.test-zone.invalid`);
-    expect(sshKeysEntry({ ...KEY, comment: 'google-ssh {"userName":"x","expireOn":"2020-01-01T00:00:00+0000"}' })).toBe(`sitesolide:ssh-ed25519 ${KEY.blob}`);
+  test("the ssh-keys entry, for the account given; a comment Google would read as an expiry, or that would break the line, left out", () => {
+    expect(sshKeysEntry(KEY, "sitesolide")).toBe(`sitesolide:ssh-ed25519 ${KEY.blob} ada@workstation.test-zone.invalid`);
+    expect(sshKeysEntry(KEY, "dev")).toBe(`dev:ssh-ed25519 ${KEY.blob} ada@workstation.test-zone.invalid`);
+    expect(sshKeysEntry({ ...KEY, comment: 'google-ssh {"userName":"x","expireOn":"2020-01-01T00:00:00+0000"}' }, "dev")).toBe(`dev:ssh-ed25519 ${KEY.blob}`);
+    // A second line would be a second account, with a key of the comment's choosing.
+    expect(sshKeysEntry({ ...KEY, comment: `x\nroot:ssh-ed25519 ${KEY.blob}` }, "dev")).toBe(`dev:ssh-ed25519 ${KEY.blob}`);
+  });
+
+  test("the account an instance logs into is read from its ssh-keys entry, the owner's name without one", () => {
+    const instance = (value?: string) => ({ id: "1", name: "web", status: "RUNNING", zone: "z", machineType: "t", metadata: { items: value === undefined ? [] : [{ key: "ssh-keys", value }] } }) as GcpInstance;
+    expect(loginOf(instance(`dev:ssh-ed25519 ${KEY.blob}\nother:ssh-ed25519 ${KEY.blob}`), DEVBOX)).toBe("dev");
+    expect(loginOf(instance(), DEVBOX)).toBe("devbox");
+    expect(loginOf(instance(`ssh-ed25519 ${KEY.blob}`), SITESOLIDE)).toBe("sitesolide");
+  });
+});
+
+// --- another owner, and what it asks --------------------------------------------------------
+
+/** What devbox orders: Ubuntu on an Intel type, its own account, SSH from one network, ping from everywhere, 80 GB, a user-data, /dev/kvm. */
+function devboxRequest(extra: Partial<CreateRequest> = {}): CreateRequest {
+  return {
+    name: "box",
+    type: "n2-standard-2",
+    location: "europe-west4-a",
+    image: "ubuntu-os-cloud/ubuntu-2404-lts-amd64",
+    backups: false,
+    key: KEY,
+    inbound: [
+      { protocol: "tcp", port: 22, sources: ["198.51.100.0/24", "2001:db8::/32"], description: "ssh" },
+      { protocol: "icmp", sources: ["0.0.0.0/0", "::/0"], description: "ping" },
+    ],
+    userData: "#cloud-config\nruncmd:\n  - [touch, /var/lib/devbox-ready]\n",
+    disk: { gb: 80, type: "pd-balanced" },
+    nestedVirtualization: true,
+    login: "dev",
+    ...extra,
+  };
+}
+
+function openAs(owner: Owner, credentials: Record<string, string> = TOKEN_CREDENTIALS): Provider {
+  return open(credentials, fakeClock(), {}, owner);
+}
+
+describe("devbox's order", () => {
+  test("with a service account's key file and no gcloud: its account, user-data, disk, nested virtualization and rules, all as asked", async () => {
+    const account = await fake.serviceAccount();
+    const file = readKeyFile(account.keyFile)!;
+    const credentials = { GOOGLE_CLOUD_PROJECT: file.project!, SITESOLIDE_GCP_CLIENT_EMAIL: file.email, SITESOLIDE_GCP_PRIVATE_KEY: file.privateKey };
+    const before = scrubbed.length;
+    const outcome = await openAs(DEVBOX, credentials).create(devboxRequest(), report);
+
+    // The exchanged token was handed to be scrubbed before it was used, and is the only credential sent.
+    expect(scrubbed.slice(before)).toContain(FAKE_EXCHANGED);
+    expect(fake.requests.filter((item) => item.path !== "/token").every((item) => item.headers.authorization === `Bearer ${FAKE_EXCHANGED}`)).toBe(true);
+
+    expect(writes()).toEqual([
+      "POST /global/firewalls",
+      "POST /global/firewalls",
+      "POST /global/firewalls",
+      "POST /regions/europe-west4/addresses",
+      "POST /regions/europe-west4/addresses/devbox-box/setLabels",
+      "POST /zones/europe-west4-a/instances",
+    ]);
+    // One rule per set of IPv4 sources, then the deny rule; no IPv6 range in any, which Google would refuse mixed.
+    expect([0, 1, 2].map((index) => bodyOf("POST", /\/global\/firewalls$/, index))).toMatchObject([
+      { name: "devbox-box", description: "managed-by=devbox devbox-machine=box: inbound tcp 22, from 198.51.100.0/24", priority: 1000, sourceRanges: ["198.51.100.0/24"], targetTags: ["devbox-box"], allowed: [{ IPProtocol: "tcp", ports: ["22"] }] },
+      { name: "devbox-box-2", description: "managed-by=devbox devbox-machine=box: inbound icmp, from 0.0.0.0/0", priority: 1000, sourceRanges: ["0.0.0.0/0"], targetTags: ["devbox-box"], allowed: [{ IPProtocol: "icmp" }] },
+      { name: "devbox-box-deny", priority: 1001, sourceRanges: ["0.0.0.0/0"], targetTags: ["devbox-box"], denied: [{ IPProtocol: "all" }] },
+    ]);
+    expect(fake.firewalls.flatMap((rule) => (rule.sourceRanges as string[] | undefined) ?? []).some((range) => range.includes(":"))).toBe(false);
+    expect(lines).toContain("-> IPv6: none on this machine, the default network's subnets being IPv4 only; 2001:db8::/32 and ::/0 left out of its rules");
+    expect(lines).toContain("   created: inbound tcp 22, from 198.51.100.0/24");
+
+    expect(bodyOf("POST", /\/addresses$/)).toMatchObject({ name: "devbox-box", labels: { "managed-by": "devbox", "devbox-machine": "box" } });
+    expect(bodyOf("POST", /\/instances$/)).toMatchObject({
+      name: "box",
+      description: "managed-by=devbox devbox-machine=box: created by devbox",
+      labels: { "managed-by": "devbox", "devbox-machine": "box" },
+      tags: { items: ["devbox-box"] },
+      metadata: {
+        items: [
+          { key: "ssh-keys", value: `dev:ssh-ed25519 ${KEY.blob} ${KEY.comment}` },
+          { key: "enable-oslogin", value: "FALSE" },
+          { key: "block-project-ssh-keys", value: "TRUE" },
+          { key: "user-data", value: devboxRequest().userData },
+        ],
+      },
+      advancedMachineFeatures: { enableNestedVirtualization: true },
+      disks: [
+        {
+          boot: true,
+          autoDelete: true,
+          initializeParams: { sourceImage: "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64", diskSizeGb: "80", diskType: "zones/europe-west4-a/diskTypes/pd-balanced", labels: { "managed-by": "devbox", "devbox-machine": "box" } },
+        },
+      ],
+    });
+    expect(lines).toContain("   ubuntu-2404-noble-amd64-v20261015, x86_64");
+    expect(lines).toContain("-> boot disk: 80 GB, pd-balanced");
+
+    // The account is reported, by the create and by every read after it.
+    expect(outcome.machine).toMatchObject({ name: "box", managed: true, login: "dev", labels: { "managed-by": "devbox", "devbox-machine": "box" } });
+    expect(await openAs(DEVBOX).find("box")).toMatchObject({ login: "dev" });
+    expect((await openAs(DEVBOX).list()).map((machine) => `${machine.name} ${machine.login}`)).toEqual(["box dev"]);
+  });
+
+  test("without an account named, the key logs into the owner's name, and neither user-data nor nested virtualization is sent", async () => {
+    const { machine } = await openAs(DEVBOX).create(devboxRequest({ login: undefined, userData: undefined, nestedVirtualization: undefined }), report);
+    const instance = bodyOf("POST", /\/instances$/);
+    expect((instance.metadata as { items: { key: string; value: string }[] }).items.map((item) => item.key)).toEqual(["ssh-keys", "enable-oslogin", "block-project-ssh-keys"]);
+    expect((instance.metadata as { items: { value: string }[] }).items[0]!.value).toStartWith("devbox:ssh-ed25519 ");
+    expect(instance.advancedMachineFeatures).toBeUndefined();
+    expect(machine.login).toBe("devbox");
+  });
+
+  test("an image of a project by its own name, by its family, and one of the other architecture", async () => {
+    await openAs(DEVBOX).create(devboxRequest({ image: "ubuntu-os-cloud/ubuntu-2404-noble-amd64-v20261015" }), report);
+    expect(bodyOf("POST", /\/instances$/)).toMatchObject({ disks: [{ initializeParams: { sourceImage: "projects/ubuntu-os-cloud/global/images/ubuntu-2404-noble-amd64-v20261015" } }] });
+    fake.reset();
+    const arm = await refusal(openAs(DEVBOX).create(devboxRequest({ image: "ubuntu-os-cloud/ubuntu-2404-lts-arm64" }), report));
+    expect(arm.failure).toMatchObject({ error: "provider-invalid", message: "the image ubuntu-2404-noble-arm64-v20261015 is arm64, and n2-standard-2 is x86_64" });
+    const missing = await refusal(openAs(DEVBOX).create(devboxRequest({ image: "ubuntu-os-cloud/ubuntu-1404-lts" }), report));
+    expect(missing.failure.message).toBe("Google Cloud has no image projects/ubuntu-os-cloud/global/images/family/ubuntu-1404-lts");
+    expect((await refusal(openAs(DEVBOX).create(devboxRequest({ image: "Ubuntu 24.04" }), report))).failure.error).toBe("provider-invalid");
+    expect(writes()).toEqual([]);
+  });
+
+  test("nested virtualization on Arm or AMD is refused before anything is written; on E2, Google's refusal says so, and the run is undone", async () => {
+    for (const type of ["n2d-standard-2", "c4a-standard-1"]) {
+      const refused = await refusal(openAs(DEVBOX).create(devboxRequest({ type, disk: undefined, image: "debian-13" }), report));
+      expect(refused.failure).toMatchObject({ error: "provider-invalid", message: `${type} cannot nest virtualization` });
+      expect(refused.failure.details?.[0]).toContain("Intel series alone");
+    }
+    expect(writes()).toEqual([]);
+
+    const refused = await refusal(openAs(DEVBOX).create(devboxRequest({ type: "e2-standard-2" }), report));
+    expect(refused.failure.error).toBe("provider-invalid");
+    expect(refused.failure.message).toBe("Google Cloud refused nested virtualization on e2-standard-2: Invalid value for field 'resource.advancedMachineFeatures.enableNestedVirtualization': 'true'. Nested virtualization is not supported for machine type 'e2-standard-2'.");
+    expect(refused.failure.details?.[0]).toContain("never on E2, an AMD series or Arm");
+    expect(refused.failure.details).toContain("deleted the address devbox-box this run had created");
+    expect(fake.instances).toEqual([]);
+    expect(fake.addresses).toEqual([]);
+    expect(fake.firewalls.map((rule) => rule.name).filter((name) => name.startsWith("devbox-"))).toEqual([]);
+  });
+
+  test("a disk Google would refuse is refused before anything is written", async () => {
+    const cases: [Partial<CreateRequest>, string][] = [
+      [{ type: "n4-standard-2", nestedVirtualization: false }, "n4-standard-2 boots from Hyperdisk alone, not from pd-balanced"],
+      [{ disk: { gb: 5 } }, "a boot disk of 5 GB is smaller than its image, 10 GB"],
+      [{ disk: { gb: 80, type: "pd-fast" } }, "pd-fast is not a disk type of the zone europe-west4-a"],
+    ];
+    for (const [extra, message] of cases) {
+      expect((await refusal(openAs(DEVBOX).create(devboxRequest(extra), report))).failure).toMatchObject({ error: "provider-invalid", message });
+    }
+    expect(writes()).toEqual([]);
+    // A Hyperdisk-only series given Hyperdisk is ordered as asked.
+    await openAs(DEVBOX).create(devboxRequest({ type: "n4-standard-2", nestedVirtualization: false, disk: { gb: 40, type: "hyperdisk-balanced" } }), report);
+    expect(bodyOf("POST", /\/instances$/)).toMatchObject({ disks: [{ initializeParams: { diskSizeGb: "40", diskType: "zones/europe-west4-a/diskTypes/hyperdisk-balanced" } }] });
+  });
+
+  test("rules an earlier run made for other rules go; those that do what is asked stay", async () => {
+    fake.fail("POST", /\/instances$/, 503, "backendError", "Backend Error");
+    await refusal(openAs(DEVBOX).create(devboxRequest(), report));
+    expect(fake.firewalls.map((rule) => rule.name).filter((name) => name.startsWith("devbox-"))).toEqual(["devbox-box", "devbox-box-2", "devbox-box-deny"]);
+    fake.requests.length = 0;
+    const everywhere = [{ protocol: "tcp" as const, port: 22, sources: ["0.0.0.0/0"] }];
+    await openAs(DEVBOX).create(devboxRequest({ inbound: everywhere }), report);
+    expect(writes()).toEqual(["DELETE /global/firewalls/devbox-box", "DELETE /global/firewalls/devbox-box-2", "POST /global/firewalls", "POST /zones/europe-west4-a/instances"]);
+    expect(lines).toContain("   an earlier run made it for other rules: deleted");
+    const ours = fake.firewalls.filter((rule) => rule.name.startsWith("devbox-"));
+    expect(ours.map((rule) => `${rule.name} ${(rule.sourceRanges as string[]).join(",")}`)).toEqual(["devbox-box-deny 0.0.0.0/0", "devbox-box 0.0.0.0/0"]);
+  });
+
+  test("no rule asked leaves the deny rule alone; and a destroy finds every rule of the machine", async () => {
+    const { machine } = await openAs(DEVBOX).create(devboxRequest({ inbound: [] }), report);
+    expect(writes().filter((write) => write === "POST /global/firewalls")).toHaveLength(1);
+    expect(bodyOf("POST", /\/global\/firewalls$/)).toMatchObject({ name: "devbox-box-deny" });
+    await openAs(DEVBOX).destroy(machine, { deleteKey: false }, report);
+    fake.reset();
+    const second = await openAs(DEVBOX).create(devboxRequest(), report);
+    fake.requests.length = 0;
+    const outcome = await openAs(DEVBOX).destroy(second.machine, { deleteKey: false }, report);
+    expect(outcome.removed.filter((line) => line.startsWith("firewall rule"))).toEqual(["firewall rule devbox-box", "firewall rule devbox-box-2", "firewall rule devbox-box-deny"]);
+    expect(fake.firewalls.map((rule) => rule.name).sort()).toEqual(["default-allow-icmp", "default-allow-internal", "default-allow-rdp", "default-allow-ssh"]);
+  });
+});
+
+describe("what a request cannot ask, refused with no request sent", () => {
+  test("checkRequest's refusals, then Google's own limits", async () => {
+    const refused = async (extra: Partial<CreateRequest>) => (await refusal(openAs(DEVBOX).create(devboxRequest(extra), report))).failure;
+    expect(await refused({ key: null })).toMatchObject({ error: "no-ssh-key", details: ["nothing was created"] });
+    expect(await refused({ inbound: [{ protocol: "tcp", sources: ["0.0.0.0/0"] }] })).toMatchObject({ error: "provider-unsupported" });
+    expect(await refused({ inbound: [{ protocol: "udp", port: 70_000, sources: ["0.0.0.0/0"] }] })).toMatchObject({ error: "provider-unsupported" });
+    expect(await refused({ inbound: [{ protocol: "tcp", port: 22, sources: [] }] })).toMatchObject({ error: "provider-unsupported" });
+    expect(await refused({ login: "root" })).toMatchObject({ error: "provider-invalid", message: `Google Cloud cannot be asked the account "root" for the key: Google's images let no key in as root` });
+    expect((await refused({ login: "dev:x" })).error).toBe("provider-invalid");
+    expect((await refused({ login: "Dev" })).error).toBe("provider-invalid");
+    expect((await refused({ userData: "x".repeat(256 * 1024 + 1) })).message).toBe("Google Cloud cannot be asked a user-data of 262145 bytes: a metadata value holds 256 KB at most");
+    expect((await refused({ disk: { gb: 0.5 } })).error).toBe("provider-invalid");
+    expect((await refused({ disk: { gb: 80, type: "../pd-ssd" } })).error).toBe("provider-invalid");
+    expect((await refused({ inbound: [{ protocol: "tcp", port: 22, sources: ["everywhere"] }] })).message).toBe(`Google Cloud cannot be asked the source "everywhere", neither an IPv4 nor an IPv6 network`);
+    const tenSets = Array.from({ length: 10 }, (_, index) => ({ protocol: "tcp" as const, port: 22, sources: [`198.51.100.${index}/32`] }));
+    expect((await refused({ inbound: tenSets })).message).toBe("Google Cloud cannot be asked rules from 10 sets of sources: 9 at most, a firewall rule each");
+    expect((await refused({ key: { ...KEY, blob: `${KEY.blob}\nroot:x` } })).error).toBe("provider-invalid");
+    expect(fake.requests).toEqual([]);
+  });
+});
+
+describe("two owners in one project", () => {
+  test("sitesolide's machine is not devbox's: not listed, not destroyed, its name not taken over", async () => {
+    const { machine: theirs } = await open().create(request(), report);
+    const devbox = openAs(DEVBOX);
+    expect(await devbox.list()).toEqual([]);
+    const seen = (await devbox.find("web"))!;
+    expect(seen).toMatchObject({ name: "web", managed: false, login: "sitesolide" });
+    fake.requests.length = 0;
+    expect((await refusal(devbox.destroy(seen, { deleteKey: true }, report))).failure.error).toBe("machine-not-managed");
+    // Even handed the machine as sitesolide read it, managed: the label is read again.
+    expect((await refusal(devbox.destroy(theirs, { deleteKey: true }, report))).failure).toMatchObject({ error: "machine-not-managed", message: "the instance web lacks the label managed-by=devbox: devbox did not create it" });
+    const taken = await refusal(devbox.create(devboxRequest({ name: "web" }), report));
+    expect(taken.failure).toMatchObject({ error: "machine-exists", message: "an instance named web exists in the project, and devbox did not create it" });
+    expect(taken.failure.details?.[1]).toBe("it lacks the label managed-by=devbox: nothing was created, nothing was changed");
+    expect(writes()).toEqual([]);
+    expect(await open().list()).toMatchObject([{ name: "web", managed: true }]);
+  });
+
+  test("devbox's machine and its leftovers are not sitesolide's, and each destroys its own alone", async () => {
+    // devbox's run whose order's outcome is unknown: its rules and address stay, with no instance.
+    fake.fail("POST", /\/instances$/, 503, "backendError", "Backend Error");
+    await refusal(openAs(DEVBOX).create(devboxRequest(), report));
+    const { machine: running } = await openAs(DEVBOX).create(devboxRequest({ name: "other" }), report);
+    expect((await openAs(DEVBOX).list()).map((machine) => `${machine.name} ${machine.status}`)).toEqual(["other running", "box incomplete"]);
+
+    // sitesolide sees none of it, and orders a machine named box with names of its own.
+    expect(await open().list()).toEqual([]);
+    expect(await open().find("box")).toBeNull();
+    expect(await open().find("other")).toMatchObject({ managed: false });
+    const { machine: ours } = await open().create(request({ name: "box" }), report);
+    expect(fake.firewalls.map((rule) => rule.name).filter((name) => name.endsWith("-box") || name.includes("-box-"))).toEqual(
+      expect.arrayContaining(["devbox-box", "devbox-box-2", "devbox-box-deny", "sitesolide-box", "sitesolide-box-deny"]),
+    );
+
+    // sitesolide's destroy takes its own box, never devbox's leftovers of the same name.
+    await open().destroy(ours, { deleteKey: false }, report);
+    expect(fake.firewalls.map((rule) => rule.name).filter((name) => name.startsWith("sitesolide-"))).toEqual([]);
+    expect(fake.addresses.map((address) => address.name).sort()).toEqual(["devbox-box", "devbox-other"]);
+    expect((await openAs(DEVBOX).list()).map((machine) => `${machine.name} ${machine.status}`)).toEqual(["other running", "box incomplete"]);
+
+    // And devbox's destroy of its leftovers takes devbox's alone.
+    const left = (await openAs(DEVBOX).find("box"))!;
+    const outcome = await openAs(DEVBOX).destroy(left, { deleteKey: false }, report);
+    expect(outcome.removed).toEqual(["address devbox-box (203.0.113.10, europe-west4)", "firewall rule devbox-box", "firewall rule devbox-box-2", "firewall rule devbox-box-deny"]);
+    expect(fake.instances.map((instance) => instance.name)).toEqual(["other"]);
   });
 });
 

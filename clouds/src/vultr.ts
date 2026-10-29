@@ -1,25 +1,26 @@
 /**
  * Vultr, through its API v2: https://www.vultr.com/api/
  *
- * A machine is three resources:
+ * A machine is three resources, `<owner>` being the name of the program that
+ * opened the provider (ProviderContext.owner):
  *
- *   - the workstation's SSH key, reused when the account already holds the
- *     same key under any name, uploaded as `sitesolide-<name>` otherwise;
+ *   - the request's SSH key, reused when the account already holds the
+ *     same key under any name, uploaded as `<owner>-<name>` otherwise;
  *   - a firewall group, inbound TCP 22, 80 and 443 and ICMP from everywhere,
  *     over IPv4 and IPv6, everything else inbound dropped;
  *   - the instance, labelled with the machine's name, with both public
  *     addresses, the key for root, the firewall group, and no user_data:
- *     `sitesolide setup` hardens it over SSH, which a run can repeat.
+ *     the program's own setup hardens it over SSH, which a run can repeat.
  *
  * Vultr has tags on instances only. The instance carries
- * `managed-by:sitesolide` and `sitesolide-machine:<name>`, which `list` and
+ * `managed-by:<owner>` and `<owner>-machine:<name>`, which `list` and
  * `destroy` go by. A firewall group has a description and nothing else: it is
  * marked by writing the same two tags into it, and `destroy` deletes a group
  * only when its description says it was made for that machine. An SSH key has
- * a name and nothing else: when this command uploaded the key, or finds the
- * one it uploaded for that name before, the instance carries a third tag,
- * `sitesolide-key:<id>`, and `destroy --delete-key` deletes that key only, and
- * only while its name is still the one sitesolide gave it. A key the account
+ * a name and nothing else: when a run uploaded the key, or finds the one it
+ * uploaded for that name before, the instance carries a third tag,
+ * `<owner>-key:<id>`, and `destroy --delete-key` deletes that key only, and
+ * only while its name is still the one its owner gave it. A key the account
  * already held under another name is never deleted.
  *
  * The instance's public IPv4 stays its own for as long as the instance
@@ -28,7 +29,7 @@
  * DNS records to keep pointing at it.
  *
  * Everything that can refuse is read before the first write: an instance of
- * that label (one without the tags is never touched), the region, the plan
+ * that label (one without the owner's tags is never touched), the region, the plan
  * against where Vultr sells it and what it has in stock there right now, and
  * the image. When the order itself is refused, a 4xx, the key and the firewall
  * group this run created for it are deleted again, and the refusal says so.
@@ -44,27 +45,23 @@
  * elsewhere.
  *
  * Every call carries the API key in the Authorization header and nowhere else,
- * follows no redirect, and fails with a ProviderError whose code
- * bin/cli/hints.ts knows. The API's errors are `{"error": "...", "status": n}`.
+ * follows no redirect, and fails with a ProviderError whose code is one of
+ * FAILURE_CODES. The API's errors are `{"error": "...", "status": n}`.
  * Lists are paginated by cursor: `meta.links.next` is passed back as `cursor`
  * until it is empty, 500 items a page, the most the API returns. Vultr allows
  * about 30 requests a second from one address; waits poll every five seconds.
  */
 import {
   apiAddress,
+  checkRequest,
   DEBIAN,
   formatPrice,
-  isManagedTags,
   keyMaterial,
   labelsOfTags,
-  machineOfTags,
-  MANAGED_LABEL,
-  MANAGED_VALUE,
   patiently,
   ProviderError,
   retryAfter,
   statusFailure,
-  tagsFor,
   TRANSIENT,
   undoMade,
   type Choice,
@@ -73,14 +70,17 @@ import {
   type DestroyOutcome,
   type Discovery,
   type Machine,
+  type Owner,
   type Provider,
   type ProviderContext,
   type ProviderEntry,
+  type PublicKey,
   type Report,
   type Resource,
+  type Supports,
   type Workstation,
 } from "./provider";
-import type { Failure } from "../remote";
+import type { Failure } from "./provider";
 
 export const DEFAULT_API = "https://api.vultr.com/v2";
 
@@ -100,8 +100,17 @@ export const VULTR_DEFAULTS = { type: "vc2-1c-2gb", location: "fra", image: DEBI
 /** Vultr's prices are in US dollars, before tax, whatever the account. */
 const CURRENCY = "USD";
 
-/** The instance tag that names the SSH key uploaded for it. */
-export const KEY_TAG = "sitesolide-key";
+/**
+ * Nothing beyond the fields every provider takes: a key is required, the
+ * firewall is FIREWALL_RULES alone, and no user-data, disk, nested
+ * virtualization or login is asked for.
+ */
+export const SUPPORTS: Supports = {};
+
+/** The instance tag that names the SSH key uploaded for it: `<owner>-key`. */
+export function keyTag(owner: Owner): string {
+  return `${owner.name}-key`;
+}
 
 /** How long each wait lasts at most, and how often it asks. */
 export const WAITS = {
@@ -125,17 +134,23 @@ type RuleRequest = { ip_type: "v4" | "v6"; protocol: string; subnet: string; sub
  * Inbound TCP 22, 80 and 443 and ICMP, from every IPv4 and IPv6 address: a
  * firewall group drops whatever inbound no rule accepts. Ping serves diagnosis
  * and external monitoring. The protocol is written lowercase, as the API
- * answers it and as Vultr's Terraform provider sends it.
+ * answers it and as Vultr's Terraform provider sends it. Each rule's notes
+ * are sent after the owner's name, `sitesolide ssh`, by ruleFor.
  */
 export const FIREWALL_RULES: RuleRequest[] = (["v4", "v6"] as const).flatMap((family) => {
   const subnet = family === "v4" ? "0.0.0.0" : "::";
   return [
-    { ip_type: family, protocol: "tcp", subnet, subnet_size: 0, port: "22", notes: "sitesolide ssh" },
-    { ip_type: family, protocol: "tcp", subnet, subnet_size: 0, port: "80", notes: "sitesolide http" },
-    { ip_type: family, protocol: "tcp", subnet, subnet_size: 0, port: "443", notes: "sitesolide https" },
-    { ip_type: family, protocol: "icmp", subnet, subnet_size: 0, notes: "sitesolide ping" },
+    { ip_type: family, protocol: "tcp", subnet, subnet_size: 0, port: "22", notes: "ssh" },
+    { ip_type: family, protocol: "tcp", subnet, subnet_size: 0, port: "80", notes: "http" },
+    { ip_type: family, protocol: "tcp", subnet, subnet_size: 0, port: "443", notes: "https" },
+    { ip_type: family, protocol: "icmp", subnet, subnet_size: 0, notes: "ping" },
   ];
 });
+
+/** A rule of FIREWALL_RULES as it is sent: its notes say whose it is, for whoever reads the group in the console. */
+export function ruleFor(rule: RuleRequest, owner: Owner): RuleRequest {
+  return { ...rule, notes: `${owner.name} ${rule.notes}` };
+}
 
 // --- the API's objects, as far as this file reads them ---------------------------------
 
@@ -284,31 +299,31 @@ export function isDefiniteRefusal(error: ProviderError): boolean {
 
 // --- what the answers mean -------------------------------------------------------------------
 
-/** The SSH key an instance's tags say was uploaded for it, or null. */
-export function keyOfTags(tags: readonly string[] | undefined): string | null {
-  const prefix = `${KEY_TAG}:`;
+/** The SSH key an instance's tags say its owner uploaded for it, or null. */
+export function keyOfTags(tags: readonly string[] | undefined, owner: Owner): string | null {
+  const prefix = `${keyTag(owner)}:`;
   return (tags ?? []).find((tag) => tag.startsWith(prefix))?.slice(prefix.length) || null;
 }
 
 /** What a firewall group made for a machine says: the instance's two tags. */
-export function firewallDescription(name: string): string {
-  return tagsFor(name).join(" ");
+export function firewallDescription(name: string, owner: Owner): string {
+  return owner.tags(name).join(" ");
 }
 
-/** Whether a firewall group was made by sitesolide for that machine, which its description alone can say. */
-export function ownsFirewall(group: VultrFirewall, name: string): boolean {
+/** Whether a firewall group was made by its owner for that machine, which its description alone can say. */
+export function ownsFirewall(group: VultrFirewall, name: string, owner: Owner): boolean {
   const words = (group.description ?? "").trim().split(/\s+/);
-  return isManagedTags(words) && machineOfTags(words) === name;
+  return owner.managesTags(words) && owner.machineOfTags(words) === name;
 }
 
 /**
- * The names sitesolide gives a key it uploads for a machine: `sitesolide-web`,
- * or, when another key has that one, `sitesolide-web-` followed by the first
+ * The names an owner gives a key it uploads for a machine: `<owner>-web`,
+ * or, when another key has that one, `<owner>-web-` followed by the first
  * eight hex digits of this key's own MD5 fingerprint. Any other suffix is
  * somebody else's naming, and the key theirs.
  */
-export function isKeyNameFor(keyName: string, machine: string, fingerprint: string): boolean {
-  const plain = `sitesolide-${machine}`;
+export function isKeyNameFor(keyName: string, machine: string, fingerprint: string, owner: Owner): boolean {
+  const plain = `${owner.name}-${machine}`;
   const prefix = fingerprint.replaceAll(":", "").toLowerCase().slice(0, 8);
   return keyName === plain || (/^[0-9a-f]{8}$/.test(prefix) && keyName === `${plain}-${prefix}`);
 }
@@ -356,7 +371,7 @@ export function priceAt(plan: VultrPlan, location: string): number {
   return typeof local === "number" && Number.isFinite(local) ? local : plan.monthly_cost;
 }
 
-export function toMachine(instance: VultrInstance, plans: VultrPlan[] | null): Machine {
+export function toMachine(instance: VultrInstance, plans: VultrPlan[] | null, owner: Owner): Machine {
   const plan = plans?.find((candidate) => candidate.id === instance.plan);
   const network = address(instance.v6_network);
   const price = plan === undefined ? Number.NaN : priceAt(plan, instance.region);
@@ -374,7 +389,7 @@ export function toMachine(instance: VultrInstance, plans: VultrPlan[] | null): M
     // Vultr gives one price, before tax: there is no other to call gross.
     monthlyPrice: cost === null ? null : { net: cost, gross: cost, currency: CURRENCY },
     backups: (instance.features ?? []).includes("auto_backups"),
-    managed: isManagedTags(instance.tags),
+    managed: owner.managesTags(instance.tags),
     labels: labelsOfTags(instance.tags),
     // An image deployed with the limited scheme locks root and lets in linuxuser, a sudoer.
     login: instance.user_scheme === "limited" ? "linuxuser" : "root",
@@ -449,7 +464,7 @@ function scheduleLine(schedule: BackupSchedule): string {
 export function vultr(context: ProviderContext): Provider {
   const base = apiAddress(context.environment, API_VARIABLE, DEFAULT_API);
   const host = new URL(base).host;
-  const { clock, fetcher } = context;
+  const { clock, fetcher, owner } = context;
   const key = context.credentials[KEY_VARIABLE] ?? "";
 
   /** One call: the key in its header, JSON both ways, every failure said in the CLI's words. */
@@ -465,7 +480,7 @@ export function vultr(context: ProviderContext): Provider {
       });
     } catch (error) {
       // The message of a failed fetch names the address at most; it is
-      // scrubbed all the same, on the way out, by bin/cli/machine.ts.
+      // scrubbed all the same, on the way out, by the program that prints it.
       throw new VultrError({ error: "provider-unreachable", message: `${host} unreachable while trying to ${what}: ${(error as Error).message}` }, 0);
     }
     if (response.status === 204) return {} as T;
@@ -544,11 +559,11 @@ export function vultr(context: ProviderContext): Provider {
     return new Set(answer.available_plans.map(String));
   }
 
-  /** The instances labelled with that name, the one sitesolide created for it first. */
+  /** The instances labelled with that name, the one its owner created for it first. */
   async function findInstance(name: string): Promise<VultrInstance | null> {
     const listed = await listAll<VultrInstance>("/instances", "instances", "read the instances", { label: name });
     const same = listed.filter((instance) => instance.label === name).map(clean);
-    return same.find((instance) => isManagedTags(instance.tags) && machineOfTags(instance.tags) === name) ?? same.find((instance) => isManagedTags(instance.tags)) ?? same[0] ?? null;
+    return same.find((instance) => owner.managesTags(instance.tags) && owner.machineOfTags(instance.tags) === name) ?? same.find((instance) => owner.managesTags(instance.tags)) ?? same[0] ?? null;
   }
 
   async function readInstance(id: string, name: string): Promise<VultrInstance> {
@@ -575,7 +590,7 @@ export function vultr(context: ProviderContext): Provider {
           });
         }
         if (!justCreated && instance.status === "active" && instance.power_status === "stopped") {
-          throw new ProviderError({ error: "machine-off", message: `${name} exists but is stopped`, details: ["sitesolide never starts or stops a machine by itself"] });
+          throw new ProviderError({ error: "machine-off", message: `${name} exists but is stopped`, details: [`${owner.name} never starts or stops a machine by itself`] });
         }
       }
       if (clock.now() >= deadline) {
@@ -623,7 +638,7 @@ export function vultr(context: ProviderContext): Provider {
         error: "provider-invalid",
         message: `no Vultr image matches ${request.image}`,
         details: [
-          "--image takes debian-<release>, or an os_id Vultr lists; sitesolide setup is verified on Debian 13 only",
+          "--image takes debian-<release>, or an os_id Vultr lists",
           ...debian.map((candidate) => `${String(candidate.id).padEnd(6)} ${candidate.name}`),
         ],
       });
@@ -635,8 +650,8 @@ export function vultr(context: ProviderContext): Provider {
   /**
    * Deletes what this run created before an order Vultr refused: the key and
    * the firewall group were made for an instance that does not exist, and
-   * nothing else in sitesolide would ever list or remove them, since `list`
-   * and `destroy` start from an instance. What an earlier run made, or the
+   * nothing else here would ever list or remove them, since `list` and
+   * `destroy` start from an instance. What an earlier run made, or the
    * account already held, is left as it was. A deletion that fails leaves the
    * resource, where the next run finds and reuses it. Returns what happened,
    * one line each, for the refusal's details.
@@ -647,30 +662,30 @@ export function vultr(context: ProviderContext): Provider {
     return undoMade(made, (resource) => call("DELETE", resource.path, `delete the ${resource.kind} ${resource.name}`), report);
   }
 
-  /** The workstation's key in the account; `forMachine` when its name says sitesolide uploaded it for this machine. */
-  async function ensureKey(request: CreateRequest, report: Report): Promise<VultrKey & { reused: boolean; forMachine: boolean }> {
+  /** The request's key in the account; `forMachine` when its name says its owner uploaded it for this machine. */
+  async function ensureKey(machine: string, publicKey: PublicKey, report: Report): Promise<VultrKey & { reused: boolean; forMachine: boolean }> {
     report("-> SSH key");
     const keys = await listAll<VultrKey>("/ssh-keys", "ssh_keys", "read the SSH keys");
-    const ours = `${request.key.algorithm} ${request.key.blob}`;
+    const ours = `${publicKey.algorithm} ${publicKey.blob}`;
     const same = keys.find((candidate) => keyMaterial(candidate.ssh_key) === ours);
     if (same !== undefined) {
-      report(`   ${same.name}, already in the account (${request.key.fingerprint}), reused`);
-      return { ...same, reused: true, forMachine: isKeyNameFor(same.name, request.name, request.key.fingerprint) };
+      report(`   ${same.name}, already in the account (${publicKey.fingerprint}), reused`);
+      return { ...same, reused: true, forMachine: isKeyNameFor(same.name, machine, publicKey.fingerprint, owner) };
     }
     // A name of its own, never one the account already uses for another key.
     const taken = new Set(keys.map((candidate) => candidate.name));
-    const plain = `sitesolide-${request.name}`;
-    const name = taken.has(plain) ? `${plain}-${request.key.fingerprint.replaceAll(":", "").slice(0, 8)}` : plain;
-    const line = [request.key.algorithm, request.key.blob, request.key.comment].filter((part) => part !== "").join(" ");
+    const plain = `${owner.name}-${machine}`;
+    const name = taken.has(plain) ? `${plain}-${publicKey.fingerprint.replaceAll(":", "").slice(0, 8)}` : plain;
+    const line = [publicKey.algorithm, publicKey.blob, publicKey.comment].filter((part) => part !== "").join(" ");
     const created = await call<{ ssh_key: VultrKey }>("POST", "/ssh-keys", `upload the SSH key ${name}`, { name, ssh_key: line });
-    report(`   ${name}, uploaded (${request.key.fingerprint})`);
+    report(`   ${name}, uploaded (${publicKey.fingerprint})`);
     return { ...created.ssh_key, reused: false, forMachine: true };
   }
 
   /** The firewall group an earlier run made for that machine, read before anything is created. */
   async function findFirewall(name: string): Promise<VultrFirewall | null> {
     const groups = await listAll<VultrFirewall>("/firewalls", "firewall_groups", "read the firewall groups");
-    return groups.find((group) => ownsFirewall(group, name)) ?? null;
+    return groups.find((group) => ownsFirewall(group, name, owner)) ?? null;
   }
 
   /**
@@ -682,19 +697,19 @@ export function vultr(context: ProviderContext): Provider {
     const path = `/firewalls/${encodeURIComponent(group.id)}/rules`;
     const rules = await listAll<VultrRule>(path, "firewall_rules", "read the firewall rules");
     const missing = FIREWALL_RULES.filter((wanted) => !rules.some((existing) => sameRule(existing, wanted)));
-    for (const rule of missing) await call("POST", path, `add the rule ${rule.notes} (${rule.ip_type}) to the firewall group`, rule);
+    for (const rule of missing) await call("POST", path, `add the rule ${rule.notes} (${rule.ip_type}) to the firewall group`, ruleFor(rule, owner));
     return missing.length;
   }
 
   /** The machine's firewall group with all its rules: the one an earlier run made, or a new one, which `made` then lists. */
   async function ensureFirewall(name: string, found: VultrFirewall | null, report: Report, made: { kind: string; name: string; path: string }[]): Promise<VultrFirewall & { reused: boolean }> {
     if (found !== null) {
-      report(`   ${found.id}, already created by sitesolide, reused`);
+      report(`   ${found.id}, already created by ${owner.name}, reused`);
       const added = await completeRules(found);
       if (added > 0) report(`   ${added} missing rules added`);
       return { ...found, reused: true };
     }
-    const created = await call<{ firewall_group: VultrFirewall }>("POST", "/firewalls", `create the firewall group for ${name}`, { description: firewallDescription(name) });
+    const created = await call<{ firewall_group: VultrFirewall }>("POST", "/firewalls", `create the firewall group for ${name}`, { description: firewallDescription(name, owner) });
     const group = created.firewall_group;
     made.push({ kind: "firewall group", name: group.id, path: `/firewalls/${encodeURIComponent(group.id)}` });
     await completeRules(group);
@@ -707,8 +722,8 @@ export function vultr(context: ProviderContext): Provider {
    * group, rules complete. It may not be: Vultr detaches the instances of a
    * group it deletes, and an instance whose order got no clear answer was
    * left as it was. A missing group is made again, or the one an earlier run
-   * left is reused, and attached. A group sitesolide did not make, attached by
-   * hand, is the owner's choice and stays.
+   * left is reused, and attached. A group its owner did not make, attached by
+   * hand, is the account holder's choice and stays.
    */
   async function ensureGuarded(instance: VultrInstance, report: Report, resources: Resource[]): Promise<VultrInstance> {
     const name = instance.label;
@@ -721,14 +736,14 @@ export function vultr(context: ProviderContext): Provider {
       } catch (error) {
         if (!(error instanceof VultrError) || error.status !== 404) throw error;
       }
-      if (attached !== null && !ownsFirewall(attached, name)) {
-        report(`!! ${name} is behind the firewall group ${attached.id}, which sitesolide did not make: left as it is`);
+      if (attached !== null && !ownsFirewall(attached, name, owner)) {
+        report(`!! ${name} is behind the firewall group ${attached.id}, which ${owner.name} did not make: left as it is`);
         return instance;
       }
       if (attached !== null) {
         const added = await completeRules(attached);
         report(`   ${attached.id}, attached${added > 0 ? `, ${added} missing rules added` : ""}`);
-        resources.push({ kind: "firewall group", name: firewallDescription(name), id: attached.id, reused: true });
+        resources.push({ kind: "firewall group", name: firewallDescription(name, owner), id: attached.id, reused: true });
         return instance;
       }
     }
@@ -736,7 +751,7 @@ export function vultr(context: ProviderContext): Provider {
     const group = await ensureFirewall(name, await findFirewall(name), report, []);
     await call("PATCH", `/instances/${encodeURIComponent(instance.id)}`, `attach the firewall group ${group.id} to ${name}`, { firewall_group_id: group.id });
     report(`   ${group.id}, attached to ${name}`);
-    resources.push({ kind: "firewall group", name: firewallDescription(name), id: group.id, reused: group.reused });
+    resources.push({ kind: "firewall group", name: firewallDescription(name, owner), id: group.id, reused: group.reused });
     return { ...instance, firewall_group_id: group.id };
   }
 
@@ -798,28 +813,31 @@ export function vultr(context: ProviderContext): Provider {
 
     async find(name) {
       const instance = await findInstance(name);
-      return instance === null ? null : toMachine(instance, await prices());
+      return instance === null ? null : toMachine(instance, await prices(), owner);
     },
 
     async create(request, report): Promise<CreateOutcome> {
+      checkRequest("Vultr", request, SUPPORTS);
+      // SUPPORTS is not keyless: checkRequest refused a request without one.
+      const publicKey = request.key!;
       const resources: Resource[] = [];
       report(`-> an instance labelled ${request.name} in the account`);
       const existing = await findInstance(request.name);
       let instance: VultrInstance;
       let created: boolean;
       if (existing !== null) {
-        const found = toMachine(existing, null);
+        const found = toMachine(existing, null, owner);
         if (!found.managed) {
           throw new ProviderError({
             error: "machine-exists",
-            message: `an instance labelled ${request.name} exists in the account, and sitesolide did not create it`,
+            message: `an instance labelled ${request.name} exists in the account, and ${owner.name} did not create it`,
             details: [
               `${found.type} at ${found.location}, ${found.status}, ${[found.ipv4, found.ipv6].filter(Boolean).join(", ") || "no public address"}`,
-              `it lacks the tag ${MANAGED_LABEL}:${MANAGED_VALUE}: nothing was created, nothing was changed`,
+              `it lacks the tag ${owner.tagMark}: nothing was created, nothing was changed`,
             ],
           });
         }
-        report(`   already created by sitesolide: ${found.type} at ${found.location}, ${found.status}`);
+        report(`   already created by ${owner.name}: ${found.type} at ${found.location}, ${found.status}`);
         if (found.type !== request.type || found.location !== request.location) {
           report(`!! it is ${found.type} at ${found.location}: --type and --location only apply to a machine being created`);
         }
@@ -836,12 +854,12 @@ export function vultr(context: ProviderContext): Provider {
         let ordering = false;
         let answer: { instance: VultrInstance };
         try {
-          const sshKey = await ensureKey(request, report);
+          const sshKey = await ensureKey(request.name, publicKey, report);
           resources.push({ kind: "ssh key", name: sshKey.name, id: sshKey.id, reused: sshKey.reused });
           if (!sshKey.reused) made.push({ kind: "SSH key", name: sshKey.name, path: `/ssh-keys/${encodeURIComponent(sshKey.id)}` });
           report(`-> firewall group for ${request.name}`);
           const firewall = await ensureFirewall(request.name, existingFirewall, report, made);
-          resources.push({ kind: "firewall group", name: firewallDescription(request.name), id: firewall.id, reused: firewall.reused });
+          resources.push({ kind: "firewall group", name: firewallDescription(request.name, owner), id: firewall.id, reused: firewall.reused });
 
           report(`-> instance ${request.name}: ${request.type} at ${request.location}, ${offer.os.name}`);
           ordering = true;
@@ -851,7 +869,7 @@ export function vultr(context: ProviderContext): Provider {
             os_id: offer.os.id,
             label: request.name,
             hostname: request.name,
-            tags: [...tagsFor(request.name), ...(sshKey.forMachine ? [`${KEY_TAG}:${sshKey.id}`] : [])],
+            tags: [...owner.tags(request.name), ...(sshKey.forMachine ? [`${keyTag(owner)}:${sshKey.id}`] : [])],
             sshkey_id: [sshKey.id],
             firewall_group_id: firewall.id,
             enable_ipv6: true,
@@ -899,13 +917,13 @@ export function vultr(context: ProviderContext): Provider {
       let running = await waitReady(instance.id, request.name, report, created);
       if (!created) running = await ensureGuarded(running, report, resources);
       if (request.backups) running = await ensureBackups(running, created, report);
-      return { machine: toMachine(running, await prices()), created, resources };
+      return { machine: toMachine(running, await prices(), owner), created, resources };
     },
 
     async list() {
-      const instances = (await listAll<VultrInstance>("/instances", "instances", "read the instances")).map(clean).filter((instance) => isManagedTags(instance.tags));
+      const instances = (await listAll<VultrInstance>("/instances", "instances", "read the instances")).map(clean).filter((instance) => owner.managesTags(instance.tags));
       const known = instances.length === 0 ? null : await prices();
-      return instances.map((instance) => toMachine(instance, known));
+      return instances.map((instance) => toMachine(instance, known, owner));
     },
 
     async destroy(machine, options, report): Promise<DestroyOutcome> {
@@ -917,15 +935,15 @@ export function vultr(context: ProviderContext): Provider {
       // Read again rather than trusted: the tags decide, and they also name
       // the firewall group and the key that go with it.
       let current = await readInstance(machine.id, machine.name);
-      if (!isManagedTags(current.tags)) {
+      if (!owner.managesTags(current.tags)) {
         throw new ProviderError({
           error: "machine-not-managed",
-          message: `the instance ${machine.name} lacks the tag ${MANAGED_LABEL}:${MANAGED_VALUE}`,
-          details: ["sitesolide did not create it: nothing was destroyed"],
+          message: `the instance ${machine.name} lacks the tag ${owner.tagMark}`,
+          details: [`${owner.name} did not create it: nothing was destroyed`],
         });
       }
       const firewallId = current.firewall_group_id ?? "";
-      const keyId = keyOfTags(current.tags);
+      const keyId = keyOfTags(current.tags, owner);
       // What is attached to it outlives it, detached and still billed: read
       // while it is attached, said, and never deleted.
       const leftovers = await attachments(current.id, machine.name, report);
@@ -964,13 +982,13 @@ export function vultr(context: ProviderContext): Provider {
 
       report(`-> firewall group for ${machine.name}`);
       const groups = await listAll<VultrFirewall>("/firewalls", "firewall_groups", "read the firewall groups");
-      const ours = groups.filter((group) => ownsFirewall(group, machine.name));
+      const ours = groups.filter((group) => ownsFirewall(group, machine.name, owner));
       const attached = groups.find((group) => group.id === firewallId);
-      if (attached !== undefined && !ownsFirewall(attached, machine.name)) {
-        kept.push(`firewall group ${attached.id} (${attached.description || "no description"}): sitesolide did not create it`);
-        report(`   ${attached.id}: kept, its description does not say sitesolide made it for ${machine.name}`);
+      if (attached !== undefined && !ownsFirewall(attached, machine.name, owner)) {
+        kept.push(`firewall group ${attached.id} (${attached.description || "no description"}): ${owner.name} did not create it`);
+        report(`   ${attached.id}: kept, its description does not say ${owner.name} made it for ${machine.name}`);
       }
-      if (ours.length === 0) report("   none created by sitesolide for that machine");
+      if (ours.length === 0) report(`   none created by ${owner.name} for that machine`);
       for (const group of ours) {
         let count = group.instance_count;
         // Vultr may still count the deleted instance for a moment.
@@ -1002,12 +1020,12 @@ export function vultr(context: ProviderContext): Provider {
         report(`   ${keyId}: no longer in the account`);
         return { removed, kept };
       }
-      if (!isKeyNameFor(sshKey.name, machine.name, fingerprintOf(sshKey.ssh_key))) {
-        // The tag names it, but it does not carry a name sitesolide gives,
+      if (!isKeyNameFor(sshKey.name, machine.name, fingerprintOf(sshKey.ssh_key), owner)) {
+        // The tag names it, but it does not carry a name its owner gives,
         // whose suffix would be its own fingerprint's: renamed since, or
-        // never sitesolide's, it is somebody's, and stays.
-        kept.push(`SSH key ${sshKey.name}: not named as sitesolide names the keys it uploads, so never deleted by it`);
-        report(`   ${sshKey.name}: kept, not named as sitesolide names the keys it uploads`);
+        // never the owner's, it is somebody's, and stays.
+        kept.push(`SSH key ${sshKey.name}: not named as ${owner.name} names the keys it uploads, so never deleted by it`);
+        report(`   ${sshKey.name}: kept, not named as ${owner.name} names the keys it uploads`);
       } else if (options.deleteKey) {
         await call("DELETE", `/ssh-keys/${encodeURIComponent(sshKey.id)}`, `delete the SSH key ${sshKey.name}`);
         removed.push(`SSH key ${sshKey.name}`);

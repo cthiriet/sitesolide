@@ -26,7 +26,7 @@
  * makes the next matching requests answer an error instead.
  */
 import type { FakeDns } from "./fake-dns";
-import type { FakeRequest } from "./fake-provider";
+import type { FakeRequest } from "../../clouds/fakes/fake-provider";
 
 /** Shaped as Scaleway's are, UUIDs; neither is anyone's. */
 export const FAKE_SECRET = "7d3f9a2c-41e8-4b6d-a5c0-2e9f8b1d4c76";

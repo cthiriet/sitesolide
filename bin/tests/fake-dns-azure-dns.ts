@@ -33,7 +33,7 @@
  * read, as somebody else writing it in between would.
  */
 import type { FakeDns } from "./fake-dns";
-import type { FakeRequest } from "./fake-provider";
+import type { FakeRequest } from "../../clouds/fakes/fake-provider";
 
 export const SUBSCRIPTION = "5d1c9e72-4a3b-4f60-9d8e-2b7a1c6f0e93";
 export const TENANT = "a7e3b1c4-2d5f-4e8a-9b6c-0f1d2e3a4b5c";

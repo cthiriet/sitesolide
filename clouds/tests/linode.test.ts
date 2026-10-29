@@ -12,16 +12,17 @@ import {
   LINODE_DEFAULTS,
   nameProblem,
   WAITS,
-} from "../cli/providers/linode";
-import { ProviderError, type CreateRequest, type Machine, type Provider, type Workstation } from "../cli/providers/provider";
-import { createFake, createFakeLinode, FAKE_TOKEN, type FakeLinode } from "./fake-linode";
+} from "../src/linode";
+import { FAILURE_CODES, ownerNamed, ProviderError, WEB_SERVER, type CreateRequest, type Machine, type Owner, type Provider, type Workstation } from "../src/provider";
+import { createFake, createFakeLinode, FAKE_TOKEN, type FakeLinode } from "../fakes/linode";
 
 /**
  * The Akamai (Linode) provider, opened directly against a local fake of the
  * Linode API v4 (fake-linode.ts): the real one is never called. The clock does
  * not wait, every fetch is checked for what it carries, and everything the
  * provider reports or throws is kept, so that the last tests can say that
- * the token never appears in it.
+ * the token never appears in it. It is opened for sitesolide unless a test
+ * says otherwise, so that every label and tag below reads as sitesolide's.
  */
 
 const REPO = join(import.meta.dir, "..", "..");
@@ -33,6 +34,9 @@ const KEY = {
   comment: "ada@workstation.test-zone.invalid",
   fingerprint: "a4:46:30:d5:fd:7e:1a:77:e5:ad:8d:21:4f:9a:3e:9e",
 };
+
+const SITESOLIDE = ownerNamed("sitesolide");
+const DEVBOX = ownerNamed("devbox");
 
 let fake: FakeLinode;
 /** Every line reported and every refusal thrown, read by the last tests. */
@@ -60,8 +64,9 @@ function fakeClock() {
   return { now: () => now, sleep: async (milliseconds: number) => void (now += milliseconds), elapsed: () => now - Date.parse("2026-10-21T10:00:00Z") };
 }
 
-function open(options: { token?: string; clock?: ReturnType<typeof fakeClock> } = {}): Provider {
+function open(options: { token?: string; clock?: ReturnType<typeof fakeClock>; owner?: Owner } = {}): Provider {
   return LINODE.open({
+    owner: options.owner ?? SITESOLIDE,
     credentials: { LINODE_TOKEN: options.token ?? FAKE_TOKEN },
     environment: { SITESOLIDE_LINODE_API: fake.url },
     fetcher: (input, init) => {
@@ -74,7 +79,7 @@ function open(options: { token?: string; clock?: ReturnType<typeof fakeClock> } 
 }
 
 function request(extra: Partial<CreateRequest> = {}): CreateRequest {
-  return { name: "web", type: LINODE_DEFAULTS.type, location: LINODE_DEFAULTS.location, image: LINODE_DEFAULTS.image, backups: false, key: KEY, ...extra };
+  return { name: "web", type: LINODE_DEFAULTS.type, location: LINODE_DEFAULTS.location, image: LINODE_DEFAULTS.image, backups: false, key: KEY, inbound: WEB_SERVER, ...extra };
 }
 
 /** The lines a step reported, kept for the last tests too. */
@@ -96,6 +101,7 @@ async function refusal(promise: Promise<unknown>): Promise<ProviderError> {
   } catch (error) {
     if (!(error instanceof ProviderError)) throw error;
     printed.push(JSON.stringify(error.failure), error.message);
+    expect(FAILURE_CODES.has(error.failure.error)).toBe(true);
     return error;
   }
   throw new Error("expected a refusal");
@@ -148,13 +154,17 @@ describe("the entry", () => {
   });
 
   test("a name Akamai would refuse is told before anything leaves", () => {
-    expect(nameProblem("web")).toBeNull();
-    expect(nameProblem("prod-paris-2")).toBeNull();
-    expect(nameProblem("ab")).toContain("shorter than 3");
-    expect(nameProblem("1web")).toContain("start with a letter");
-    expect(nameProblem("a--b")).toContain("two dashes");
-    expect(nameProblem("a".repeat(21))).toBeNull();
-    expect(nameProblem("a".repeat(22))).toContain("32 at most");
+    expect(nameProblem("web", SITESOLIDE)).toBeNull();
+    expect(nameProblem("prod-paris-2", SITESOLIDE)).toBeNull();
+    expect(nameProblem("ab", SITESOLIDE)).toContain("shorter than 3");
+    expect(nameProblem("1web", SITESOLIDE)).toContain("start with a letter");
+    expect(nameProblem("a--b", SITESOLIDE)).toContain("two dashes");
+    expect(nameProblem("a".repeat(21), SITESOLIDE)).toBeNull();
+    expect(nameProblem("a".repeat(22), SITESOLIDE)).toBe("it is longer than 21 characters: the firewall's label, sitesolide-<name>, holds 32 at most");
+    // The owner's name is part of the firewall's label: a shorter one leaves more to the machine's.
+    expect(nameProblem("a".repeat(25), DEVBOX)).toBeNull();
+    expect(nameProblem("a".repeat(26), DEVBOX)).toBe("it is longer than 25 characters: the firewall's label, devbox-<name>, holds 32 at most");
+    expect(LINODE.nameProblem).toBe(nameProblem);
   });
 
   test("the fake is a FakeProvider: its environment opens the provider", () => {
@@ -549,6 +559,7 @@ describe("the errors", () => {
     fake.fail("GET", /^\/linode\/instances$/, 404, "", { body: "<html>not here</html>" });
     expect((await refusal(open().list())).failure.error).toBe("provider-unreadable");
     const closed = LINODE.open({
+      owner: SITESOLIDE,
       credentials: { LINODE_TOKEN: FAKE_TOKEN },
       environment: { SITESOLIDE_LINODE_API: "http://127.0.0.1:9/v4" },
       fetcher: fetch,
@@ -635,6 +646,93 @@ describe("discover", () => {
     expect(await discover(workstation({}, { "~/.config/linode-cli": "[ada]\ntoken = Bearer xyz\n" }))).toBeNull();
     expect(cliConfigToken(`[ada]\ntoken = ${CLI_TOKEN}\n[bob]\ntoken = ${"b".repeat(64)}\n`)).toBeNull();
     expect(cliConfigToken(`# a comment\n[ada]\nTOKEN: ${CLI_TOKEN}\n`)).toBe(CLI_TOKEN);
+  });
+});
+
+// --- what the request may ask -----------------------------------------------------------------
+
+describe("what Akamai is never asked", () => {
+  test("no key, a user-data, other firewall rules, a disk, nested virtualization or a login: refused before anything leaves", async () => {
+    // A machine of that name already there changes nothing: the request is refused before it is looked for.
+    fake.addInstance({ label: "web", tags: MANAGED });
+    const cases: [Partial<CreateRequest>, string][] = [
+      [{ key: null }, "no-ssh-key"],
+      [{ userData: "#cloud-config\n" }, "provider-unsupported"],
+      [{ inbound: WEB_SERVER.filter((rule) => rule.protocol !== "icmp") }, "provider-unsupported"],
+      [{ inbound: [...WEB_SERVER, { protocol: "udp", port: 51820, sources: ["0.0.0.0/0", "::/0"] }] }, "provider-unsupported"],
+      [{ inbound: WEB_SERVER.map((rule) => ({ ...rule, sources: ["198.51.100.0/24"] })) }, "provider-unsupported"],
+      [{ disk: { gb: 80 } }, "provider-unsupported"],
+      [{ nestedVirtualization: true }, "provider-unsupported"],
+      [{ login: "admin" }, "provider-unsupported"],
+    ];
+    for (const [extra, code] of cases) {
+      const error = await refusal(open().create(request(extra), recorder().report));
+      expect({ extra, code: error.failure.error, details: error.failure.details }).toEqual({ extra, code, details: ["nothing was created"] });
+    }
+    expect(fake.requests).toEqual([]);
+  });
+
+  test("the rules of WEB_SERVER are taken in any order", async () => {
+    await open().create(request({ inbound: [...WEB_SERVER].reverse() }), recorder().report);
+    expect(body("POST", "/networking/firewalls").rules).toEqual(FIREWALL_RULES);
+  });
+});
+
+// --- two owners, one account ------------------------------------------------------------------
+
+describe("two owners sharing one account", () => {
+  test("devbox neither lists, adopts nor destroys sitesolide's Linode", async () => {
+    const theirs = await open().create(request(), recorder().report);
+    fake.requests.length = 0;
+    const devbox = open({ owner: DEVBOX });
+    expect(await devbox.list()).toEqual([]);
+    expect(await devbox.find("web")).toMatchObject({ id: theirs.machine.id, managed: false });
+    const taken = await refusal(devbox.create(request(), recorder().report));
+    expect(taken.failure).toMatchObject({ error: "machine-exists", message: "a Linode labelled web exists in the account, and devbox did not create it" });
+    expect(taken.failure.details?.[1]).toBe("it lacks the tags managed-by:devbox and devbox-machine:web: nothing was created, nothing was changed");
+    // Handed sitesolide's machine as its own, it reads the tags again and refuses.
+    const destroyed = await refusal(devbox.destroy(theirs.machine, { deleteKey: true }, recorder().report));
+    expect(destroyed.failure).toMatchObject({ error: "machine-not-managed", message: "the Linode web does not carry the tag managed-by:devbox: devbox did not create it" });
+    expect(writes()).toEqual([]);
+    expect({ instances: fake.instances.length, firewalls: fake.firewalls.length }).toEqual({ instances: 1, firewalls: 1 });
+  });
+
+  test("devbox's Linode carries devbox's labels and tags, and sitesolide neither lists nor destroys it", async () => {
+    const ours = await open({ owner: DEVBOX }).create(request({ name: "api" }), recorder().report);
+    expect(body("POST", "/networking/firewalls")).toEqual({ label: "devbox-api", tags: ["managed-by:devbox", "devbox-machine:api"], rules: FIREWALL_RULES });
+    expect(body("POST", "/linode/instances").tags).toEqual(["managed-by:devbox", "devbox-machine:api"]);
+    expect(ours.machine).toMatchObject({ managed: true, labels: { "managed-by": "devbox", "devbox-machine": "api" } });
+
+    fake.requests.length = 0;
+    const sitesolide = open();
+    expect(await sitesolide.list()).toEqual([]);
+    expect(await sitesolide.find("api")).toMatchObject({ managed: false });
+    expect((await refusal(sitesolide.destroy(ours.machine, { deleteKey: true }, recorder().report))).failure.error).toBe("machine-not-managed");
+    expect(writes()).toEqual([]);
+  });
+
+  test("a firewall of devbox's label that sitesolide's tags mark is neither adopted nor deleted by devbox", async () => {
+    const theirs = fake.addFirewall({ label: "devbox-api", tags: ["managed-by:sitesolide", "sitesolide-machine:api"] });
+    const refused = await refusal(open({ owner: DEVBOX }).create(request({ name: "api" }), recorder().report));
+    expect(refused.failure).toMatchObject({ error: "firewall-taken", message: "a firewall labelled devbox-api exists in the account, and devbox did not create it for api" });
+    expect(writes()).toEqual([]);
+
+    const instance = fake.addInstance({ label: "api", tags: ["managed-by:devbox", "devbox-machine:api"] });
+    const devbox = open({ owner: DEVBOX });
+    const outcome = await devbox.destroy((await devbox.find("api"))!, { deleteKey: false }, recorder().report);
+    expect(writes()).toEqual([`DELETE /linode/instances/${instance.id}`]);
+    expect(outcome.kept).toEqual(["firewall devbox-api: devbox did not create it for api"]);
+    expect(fake.firewalls).toEqual([theirs]);
+  });
+
+  test("destroying devbox's Linode deletes devbox's firewall alone", async () => {
+    await open().create(request(), recorder().report);
+    const ours = await open({ owner: DEVBOX }).create(request({ name: "api" }), recorder().report);
+    fake.requests.length = 0;
+    const outcome = await open({ owner: DEVBOX }).destroy(ours.machine, { deleteKey: true }, recorder().report);
+    expect(outcome.removed).toEqual([`Linode api (${ours.machine.ipv4}, ${ours.machine.ipv6})`, "firewall devbox-api"]);
+    expect(fake.instances.map((instance) => instance.label)).toEqual(["web"]);
+    expect(fake.firewalls.map((firewall) => [firewall.label, firewall.tags])).toEqual([["sitesolide-web", MANAGED]]);
   });
 });
 

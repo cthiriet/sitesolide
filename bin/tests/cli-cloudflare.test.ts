@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { canonicalAddress, cloudflareBase, DEFAULT_CLOUDFLARE_API, desiredRecords, manualRecords, planRecords, scrub, zoneCandidates, type DnsRecord } from "../cli/cloudflare";
 import { CLOUDFLARE } from "../cli/dns/cloudflare";
 import { DnsError, ensureZoneRecords } from "../cli/dns/dns";
-import { realClock } from "../cli/providers/provider";
+import { realClock } from "../../clouds/src/provider";
 import { startCloudflareMock, type CloudflareMock } from "./cloudflare-mock";
 
 /**

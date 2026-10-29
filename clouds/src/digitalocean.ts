@@ -3,36 +3,37 @@
  * https://docs.digitalocean.com/reference/api/reference/, whose OpenAPI
  * source is https://github.com/digitalocean/openapi.
  *
- * A machine is four resources:
+ * A machine is four resources, `<owner>` being the name of the program that
+ * opened the provider (ProviderContext.owner):
  *
- *   - the workstation's SSH key, reused when the account already holds it
- *     under any name, uploaded as `sitesolide-<name>` otherwise;
- *   - the tag `sitesolide-machine:<name>`, which the firewall targets;
- *   - a Cloud Firewall named `sitesolide-<name>`, inbound TCP 22, 80 and 443
+ *   - the request's SSH key, reused when the account already holds it under
+ *     any name, uploaded as `<owner>-<name>` otherwise;
+ *   - the tag `<owner>-machine:<name>`, which the firewall targets;
+ *   - a Cloud Firewall named `<owner>-<name>`, inbound TCP 22, 80 and 443
  *     and ICMP from everywhere, outbound everything;
  *   - the Droplet, with IPv6, the key for root, no user_data, tagged
- *     `managed-by:sitesolide` and `sitesolide-machine:<name>`.
+ *     `managed-by:<owner>` and `<owner>-machine:<name>`.
  *
  * DigitalOcean has no labels, and tags only exist on some resources, which
  * is why the four are recognised in three different ways:
  *
- *   - a Droplet is ours when it carries the tag `managed-by:sitesolide`;
+ *   - a Droplet is ours when it carries the tag `managed-by:<owner>`;
  *   - a firewall cannot carry it: a firewall's tags are not a description, they
- *     are the Droplets it applies to, and `managed-by:sitesolide` would apply
+ *     are the Droplets it applies to, and `managed-by:<owner>` would apply
  *     every machine's firewall to every other machine. Ours targets the tag
- *     `sitesolide-machine:<name>` and is named `sitesolide-<name>`; a firewall
+ *     `<owner>-machine:<name>` and is named `<owner>-<name>`; a firewall
  *     of that name targeting anything else is somebody else's. Targeting the
  *     tag rather than the Droplet's id also means the firewall is in place
  *     from the Droplet's first boot, since the Droplet is created with it;
- *   - an SSH key carries nothing at all. When this command uploads one for a
- *     machine, the Droplet is also tagged `sitesolide-key:<key id>`: that tag,
+ *   - an SSH key carries nothing at all. When a run uploads one for a
+ *     machine, the Droplet is also tagged `<owner>-key:<key id>`: that tag,
  *     read before the Droplet is deleted, is the only thing that lets
  *     `--delete-key` delete a key, so that a key the account held before is
  *     never deleted, whatever its name.
  *
  * Everything that can refuse is read before the first write, so that a
  * refusal leaves nothing behind: the Droplet by name (names are not unique at
- * DigitalOcean, and one sitesolide did not create is never touched), the
+ * DigitalOcean, and one the owner did not create is never touched), the
  * region, the size and the image against what DigitalOcean sells there, and
  * the firewall's name. When the order itself is refused (a 4xx, 429 apart),
  * the key, the tag and the firewall this run created for it are deleted
@@ -51,8 +52,8 @@
  * needed for DNS records to stay right.
  *
  * Every call carries the token in the Authorization header and nowhere else,
- * follows no redirect, and fails with a ProviderError whose code
- * bin/cli/hints.ts knows. The API's error format is `{"id", "message",
+ * follows no redirect, and fails with a ProviderError whose code is one of
+ * FAILURE_CODES. The API's error format is `{"id", "message",
  * "request_id"}`, and `{"error", "messages", "root_causes"}` on the tags'
  * 400; `failureFrom` reads both.
  *
@@ -67,16 +68,12 @@
  */
 import {
   apiAddress,
+  checkRequest,
   DEBIAN,
   formatPrice,
-  isManagedTags,
   keyMaterial,
-  machineOfTags,
-  MANAGED_LABEL,
-  MANAGED_VALUE,
   patiently,
   ProviderError,
-  tagsFor,
   TRANSIENT,
   undoMade,
   type Choice,
@@ -84,14 +81,17 @@ import {
   type CreateRequest,
   type DestroyOutcome,
   type Machine,
+  type Owner,
   type Provider,
   type ProviderContext,
   type ProviderEntry,
+  type PublicKey,
   type Report,
   type Resource,
+  type Supports,
   type Workstation,
 } from "./provider";
-import type { Failure } from "../remote";
+import type { Failure } from "./provider";
 
 export const DEFAULT_API = "https://api.digitalocean.com/v2";
 
@@ -136,8 +136,17 @@ export const WAITS = {
 /** The most items a page holds. */
 const PER_PAGE = 200;
 
-/** The tag that names the key uploaded for a machine, followed by the key's id. */
-export const KEY_TAG = "sitesolide-key";
+/**
+ * Nothing beyond the fields every provider takes: a key is required, the
+ * firewall is INBOUND_RULES alone, and no user-data, disk, nested
+ * virtualization or login is asked for.
+ */
+export const SUPPORTS: Supports = {};
+
+/** The tag that names the key uploaded for a machine, followed by the key's id: `<owner>-key`. */
+export function keyTag(owner: Owner): string {
+  return `${owner.name}-key`;
+}
 
 const EVERYWHERE = (): { addresses: string[] } => ({ addresses: ["0.0.0.0/0", "::/0"] });
 
@@ -406,7 +415,7 @@ function publicAddress(networks: DoNetwork[] | undefined): string | null {
   return networks?.find((network) => network.type === "public")?.ip_address ?? null;
 }
 
-export function toMachine(droplet: DoDroplet): Machine {
+export function toMachine(droplet: DoDroplet, owner: Owner): Machine {
   const ipv6 = publicAddress(droplet.networks?.v6);
   const price = droplet.size?.price_monthly;
   return {
@@ -423,33 +432,34 @@ export function toMachine(droplet: DoDroplet): Machine {
     // account's country, which it does not say: `gross` repeats it.
     monthlyPrice: typeof price === "number" && Number.isFinite(price) ? { net: String(price), gross: String(price), currency: "USD" } : null,
     backups: (droplet.features ?? []).includes("backups"),
-    managed: isManagedTags(droplet.tags),
+    managed: owner.managesTags(droplet.tags),
     labels: labelsOfTags(droplet.tags),
     // The keys of the order are written to root's authorized_keys.
     login: "root",
   };
 }
 
-/** The tag the firewall targets and the Droplet carries: `sitesolide-machine:<name>`. */
-export function machineTag(name: string): string {
-  return tagsFor(name)[1]!;
+/** The tag the firewall targets and the Droplet carries: `<owner>-machine:<name>`. */
+export function machineTag(name: string, owner: Owner): string {
+  return owner.tags(name)[1]!;
 }
 
-/** The firewall's name: a firewall's name takes two characters at least, and a machine's may be one. */
-export function firewallName(name: string): string {
-  return `sitesolide-${name}`;
+/** The firewall's name, `<owner>-<name>`: a firewall's name takes two characters at least, and a machine's may be one. */
+export function firewallName(name: string, owner: Owner): string {
+  return `${owner.name}-${name}`;
 }
 
-/** Whether a firewall of the right name is the one sitesolide created for that machine: it targets the machine's tag. */
-export function ownsFirewall(firewall: DoFirewall, name: string): boolean {
-  return firewall.name === firewallName(name) && (firewall.tags ?? []).includes(machineTag(name));
+/** Whether a firewall of the right name is the one its owner created for that machine: it targets the machine's tag. */
+export function ownsFirewall(firewall: DoFirewall, name: string, owner: Owner): boolean {
+  return firewall.name === firewallName(name, owner) && (firewall.tags ?? []).includes(machineTag(name, owner));
 }
 
-/** The ids of the keys a Droplet's tags say sitesolide uploaded for it. */
-export function uploadedKeys(tags: readonly string[] | null | undefined): number[] {
+/** The ids of the keys a Droplet's tags say its owner uploaded for it. */
+export function uploadedKeys(tags: readonly string[] | null | undefined, owner: Owner): number[] {
+  const prefix = `${keyTag(owner)}:`;
   return (tags ?? [])
-    .filter((tag) => tag.startsWith(`${KEY_TAG}:`))
-    .map((tag) => Number(tag.slice(KEY_TAG.length + 1)))
+    .filter((tag) => tag.startsWith(prefix))
+    .map((tag) => Number(tag.slice(prefix.length)))
     .filter((id) => Number.isSafeInteger(id) && id > 0);
 }
 
@@ -467,7 +477,7 @@ export function describeSize(size: DoSize): string {
   return `${size.vcpus} vCPU, ${gigabytes(size.memory)} GB RAM, ${size.disk} GB disk, ${size.description}${price}`;
 }
 
-/** A size worth offering: sold, not a GPU, and with the 2 GB a machine of sitesolide needs at least. */
+/** A size worth offering: sold, not a GPU, and with 2 GB at least, the defaults' floor. */
 function offered(size: DoSize, region: string): boolean {
   const gpu = (size.gpu_info !== undefined && size.gpu_info !== null) || size.slug.startsWith("gpu-");
   return size.available && size.regions.includes(region) && !gpu && size.memory >= 2048;
@@ -515,7 +525,7 @@ function firewallUsesTag(firewall: DoFirewall, tag: string): boolean {
 export function digitalocean(context: ProviderContext): Provider {
   const base = apiAddress(context.environment, API_VARIABLE, DEFAULT_API);
   const host = new URL(base).host;
-  const { clock, fetcher } = context;
+  const { clock, fetcher, owner } = context;
   const token = context.credentials[TOKEN_VARIABLE] ?? "";
   if (token === "") {
     throw new ProviderError({ error: "no-provider-token", message: `no DigitalOcean API token: set ${TOKEN_VARIABLE}, or pipe it to --token-stdin`, details: CREDENTIAL_HELP });
@@ -534,7 +544,7 @@ export function digitalocean(context: ProviderContext): Provider {
       });
     } catch (error) {
       // The message of a failed fetch names the address at most; it is
-      // scrubbed all the same, on the way out, by bin/cli/machine.ts.
+      // scrubbed all the same, on the way out, by the program that prints it.
       throw new DigitalOceanError({ error: "provider-unreachable", message: `${host} unreachable while trying to ${what}: ${(error as Error).message}` }, 0, "");
     }
     if (response.status === 204) return {} as T;
@@ -596,7 +606,7 @@ export function digitalocean(context: ProviderContext): Provider {
   async function dropletsNamed(name: string): Promise<DoDroplet[]> {
     const droplets = await listAll<DoDroplet>("/droplets", "droplets", "read the droplets", { name });
     const same = droplets.filter((droplet) => droplet.name.toLowerCase() === name.toLowerCase());
-    const rank = (droplet: DoDroplet) => (isManagedTags(droplet.tags) ? (machineOfTags(droplet.tags) === name ? 0 : 1) : 2);
+    const rank = (droplet: DoDroplet) => (owner.managesTags(droplet.tags) ? (owner.machineOfTags(droplet.tags) === name ? 0 : 1) : 2);
     return same.sort((a, b) => rank(a) - rank(b) || a.id - b.id);
   }
 
@@ -638,7 +648,7 @@ export function digitalocean(context: ProviderContext): Provider {
         last = droplet.status;
         if (droplet.status === "active" && publicAddress(droplet.networks?.v4) !== null) return droplet;
         if (droplet.status === "off" && !justCreated) {
-          throw new ProviderError({ error: "machine-off", message: `${name} exists but is powered off`, details: ["sitesolide never powers a machine on or off by itself"] });
+          throw new ProviderError({ error: "machine-off", message: `${name} exists but is powered off`, details: [`${owner.name} never powers a machine on or off by itself`] });
         }
         if (droplet.status === "archive") {
           throw new ProviderError({ error: "provider-not-found", message: `the droplet ${name} is being deleted (status archive)` });
@@ -656,7 +666,7 @@ export function digitalocean(context: ProviderContext): Provider {
    * applies it on its own once the Droplet carries the tag; what it reports
    * is read here so that a firewall that failed is said, rather than a
    * machine left open without anyone knowing. A warning, not a failure: the
-   * machine exists, and `setup` adds its own firewall on it.
+   * machine exists all the same, and a failure would leave it unreported.
    */
   async function waitFirewall(firewall: DoFirewall, dropletId: number, report: Report): Promise<void> {
     const deadline = clock.now() + WAITS.firewallMs;
@@ -730,43 +740,43 @@ export function digitalocean(context: ProviderContext): Provider {
     return { sizes, region };
   }
 
-  /** The firewall of that name, when sitesolide created it; read before anything is created, so that a refusal leaves nothing. */
+  /** The firewall of that name, when its owner created it; read before anything is created, so that a refusal leaves nothing. */
   async function findFirewall(name: string): Promise<DoFirewall | null> {
     const firewalls = await listAll<DoFirewall>("/firewalls", "firewalls", "read the firewalls");
-    const same = firewalls.find((firewall) => firewall.name === firewallName(name));
-    if (same !== undefined && !ownsFirewall(same, name)) {
+    const same = firewalls.find((firewall) => firewall.name === firewallName(name, owner));
+    if (same !== undefined && !ownsFirewall(same, name, owner)) {
       throw new ProviderError({
         error: "firewall-taken",
-        message: `a firewall named ${firewallName(name)} exists in the account, and sitesolide did not create it`,
-        details: [`it does not target the tag ${machineTag(name)}: it is never adopted nor changed`],
+        message: `a firewall named ${firewallName(name, owner)} exists in the account, and ${owner.name} did not create it`,
+        details: [`it does not target the tag ${machineTag(name, owner)}: it is never adopted nor changed`],
       });
     }
     return same ?? null;
   }
 
   /**
-   * The workstation's key, found by its fingerprint or uploaded. `forMachine`
+   * The request's key, found by its fingerprint or uploaded. `forMachine`
    * says whether the Droplet should be tagged with it, which is what lets
-   * `--delete-key` delete it later: the key was uploaded now, or a run of
-   * this command for this machine uploaded it under the name it gives,
-   * before being interrupted.
+   * `--delete-key` delete it later: the key was uploaded now, or an earlier
+   * run for this machine uploaded it under the name it gives, before being
+   * interrupted.
    */
-  async function ensureKey(request: CreateRequest, report: Report): Promise<{ key: DoKey; reused: boolean; forMachine: boolean }> {
+  async function ensureKey(machine: string, publicKey: PublicKey, report: Report): Promise<{ key: DoKey; reused: boolean; forMachine: boolean }> {
     report("-> SSH key");
     const keys = await listAll<DoKey>("/account/keys", "ssh_keys", "read the SSH keys");
-    const ours = `${request.key.algorithm} ${request.key.blob}`;
-    const plain = `sitesolide-${request.name}`;
-    const suffixed = `${plain}-${request.key.fingerprint.replaceAll(":", "").slice(0, 8)}`;
-    const same = keys.find((key) => key.fingerprint === request.key.fingerprint || keyMaterial(key.public_key) === ours);
+    const ours = `${publicKey.algorithm} ${publicKey.blob}`;
+    const plain = `${owner.name}-${machine}`;
+    const suffixed = `${plain}-${publicKey.fingerprint.replaceAll(":", "").slice(0, 8)}`;
+    const same = keys.find((key) => key.fingerprint === publicKey.fingerprint || keyMaterial(key.public_key) === ours);
     if (same !== undefined) {
-      report(`   ${same.name}, already in the account (${request.key.fingerprint}), reused`);
+      report(`   ${same.name}, already in the account (${publicKey.fingerprint}), reused`);
       return { key: same, reused: true, forMachine: same.name === plain || same.name === suffixed };
     }
     // A name of its own, never one the account already uses for another key.
     const name = keys.some((key) => key.name === plain) ? suffixed : plain;
-    const line = [request.key.algorithm, request.key.blob, request.key.comment].filter((part) => part !== "").join(" ");
+    const line = [publicKey.algorithm, publicKey.blob, publicKey.comment].filter((part) => part !== "").join(" ");
     const created = await call<{ ssh_key: DoKey }>("POST", "/account/keys", `upload the SSH key ${name}`, { name, public_key: line });
-    report(`   ${name}, uploaded (${request.key.fingerprint})`);
+    report(`   ${name}, uploaded (${publicKey.fingerprint})`);
     return { key: created.ssh_key, reused: false, forMachine: true };
   }
 
@@ -786,41 +796,41 @@ export function digitalocean(context: ProviderContext): Provider {
   }
 
   async function ensureFirewall(name: string, found: DoFirewall | null, report: Report): Promise<{ firewall: DoFirewall; reused: boolean }> {
-    report(`-> firewall ${firewallName(name)}`);
+    report(`-> firewall ${firewallName(name, owner)}`);
     if (found !== null) {
-      report("   already created by sitesolide, reused");
+      report(`   already created by ${owner.name}, reused`);
       return { firewall: found, reused: true };
     }
-    const created = await call<{ firewall: DoFirewall }>("POST", "/firewalls", `create the firewall ${firewallName(name)}`, {
-      name: firewallName(name),
+    const created = await call<{ firewall: DoFirewall }>("POST", "/firewalls", `create the firewall ${firewallName(name, owner)}`, {
+      name: firewallName(name, owner),
       inbound_rules: INBOUND_RULES,
       outbound_rules: OUTBOUND_RULES,
-      tags: [machineTag(name)],
+      tags: [machineTag(name, owner)],
     });
-    report(`   created: inbound tcp 22, 80, 443 and icmp, from everywhere, for the droplets tagged ${machineTag(name)}`);
+    report(`   created: inbound tcp 22, 80, 443 and icmp, from everywhere, for the droplets tagged ${machineTag(name, owner)}`);
     return { firewall: created.firewall, reused: false };
   }
 
   /**
    * The firewall of a Droplet an earlier run created, made again when it is
    * gone: an earlier run that could not finish, or a person in the control
-   * panel, would otherwise leave the machine with nothing of sitesolide's in
-   * front of it. A firewall of that name that is not sitesolide's is left as
+   * panel, would otherwise leave the machine with nothing of its owner's in
+   * front of it. A firewall of that name its owner did not create is left as
    * it is, and said.
    */
   async function ensureFirewallOf(droplet: DoDroplet, name: string, report: Report): Promise<void> {
-    const tag = machineTag(name);
-    if (!(droplet.tags ?? []).includes(tag)) report(`!! the droplet ${droplet.name} lacks the tag ${tag}: the firewall ${firewallName(name)} does not apply to it`);
+    const tag = machineTag(name, owner);
+    if (!(droplet.tags ?? []).includes(tag)) report(`!! the droplet ${droplet.name} lacks the tag ${tag}: the firewall ${firewallName(name, owner)} does not apply to it`);
     let found: DoFirewall | null;
     try {
       found = await findFirewall(name);
     } catch (error) {
       if (!(error instanceof ProviderError) || error.failure.error !== "firewall-taken") throw error;
-      report(`!! ${error.failure.message}, and none of sitesolide's applies to ${droplet.name}: it is left as it is, the control panel shows it under Networking, Firewalls`);
+      report(`!! ${error.failure.message}, and none of ${owner.name}'s applies to ${droplet.name}: it is left as it is, the control panel shows it under Networking, Firewalls`);
       return;
     }
     if (found !== null) return;
-    report(`!! the firewall ${firewallName(name)} is gone: it is created again`);
+    report(`!! the firewall ${firewallName(name, owner)} is gone: it is created again`);
     await ensureTag(tag, report);
     const { firewall } = await ensureFirewall(name, null, report);
     await waitFirewall(firewall, droplet.id, report);
@@ -843,7 +853,7 @@ export function digitalocean(context: ProviderContext): Provider {
   /**
    * Deletes what this run created before an order DigitalOcean refused: the
    * key, the tag and the firewall were made for a Droplet that does not
-   * exist, and nothing in sitesolide would ever list or remove them, since
+   * exist, and nothing here would ever list or remove them, since
    * `list` and `destroy` start from a Droplet. What an earlier run made, or
    * the account already held, is left as it was. A deletion that fails
    * leaves the resource, where the next run finds and reuses it.
@@ -928,10 +938,13 @@ export function digitalocean(context: ProviderContext): Provider {
 
     async find(name) {
       const [first] = await dropletsNamed(name);
-      return first === undefined ? null : toMachine(first);
+      return first === undefined ? null : toMachine(first, owner);
     },
 
     async create(request, report): Promise<CreateOutcome> {
+      checkRequest("DigitalOcean", request, SUPPORTS);
+      // SUPPORTS is not keyless: checkRequest refused a request without one.
+      const publicKey = request.key!;
       const resources: Resource[] = [];
       report(`-> a droplet named ${request.name} in the account`);
       const same = await dropletsNamed(request.name);
@@ -939,18 +952,18 @@ export function digitalocean(context: ProviderContext): Provider {
       let droplet: DoDroplet;
       let created: boolean;
       if (existing !== undefined) {
-        const found = toMachine(existing);
+        const found = toMachine(existing, owner);
         if (!found.managed) {
           throw new ProviderError({
             error: "machine-exists",
-            message: `a droplet named ${existing.name} exists in the account, and sitesolide did not create it`,
+            message: `a droplet named ${existing.name} exists in the account, and ${owner.name} did not create it`,
             details: [
               `${found.type} at ${found.location}, ${found.status}, ${[found.ipv4, found.ipv6].filter(Boolean).join(", ") || "no public address"}`,
-              `it lacks the tag ${MANAGED_LABEL}:${MANAGED_VALUE}: nothing was created, nothing was changed`,
+              `it lacks the tag ${owner.tagMark}: nothing was created, nothing was changed`,
             ],
           });
         }
-        report(`   already created by sitesolide: ${found.type} at ${found.location}, ${found.status}`);
+        report(`   already created by ${owner.name}: ${found.type} at ${found.location}, ${found.status}`);
         if (same.length > 1) report(`!! ${same.length - 1} other droplet${same.length === 2 ? "" : "s"} of that name, left as they are`);
         if (found.type !== request.type || found.location !== request.location) {
           report(`!! it is ${found.type} at ${found.location}: --type and --location only apply to a machine being created`);
@@ -971,10 +984,10 @@ export function digitalocean(context: ProviderContext): Provider {
         let answer: { droplet: DoDroplet; links?: { actions?: { id: number; rel: string }[] } };
         let firewall: DoFirewall;
         try {
-          const { key, reused, forMachine } = await ensureKey(request, report);
+          const { key, reused, forMachine } = await ensureKey(request.name, publicKey, report);
           resources.push({ kind: "ssh key", name: key.name, id: String(key.id), reused });
           if (!reused) made.push({ kind: "SSH key", name: key.name, path: `/account/keys/${key.id}` });
-          const tag = machineTag(request.name);
+          const tag = machineTag(request.name, owner);
           const tagCreated = await ensureTag(tag, report);
           resources.push({ kind: "tag", name: tag, id: tag, reused: !tagCreated });
           if (tagCreated) made.push({ kind: "tag", name: tag, path: `/tags/${tag}` });
@@ -997,9 +1010,10 @@ export function digitalocean(context: ProviderContext): Provider {
             ...(request.backups ? { backup_policy: { plan: "daily" } } : {}),
             ipv6,
             // Free, but a second agent from a repository of DigitalOcean's,
-            // reporting to it: sitesolide's own monitor watches the machine.
+            // reporting to it: what watches the machine is the program's
+            // choice, not one a provider makes for it.
             monitoring: false,
-            tags: [...tagsFor(request.name), ...(forMachine ? [`${KEY_TAG}:${key.id}`] : [])],
+            tags: [...owner.tags(request.name), ...(forMachine ? [`${keyTag(owner)}:${key.id}`] : [])],
           });
           if (typeof answer?.droplet?.id !== "number") {
             throw new DigitalOceanError({ error: "provider-unreadable", message: `${host} answered the order of the droplet ${request.name} without the droplet` }, 202, "");
@@ -1040,16 +1054,16 @@ export function digitalocean(context: ProviderContext): Provider {
         const running = await waitActive(droplet.id, request.name, report, true);
         await waitFirewall(firewall, droplet.id, report);
         report(`-> ${request.name} running`);
-        return { machine: toMachine(running), created, resources };
+        return { machine: toMachine(running, owner), created, resources };
       }
       report(`-> ${request.name} running`);
       const running = await waitActive(droplet.id, request.name, report, created);
-      return { machine: toMachine(running), created, resources };
+      return { machine: toMachine(running, owner), created, resources };
     },
 
     async list() {
-      const droplets = await listAll<DoDroplet>("/droplets", "droplets", "read the droplets", { tag_name: `${MANAGED_LABEL}:${MANAGED_VALUE}` });
-      return droplets.filter((droplet) => isManagedTags(droplet.tags)).map(toMachine);
+      const droplets = await listAll<DoDroplet>("/droplets", "droplets", "read the droplets", { tag_name: owner.tagMark });
+      return droplets.filter((droplet) => owner.managesTags(droplet.tags)).map((droplet) => toMachine(droplet, owner));
     },
 
     async destroy(machine, options, report): Promise<DestroyOutcome> {
@@ -1060,12 +1074,12 @@ export function digitalocean(context: ProviderContext): Provider {
 
       report(`-> droplet ${machine.name}`);
       // Read again rather than trusted: the tags say which key was uploaded
-      // for it, and whether it is still sitesolide's to delete.
+      // for it, and whether it is still its owner's to delete.
       const before = (await call<{ droplet: DoDroplet }>("GET", `/droplets/${id}`, `read the droplet ${machine.name}`)).droplet;
-      if (!isManagedTags(before.tags)) {
-        throw new ProviderError({ error: "machine-not-managed", message: `the droplet ${before.name} lacks the tag ${MANAGED_LABEL}:${MANAGED_VALUE}`, details: ["nothing was destroyed"] });
+      if (!owner.managesTags(before.tags)) {
+        throw new ProviderError({ error: "machine-not-managed", message: `the droplet ${before.name} lacks the tag ${owner.tagMark}`, details: ["nothing was destroyed"] });
       }
-      const keys = uploadedKeys(before.tags);
+      const keys = uploadedKeys(before.tags, owner);
       // What DigitalOcean detaches from a deleted Droplet rather than deleting,
       // and goes on billing: read before, said after, and never deleted, since
       // a volume holds data and a reserved IP may be named by someone's DNS.
@@ -1089,15 +1103,15 @@ export function digitalocean(context: ProviderContext): Provider {
         report(`!! reserved IP ${address}: unassigned, kept, and still billed`);
       }
 
-      const name = firewallName(machine.name);
+      const name = firewallName(machine.name, owner);
       report(`-> firewall ${name}`);
       const firewalls = await listAll<DoFirewall>("/firewalls", "firewalls", "read the firewalls");
-      const firewall = firewalls.find((candidate) => ownsFirewall(candidate, machine.name));
+      const firewall = firewalls.find((candidate) => ownsFirewall(candidate, machine.name, owner));
       let firewallKept = false;
       if (firewall === undefined) {
-        report("   none created by sitesolide under that name");
+        report(`   none created by ${owner.name} under that name`);
       } else {
-        const tag = machineTag(machine.name);
+        const tag = machineTag(machine.name, owner);
         const tagged = await listAll<DoDroplet>("/droplets", "droplets", `read the droplets tagged ${tag}`, { tag_name: tag });
         const elsewhere = [
           ...(firewall.droplet_ids ?? []).filter((other) => other !== id).map((other) => `droplet ${other}`),
@@ -1140,7 +1154,7 @@ export function digitalocean(context: ProviderContext): Provider {
 
       report("-> tags");
       const remaining = firewalls.filter((candidate) => candidate !== firewall || firewallKept);
-      for (const tag of [machineTag(machine.name), ...keys.map((keyId) => `${KEY_TAG}:${keyId}`)]) {
+      for (const tag of [machineTag(machine.name, owner), ...keys.map((keyId) => `${keyTag(owner)}:${keyId}`)]) {
         await deleteTagIfUnused(tag, remaining, removed, kept, report);
       }
       return { removed, kept };
@@ -1170,7 +1184,7 @@ export function digitalocean(context: ProviderContext): Provider {
 const CREDENTIAL_HELP = [
   "create it in the DigitalOcean control panel: API, Tokens, Generate New Token, with Custom Scopes",
   "the scopes: droplet create, read, update, delete; firewall, ssh_key and tag create, read, delete; regions, sizes, image, actions, reserved_ip and block_storage read (docs/providers/digitalocean.md)",
-  "a token reaches its whole team: a team of its own for sitesolide keeps it away from everything else you run at DigitalOcean",
+  "a token reaches its whole team: a team of its own for these machines keeps it away from everything else you run at DigitalOcean",
 ];
 
 /**

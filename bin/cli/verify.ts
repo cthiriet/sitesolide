@@ -11,7 +11,7 @@
  * which an app that warms up before it listens does for a few seconds after
  * its restart, healthy all along. Any other answer is judged at once.
  */
-import type { Clock } from "./providers/provider";
+import type { Clock } from "../../clouds/src/provider";
 
 /** Between two attempts. */
 export const VERIFY_RETRY_MS = 5_000;

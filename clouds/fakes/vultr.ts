@@ -1,9 +1,9 @@
 /**
  * A local stand-in for the Vultr API v2, on a random port of the loopback:
- * the tests of `sitesolide machine` never reach the real one.
+ * the tests of the Vultr provider never reach the real one.
  *
  * It keeps an account in memory (SSH keys, firewall groups and their rules,
- * instances) and answers the calls bin/cli/providers/vultr.ts makes, in the
+ * instances) and answers the calls src/vultr.ts makes, in the
  * shapes of https://www.vultr.com/api/ as its OpenAPI document and Vultr's Go
  * client describe them: `{"error": "...", "status": n}` errors, cursor
  * pagination through `meta.links.next`, an instance that is `pending` for a

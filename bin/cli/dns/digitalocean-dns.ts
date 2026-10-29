@@ -32,7 +32,7 @@
  * query parameter: the reference says it takes a fully qualified name, and
  * says nothing of how it matches `@` or `*`.
  */
-import { apiAddress } from "../providers/provider";
+import { apiAddress } from "../../../clouds/src/provider";
 import { DnsError, zoneCandidates, type DnsContext, type DnsEntry, type DnsRecord, type ZoneApi, type ZoneRef } from "./dns";
 
 export const DEFAULT_API = "https://api.digitalocean.com/v2";

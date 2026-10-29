@@ -2,12 +2,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HETZNER } from "../cli/providers/hetzner";
-import type { Choice, Workstation } from "../cli/providers/provider";
+import { HETZNER } from "../../clouds/src/hetzner";
+import type { Choice, Workstation } from "../../clouds/src/provider";
 import type { SetupExtras, SetupOptions, SetupOutput } from "../cli/setup";
 import { Cancelled, runWizard, type Prompter, type WizardDependencies } from "../cli/wizard";
 import { startCloudflareMock, type CloudflareMock } from "./cloudflare-mock";
-import { createFakeHetzner, FAKE_TOKEN, type FakeHetzner } from "./fake-hetzner";
+import { createFakeHetzner, FAKE_TOKEN, type FakeHetzner } from "../../clouds/fakes/hetzner";
 
 /**
  * The setup wizard, its questions answered from a script, against the fake

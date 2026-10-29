@@ -1,12 +1,16 @@
 /**
  * A local stand-in for the Hetzner Cloud API, on a random port of the
- * loopback: the tests of `sitesolide machine` never reach the real one.
+ * loopback: the tests of the provider, and of the programs that use it,
+ * never reach the real one.
  *
  * It keeps a project in memory (SSH keys, firewalls, servers, actions) and
- * answers the calls bin/cli/providers/hetzner.ts makes, in the shapes of
+ * answers the calls src/hetzner.ts makes, in the shapes of
  * https://docs.hetzner.cloud/reference/cloud: the `{"error": {"code",
  * "message", "details"}}` errors, `meta.pagination` on every list, actions
- * that run for a few polls before they succeed, names unique per project.
+ * that run for a few polls before they succeed, names unique per project, a
+ * root password for a server ordered without a key, a user_data refused over
+ * 32768 bytes. Label selectors are read as the request writes them, whoever
+ * the owner.
  *
  * Lists come back `pageSize` items a page whatever `per_page` asks, two by
  * default, so that a client that reads only the first page fails a test.
@@ -14,6 +18,11 @@
  */
 
 export const FAKE_TOKEN = "fake-hcloud-token-0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/** What the fake answers as `root_password` for a server ordered without a key: never to be repeated. */
+export const FAKE_ROOT_PASSWORD = "fake-root-password-7Hq2xVb9";
+
+const USER_DATA_BYTES = 32768;
 
 type Labels = Record<string, string>;
 export type FakeKey = { id: number; name: string; fingerprint: string; public_key: string; labels: Labels; created: string };
@@ -263,6 +272,12 @@ export function createFakeHetzner(options: { pageSize?: number; actionPolls?: nu
       firewalls.push(firewall);
       return Response.json({ firewall, actions: [] }, { status: 201 });
     }
+    if (method === "POST" && /^\/firewalls\/[0-9]+\/actions\/set_rules$/.test(path)) {
+      const firewall = firewalls.find((candidate) => candidate.id === id);
+      if (firewall === undefined) return error(404, "not_found", "firewall not found");
+      firewall.rules = (body as { rules?: unknown[] } | null)?.rules ?? [];
+      return Response.json({ actions: [actionView(action("set_firewall_rules", firewall.id))] }, { status: 201 });
+    }
     if (method === "GET" && /^\/firewalls\/[0-9]+$/.test(path)) {
       const firewall = firewalls.find((candidate) => candidate.id === id);
       return firewall === undefined ? error(404, "not_found", "firewall not found") : Response.json({ firewall });
@@ -285,6 +300,9 @@ export function createFakeHetzner(options: { pageSize?: number; actionPolls?: nu
       const type = SERVER_TYPES.find((candidate) => candidate.name === input.server_type);
       if (type === undefined) return error(422, "invalid_input", "invalid input in field 'server_type'", { fields: [{ name: "server_type", messages: ["unknown server type"] }] });
       for (const key of input.ssh_keys ?? []) if (!keys.some((candidate) => candidate.id === key)) return error(422, "invalid_input", "invalid input in field 'ssh_keys'", { fields: [{ name: "ssh_keys", messages: [`ssh key ${key} not found`] }] });
+      if (typeof input.user_data === "string" && Buffer.byteLength(input.user_data, "utf8") > USER_DATA_BYTES) {
+        return error(422, "invalid_input", "invalid input in field 'user_data'", { fields: [{ name: "user_data", messages: [`must be at most ${USER_DATA_BYTES} bytes`] }] });
+      }
       const serial = servers.length + 10;
       const server: FakeServer = {
         id: nextId++,
@@ -306,7 +324,8 @@ export function createFakeHetzner(options: { pageSize?: number; actionPolls?: nu
       for (const firewallId of server.firewalls) firewalls.find((candidate) => candidate.id === firewallId)?.applied_to.push({ type: "server", server: { id: server.id } });
       const created = action("create_server", server.id);
       const start = action("start_server", server.id);
-      return Response.json({ server: serverView(server), action: actionView(created), next_actions: [actionView(start)], root_password: null }, { status: 201 });
+      const rootPassword = server.ssh_keys.length === 0 ? FAKE_ROOT_PASSWORD : null;
+      return Response.json({ server: serverView(server), action: actionView(created), next_actions: [actionView(start)], root_password: rootPassword }, { status: 201 });
     }
     if (method === "GET" && /^\/servers\/[0-9]+$/.test(path)) {
       const server = servers.find((candidate) => candidate.id === id);

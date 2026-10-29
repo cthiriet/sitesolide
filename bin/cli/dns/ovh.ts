@@ -45,7 +45,7 @@
  * name come back whole, and each record is read. Errors are `{"message",
  * "errorCode", "httpCode", "class", "details"}`, some of them absent.
  */
-import { apiAddress } from "../providers/provider";
+import { apiAddress } from "../../../clouds/src/provider";
 import { DnsError, zoneCandidates, type DnsContext, type DnsEntry, type DnsRecord, type ZoneApi, type ZoneRef } from "./dns";
 
 /** The API of each region, as OVHcloud's libraries name them. */

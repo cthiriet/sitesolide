@@ -7,23 +7,24 @@
  *
  * A location is a region, `eu-central-1`; a type is an instance type,
  * `t3.small`. A machine is five resources in that region, each tagged
- * `managed-by=sitesolide`, `sitesolide-machine=<name>` and `Name=<name>`:
+ * `managed-by=<owner>`, `<owner>-machine=<name>` and `Name=<name>`:
  *
  *   - the workstation's SSH key, as a key pair: reused when the region
  *     already holds the same key under any name, imported otherwise;
- *   - a security group `sitesolide-<name>` in the default VPC: inbound TCP 22,
+ *   - a security group `<owner>-<name>` in the default VPC: inbound TCP 22,
  *     80 and 443 and ping from everywhere, IPv4 and IPv6, the rest dropped;
  *   - an elastic IP: the address an instance gets by default changes at
  *     every stop and start, and DNS records point at it;
  *   - the instance, Debian 13 from Debian's own account, IMDSv2 only, a
  *     20 GB encrypted gp3 root volume deleted with it, and no user data:
- *     `sitesolide setup` hardens it over SSH, as `admin`, the account
+ *     the program's own setup reaches it over SSH, as `admin`, the account
  *     Debian's images let in with the key.
  *
- * EC2 names nothing uniquely: an instance's name is its `Name` tag. sitesolide
- * keeps one machine per name across every region the account has enabled, so
+ * EC2 names nothing uniquely: an instance's name is its `Name` tag. One
+ * machine is kept per name across every region the account has enabled, so
  * that `find` and `destroy` are never ambiguous: `create` looks in all of them
- * first, and an instance of that name it did not create, anywhere, stops it.
+ * first, and an instance of that name the owner did not create, anywhere,
+ * another owner's included, stops it.
  * What a run left without an instance, an elastic IP billed by the hour above
  * all, makes an `incomplete` machine, which `list` shows, `find` returns and
  * `destroy` removes, in every region where it is; `create` reuses it.
@@ -39,7 +40,7 @@
  *
  * Every call carries the access key ID in its Authorization header and the
  * secret only as an HMAC there, follows no redirect, and fails with a
- * ProviderError whose code bin/cli/hints.ts knows. The API's own errors are
+ * ProviderError whose code is one of FAILURE_CODES. The API's own errors are
  * `<Response><Errors><Error><Code>` and `<Message>`; `failureFrom` reads them.
  * https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
  *
@@ -52,12 +53,9 @@ import { signRequest, uriEncode, type AwsCredentials } from "./aws-sigv4";
 import { at, items, parseXml, tagsOf, textAt, XmlError, type XmlElement } from "./aws-xml";
 import {
   apiAddress,
+  checkRequest,
   DEBIAN,
-  isManaged,
-  labelsFor,
-  MACHINE_LABEL,
   MANAGED_LABEL,
-  MANAGED_VALUE,
   ProviderError,
   retryAfter,
   TRANSIENT,
@@ -68,17 +66,26 @@ import {
   type DestroyOutcome,
   type Discovery,
   type Machine,
+  type Owner,
   type Provider,
   type ProviderContext,
   type ProviderEntry,
   type PublicKey,
   type Report,
   type Resource,
+  type Supports,
   type Workstation,
 } from "./provider";
-import type { Failure } from "../remote";
+import type { Failure } from "./provider";
 
 export const API_VERSION = "2016-11-15";
+
+/**
+ * Nothing beyond what every provider takes: the key is imported as a key
+ * pair, without which Debian's image lets nobody in, and the security group
+ * holds FIREWALL_RULES, WEB_SERVER's rules.
+ */
+export const SUPPORTS: Supports = {};
 
 /** The API's address for every region, for tests against a local fake: https, or http on the loopback only. */
 export const API_VARIABLE = "SITESOLIDE_AWS_API";
@@ -278,7 +285,7 @@ export function short(said: string): string {
 /**
  * An error answer of the API as a failure the CLI reports, with the code its
  * hint is found by. `what` says what was being done, in the infinitive, for
- * the message: `create the security group sitesolide-web`.
+ * the message: `create the security group <owner>-web`.
  */
 export function failureFrom(status: number, code: string, said: string, headers: Headers, what: string): AwsError {
   const answer = `${status}${code === "" ? "" : ` ${code}`}`;
@@ -346,9 +353,9 @@ export function numbered(name: string, values: readonly string[]): Record<string
   return Object.fromEntries(values.map((value, index) => [`${name}.${index + 1}`, value]));
 }
 
-/** The three tags of everything sitesolide creates for a machine: its two labels, and Name, which the console shows. */
-export function tagsFor(name: string): Record<string, string> {
-  return { Name: name, ...labelsFor(name) };
+/** The three tags of everything the owner creates for a machine: its two labels, and Name, which the console shows. */
+export function tagsFor(name: string, owner: Owner): Record<string, string> {
+  return { Name: name, ...owner.labels(name) };
 }
 
 /** `TagSpecification.<n>.ResourceType` and its tags. */
@@ -375,7 +382,7 @@ function ipv6Of(instance: XmlElement): string | null {
   return null;
 }
 
-export function toMachine(instance: XmlElement, region: string): Machine {
+export function toMachine(instance: XmlElement, region: string, owner: Owner): Machine {
   const tags = tagsOf(instance);
   const id = textAt(instance, "instanceId") ?? "";
   return {
@@ -392,7 +399,7 @@ export function toMachine(instance: XmlElement, region: string): Machine {
     // The EC2 API gives no price.
     monthlyPrice: null,
     backups: false,
-    managed: isManaged(tags),
+    managed: owner.manages(tags),
     labels: tags,
     login: LOGIN,
   };
@@ -506,7 +513,7 @@ function keyLine(key: PublicKey): string {
 // --- the provider ---------------------------------------------------------------------------
 
 export function aws(context: ProviderContext): Provider {
-  const { clock, fetcher, environment } = context;
+  const { clock, fetcher, environment, owner } = context;
   const credentials: AwsCredentials = {
     accessKeyId: context.credentials[ACCESS_KEY_VARIABLE] ?? "",
     secretAccessKey: context.credentials[SECRET_KEY_VARIABLE] ?? "",
@@ -546,7 +553,7 @@ export function aws(context: ProviderContext): Provider {
       response = await fetcher(url, { method: "POST", redirect: "error", headers: { ...headers, ...signed }, body, signal: AbortSignal.timeout(60_000) });
     } catch (error) {
       // The message of a failed fetch names the address at most; it is
-      // scrubbed all the same, on the way out, by bin/cli/machine.ts.
+      // scrubbed all the same, on the way out, by the program.
       throw new AwsError({ error: "provider-unreachable", message: `${host} unreachable while trying to ${what}: ${(error as Error).message}` }, 0, "");
     }
     const text = await response.text().catch(() => "");
@@ -672,8 +679,8 @@ export function aws(context: ProviderContext): Provider {
   function ambiguous(name: string, found: Located[]): ProviderError {
     return new ProviderError({
       error: "machine-ambiguous",
-      message: `${found.length} instances created by sitesolide are named ${name}`,
-      details: [...found.map(({ instance, region }) => `${textAt(instance, "instanceId")} at ${region}, ${textAt(instance, "instanceState", "name")}`), "sitesolide keeps one machine per name: it cannot tell which one is meant"],
+      message: `${found.length} instances created by ${owner.name} are named ${name}`,
+      details: [...found.map(({ instance, region }) => `${textAt(instance, "instanceId")} at ${region}, ${textAt(instance, "instanceState", "name")}`), `${owner.name} keeps one machine per name: it cannot tell which one is meant`],
     });
   }
 
@@ -711,19 +718,19 @@ export function aws(context: ProviderContext): Provider {
         deadline,
         report,
       );
-      if (instance === null) throw new ProviderError({ error: "provider-not-found", message: `the instance ${name} (${id}) is gone`, details: ["run `sitesolide machine list --provider aws`, then the same command again"] });
+      if (instance === null) throw new ProviderError({ error: "provider-not-found", message: `the instance ${name} (${id}) is gone`, details: [`run \`${owner.name} machine list --provider aws\`, then the same command again`] });
       const state = textAt(instance, "instanceState", "name") ?? "unknown";
       if (state !== last) report(`   state: ${state}`);
       last = state;
       if (state === "running") return instance;
       if ((state === "stopped" || state === "stopping") && !justCreated) {
-        throw new ProviderError({ error: "machine-off", message: `${name} exists but is ${state}`, details: ["sitesolide never starts or stops a machine by itself"] });
+        throw new ProviderError({ error: "machine-off", message: `${name} exists but is ${state}`, details: [`${owner.name} never starts or stops a machine by itself`] });
       }
       if (state === "terminated" || state === "shutting-down") {
         throw new ProviderError({
           error: "action-failed",
           message: `AWS is terminating the instance ${name}: ${textAt(instance, "stateReason", "message") ?? "no reason given"}`,
-          details: [`instance ${id} at ${region}`, "run `sitesolide machine destroy` to remove what was created for it, then create it again"],
+          details: [`instance ${id} at ${region}`, `run \`${owner.name} machine destroy\` to remove what was created for it, then create it again`],
         });
       }
       if (clock.now() >= deadline) {
@@ -752,7 +759,7 @@ export function aws(context: ProviderContext): Provider {
 
   async function suggestedTypes(region: string, except: string): Promise<string[]> {
     const sold = (await soldTypes(region).catch(() => [])).filter((info) => info.name !== except).slice(0, 6);
-    if (sold.length === 0) return [`no type sitesolide suggests is sold at ${region}`];
+    if (sold.length === 0) return [`no type ${owner.name} suggests is sold at ${region}`];
     return [`types sold at ${region}, roughly cheapest first:`, ...sold.map((info) => `${info.name.padEnd(15)} ${describeType(info)}`)];
   }
 
@@ -834,7 +841,7 @@ export function aws(context: ProviderContext): Provider {
         found = [];
       }
     } else {
-      throw new ProviderError({ error: "invalid-image", message: `the image given, ${shown(image, IMAGE_SHAPE)}, is not one sitesolide can order at AWS`, details: ["--image takes debian-13, the default, or the ID of an AMI of the region, ami-..."] });
+      throw new ProviderError({ error: "invalid-image", message: `the image given, ${shown(image, IMAGE_SHAPE)}, is not one ${owner.name} can order at AWS`, details: ["--image takes debian-13, the default, or the ID of an AMI of the region, ami-..."] });
     }
     const newest = found
       .filter((candidate) => textAt(candidate, "architecture") === architecture)
@@ -848,7 +855,7 @@ export function aws(context: ProviderContext): Provider {
     }
     const chosen = { id: textAt(newest, "imageId") ?? "", name: textAt(newest, "name") ?? image, rootDevice: textAt(newest, "rootDeviceName") ?? "/dev/xvda" };
     report(`   ${chosen.name} (${chosen.id})`);
-    if (image !== DEBIAN) report(`!! sitesolide setup is only verified on Debian 13, and connects first as ${LOGIN}, the account of Debian's images`);
+    if (image !== DEBIAN) report(`!! not Debian 13: the first login is still as ${LOGIN}, the account of Debian's images, which this one may lack`);
     return chosen;
   }
 
@@ -863,7 +870,7 @@ export function aws(context: ProviderContext): Provider {
       throw new ProviderError({
         error: "no-default-vpc",
         message: `${region} has no default VPC`,
-        details: ["sitesolide launches into the default VPC: its owner creates one in the VPC console, Your VPCs, Actions, Create default VPC", "or pick another --location"],
+        details: [`${owner.name} launches into the default VPC: the account's owner creates one in the VPC console, Your VPCs, Actions, Create default VPC`, "or pick another --location"],
       });
     }
     const subnets = await describe(region, "DescribeSubnets", filters([["vpc-id", [vpcId]], ["default-for-az", ["true"]], ["state", ["available"]]]), "subnetSet", "read the default subnets", 1000);
@@ -884,15 +891,15 @@ export function aws(context: ProviderContext): Provider {
     return { vpcId, subnetId: textAt(chosen, "subnetId") ?? "", zone };
   }
 
-  /** The security group of that name in the VPC, when sitesolide created it; read before anything is created. */
+  /** The security group of that name in the VPC, when its owner created it; read before anything is created. */
   async function findGroup(region: string, vpcId: string, groupName: string): Promise<XmlElement | null> {
     const groups = await describe(region, "DescribeSecurityGroups", filters([["vpc-id", [vpcId]], ["group-name", [groupName]]]), "securityGroupInfo", "read the security groups", 1000);
     const same = groups.find((group) => (textAt(group, "groupName") ?? "").toLowerCase() === groupName.toLowerCase());
-    if (same !== undefined && !isManaged(tagsOf(same))) {
+    if (same !== undefined && !owner.manages(tagsOf(same))) {
       throw new ProviderError({
         error: "firewall-taken",
-        message: `a security group named ${groupName} exists in the default VPC of ${region}, and sitesolide did not create it`,
-        details: [`${textAt(same, "groupId")} lacks the tag ${MANAGED_LABEL}=${MANAGED_VALUE}: it is never adopted nor changed`],
+        message: `a security group named ${groupName} exists in the default VPC of ${region}, and ${owner.name} did not create it`,
+        details: [`${textAt(same, "groupId")} lacks the tag ${owner.mark}: it is never adopted nor changed`],
       });
     }
     return same ?? null;
@@ -903,10 +910,10 @@ export function aws(context: ProviderContext): Provider {
   /**
    * Deletes what this run created before an order AWS refused: the key pair,
    * the security group and the address were made for an instance that does
-   * not exist, and nothing in sitesolide would ever list or remove them, since
-   * `list` and `destroy` start from an instance. What an earlier run made, or
-   * the account already held, is left as it was. A deletion that fails leaves
-   * the resource tagged, where the next run finds and reuses it. Returns what
+   * not exist, and nothing would ever list or remove them, since `list` and
+   * `destroy` start from an instance. What an earlier run made, or the
+   * account already held, is left as it was. A deletion that fails leaves the
+   * resource tagged, where the next run finds and reuses it. Returns what
    * happened, one line each, for the refusal's details.
    */
   async function undo(region: string, made: Made[], report: Report): Promise<string[]> {
@@ -914,26 +921,26 @@ export function aws(context: ProviderContext): Provider {
     return undoMade(made, (resource) => call(region, resource.action, resource.parameters, `delete the ${resource.kind} ${resource.name}`), report);
   }
 
-  async function ensureKey(region: string, request: CreateRequest, pairs: XmlElement[], report: Report): Promise<{ name: string; id: string; reused: boolean; ours: boolean }> {
+  async function ensureKey(region: string, machine: string, key: PublicKey, pairs: XmlElement[], report: Report): Promise<{ name: string; id: string; reused: boolean; ours: boolean }> {
     report("-> key pair");
-    const same = pairs.find((pair) => sameKey(pair, request.key));
+    const same = pairs.find((pair) => sameKey(pair, key));
     if (same !== undefined) {
       const name = textAt(same, "keyName") ?? "";
-      report(`   ${name}, already in ${region} (${request.key.fingerprint}), reused`);
+      report(`   ${name}, already in ${region} (${key.fingerprint}), reused`);
       const tags = tagsOf(same);
-      return { name, id: textAt(same, "keyPairId") ?? "", reused: true, ours: isManaged(tags) && tags[MACHINE_LABEL] === request.name };
+      return { name, id: textAt(same, "keyPairId") ?? "", reused: true, ours: owner.manages(tags) && tags[owner.machineLabel] === machine };
     }
     // A name of its own, never one the region already uses for another key.
     const taken = new Set(pairs.map((pair) => textAt(pair, "keyName")));
-    const plain = `sitesolide-${request.name}`;
-    const name = taken.has(plain) ? `${plain}-${request.key.fingerprint.replaceAll(":", "").slice(0, 8)}` : plain;
+    const plain = `${owner.name}-${machine}`;
+    const name = taken.has(plain) ? `${plain}-${key.fingerprint.replaceAll(":", "").slice(0, 8)}` : plain;
     const answer = await call(
       region,
       "ImportKeyPair",
-      { KeyName: name, PublicKeyMaterial: btoa(keyLine(request.key)), ...tagSpecification(1, "key-pair", tagsFor(request.name)) },
+      { KeyName: name, PublicKeyMaterial: btoa(keyLine(key)), ...tagSpecification(1, "key-pair", tagsFor(machine, owner)) },
       `import the key pair ${name}`,
     );
-    report(`   ${name}, imported (${request.key.fingerprint})`);
+    report(`   ${name}, imported (${key.fingerprint})`);
     return { name, id: textAt(answer, "keyPairId") ?? "", reused: false, ours: true };
   }
 
@@ -960,14 +967,14 @@ export function aws(context: ProviderContext): Provider {
   }
 
   async function ensureGroup(region: string, placed: Placement, request: CreateRequest, found: XmlElement | null, report: Report): Promise<{ name: string; id: string; reused: boolean }> {
-    const groupName = `sitesolide-${request.name}`;
+    const groupName = `${owner.name}-${request.name}`;
     report(`-> security group ${groupName}`);
     if (found !== null) {
       const id = textAt(found, "groupId") ?? "";
       const missing = missingRules(found);
       // An earlier run may have stopped between the group and its rules.
       await authorize(region, id, missing, report);
-      report(`   already created by sitesolide, reused${missing.length === 0 ? "" : `, ${missing.length} missing rules added`}`);
+      report(`   already created by ${owner.name}, reused${missing.length === 0 ? "" : `, ${missing.length} missing rules added`}`);
       return { name: groupName, id, reused: true };
     }
     const answer = await call(
@@ -975,9 +982,9 @@ export function aws(context: ProviderContext): Provider {
       "CreateSecurityGroup",
       {
         GroupName: groupName,
-        GroupDescription: `sitesolide machine ${request.name}: inbound ssh, http, https and ping from everywhere`,
+        GroupDescription: `${owner.name} machine ${request.name}: inbound ssh, http, https and ping from everywhere`,
         VpcId: placed.vpcId,
-        ...tagSpecification(1, "security-group", tagsFor(request.name)),
+        ...tagSpecification(1, "security-group", tagsFor(request.name, owner)),
       },
       `create the security group ${groupName}`,
     );
@@ -995,11 +1002,11 @@ export function aws(context: ProviderContext): Provider {
 
   function ownAddress(address: XmlElement, name: string): boolean {
     const tags = tagsOf(address);
-    return isManaged(tags) && tags[MACHINE_LABEL] === name;
+    return owner.manages(tags) && tags[owner.machineLabel] === name;
   }
 
   async function allocate(region: string, name: string, report: Report): Promise<Address> {
-    const answer = await call(region, "AllocateAddress", { Domain: "vpc", ...tagSpecification(1, "elastic-ip", tagsFor(name)) }, `allocate an elastic IP for ${name}`);
+    const answer = await call(region, "AllocateAddress", { Domain: "vpc", ...tagSpecification(1, "elastic-ip", tagsFor(name, owner)) }, `allocate an elastic IP for ${name}`);
     const address = { ip: textAt(answer, "publicIp") ?? "", allocationId: textAt(answer, "allocationId") ?? "", reused: false };
     report(`   ${address.ip}, allocated`);
     return address;
@@ -1039,17 +1046,17 @@ export function aws(context: ProviderContext): Provider {
   type Tagged = { region: string; kind: "elastic IP" | "security group" | "key pair"; element: XmlElement; machine: string };
 
   /**
-   * What sitesolide created in a region, tagged, for one machine or for every
+   * What the owner created in a region, tagged, for one machine or for every
    * one: its elastic IPs and security groups, and its key pairs when
-   * `withKeys`.
+   * `withKeys`. Another owner's are neither asked for nor kept.
    */
   async function tagged(region: string, machine: string | null, withKeys: boolean): Promise<Tagged[]> {
-    const wanted = filters([[`tag:${MANAGED_LABEL}`, [MANAGED_VALUE]], ...(machine === null ? [] : [[`tag:${MACHINE_LABEL}`, [machine]] as const])]);
+    const wanted = filters([[`tag:${MANAGED_LABEL}`, [owner.name]], ...(machine === null ? [] : [[`tag:${owner.machineLabel}`, [machine]] as const])]);
     const found: Tagged[] = [];
     const keep = (kind: Tagged["kind"], element: XmlElement): void => {
       const tags = tagsOf(element);
-      const owner = tags[MACHINE_LABEL];
-      if (isManaged(tags) && owner !== undefined && owner !== "" && (machine === null || owner === machine)) found.push({ region, kind, element, machine: owner });
+      const createdFor = tags[owner.machineLabel];
+      if (owner.manages(tags) && createdFor !== undefined && createdFor !== "" && (machine === null || createdFor === machine)) found.push({ region, kind, element, machine: createdFor });
     };
     for (const address of items(await call(region, "DescribeAddresses", wanted, "read the elastic IPs"), "addressesSet")) keep("elastic IP", address);
     for (const group of await describe(region, "DescribeSecurityGroups", wanted, "securityGroupInfo", "read the security groups", 1000)) keep("security group", group);
@@ -1077,14 +1084,14 @@ export function aws(context: ProviderContext): Provider {
       monthlyPrice: null,
       backups: false,
       managed: true,
-      labels: labelsFor(name),
+      labels: owner.labels(name),
       login: LOGIN,
     };
   }
 
   /** The machine as it stands, its elastic IP said even when the instance's own read lags behind. */
   function finished(region: string, instance: XmlElement, address: Address): Machine {
-    const machine = toMachine(instance, region);
+    const machine = toMachine(instance, region, owner);
     return { ...machine, ipv4: address.ip || machine.ipv4 };
   }
 
@@ -1094,10 +1101,10 @@ export function aws(context: ProviderContext): Provider {
     async find(name) {
       const regions = await enabledRegions();
       const { found } = await named(name, checkRegion(home), regions);
-      const managed = found.filter(({ instance }) => isManaged(tagsOf(instance)));
+      const managed = found.filter(({ instance }) => owner.manages(tagsOf(instance)));
       if (managed.length > 1) throw ambiguous(name, managed);
       const chosen = managed[0] ?? found[0];
-      if (chosen !== undefined) return toMachine(chosen.instance, chosen.region);
+      if (chosen !== undefined) return toMachine(chosen.instance, chosen.region, owner);
       // No instance, but what a run left for one, in any region, a key pair
       // included: only a machine of that name lets destroy reach it.
       const { found: left } = await everyRegion(home, (region) => tagged(region, name, true), regions);
@@ -1105,8 +1112,11 @@ export function aws(context: ProviderContext): Provider {
     },
 
     async create(request, report): Promise<CreateOutcome> {
+      checkRequest("AWS", request, SUPPORTS);
+      // Not null: checkRequest refuses a request without a key, SUPPORTS not being keyless.
+      const key = request.key!;
       const region = checkRegion(request.location);
-      const keyProblem = awsKeyProblem(request.key);
+      const keyProblem = awsKeyProblem(key);
       if (keyProblem !== null) {
         throw new ProviderError({ error: "no-ssh-key", message: keyProblem, details: ["pass an ed25519 key with --ssh-key, the .pub file; nothing was created"] });
       }
@@ -1122,13 +1132,13 @@ export function aws(context: ProviderContext): Provider {
       }
       const { found, skipped } = await named(request.name, region, regions);
       if (skipped.length > 0) report(`!! the credentials may not read ${skipped.join(", ")}: an instance of that name there is not seen`);
-      const managed = found.filter(({ instance }) => isManaged(tagsOf(instance)));
+      const managed = found.filter(({ instance }) => owner.manages(tagsOf(instance)));
       if (managed.length > 1) throw ambiguous(request.name, managed);
 
       if (managed.length === 1) {
         const existing = managed[0]!;
-        const machine = toMachine(existing.instance, existing.region);
-        report(`   already created by sitesolide: ${machine.type} at ${machine.location}, ${machine.status}`);
+        const machine = toMachine(existing.instance, existing.region, owner);
+        report(`   already created by ${owner.name}: ${machine.type} at ${machine.location}, ${machine.status}`);
         if (machine.type !== request.type || machine.location !== region) {
           report(`!! it is ${machine.type} at ${machine.location}: --type and --location only apply to a machine being created`);
         }
@@ -1140,13 +1150,13 @@ export function aws(context: ProviderContext): Provider {
         return { machine: finished(existing.region, running, address), created: false, resources };
       }
       if (found.length > 0) {
-        const other = toMachine(found[0]!.instance, found[0]!.region);
+        const other = toMachine(found[0]!.instance, found[0]!.region, owner);
         throw new ProviderError({
           error: "machine-exists",
-          message: `an instance named ${request.name} exists in the account, and sitesolide did not create it`,
+          message: `an instance named ${request.name} exists in the account, and ${owner.name} did not create it`,
           details: [
             `${other.id}, ${other.type} at ${other.location}, ${other.status}, ${[other.ipv4, other.ipv6].filter(Boolean).join(", ") || "no public address"}`,
-            `it lacks the tag ${MANAGED_LABEL}=${MANAGED_VALUE}: nothing was created, nothing was changed`,
+            `it lacks the tag ${owner.mark}: nothing was created, nothing was changed`,
           ],
         });
       }
@@ -1157,7 +1167,7 @@ export function aws(context: ProviderContext): Provider {
       const image = await resolveImage(region, request.image, offer.info.architecture!, report);
       const placed = await placement(region, request.type, offer.zones, report);
       const pairs = items(await call(region, "DescribeKeyPairs", { IncludePublicKey: "true" }, "read the key pairs"), "keySet");
-      const existingGroup = await findGroup(region, placed.vpcId, `sitesolide-${request.name}`);
+      const existingGroup = await findGroup(region, placed.vpcId, `${owner.name}-${request.name}`);
       const free = (await addresses(region)).find((address) => ownAddress(address, request.name) && textAt(address, "associationId") === null);
 
       // What this run creates before the instance, undone if the order is
@@ -1168,10 +1178,10 @@ export function aws(context: ProviderContext): Provider {
       let address: Address;
       let ordered: XmlElement | undefined;
       try {
-        const key = await ensureKey(region, request, pairs, report);
-        resources.push({ kind: "key pair", name: key.name, id: key.id, reused: key.reused });
-        if (!key.reused) made.push({ kind: "key pair", name: key.name, action: "DeleteKeyPair", parameters: { KeyPairId: key.id } });
-        else if (key.ours) leftBefore.push(`key pair ${key.name}`);
+        const pair = await ensureKey(region, request.name, key, pairs, report);
+        resources.push({ kind: "key pair", name: pair.name, id: pair.id, reused: pair.reused });
+        if (!pair.reused) made.push({ kind: "key pair", name: pair.name, action: "DeleteKeyPair", parameters: { KeyPairId: pair.id } });
+        else if (pair.ours) leftBefore.push(`key pair ${pair.name}`);
 
         const group = await ensureGroup(region, placed, request, existingGroup, report);
         resources.push({ kind: "security group", name: group.name, id: group.id, reused: group.reused });
@@ -1196,8 +1206,10 @@ export function aws(context: ProviderContext): Provider {
         report(`-> instance ${request.name}: ${request.type} at ${placed.zone}, ${image.name}`);
         ordering = true;
         // The same order, made again with the same address after a run that
-        // lost its answer, returns the instance that order created.
-        const clientToken = `sitesolide-${sha256(JSON.stringify([request.name, address.allocationId, image.id, request.type, placed.subnetId]), "hex").slice(0, 48)}`;
+        // lost its answer, returns the instance that order created. AWS takes
+        // a token of 64 characters at most, which a long owner's name shortens.
+        const digest = sha256(JSON.stringify([request.name, address.allocationId, image.id, request.type, placed.subnetId]), "hex");
+        const clientToken = `${owner.name}-${digest.slice(0, Math.min(48, 63 - owner.name.length))}`;
         // A key pair or a group created a moment ago may be unknown to the
         // order for a while; the token makes asking again harmless.
         const order = (): Promise<XmlElement> => call(
@@ -1208,7 +1220,7 @@ export function aws(context: ProviderContext): Provider {
             InstanceType: request.type,
             MinCount: "1",
             MaxCount: "1",
-            KeyName: key.name,
+            KeyName: pair.name,
             SubnetId: placed.subnetId,
             "SecurityGroupId.1": group.id,
             ClientToken: clientToken,
@@ -1219,10 +1231,10 @@ export function aws(context: ProviderContext): Provider {
             "BlockDeviceMapping.1.Ebs.VolumeSize": String(ROOT_VOLUME_GB),
             "BlockDeviceMapping.1.Ebs.VolumeType": "gp3",
             "BlockDeviceMapping.1.Ebs.DeleteOnTermination": "true",
-            // With the account's default key, aws/ebs unless its owner chose another: no cost, and the vault's disk is encrypted at rest.
+            // With the account's default key, aws/ebs unless its owner chose another: no cost, and the disk is encrypted at rest.
             "BlockDeviceMapping.1.Ebs.Encrypted": "true",
-            ...tagSpecification(1, "instance", tagsFor(request.name)),
-            ...tagSpecification(2, "volume", tagsFor(request.name)),
+            ...tagSpecification(1, "instance", tagsFor(request.name, owner)),
+            ...tagSpecification(2, "volume", tagsFor(request.name, owner)),
           },
           `create the instance ${request.name}`,
         );
@@ -1238,7 +1250,7 @@ export function aws(context: ProviderContext): Provider {
             ? []
             : [
                 `left by an earlier run, and kept: ${leftBefore.join("; ")}`,
-                `\`sitesolide machine destroy ${request.name} --provider aws${leftBefore.some((line) => line.startsWith("key pair")) ? " --delete-key" : ""}\` removes them, if you give up on this machine`,
+                `\`${owner.name} machine destroy ${request.name} --provider aws${leftBefore.some((line) => line.startsWith("key pair")) ? " --delete-key" : ""}\` removes them, if you give up on this machine`,
               ];
         // Refused for sure: a 4xx other than the rate limit, or no capacity.
         const refused = aws !== null && (CAPACITY.has(aws.code) || (aws.status >= 400 && aws.status < 500 && error.failure.error !== "provider-rate-limited"));
@@ -1249,7 +1261,7 @@ export function aws(context: ProviderContext): Provider {
               ...(error.failure.details ?? []),
               "whether AWS created the instance is not known: run the same command again, it finds the instance if there is one, and orders it again with the same token otherwise",
               "nothing was deleted: the key pair, the security group and the elastic IP are reused by the next run",
-              `if you give up on this machine, \`sitesolide machine destroy ${request.name} --provider aws --delete-key\` removes them`,
+              `if you give up on this machine, \`${owner.name} machine destroy ${request.name} --provider aws --delete-key\` removes them`,
             ],
           });
         }
@@ -1285,14 +1297,14 @@ export function aws(context: ProviderContext): Provider {
       const { found } = await everyRegion(
         checkRegion(home),
         async (region) =>
-          (await instances(region, filters([[`tag:${MANAGED_LABEL}`, [MANAGED_VALUE]], ["instance-state-name", LIVE_STATES]]), "read the instances")).map((instance) => ({ instance, region })),
+          (await instances(region, filters([[`tag:${MANAGED_LABEL}`, [owner.name]], ["instance-state-name", LIVE_STATES]]), "read the instances")).map((instance) => ({ instance, region })),
         regions,
       );
-      const machines = found.filter(({ instance }) => isManaged(tagsOf(instance))).map(({ instance, region }) => toMachine(instance, region));
+      const machines = found.filter(({ instance }) => owner.manages(tagsOf(instance))).map(({ instance, region }) => toMachine(instance, region, owner));
       // What a run left without an instance, an elastic IP billed by the
       // hour above all, is listed as an incomplete machine. A key pair alone
       // is not: destroy keeps it on purpose, and it costs nothing.
-      const alive = new Set(machines.flatMap((machine) => [machine.name, machine.labels[MACHINE_LABEL] ?? machine.name]));
+      const alive = new Set(machines.flatMap((machine) => [machine.name, machine.labels[owner.machineLabel] ?? machine.name]));
       const { found: left } = await everyRegion(home, (region) => tagged(region, null, false), regions);
       const unfinished = new Map<string, Tagged[]>();
       for (const entry of left) if (!alive.has(entry.machine)) unfinished.set(entry.machine, [...(unfinished.get(entry.machine) ?? []), entry]);
@@ -1306,7 +1318,7 @@ export function aws(context: ProviderContext): Provider {
       const regions = await enabledRegions(region);
       // What was created for it carries the machine's tag, which outlives a
       // change of its Name.
-      let owner = machine.name;
+      let createdFor = machine.name;
       let instanceId: string | null = null;
       // Addresses someone else associated with the instance: never released here.
       let foreign: XmlElement[] = [];
@@ -1316,11 +1328,11 @@ export function aws(context: ProviderContext): Provider {
       } else {
         report(`-> instance ${machine.name}`);
         const instance = await readInstance(region, machine.id, `read the instance ${machine.name}`);
-        if (instance === null) throw new ProviderError({ error: "provider-not-found", message: `the instance ${machine.id} is not at ${region} any more`, details: ["run `sitesolide machine list --provider aws`: nothing was destroyed"] });
-        if (!isManaged(tagsOf(instance))) {
-          throw new ProviderError({ error: "machine-not-managed", message: `the instance ${machine.id} lacks the tag ${MANAGED_LABEL}=${MANAGED_VALUE}`, details: ["sitesolide only destroys what it created: nothing was destroyed"] });
+        if (instance === null) throw new ProviderError({ error: "provider-not-found", message: `the instance ${machine.id} is not at ${region} any more`, details: [`run \`${owner.name} machine list --provider aws\`: nothing was destroyed`] });
+        if (!owner.manages(tagsOf(instance))) {
+          throw new ProviderError({ error: "machine-not-managed", message: `the instance ${machine.id} lacks the tag ${owner.mark}`, details: [`${owner.name} only destroys what it created: nothing was destroyed`] });
         }
-        owner = tagsOf(instance)[MACHINE_LABEL] ?? machine.name;
+        createdFor = tagsOf(instance)[owner.machineLabel] ?? machine.name;
         instanceId = machine.id;
         const addressesShown = [machine.ipv4, machine.ipv6].filter(Boolean).join(", ");
         // What the instance holds, read before it goes: its volumes, the
@@ -1329,7 +1341,7 @@ export function aws(context: ProviderContext): Provider {
         const volumes = items(instance, "blockDeviceMapping")
           .map((mapping) => ({ id: textAt(mapping, "ebs", "volumeId"), device: textAt(mapping, "deviceName") ?? "" }))
           .filter((volume): volume is { id: string; device: string } => volume.id !== null);
-        foreign = (await addresses(region)).filter((address) => textAt(address, "instanceId") === machine.id && !ownAddress(address, owner));
+        foreign = (await addresses(region)).filter((address) => textAt(address, "instanceId") === machine.id && !ownAddress(address, createdFor));
         if (textAt(instance, "instanceState", "name") !== "terminated") {
           await call(region, "TerminateInstances", numbered("InstanceId", [machine.id]), `terminate the instance ${machine.name}`);
           const deadline = clock.now() + WAITS.terminatedMs;
@@ -1381,7 +1393,7 @@ export function aws(context: ProviderContext): Provider {
 
       // What was created for the machine, in every region: an interrupted
       // run may have left an address or a group in another one.
-      const { found: created, skipped } = await everyRegion(region, (each) => tagged(each, owner, true), regions);
+      const { found: created, skipped } = await everyRegion(region, (each) => tagged(each, createdFor, true), regions);
       if (skipped.length > 0) report(`!! the credentials may not read ${skipped.join(", ")}: what was created there for ${machine.name} is not seen`);
       const where = (entry: Tagged): string => (entry.region === region ? "" : ` at ${entry.region}`);
 
@@ -1401,14 +1413,14 @@ export function aws(context: ProviderContext): Provider {
       }
       for (const address of foreign) {
         const ip = textAt(address, "publicIp") ?? "";
-        kept.push(`elastic IP ${ip}: sitesolide did not allocate it; AWS bills it until it is released from the console`);
-        report(`!! elastic IP ${ip} was associated with ${machine.name} but sitesolide did not allocate it: kept, and billed until it is released`);
+        kept.push(`elastic IP ${ip}: ${owner.name} did not allocate it; AWS bills it until it is released from the console`);
+        report(`!! elastic IP ${ip} was associated with ${machine.name} but ${owner.name} did not allocate it: kept, and billed until it is released`);
       }
       if (ownAddresses.length === 0 && foreign.length === 0) report(`   none was allocated for ${machine.name}`);
 
-      report(`-> security group sitesolide-${owner}`);
+      report(`-> security group ${owner.name}-${createdFor}`);
       const groups = created.filter((entry) => entry.kind === "security group");
-      if (groups.length === 0) report("   none created by sitesolide for it");
+      if (groups.length === 0) report(`   none created by ${owner.name} for it`);
       for (const entry of groups) {
         const id = textAt(entry.element, "groupId") ?? "";
         const name = `${textAt(entry.element, "groupName") ?? id}${where(entry)}`;

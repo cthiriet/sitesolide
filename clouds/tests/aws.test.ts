@@ -11,15 +11,15 @@ import {
   missingRules,
   short,
   WAITS,
-} from "../cli/providers/aws";
-import { amzDate, canonicalQuery, signRequest, uriEncode } from "../cli/providers/aws-sigv4";
-import { items, parseXml, tagsOf, textAt, XmlError } from "../cli/providers/aws-xml";
-import { ProviderError, type Clock, type CreateRequest, type Fetch, type Provider, type PublicKey, type Workstation } from "../cli/providers/provider";
-import { createFake, createFakeAws, FAKE_ACCESS_KEY, FAKE_SECRET_KEY, type FakeAws, type Received } from "./fake-aws";
+} from "../src/aws";
+import { amzDate, canonicalQuery, signRequest, uriEncode } from "../src/aws-sigv4";
+import { items, parseXml, tagsOf, textAt, XmlError } from "../src/aws-xml";
+import { FAILURE_CODES, ownerNamed, ProviderError, WEB_SERVER, type Clock, type CreateRequest, type Fetch, type Owner, type Provider, type PublicKey, type Workstation } from "../src/provider";
+import { createFake, createFakeAws, FAKE_ACCESS_KEY, FAKE_SECRET_KEY, type FakeAws, type Received } from "../fakes/aws";
 
 /**
  * The AWS provider, through AWS.open(), against a local fake of the EC2
- * Query API (fake-aws.ts) that checks every signature with its own copy of
+ * Query API (fakes/aws.ts) that checks every signature with its own copy of
  * the secret: the real API is never called. The clock does not wait.
  *
  * Whatever the path, no credential may appear in what the provider reports or
@@ -35,6 +35,10 @@ const SESSION_TOKEN = "FwoGZXIvYXdzEFAKEsessionTOKEN0123456789abcdefghijklmnopqr
 const printed: string[] = [];
 let fake: FakeAws;
 
+/** The owner every test opens the provider for, unless it says another: its expectations are sitesolide's names. */
+const SITESOLIDE = ownerNamed("sitesolide");
+const DEVBOX = ownerNamed("devbox");
+
 beforeAll(() => {
   fake = createFakeAws();
 });
@@ -48,12 +52,12 @@ beforeEach(() => {
 });
 
 function request(overrides: Partial<CreateRequest> = {}): CreateRequest {
-  return { name: "web", type: DEFAULT_TYPE, location: "eu-central-1", image: "debian-13", backups: false, key: KEY, ...overrides };
+  return { name: "web", type: DEFAULT_TYPE, location: "eu-central-1", image: "debian-13", backups: false, key: KEY, inbound: WEB_SERVER, ...overrides };
 }
 
 type Opened = { provider: Provider; lines: string[]; slept: number[]; clock: Clock; report: (line: string) => void };
 
-function open(options: { environment?: Record<string, string>; credentials?: Record<string, string>; fetcher?: Fetch } = {}): Opened {
+function open(options: { environment?: Record<string, string>; credentials?: Record<string, string>; fetcher?: Fetch; owner?: Owner } = {}): Opened {
   let now = Date.parse("2026-10-21T10:00:00Z");
   const slept: number[] = [];
   const clock: Clock = {
@@ -66,7 +70,7 @@ function open(options: { environment?: Record<string, string>; credentials?: Rec
   const environment = { ...fake.environment, ...options.environment };
   const credentials = options.credentials ?? { AWS_ACCESS_KEY_ID: FAKE_ACCESS_KEY, AWS_SECRET_ACCESS_KEY: FAKE_SECRET_KEY };
   const lines: string[] = [];
-  const provider = AWS.open({ credentials, environment, fetcher: options.fetcher ?? ((input, init) => fetch(input, init)), clock, secret: () => {} });
+  const provider = AWS.open({ owner: options.owner ?? SITESOLIDE, credentials, environment, fetcher: options.fetcher ?? ((input, init) => fetch(input, init)), clock, secret: () => {} });
   const report = (line: string) => {
     lines.push(line);
     printed.push(line);
@@ -74,13 +78,14 @@ function open(options: { environment?: Record<string, string>; credentials?: Rec
   return { provider, lines, slept, clock, report };
 }
 
-/** The refusal a promise ends with, its message and details added to what was printed. */
+/** The refusal a promise ends with, its message and details added to what was printed; its code is one of FAILURE_CODES. */
 async function refusal(promise: Promise<unknown>): Promise<ProviderError> {
   try {
     await promise;
   } catch (error) {
     if (!(error instanceof ProviderError)) throw error;
     printed.push(error.message, ...(error.failure.details ?? []));
+    expect(FAILURE_CODES.has(error.failure.error)).toBe(true);
     return error;
   }
   throw new Error("expected a refusal");
@@ -993,6 +998,93 @@ describe("wizard", () => {
     expect(paris.map((choice) => choice.value).some((value) => value.startsWith("t3a."))).toBe(false);
     expect(writes()).toEqual([]);
   });
+});
+
+// --- two owners ------------------------------------------------------------------------------
+
+describe("two owners in one account", () => {
+  const OTHER_KEY: PublicKey = { ...KEY, blob: "AAAAC3NzaC1lZDI1NTE5AAAAIBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", fingerprint: "b5:57:41:e6:0e:8f:2b:88:f6:be:9e:32:50:ab:4f:af" };
+  const tagged = (owner: string, name: string) => ({ Name: name, "managed-by": owner, [`${owner}-machine`]: name });
+
+  test("each owner's resources carry its name, and each list shows its own machines alone", async () => {
+    await open().provider.create(request(), () => {});
+    const created = await open({ owner: DEVBOX }).provider.create(request({ name: "api", key: OTHER_KEY }), () => {});
+    const region = fake.region("eu-central-1");
+    const tags = tagged("devbox", "api");
+    expect(region.keyPairs.find((pair) => pair.name === "devbox-api")?.tags).toEqual(tags);
+    expect(region.groups.find((group) => group.name === "devbox-api")?.tags).toEqual(tags);
+    expect(region.addresses.find((address) => address.instanceId === created.machine.id)?.tags).toEqual(tags);
+    expect(region.instances.find((instance) => instance.id === created.machine.id)?.tags).toEqual(tags);
+    expect(fake.requests.filter((entry) => entry.action === "RunInstances").at(-1)!.body.ClientToken).toMatch(/^devbox-[0-9a-f]{48}$/);
+    expect((await open({ owner: DEVBOX }).provider.list()).map((machine) => machine.name)).toEqual(["api"]);
+    expect((await open().provider.list()).map((machine) => machine.name)).toEqual(["web"]);
+  });
+
+  test("a machine of another owner is found as not managed, never destroyed, and its name is refused", async () => {
+    await open().provider.create(request(), () => {});
+    const theirs = fake.region("eu-central-1").instances[0]!;
+    fake.requests.length = 0;
+    const { provider, report } = open({ owner: DEVBOX });
+    expect(await provider.list()).toEqual([]);
+    const found = (await provider.find("web"))!;
+    expect(found.managed).toBe(false);
+    const destroyed = await refusal(provider.destroy({ ...found, managed: true }, { deleteKey: true }, report));
+    expect(destroyed.failure.error).toBe("machine-not-managed");
+    expect(destroyed.message).toBe(`the instance ${theirs.id} lacks the tag managed-by=devbox`);
+    // Taken for an incomplete machine of its own, it reaches nothing the other owner made either.
+    expect(await provider.destroy({ ...found, id: "", status: "incomplete", managed: true }, { deleteKey: true }, report)).toEqual({
+      removed: [],
+      kept: [],
+    });
+    const created = await refusal(provider.create(request(), report));
+    expect(created.failure.error).toBe("machine-exists");
+    expect(created.message).toBe("an instance named web exists in the account, and devbox did not create it");
+    expect(created.failure.details).toContain("it lacks the tag managed-by=devbox: nothing was created, nothing was changed");
+    expect(writes()).toEqual([]);
+    expect(theirs.state).toBe("running");
+  });
+
+  test("what a run left for one owner is neither listed nor swept by the other", async () => {
+    const address = fake.addAddress("eu-west-3", { tags: tagged("sitesolide", "web") });
+    const group = fake.addGroup("us-east-1", { name: "sitesolide-web", tags: tagged("sitesolide", "web") });
+    const pair = fake.addKeyPair("eu-central-1", { name: "sitesolide-web", publicKey: `ssh-ed25519 ${BLOB}`, tags: tagged("sitesolide", "web") });
+    const left = fake.addAddress("eu-central-1", { tags: tagged("devbox", "web") });
+    const { provider, report } = open({ owner: DEVBOX });
+    expect((await provider.list()).map((machine) => `${machine.name} ${machine.status} ${machine.ipv4}`)).toEqual([`web incomplete ${left.publicIp}`]);
+    const outcome = await provider.destroy((await provider.find("web"))!, { deleteKey: true }, report);
+    expect(outcome.removed).toEqual([`elastic IP ${left.publicIp}`]);
+    expect(writes()).toEqual(["ReleaseAddress"]);
+    expect(fake.region("eu-west-3").addresses).toEqual([address]);
+    expect(fake.region("us-east-1").groups).toContain(group);
+    expect(fake.region("eu-central-1").keyPairs).toEqual([pair]);
+    expect((await open().provider.list()).map((machine) => `${machine.name} ${machine.status} ${machine.ipv4}`)).toEqual([`web incomplete ${address.publicIp}`]);
+  });
+
+  test("an owner of the longest name still orders with a client token AWS takes", async () => {
+    await open({ owner: ownerNamed("a-twenty-char-owner1") }).provider.create(request(), () => {});
+    expect(fake.requests.find((entry) => entry.action === "RunInstances")!.body.ClientToken).toMatch(/^a-twenty-char-owner1-[0-9a-f]{43}$/);
+  });
+});
+
+// --- what this provider is not asked -------------------------------------------------------------
+
+describe("what AWS is not asked here is refused before any request", () => {
+  const cases: [string, Partial<CreateRequest>, string][] = [
+    ["no key", { key: null }, "no-ssh-key"],
+    ["a user-data", { userData: "#cloud-config\n" }, "provider-unsupported"],
+    ["inbound rules other than a web server's", { inbound: [{ protocol: "tcp", port: 22, sources: ["0.0.0.0/0", "::/0"] }] }, "provider-unsupported"],
+    ["the size of the disk", { disk: { gb: 50 } }, "provider-unsupported"],
+    ["nested virtualization", { nestedVirtualization: true }, "provider-unsupported"],
+    ["the account the key logs into", { login: "dev" }, "provider-unsupported"],
+  ];
+  for (const [what, overrides, code] of cases) {
+    test(what, async () => {
+      const refused = await refusal(open().provider.create(request(overrides), () => {}));
+      expect(refused.failure.error).toBe(code);
+      expect(refused.failure.details).toContain("nothing was created");
+      expect(fake.requests).toEqual([]);
+    });
+  }
 });
 
 // --- last: nothing printed carried a credential ----------------------------------------------

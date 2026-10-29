@@ -207,5 +207,5 @@ naming an address Scaleway will give to someone else.
 
 `SITESOLIDE_SCALEWAY_API` points the command at another address than
 `https://api.scaleway.com`, for a local fake of the Instance, IAM, Marketplace
-and Block Storage APIs (`bin/tests/fake-scaleway.ts`). It takes https, or http
+and Block Storage APIs (`clouds/fakes/scaleway.ts`). It takes https, or http
 on the loopback only, so that the key never travels in the clear.

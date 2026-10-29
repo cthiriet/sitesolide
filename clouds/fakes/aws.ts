@@ -7,8 +7,8 @@
  * of the secret, exactly as AWS does, so that a request signed wrong fails
  * here as it would there. It keeps an account in memory, region by region
  * (key pairs, security groups, elastic IPs, instances and their volumes,
- * images, a default VPC), and answers the calls bin/cli/providers/aws.ts
- * makes, in the shapes of the API reference
+ * images, a default VPC), and answers the calls src/aws.ts makes, in the
+ * shapes of the API reference
  * (https://docs.aws.amazon.com/AWSEC2/latest/APIReference/): XML in the
  * 2016-11-15 namespace, `<Response><Errors><Error>` errors, `nextToken`
  * pages, filters with their wildcards, a filter it does not know refused.
@@ -21,8 +21,8 @@
  * terminated instance's interface for a few tries, as on AWS. `fail()` makes
  * the next matching request answer an error instead.
  */
-import { parseAuthorization, signature, signingParts } from "../cli/providers/aws-sigv4";
-import { escapeXml } from "../cli/providers/aws-xml";
+import { parseAuthorization, signature, signingParts } from "../src/aws-sigv4";
+import { escapeXml } from "../src/aws-xml";
 import type { FakeProvider, FakeRequest } from "./fake-provider";
 
 export const FAKE_ACCESS_KEY = "AKIAFAKEFAKE01234567";

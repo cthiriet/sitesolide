@@ -192,5 +192,5 @@ naming an address Vultr will give to someone else.
 
 `SITESOLIDE_VULTR_API` points the command at another address than
 `https://api.vultr.com/v2`, for a local fake of the API
-(`bin/tests/fake-vultr.ts`). It takes https, or http on the loopback only, so
+(`clouds/fakes/vultr.ts`). It takes https, or http on the loopback only, so
 that the key never travels in the clear.

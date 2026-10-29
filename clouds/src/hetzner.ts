@@ -2,19 +2,19 @@
  * Hetzner Cloud, through its API: what infra/main.tf created with Terraform,
  * without Terraform. https://docs.hetzner.cloud/reference/cloud
  *
- * A machine is three resources, each labelled `managed-by=sitesolide` and
- * `sitesolide-machine=<name>`:
+ * A machine is three resources, or two without a key, each labelled
+ * `managed-by=<owner>` and `<owner>-machine=<name>`:
  *
- *   - the workstation's SSH key, reused when the project already holds it
- *     under any name, uploaded otherwise;
- *   - a firewall named after the machine, inbound TCP 22, 80 and 443 and ICMP
- *     from everywhere, as main.tf had it;
- *   - the server, with both public addresses, the key and the firewall, and no
- *     user_data: `sitesolide setup` hardens it over SSH, which a run can be
- *     repeated against, where cloud-init only ever ran once.
+ *   - the request's SSH key, reused when the project already holds it under
+ *     any name, uploaded as `<owner>-<name>` otherwise; none for `key: null`,
+ *     the user-data then carrying the only key (see `create`);
+ *   - a firewall `<owner>-<name>`, the request's inbound rules and nothing
+ *     else, outbound left open;
+ *   - the server, with both public addresses, the key, the firewall, and the
+ *     request's user-data when it has one.
  *
  * Everything that can refuse is read before the first write, so that a
- * refusal leaves nothing behind: the server, by name (one sitesolide did not
+ * refusal leaves nothing behind: the server, by name (one the owner did not
  * create is never touched), the type and the location against what Hetzner
  * sells there (a refusal that lists the cheapest types of the location says
  * more than the API's 422), and the firewall's name. The one refusal that
@@ -24,8 +24,8 @@
  * deleted again, and the refusal lists the types to try instead.
  *
  * Every call carries the token in the Authorization header and nowhere else,
- * follows no redirect, and fails with a ProviderError whose code
- * bin/cli/hints.ts knows. The API's own error format is
+ * follows no redirect, and fails with a ProviderError whose code is one of
+ * FAILURE_CODES. The API's own error format is
  * `{"error": {"code", "message", "details"}}`; `failureFrom` reads it.
  *
  * Lists are paginated: `meta.pagination.next_page` is followed until it is
@@ -35,14 +35,11 @@
  */
 import {
   apiAddress,
+  checkRequest,
   DEBIAN,
+  describeInbound,
   formatPrice,
-  isManaged,
   keyMaterial,
-  labelsFor,
-  MANAGED_LABEL,
-  MANAGED_VALUE,
-  MACHINE_LABEL,
   patiently,
   ProviderError,
   undoMade,
@@ -50,16 +47,27 @@ import {
   type CreateOutcome,
   type CreateRequest,
   type DestroyOutcome,
+  type Inbound,
   type Machine,
+  type Owner,
   type Provider,
   type ProviderContext,
   type ProviderEntry,
+  type PublicKey,
   type Report,
   type Resource,
+  type Supports,
 } from "./provider";
-import type { Failure } from "../remote";
+import type { Failure } from "./provider";
 
 export const DEFAULT_API = "https://api.hetzner.cloud/v1";
+
+const TITLE = "Hetzner";
+
+export const SUPPORTS: Supports = { keyless: true, inbound: true, userData: true };
+
+/** Hetzner refuses a larger user_data when the server is created, counted in bytes. */
+export const USER_DATA_BYTES = 32768;
 
 /** Where the token is read from: the variable the hcloud CLI and the Terraform provider read. */
 export const TOKEN_VARIABLE = "HCLOUD_TOKEN";
@@ -79,18 +87,17 @@ export const WAITS = {
   firewallTries: 5,
 };
 
-/** Every rule allows these sources, as main.tf did, ssh_allowed_from's default included. */
-const EVERYWHERE = ["0.0.0.0/0", "::/0"];
-
-export const FIREWALL_RULES = [
-  { direction: "in", protocol: "tcp", port: "22", source_ips: EVERYWHERE, description: "ssh" },
-  { direction: "in", protocol: "tcp", port: "80", source_ips: EVERYWHERE, description: "http" },
-  { direction: "in", protocol: "tcp", port: "443", source_ips: EVERYWHERE, description: "https" },
-  // Ping serves diagnosis and external monitoring.
-  { direction: "in", protocol: "icmp", source_ips: EVERYWHERE, description: "ping" },
-];
-
 // --- the API's objects, as far as this file reads them ---------------------------------
+
+/** A rule of a firewall: the API answers `port: null` for ICMP and `destination_ips: []` for an inbound rule. */
+export type HetznerRule = {
+  direction: "in" | "out";
+  protocol: string;
+  port?: string | null;
+  source_ips?: string[];
+  destination_ips?: string[];
+  description?: string | null;
+};
 
 type Price = { location: string; price_monthly: { net: string; gross: string } };
 type Deprecation = { unavailable_after: string; announced: string } | null;
@@ -146,6 +153,7 @@ type HetznerFirewall = {
   id: number;
   name: string;
   labels: Record<string, string>;
+  rules?: HetznerRule[];
   applied_to: { type: string; server?: { id: number }; label_selector?: { selector: string } }[];
 };
 
@@ -253,7 +261,7 @@ function locationOf(server: HetznerServer): string {
   return server.location?.name ?? server.datacenter?.location?.name ?? "unknown";
 }
 
-export function toMachine(server: HetznerServer, currency: string | null): Machine {
+export function toMachine(server: HetznerServer, currency: string | null, owner: Owner): Machine {
   const network = server.public_net?.ipv6?.ip ?? null;
   const location = locationOf(server);
   const price = server.server_type?.prices?.find((entry) => entry.location === location)?.price_monthly;
@@ -269,11 +277,40 @@ export function toMachine(server: HetznerServer, currency: string | null): Machi
     ipv6Network: network,
     monthlyPrice: price === undefined ? null : { net: price.net, gross: price.gross, currency },
     backups: server.backup_window !== null && server.backup_window !== undefined,
-    managed: isManaged(server.labels),
+    managed: owner.manages(server.labels),
     labels: server.labels ?? {},
     // Hetzner's images take the key for root, and only for root.
     login: "root",
   };
+}
+
+/**
+ * The firewall's name, the owner's before the machine's: Hetzner keeps a
+ * firewall's name unique in a project, and two programs sharing one then never
+ * want the same, nor a firewall made by hand under the machine's name.
+ */
+export function firewallName(owner: Owner, machine: string): string {
+  return `${owner.name}-${machine}`;
+}
+
+/** The request's rules in Hetzner's shape, where a port is a string. */
+export function firewallRules(inbound: readonly Inbound[]): HetznerRule[] {
+  return inbound.map((rule) => ({
+    direction: "in",
+    protocol: rule.protocol,
+    ...(rule.port === undefined ? {} : { port: String(rule.port) }),
+    source_ips: [...rule.sources],
+    ...(rule.description === undefined ? {} : { description: rule.description }),
+  }));
+}
+
+/** Whether a firewall holds these rules and no other, in any order: what they open, their descriptions aside. */
+export function holdsRules(held: readonly HetznerRule[] | undefined, wanted: readonly HetznerRule[]): boolean {
+  const key = (rule: HetznerRule) =>
+    [rule.direction, rule.protocol, rule.port ?? "", [...(rule.source_ips ?? [])].sort().join(","), [...(rule.destination_ips ?? [])].sort().join(",")].join(" ");
+  const left = (held ?? []).map(key).sort();
+  const right = wanted.map(key).sort();
+  return left.length === right.length && left.every((rule, index) => rule === right[index]);
 }
 
 export type Offer = {
@@ -387,7 +424,7 @@ function appliedElsewhere(firewall: HetznerFirewall, except: number): string[] {
 export function hetzner(context: ProviderContext): Provider {
   const base = apiBase(context.environment);
   const host = new URL(base).host;
-  const { clock, fetcher } = context;
+  const { clock, fetcher, owner } = context;
   const token = context.credentials[TOKEN_VARIABLE] ?? "";
 
   /** One call: the token in its header, JSON both ways, every failure said in the CLI's words. */
@@ -403,7 +440,7 @@ export function hetzner(context: ProviderContext): Provider {
       });
     } catch (error) {
       // The message of a failed fetch names the address at most; it is
-      // scrubbed all the same, on the way out, by bin/cli/machine.ts.
+      // scrubbed all the same, on the way out, by the program.
       throw new HetznerError({ error: "provider-unreachable", message: `${host} unreachable while trying to ${what}: ${(error as Error).message}` }, 0, "");
     }
     if (response.status === 204) return {} as T;
@@ -508,7 +545,7 @@ export function hetzner(context: ProviderContext): Provider {
         last = server.status;
         if (server.status === "running") return server;
         if (server.status === "off" && !justCreated) {
-          throw new ProviderError({ error: "machine-off", message: `${name} exists but is powered off`, details: ["sitesolide never powers a machine on or off by itself"] });
+          throw new ProviderError({ error: "machine-off", message: `${name} exists but is powered off`, details: [`${owner.name} never powers a machine on or off by itself`] });
         }
       }
       if (clock.now() >= deadline) {
@@ -548,8 +585,8 @@ export function hetzner(context: ProviderContext): Provider {
   /**
    * Deletes what this run created before an order Hetzner refused: the key
    * and the firewall were made for a server that does not exist, and nothing
-   * else in sitesolide would ever list or remove them, since `list` and
-   * `destroy` start from a server. What an earlier run made, or the project
+   * else would ever list or remove them, since `list` and `destroy` start
+   * from a server. What an earlier run made, or the project
    * already held, is left as it was. A deletion that fails leaves the
    * resource labelled, where the next run finds and reuses it. Returns what
    * happened, one line each, for the refusal's details.
@@ -560,52 +597,61 @@ export function hetzner(context: ProviderContext): Provider {
     return undoMade(made, (resource) => call("DELETE", resource.path, `delete the ${resource.kind} ${resource.name}`), report);
   }
 
-  async function ensureKey(request: CreateRequest, report: Report): Promise<HetznerKey & { reused: boolean }> {
+  async function ensureKey(machine: string, key: PublicKey, report: Report): Promise<HetznerKey & { reused: boolean }> {
     report("-> SSH key");
     const keys = await listAll<HetznerKey>("/ssh_keys", "ssh_keys", "read the SSH keys");
-    const ours = `${request.key.algorithm} ${request.key.blob}`;
-    const same = keys.find((key) => key.fingerprint === request.key.fingerprint || keyMaterial(key.public_key) === ours);
+    const ours = `${key.algorithm} ${key.blob}`;
+    const same = keys.find((candidate) => candidate.fingerprint === key.fingerprint || keyMaterial(candidate.public_key) === ours);
     if (same !== undefined) {
-      report(`   ${same.name}, already in the project (${request.key.fingerprint}), reused`);
+      report(`   ${same.name}, already in the project (${key.fingerprint}), reused`);
       return { ...same, reused: true };
     }
     // A name of its own, never one the project already uses for another key.
-    const taken = new Set(keys.map((key) => key.name));
-    const plain = `sitesolide-${request.name}`;
-    const name = taken.has(plain) ? `${plain}-${request.key.fingerprint.replaceAll(":", "").slice(0, 8)}` : plain;
-    const line = [request.key.algorithm, request.key.blob, request.key.comment].filter((part) => part !== "").join(" ");
-    const created = await call<{ ssh_key: HetznerKey }>("POST", "/ssh_keys", `upload the SSH key ${name}`, { name, public_key: line, labels: labelsFor(request.name) });
-    report(`   ${name}, uploaded (${request.key.fingerprint})`);
+    const taken = new Set(keys.map((candidate) => candidate.name));
+    const plain = `${owner.name}-${machine}`;
+    const name = taken.has(plain) ? `${plain}-${key.fingerprint.replaceAll(":", "").slice(0, 8)}` : plain;
+    const line = [key.algorithm, key.blob, key.comment].filter((part) => part !== "").join(" ");
+    const created = await call<{ ssh_key: HetznerKey }>("POST", "/ssh_keys", `upload the SSH key ${name}`, { name, public_key: line, labels: owner.labels(machine) });
+    report(`   ${name}, uploaded (${key.fingerprint})`);
     return { ...created.ssh_key, reused: false };
   }
 
-  /** The firewall of that name, when sitesolide created it; read before anything is created, so that a refusal leaves nothing. */
+  /** The firewall of that name, when the owner created it; read before anything is created, so that a refusal leaves nothing. */
   async function findFirewall(name: string): Promise<HetznerFirewall | null> {
     const firewalls = await listAll<HetznerFirewall>("/firewalls", "firewalls", "read the firewalls");
     const same = firewalls.find((firewall) => firewall.name === name);
-    if (same !== undefined && !isManaged(same.labels)) {
+    if (same !== undefined && !owner.manages(same.labels)) {
       throw new ProviderError({
         error: "firewall-taken",
-        message: `a firewall named ${name} exists in the project, and sitesolide did not create it`,
-        details: [`it lacks the label ${MANAGED_LABEL}=${MANAGED_VALUE}: it is never adopted nor changed`],
+        message: `a firewall named ${name} exists in the project, and ${owner.name} did not create it`,
+        details: [`it lacks the label ${owner.mark}: it is never adopted nor changed`],
       });
     }
     return same ?? null;
   }
 
-  async function ensureFirewall(name: string, found: HetznerFirewall | null, report: Report): Promise<HetznerFirewall & { reused: boolean }> {
+  async function ensureFirewall(machine: string, inbound: readonly Inbound[], found: HetznerFirewall | null, report: Report): Promise<HetznerFirewall & { reused: boolean }> {
+    const name = firewallName(owner, machine);
+    const rules = firewallRules(inbound);
     report(`-> firewall ${name}`);
     if (found !== null) {
-      report("   already created by sitesolide, reused");
+      report(`   already created by ${owner.name}, reused`);
+      // Left by a run that stopped before its server, maybe with other rules:
+      // reused as it is, it would open what this request does not.
+      if (!holdsRules(found.rules, rules)) {
+        const set = await call<{ actions?: HetznerAction[] }>("POST", `/firewalls/${found.id}/actions/set_rules`, `set the rules of the firewall ${name}`, { rules });
+        for (const action of set.actions ?? []) await waitForAction(action, report);
+        report(`   rules set to the request's: ${describeInbound(inbound)}`);
+      }
       return { ...found, reused: true };
     }
     const created = await call<{ firewall: HetznerFirewall; actions?: HetznerAction[] }>("POST", "/firewalls", `create the firewall ${name}`, {
       name,
-      labels: labelsFor(name),
-      rules: FIREWALL_RULES,
+      labels: owner.labels(machine),
+      rules,
     });
     for (const action of created.actions ?? []) await waitForAction(action, report);
-    report("   created: inbound tcp 22, 80, 443 and icmp, from everywhere");
+    report(`   created: ${describeInbound(inbound)}`);
     return { ...created.firewall, reused: false };
   }
 
@@ -625,28 +671,40 @@ export function hetzner(context: ProviderContext): Provider {
 
     async find(name) {
       const server = await findServer(name);
-      return server === null ? null : toMachine(server, await currency());
+      return server === null ? null : toMachine(server, await currency(), owner);
     },
 
     async create(request, report): Promise<CreateOutcome> {
+      checkRequest(TITLE, request, SUPPORTS);
+      if (request.userData !== undefined) {
+        // Bytes, not characters: a character outside ASCII takes two to four.
+        const size = Buffer.byteLength(request.userData, "utf8");
+        if (size > USER_DATA_BYTES) {
+          throw new ProviderError({
+            error: "provider-invalid",
+            message: `the user-data is ${size} bytes, and Hetzner refuses one over ${USER_DATA_BYTES}`,
+            details: ["nothing was created"],
+          });
+        }
+      }
       const resources: Resource[] = [];
       report(`-> a server named ${request.name} in the project`);
       const existing = await findServer(request.name);
       let server: HetznerServer;
       let created: boolean;
       if (existing !== null) {
-        const found = toMachine(existing, null);
+        const found = toMachine(existing, null, owner);
         if (!found.managed) {
           throw new ProviderError({
             error: "machine-exists",
-            message: `a server named ${request.name} exists in the project, and sitesolide did not create it`,
+            message: `a server named ${request.name} exists in the project, and ${owner.name} did not create it`,
             details: [
               `${found.type} at ${found.location}, ${found.status}, ${[found.ipv4, found.ipv6].filter(Boolean).join(", ") || "no public address"}`,
-              `it lacks the label ${MANAGED_LABEL}=${MANAGED_VALUE}: nothing was created, nothing was changed`,
+              `it lacks the label ${owner.mark}: nothing was created, nothing was changed`,
             ],
           });
         }
-        report(`   already created by sitesolide: ${found.type} at ${found.location}, ${found.status}`);
+        report(`   already created by ${owner.name}: ${found.type} at ${found.location}, ${found.status}`);
         if (found.type !== request.type || found.location !== request.location) {
           report(`!! it is ${found.type} at ${found.location}: --type and --location only apply to a machine being created`);
         }
@@ -656,17 +714,27 @@ export function hetzner(context: ProviderContext): Provider {
       } else {
         report("   none of that name yet");
         const types = await checkOffer(request, report);
-        const existingFirewall = await findFirewall(request.name);
+        const existingFirewall = await findFirewall(firewallName(owner, request.name));
 
         // What this run creates before the server, undone if the order fails.
         const made: { kind: string; name: string; path: string }[] = [];
         let ordering = false;
         let answer: { server: HetznerServer; action: HetznerAction; next_actions?: HetznerAction[] };
         try {
-          const key = await ensureKey(request, report);
-          resources.push({ kind: "ssh key", name: key.name, id: String(key.id), reused: key.reused });
-          if (!key.reused) made.push({ kind: "SSH key", name: key.name, path: `/ssh_keys/${key.id}` });
-          const firewall = await ensureFirewall(request.name, existingFirewall, report);
+          // Without a key, none is looked up or uploaded, and the order names
+          // none: the user-data carries the only one. Hetzner then sets a root
+          // password and emails it, which is inert while SSH refuses passwords,
+          // as Ubuntu's image does as shipped (PasswordAuthentication no) and as
+          // the user-data that carries the key may say again. Registering the
+          // key instead races two machines ordered at once with it: Hetzner
+          // refuses a second key of the same fingerprint in a project.
+          let key: (HetznerKey & { reused: boolean }) | null = null;
+          if (request.key !== null) {
+            key = await ensureKey(request.name, request.key, report);
+            resources.push({ kind: "ssh key", name: key.name, id: String(key.id), reused: key.reused });
+            if (!key.reused) made.push({ kind: "SSH key", name: key.name, path: `/ssh_keys/${key.id}` });
+          }
+          const firewall = await ensureFirewall(request.name, request.inbound, existingFirewall, report);
           resources.push({ kind: "firewall", name: firewall.name, id: String(firewall.id), reused: firewall.reused });
           if (!firewall.reused) made.push({ kind: "firewall", name: firewall.name, path: `/firewalls/${firewall.id}` });
 
@@ -677,10 +745,11 @@ export function hetzner(context: ProviderContext): Provider {
             server_type: request.type,
             location: request.location,
             image: request.image,
-            ssh_keys: [key.id],
+            ...(key === null ? {} : { ssh_keys: [key.id] }),
             firewalls: [{ firewall: firewall.id }],
             public_net: { enable_ipv4: true, enable_ipv6: true },
-            labels: labelsFor(request.name),
+            labels: owner.labels(request.name),
+            ...(request.userData === undefined ? {} : { user_data: request.userData }),
             start_after_create: true,
           });
         } catch (error) {
@@ -716,7 +785,7 @@ export function hetzner(context: ProviderContext): Provider {
       if (request.backups) await ensureBackups(server, report);
       report(`-> ${request.name} running`);
       const running = await waitRunning(server.id, request.name, report, created);
-      return { machine: toMachine(running, await currency()), created, resources };
+      return { machine: toMachine(running, await currency(), owner), created, resources };
     },
 
     async locations(): Promise<Choice[]> {
@@ -750,9 +819,9 @@ export function hetzner(context: ProviderContext): Provider {
     },
 
     async list() {
-      const servers = await listAll<HetznerServer>("/servers", "servers", "read the servers", { label_selector: `${MANAGED_LABEL}=${MANAGED_VALUE}` });
+      const servers = await listAll<HetznerServer>("/servers", "servers", "read the servers", { label_selector: owner.mark });
       const unit = servers.length === 0 ? null : await currency();
-      return servers.filter((server) => isManaged(server.labels)).map((server) => toMachine(server, unit));
+      return servers.filter((server) => owner.manages(server.labels)).map((server) => toMachine(server, unit, owner));
     },
 
     async destroy(machine, options, report): Promise<DestroyOutcome> {
@@ -767,6 +836,9 @@ export function hetzner(context: ProviderContext): Provider {
       // seen on the real API on 5 October 2026; checked after all the same,
       // since one that stayed would be billed without anyone knowing.
       const before = await call<{ server: HetznerServer }>("GET", `/servers/${id}`, `read the server ${machine.name}`);
+      if (!owner.manages(before.server.labels)) {
+        throw new ProviderError({ error: "machine-not-managed", message: `the server ${before.server.name} lacks the label ${owner.mark}: ${owner.name} did not create it`, details: ["nothing was deleted"] });
+      }
       const primaryIps = [before.server.public_net?.ipv4, before.server.public_net?.ipv6].filter((ip): ip is { id: number; ip: string } => typeof ip?.id === "number");
       // Volumes and Floating IPs attached by hand outlive the server, detached,
       // and stay billed: said, never deleted, since they may hold data or be
@@ -792,42 +864,43 @@ export function hetzner(context: ProviderContext): Provider {
         }
       }
 
-      report(`-> firewall ${machine.name}`);
-      const firewalls = await listAll<HetznerFirewall>("/firewalls", "firewalls", "read the firewalls");
-      const firewall = firewalls.find((candidate) => candidate.name === machine.name && isManaged(candidate.labels));
-      if (firewall === undefined) {
-        report("   none created by sitesolide under that name");
-      } else {
+      // Found by its labels, not its name: a firewall made before it took the
+      // owner's name was named after the machine alone, and is found the same.
+      // The selector is checked again here, since it is the safety boundary.
+      const madeFor = { label_selector: `${owner.mark},${owner.machineLabel}=${machine.name}` };
+      const forMachine = (labels: Record<string, string> | undefined) => owner.manages(labels) && labels?.[owner.machineLabel] === machine.name;
+      report("-> firewall");
+      const firewalls = (await listAll<HetznerFirewall>("/firewalls", "firewalls", "read the firewalls", madeFor)).filter((candidate) => forMachine(candidate.labels));
+      if (firewalls.length === 0) report(`   none created by ${owner.name} for ${machine.name}`);
+      for (const firewall of firewalls) {
         const elsewhere = appliedElsewhere(firewall, id);
         if (elsewhere.length > 0) {
           kept.push(`firewall ${firewall.name}: still applied to ${elsewhere.join(", ")}`);
-          report(`   kept: still applied to ${elsewhere.join(", ")}`);
-        } else {
-          // Hetzner may still count the deleted server for a moment.
-          for (let attempt = 1; ; attempt++) {
-            try {
-              await call("DELETE", `/firewalls/${firewall.id}`, `delete the firewall ${firewall.name}`);
-              removed.push(`firewall ${firewall.name}`);
-              report("   deleted");
+          report(`   ${firewall.name}: kept, still applied to ${elsewhere.join(", ")}`);
+          continue;
+        }
+        // Hetzner may still count the deleted server for a moment.
+        for (let attempt = 1; ; attempt++) {
+          try {
+            await call("DELETE", `/firewalls/${firewall.id}`, `delete the firewall ${firewall.name}`);
+            removed.push(`firewall ${firewall.name}`);
+            report(`   ${firewall.name}: deleted`);
+            break;
+          } catch (error) {
+            if (!(error instanceof HetznerError) || error.code !== "resource_in_use") throw error;
+            if (attempt >= WAITS.firewallTries) {
+              kept.push(`firewall ${firewall.name}: Hetzner still says it is in use`);
+              report(`   ${firewall.name}: kept, Hetzner still says it is in use; delete it from the console once it is free`);
               break;
-            } catch (error) {
-              if (!(error instanceof HetznerError) || error.code !== "resource_in_use") throw error;
-              if (attempt >= WAITS.firewallTries) {
-                kept.push(`firewall ${firewall.name}: Hetzner still says it is in use`);
-                report("   kept: Hetzner still says it is in use; delete it from the console once it is free");
-                break;
-              }
-              await clock.sleep(WAITS.pollMs);
             }
+            await clock.sleep(WAITS.pollMs);
           }
         }
       }
 
       report("-> SSH key");
-      const keys = await listAll<HetznerKey>("/ssh_keys", "ssh_keys", "read the SSH keys", {
-        label_selector: `${MANAGED_LABEL}=${MANAGED_VALUE},${MACHINE_LABEL}=${machine.name}`,
-      });
-      if (keys.length === 0) report(`   none was uploaded for ${machine.name}: the key it used was already in the project`);
+      const keys = (await listAll<HetznerKey>("/ssh_keys", "ssh_keys", "read the SSH keys", madeFor)).filter((key) => forMachine(key.labels));
+      if (keys.length === 0) report(`   none was uploaded for ${machine.name}: it was ordered with a key already in the project, or none`);
       for (const key of keys) {
         if (options.deleteKey) {
           await call("DELETE", `/ssh_keys/${key.id}`, `delete the SSH key ${key.name}`);
@@ -846,11 +919,11 @@ export function hetzner(context: ProviderContext): Provider {
 /** The token is read from HCLOUD_TOKEN, as the hcloud CLI and the Terraform provider read it. */
 export const HETZNER: ProviderEntry = {
   name: "hetzner",
-  title: "Hetzner",
+  title: TITLE,
   credentials: [{ variable: TOKEN_VARIABLE, label: "token", secret: true, shape: /^[A-Za-z0-9_\-.:+/=]{16,512}$/ }],
   credentialHelp: [
     "create it in the Hetzner console: the project, Security, API tokens, with Read & Write",
-    "a project of its own for sitesolide keeps the token away from everything else you run at Hetzner",
+    "a project of its own for these machines keeps the token away from everything else you run at Hetzner",
   ],
   docs: "docs/providers/hetzner.md",
   defaults: () => HETZNER_DEFAULTS,

@@ -5,6 +5,7 @@
 | Path | What it holds |
 |---|---|
 | `bin/` | The CLI and the deployment scripts. Runs from any directory, on any project. |
+| `clouds/` | The cloud providers `sitesolide machine` orders from, as a package with no dependency and no idea of sitesolide: whose labels, which ports and which user-data are the caller's. Another program copies it at a pinned commit; see [clouds/README.md](clouds/README.md). |
 | `infra/` | The Caddy configuration and the systemd units of the services that serve the others. |
 | `api/` | The shared service, deliberately tiny: the `ask` endpoint for on-demand TLS, and preview locks. |
 | `dashboard/` | The dashboard, the steward that writes secrets as root, and the gatekeeper that touches Caddy. |

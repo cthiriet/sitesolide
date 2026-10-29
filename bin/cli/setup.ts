@@ -68,7 +68,7 @@ import { canonicalAddress, describePlan, manualRecords, tunnelManualRecords } fr
 import { DnsError, ensureTunnelRecords, ensureZoneRecords, type DnsEntry, type ZoneApi } from "./dns/dns";
 import { DNS_PROVIDERS, dnsEntry, dnsVariables, MANUAL } from "./dns/registry";
 import { fieldsToAsk, fromEnvironment, isFailure, missingFields, parseStdinCredentials, scrubSecrets, secretValues } from "./machine";
-import { ProviderError, type Credentials, type Fetch } from "./providers/provider";
+import { ProviderError, type Credentials, type Fetch } from "../../clouds/src/provider";
 import { CADDY_RESTART, caddyRestartScript, policyPending, tlsZoneCheck, tlsZoneContent, tlsZoneRun, TLS_ZONE_FILE, TLS_ZONE_RESTARTED } from "./tls";
 import { ACME_STAGING, adoptLegacyKeys, composeConfig, CONFIG_DIR_VARIABLE, expandHome, privateFolder, writeConfig } from "./config";
 import {

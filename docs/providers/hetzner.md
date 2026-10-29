@@ -55,14 +55,14 @@ Three resources, each labelled `managed-by=sitesolide` and
 | Resource | What it is |
 |---|---|
 | SSH key | Your workstation's public key: `--ssh-key`, else the first of `~/.ssh/id_ed25519.pub`, `id_ecdsa.pub`, `id_rsa.pub`. A key the project already holds, under any name, is reused; otherwise it is uploaded as `sitesolide-<name>`. |
-| Firewall `<name>` | Inbound TCP 22, 80 and 443, and ICMP, from `0.0.0.0/0` and `::/0`; everything else inbound is dropped before it reaches the machine. |
+| Firewall `sitesolide-<name>` | Inbound TCP 22, 80 and 443, and ICMP, from `0.0.0.0/0` and `::/0`; everything else inbound is dropped before it reaches the machine. |
 | Server `<name>` | `cx23` at `fsn1` with `debian-13` unless `--type`, `--location` and `--image` say otherwise, a public IPv4 and IPv6, the key for `root`, the firewall. `--backups` turns on Hetzner's daily backups. |
 
 Before anything is created, `create` reads what could refuse it: a server of
 that name sitesolide did not create (it is never touched: pick another name), a
 type the location does not sell or no longer sells (the refusal lists the
-cheapest ones it does, with their price), a firewall of that name that is not
-sitesolide's. A refusal leaves nothing behind.
+cheapest ones it does, with their price), a firewall named `sitesolide-<name>`
+that is not sitesolide's. A refusal leaves nothing behind.
 
 Hetzner's list of types also says whether a type is *available* at a location,
 and that flag does not decide: it has been seen false for a type Hetzner then
@@ -130,5 +130,5 @@ naming an address Hetzner will give to someone else.
 
 `SITESOLIDE_HETZNER_API` points the command at another address than
 `https://api.hetzner.cloud/v1`, for a local fake of the API
-(`bin/tests/fake-hetzner.ts`). It takes https, or http on the loopback only, so
+(`clouds/fakes/hetzner.ts`). It takes https, or http on the loopback only, so
 that the token never travels in the clear.

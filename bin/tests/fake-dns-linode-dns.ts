@@ -25,7 +25,7 @@
  * outside 25 to 500, the reference's bounds, is a 400.
  */
 import type { FakeDns } from "./fake-dns";
-import type { FakeRequest } from "./fake-provider";
+import type { FakeRequest } from "../../clouds/fakes/fake-provider";
 
 /** The shape of a personal access token: 64 hexadecimal characters. */
 export const FAKE_TOKEN = "d1e5a7c0b2f4e6d8a0c2e4f6b8d0a2c4e6f8b0d2a4c6e8f0b2d4a6c8e0f2b4d6";

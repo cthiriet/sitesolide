@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { CLOUDFLARE } from "../cli/dns/cloudflare";
 import { detectDns, DnsError, ensureZoneRecords, zoneRecords, type DnsContext } from "../cli/dns/dns";
 import { absoluteName, API_VARIABLE, DEFAULT_API, LINODE_DNS, relativeName, TOKEN_SHAPE, TOKEN_VARIABLE, TTL } from "../cli/dns/linode-dns";
-import { ProviderError } from "../cli/providers/provider";
+import { ProviderError } from "../../clouds/src/provider";
 import { createFakeLinodeDns, FAKE_TOKEN, ZONE, type FakeLinodeDns } from "./fake-dns-linode-dns";
 
 /**

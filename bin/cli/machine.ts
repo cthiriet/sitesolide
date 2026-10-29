@@ -10,9 +10,9 @@
  * It replaces what infra/main.tf did with Terraform: a server, its firewall,
  * and the workstation's SSH key, with no state file to keep. What exists is
  * read from the provider each time, and found again by the labels every
- * resource carries (bin/cli/providers/provider.ts), so a run interrupted
+ * resource carries (clouds/src/provider.ts), so a run interrupted
  * anywhere is finished by running the same command again. Each provider is a
- * file of bin/cli/providers/, registered in PROVIDERS below; the setup wizard
+ * file of clouds/src/, registered in PROVIDERS below; the setup wizard
  * (bin/cli/wizard.ts) drives the same functions.
  *
  * `create` stops once the machine accepts connections on port 22, and prints
@@ -44,19 +44,21 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { expandHome } from "./config";
 import { HOST_KEY_CHANGED, hostKeyAdvice } from "./harden";
-import { AWS } from "./providers/aws";
-import { AZURE } from "./providers/azure";
-import { DIGITALOCEAN } from "./providers/digitalocean";
-import { GCP } from "./providers/gcp";
+import { AWS } from "../../clouds/src/aws";
+import { AZURE } from "../../clouds/src/azure";
+import { DIGITALOCEAN } from "../../clouds/src/digitalocean";
+import { GCP } from "../../clouds/src/gcp";
 import { dnsVariables } from "./dns/registry";
-import { HETZNER } from "./providers/hetzner";
-import { LINODE } from "./providers/linode";
-import { SCALEWAY } from "./providers/scaleway";
-import { VULTR } from "./providers/vultr";
+import { HETZNER } from "../../clouds/src/hetzner";
+import { LINODE } from "../../clouds/src/linode";
+import { SCALEWAY } from "../../clouds/src/scaleway";
+import { VULTR } from "../../clouds/src/vultr";
 import {
   formatPrice,
+  ownerNamed,
   ProviderError,
   realClock,
+  WEB_SERVER,
   type Clock,
   type CredentialField,
   type Credentials,
@@ -66,7 +68,10 @@ import {
   type ProviderEntry,
   type PublicKey,
   type Workstation,
-} from "./providers/provider";
+} from "../../clouds/src/provider";
+
+/** Whose labels the machines this command creates carry: it lists and destroys those alone. */
+export const SITESOLIDE = ownerNamed("sitesolide");
 import { humanOutput, report, type Failure, type Output } from "./remote";
 
 /** The providers `--provider` accepts, in the order the wizard offers them. */
@@ -894,6 +899,7 @@ export async function openProvider(
   secrets.push(...found.secrets);
   say(`   credentials: ${found.source}`);
   return entry.open({
+    owner: SITESOLIDE,
     credentials: found.credentials,
     environment: dependencies.environment,
     fetcher: dependencies.fetcher ?? fetch,
@@ -919,7 +925,7 @@ async function create(context: Context): Promise<number> {
   const { parsed, output, dependencies, entry } = context;
   const name = parsed.values["--name"];
   if (name === undefined || !isValidMachineName(name)) return report(output, nameFailure(name, "--name <name>"));
-  const problem = entry.nameProblem?.(name) ?? null;
+  const problem = entry.nameProblem?.(name, SITESOLIDE) ?? null;
   if (problem !== null) return report(output, { error: "machine-name", message: `${entry.title} would not take the name ${name}: ${problem}`, details: ["pick another --name"] });
   const defaults = entry.defaults(dependencies.environment);
   const choices = { type: parsed.values["--type"] ?? defaults.type, location: parsed.values["--location"] ?? defaults.location, image: parsed.values["--image"] ?? defaults.image };
@@ -951,7 +957,7 @@ async function create(context: Context): Promise<number> {
   const provider = await open(context, (line) => output.say(line));
   if (isFailure(provider)) return report(output, provider);
   output.say(`   SSH key ${chosen.shown}`);
-  const outcome = await provider.create({ name, ...choices, backups, key }, (line) => output.say(line));
+  const outcome = await provider.create({ name, ...choices, backups, key, inbound: WEB_SERVER }, (line) => output.say(line));
 
   const address = outcome.machine.ipv4 ?? outcome.machine.ipv6;
   const clock = dependencies.clock ?? realClock;

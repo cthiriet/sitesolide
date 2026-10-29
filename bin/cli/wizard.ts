@@ -65,6 +65,7 @@ import {
   loadPublicKey,
   machine,
   openProvider,
+  SITESOLIDE,
   PROVIDER_LIST,
   resolveCredentials,
   scrubSecrets,
@@ -77,7 +78,7 @@ import {
   type Found,
   type MachineDependencies,
 } from "./machine";
-import { formatPrice, ProviderError, type Fetch, type Choice, type Credentials, type Machine, type Provider, type ProviderEntry, type Workstation } from "./providers/provider";
+import { formatPrice, ProviderError, type Fetch, type Choice, type Credentials, type Machine, type Provider, type ProviderEntry, type Workstation } from "../../clouds/src/provider";
 import type { Failure, Output } from "./remote";
 import { ACCOUNT, EMAIL, HOST, hostOf, parseSetupArguments, ZONE, type SetupExtras, type SetupOptions, type SetupOutput } from "./setup";
 
@@ -318,7 +319,7 @@ async function chooseCloud(deps: WizardDependencies, secrets: string[]): Promise
       machineName = (
         await ui.text("Name of the machine", {
           initial: DEFAULT_NAME,
-          validate: (value) => (isValidMachineName(value.trim()) ? (entry.nameProblem?.(value.trim()) ?? undefined) : "lowercase letters, digits and dashes, starting with a letter"),
+          validate: (value) => (isValidMachineName(value.trim()) ? (entry.nameProblem?.(value.trim(), SITESOLIDE) ?? undefined) : "lowercase letters, digits and dashes, starting with a letter"),
         })
       ).trim();
       const name = machineName;
