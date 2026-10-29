@@ -757,6 +757,7 @@ export function PageHeader({
   description,
   actions,
   history,
+  wide = false,
 }: {
   title: string
   count?: ReactNode
@@ -766,6 +767,8 @@ export function PageHeader({
   description?: ReactNode
   actions?: ReactNode
   history?: HistoryFilter
+  /** Aligned on a body that takes the whole width, a canvas's. */
+  wide?: boolean
 }) {
   const header = useHeaderHeight()
   const pageActions =
@@ -778,7 +781,7 @@ export function PageHeader({
   return (
     <>
       <header ref={header} className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur-md">
-        <div className={cn(CONTAINER, "flex flex-wrap items-center gap-x-4 gap-y-2 py-3 md:min-h-[4.25rem]")}>
+        <div className={cn(CONTAINER, "flex flex-wrap items-center gap-x-4 gap-y-2 py-3 md:min-h-[4.25rem]", wide && "max-w-none")}>
           {/* From md, its natural width decides the line break: the controls go under the title before it is cut. */}
           <div className="flex min-w-0 flex-1 items-center gap-2.5 md:basis-auto">
             <InternalLink

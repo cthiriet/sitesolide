@@ -1,8 +1,5 @@
-import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
-  BAR_CLASSES,
-  THRESHOLD_POSITIONS,
   WARNING_THRESHOLD,
   CRITICAL_THRESHOLD,
   loadTile,
@@ -11,6 +8,7 @@ import {
   type Level,
   type Tile,
 } from "@/lib/gauges"
+import type { MemoryReading } from "@/lib/sites"
 import type { Snapshot } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -21,51 +19,6 @@ export const LEVEL_TEXT: Record<Level, string> = {
   critical: "text-destructive",
 }
 
-/**
- * A gauge's track, and the two thresholds engraved on it: a tick across the
- * bar at 70 and 90 %, standing out above and below it so that it still reads
- * where the fill covers it. At a glance you read the distance to the next
- * threshold, not only the colour of the moment.
- *
- * A site's card reuses it for a service's memory: its thresholds are then the
- * service's.
- */
-export function Track({
-  tile,
-  thresholds = THRESHOLD_POSITIONS,
-  title = `Warning from ${WARNING_THRESHOLD}%, critical from ${CRITICAL_THRESHOLD}%`,
-}: {
-  tile: Tile
-  thresholds?: readonly { position: string }[]
-  title?: string
-}) {
-  return (
-    <div className="relative py-[3px]" title={title}>
-      {/* The bar is capped at one hundred, the figure is not: a load of six on four cores reads 150 %. */}
-      {tile.percent === null ? (
-        <div className="h-1.5 w-full rounded-full bg-track shadow-well" />
-      ) : (
-        <Progress
-          value={Math.min(tile.percent, 100)}
-          aria-label={tile.heading}
-          getAriaValueText={() => `${tile.value} used`}
-          className={cn(
-            "w-full [&_[data-slot=progress-track]]:h-1.5 [&_[data-slot=progress-track]]:bg-track",
-            BAR_CLASSES[tile.level],
-          )}
-        />
-      )}
-      {thresholds.map(({ position }) => (
-        <span
-          key={position}
-          aria-hidden="true"
-          className={cn("pointer-events-none absolute inset-y-0 w-px -translate-x-1/2 bg-tick", position)}
-        />
-      ))}
-    </div>
-  )
-}
-
 const RING_STROKE: Record<Level, string> = {
   normal: "stroke-primary",
   warn: "stroke-attention",
@@ -74,8 +27,8 @@ const RING_STROKE: Record<Level, string> = {
 
 /**
  * A share as an 18 px ring: a grey track and an arc from the top, clockwise,
- * in the level's colour. The Sites list's Memory column draws a site's
- * memory against its limit with it, read at a glance down the column. A
+ * in the level's colour: a service's memory against its limit, everywhere
+ * the page shows it (`MemoryUsage`), read at a glance down a column. A
  * share under 1 % still draws a dot, the round cap of a zero-length arc.
  */
 export function UsageRing({ percent, level = "normal" }: { percent: number; level?: Level }) {
@@ -97,6 +50,25 @@ export function UsageRing({ percent, level = "normal" }: { percent: number; leve
         transform="rotate(-90 9 9)"
       />
     </svg>
+  )
+}
+
+/**
+ * A service's memory wherever it is shown, the Sites list's way: its ring,
+ * then its figure, muted while fine unless `muted` is off, amber or red near
+ * the limit; the limit, the share and the peak in its tooltip, and the share
+ * for a screen reader beside the figure.
+ */
+export function MemoryUsage({ reading, muted = true, className }: { reading: MemoryReading; muted?: boolean; className?: string }) {
+  const { percent, level, text, title } = reading
+  return (
+    <span title={title} className={cn("inline-flex min-w-0 items-center gap-2", className)}>
+      {percent !== null && <UsageRing percent={percent} level={level} />}
+      <span className={cn("whitespace-nowrap tabular-nums", level !== "normal" ? cn("font-medium", LEVEL_TEXT[level]) : muted && "text-muted-foreground")}>
+        {text}
+        {percent !== null && <span className="sr-only">, {percent}% of its limit</span>}
+      </span>
+    </span>
   )
 }
 

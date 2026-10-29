@@ -80,10 +80,10 @@ export function busyShare(site: ListedSite, cores: number | null): number | null
  * and the level of the service's own bounds, amber from a peak at 80 % of the
  * limit, red past 90 %. Null when nothing runs.
  */
-export function memoryUsage(site: ListedSite): { memory: number; limit: number | null; share: number | null; level: Level } | null {
+export function memoryUsage(site: ListedSite): { memory: number; peak: number | null; limit: number | null; share: number | null; level: Level } | null {
   const { counted, memory, peak, limit } = siteWeight(site)
   if (counted === 0 || memory === null) return null
-  return { memory, limit, share: memoryShare(memory, limit), level: serviceLevel(memory, peak, limit) }
+  return { memory, peak, limit, share: memoryShare(memory, limit), level: serviceLevel(memory, peak, limit) }
 }
 
 // --- What the list keeps ---------------------------------------------------------

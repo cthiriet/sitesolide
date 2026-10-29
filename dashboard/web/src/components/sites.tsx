@@ -6,7 +6,7 @@ import { CHIP, RoleBars } from "@/components/access-word"
 import { useCopy } from "@/components/copy"
 import { useData } from "@/components/data"
 import { CellText, DataTable, RowLink, RowMenu, RowMenuLink, type Column } from "@/components/data-table"
-import { LEVEL_TEXT, UsageRing } from "@/components/gauge"
+import { MemoryUsage } from "@/components/gauge"
 import { AccessIcon, KindIcon } from "@/components/legend"
 import { StateLabel, When } from "@/components/page"
 import { SECTION_ICONS } from "@/components/sidebar"
@@ -17,7 +17,7 @@ import { siteKind } from "@/lib/legend"
 import { sectionsFor, siteUrl } from "@/lib/pages"
 import { siteFolder } from "@/lib/site-card"
 import { PLATFORM_FACET, busyShare, figure, kindDetail, listedAccess, memoryUsage, type ListedSite, type RowState } from "@/lib/site-list"
-import { HEADLESS_NOTE, computeCpuShare, processorShare, processorTitle, siteAccess, siteAddress, siteWeight } from "@/lib/sites"
+import { HEADLESS_NOTE, computeCpuShare, memoryReading, processorShare, processorTitle, siteAccess, siteAddress, siteWeight } from "@/lib/sites"
 import { cn } from "@/lib/utils"
 
 /**
@@ -91,15 +91,7 @@ function CpuTag({ site, cores }: { site: ListedSite; cores: number | null }) {
 function MemoryCell({ site }: { site: ListedSite }) {
   const usage = memoryUsage(site)
   if (usage === null) return null
-  const title = usage.limit === null ? `${size(usage.memory)}, no memory limit` : `${size(usage.memory)} of its ${size(usage.limit)} limit, ${usage.share}%`
-  return (
-    <span title={title} className="flex min-w-0 items-center gap-2">
-      {usage.share !== null && <UsageRing percent={usage.share} level={usage.level} />}
-      <span className={cn("text-[0.8125rem] whitespace-nowrap tabular-nums", usage.level === "normal" ? "text-muted-foreground" : cn("font-medium", LEVEL_TEXT[usage.level]))}>
-        {size(usage.memory)}
-      </span>
-    </span>
-  )
+  return <MemoryUsage reading={memoryReading(usage.memory, usage.peak, usage.limit)} className="flex text-[0.8125rem]" />
 }
 
 /** The row's word when it has one: its tone, "+2", and every message in the tooltip, the first in strong. */
@@ -174,7 +166,7 @@ function SiteMenu({ site }: { site: ListedSite }) {
   const address = siteAddress(site)
   const access = siteAccess(site)
   const headless = site.headless && site.domain === null
-  const sections = sectionsFor(identity, site.slug).filter((entry) => entry.section !== "overview")
+  const sections = sectionsFor(identity, site.slug, site).filter((entry) => entry.section !== "overview")
   return (
     <RowMenu label={`Actions for ${site.slug}`}>
       <DropdownMenuGroup>

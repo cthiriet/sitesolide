@@ -14,13 +14,23 @@ describe("what a person sees of the page", () => {
     expect(machinePagesFor(ALICE).map((entry) => entry.name)).toEqual(["home", "activity", "tokens"])
     expect(machinePagesFor(VIC).map((entry) => entry.name)).toEqual(["home", "activity"])
     expect(machinePagesFor({ ...VIC, create: true } as IdentityView).map((entry) => entry.name)).toEqual(["home", "activity", "tokens"])
-    expect(sectionsFor(ALICE, "shop").map((entry) => entry.section)).toEqual(["overview", "audience", "access"])
-    expect(sectionsFor(ALICE, "blog").map((entry) => entry.section)).toEqual(["overview", "audience", "secrets", "access"])
-    expect(sectionsFor(ALICE, "cms").map((entry) => entry.section)).toEqual(["overview", "audience", "secrets", "access", "backups"])
+    expect(sectionsFor(ALICE, "shop").map((entry) => entry.section)).toEqual(["overview", "services", "audience", "access"])
+    expect(sectionsFor(ALICE, "blog").map((entry) => entry.section)).toEqual(["overview", "services", "audience", "secrets", "access"])
+    expect(sectionsFor(ALICE, "cms").map((entry) => entry.section)).toEqual(["overview", "services", "audience", "secrets", "access", "backups"])
     expect(machinePagesFor(OWNER)).toEqual(MACHINE_PAGES)
     expect(machinePagesFor(OWNER).map((entry) => entry.title)).toEqual(["Sites", "Activity", "People", "Tokens", "Connectors", "Server"])
     expect(sectionsFor(null, "blog")).toEqual(SECTIONS)
-    expect(SECTIONS.map((entry) => entry.title)).toEqual(["Overview", "Audience", "Secrets", "Access", "Backups"])
+    expect(SECTIONS.map((entry) => entry.title)).toEqual(["Overview", "Services", "Audience", "Secrets", "Access", "Backups"])
+  })
+
+  test("Services only for a site that runs some: a static site's would be empty", () => {
+    const sections = (type: "app" | "static" | "no-manifest") => sectionsFor(OWNER, "blog", { type }).map((entry) => entry.section)
+    expect(sections("app")).toContain("services")
+    expect(sections("static")).not.toContain("services")
+    expect(sections("no-manifest")).not.toContain("services")
+    // Before the snapshot says what the site is, the section is offered: a link to it must not vanish then come back.
+    expect(sectionsFor(OWNER, "blog", null).map((entry) => entry.section)).toContain("services")
+    expect(mayOpen(pageFromUrl("/site/services/", "?s=shop"), ALICE)).toBe(true)
   })
 
   test("a page that is not theirs, reached by its address, says so", () => {

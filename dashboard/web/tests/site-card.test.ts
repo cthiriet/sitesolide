@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { MEMORY_CRITICAL_SHARE, PEAK_WARNING_SHARE } from "../src/lib/gauges"
 import {
   SAME_DEPLOYMENT_MS,
-  SERVICE_THRESHOLD_POSITIONS,
   addressSummary,
   audienceHeadline,
   deployedBy,
@@ -185,12 +183,6 @@ describe("a site's service", () => {
       note: "No systemd unit is loaded for this app: none of its services runs.",
     })
   })
-
-  /** Tailwind only generates the classes that are written: every position has to follow its constant. */
-  test("the gauge's ticks follow the service's thresholds", () => {
-    expect(SERVICE_THRESHOLD_POSITIONS.map((tick) => tick.threshold)).toEqual([PEAK_WARNING_SHARE * 100, MEMORY_CRITICAL_SHARE * 100])
-    for (const { threshold, position } of SERVICE_THRESHOLD_POSITIONS) expect(position).toBe(`left-[${threshold}%]`)
-  })
 })
 
 describe("a site's addresses", () => {
@@ -361,13 +353,12 @@ describe("a project's services", () => {
     const [web, api, worker] = serviceRows(lab, NOW)
     expect(web!.state).toEqual({ tone: "ok", label: "Running" })
     expect(web!.memory).toBe("47 of 256 MB")
-    expect(web!.memoryPercent).toBe(18)
-    expect(web!.memoryLevel).toBe("normal")
+    expect(web!.reading).toMatchObject({ percent: 18, level: "normal", text: "47 of 256 MB" })
     expect(api!.listening).toBe(false)
     expect(api!.restarts).toBe("2 restarts")
     expect(worker!.state).toEqual({ tone: "error", label: "Not loaded" })
     expect(worker!.memory).toBeNull()
-    expect(worker!.memoryPercent).toBeNull()
+    expect(worker!.reading).toBeNull()
     expect(web!.runs).toBeNull()
   })
 

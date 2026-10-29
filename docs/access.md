@@ -119,9 +119,9 @@ in a project the sections their role opens:
 
 | Role | A project's sections |
 |---|---|
-| Viewer | Overview, Audience, and Access read only: its general access, its people with access, and whom to ask to add someone |
+| Viewer | Overview, Services, Audience, and Access read only: its general access, its people with access, and whom to ask to add someone |
 | Developer | the same, and Secrets, whose values they write and never read back |
-| Admin | everything: Overview, Audience, Secrets, whose values they write and never read back either, Access, where they give people access, and Backups |
+| Admin | everything: Overview, Services, Audience, Secrets, whose values they write and never read back either, Access, where they give people access, and Backups |
 
 The rest of the dashboard is the owner's, hidden and refused: People,
 Connectors, and every project they hold no role on.

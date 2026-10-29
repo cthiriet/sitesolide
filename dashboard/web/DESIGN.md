@@ -325,10 +325,10 @@ return, the current site on a raised card (its initial on a tile, its name,
 then its kind when fine, "App", "Static site", and its state in its tone with
 a dot when not, "Restarting, 3 errors", quiet when fine like the Overview's
 header), which opens the site switcher, every site by name, a dot on those in
-trouble alone; then its five sections, Overview, Audience, Secrets, Access
-and Backups. Collapsed, the site is just its initial, with its dot while in
+trouble alone; then its six sections, Overview, Services, Audience, Secrets,
+Access and Backups, Services only for an app. Collapsed, the site is just its initial, with its dot while in
 trouble. On a phone the tabs follow the level: six for the
-owner's machine, five for a site, on one row.
+owner's machine, six for an app, on one row.
 
 **A person's shell.** Someone signed in with their company account sees the
 pages that are theirs and no other entry (`machinePagesFor` and `sectionsFor`
@@ -338,9 +338,9 @@ lets them mint a token. In a site, by their role there:
 
 | Role | Sections |
 |---|---|
-| Viewer | Overview, Audience, Access read only: its general access and its people with access |
-| Developer | Overview, Audience, Secrets, Access |
-| Admin | all five |
+| Viewer | Overview, Services, Audience, Access read only: its general access and its people with access |
+| Developer | Overview, Services, Audience, Secrets, Access |
+| Admin | all six |
 
 Their email sits above the sidebar's own controls, in `muted-foreground`. A
 page of the owner's, reached by its address, says *Only the owner's* in an
@@ -376,7 +376,7 @@ gutters, bottom margin, touch target size.
 | `@container/body` | `@4xl/body:` (56 rem) | two columns: a site's Overview |
 | Audience's rankings | `@2xl/body:`, `@5xl/body:` (42, 64 rem) | two panels a row, then three; one below; the chart's four figures a row from `@2xl/body:`, two by two below |
 | Activity's tables, one per day | `narrowBelow` 48 rem | five columns, otherwise two lines |
-| `@container/facts`, a site's Overview panels | `@sm/facts:` (24 rem) | a 6.5 rem label column and a 120 px memory track, otherwise 5.5 rem and 64 px |
+| `@container/facts`, a site's Overview panels | `@sm/facts:` (24 rem) | a 6.5 rem label column, otherwise 5.5 rem |
 | `@container/people`, a site's people with access | `@xl/people:` (36 rem) | what a row is beside its name, otherwise under it |
 
 Useful content widths: 1088 px at 1440 with the sidebar expanded, 984 at 1280,
@@ -487,7 +487,8 @@ on screen.
 | `CHIP`, `AccessWord` | a 20 or 24 px chip; a site's general access as the landing page's badges, *Restricted* with a lock, *Public* with a globe and quieter, *Anyone with the code* with a key over the code in its well |
 | `RoleBars` | a role as four rising bars, as many lit in `share-ink` as the role has rungs, before its word: beside a site's name, in a role's menu, in what each role can do |
 | `ExternalLink` | a site address, underlined at rest, in a new tab; the address in mono |
-| `MachineStrip`, `Track` | the strip, reserved for the home page: a status line, no panel, load, memory and disk on one 32 px line, each a mono label, a 56 px bar, its figure in its level's colour and, from 56 rem of the line (`@container/strip`), its caption ("1.3 on 6 cores"); each the button of a sort, Load of CPU; `UsageRing` is an 18 px ring of a share in its level's colour, the Sites list's memory against its limit; `Track` is a 6 px groove with a 1 px tick across it at each threshold, for a service's memory |
+| `MachineStrip` | the strip, reserved for the home page: a status line, no panel, load, memory and disk on one 32 px line, each a mono label, a 56 px bar, its figure in its level's colour and, from 56 rem of the line (`@container/strip`), its caption ("1.3 on 6 cores"); each the button of a sort, Load of CPU |
+| `MemoryUsage`, `UsageRing` | a service's memory, or a site's running services' together, the same wherever it shows, the Sites list's Memory column, the Overview's Service panel and Services table, a card on the Services canvas and its sheet: an 18 px ring of it against the limit (`UsageRing`) in the level of the service's own bounds, then the figure, muted in a list and plain among facts, amber from a peak at 80 % of the limit and red past 90 %; "47 of 256 MB" where there is room, "47 MB" in the Sites list; the limit, the share and the peak in its tooltip (`memoryReading` in `lib/sites.ts`) |
 | `Track` (dialogs) | waiting for a long answer: the time actually elapsed on its scale, the usual duration ticked when known, never an invented progress bar |
 | `Command` | a command to type in a terminal, copyable |
 | `SettingRow` | `server-setup.tsx`: one of the server's own settings, the same row on the Server page and in the setup guide on Sites (7, *Server*): its icon, its name and one sentence, its state on the right, one action, the "..." of the rest |
@@ -622,7 +623,9 @@ with one meaning everywhere and its words in its tooltip (`lib/legend.ts`):
 | `Server`, `Cloud` | where a snapshot lives: on this server, in the offsite copy | muted |
 | `Layers`, `History`, `UsersRound`, `KeySquare`, `Plug`, `SlidersHorizontal` | the machine's pages in the sidebar, the tabs and the Sites row menu: Sites, Activity, People, Tokens, Connectors, Server | `secondary-foreground` |
 | `HeartPulse`, `BellRing`, `Cloud`, `LogIn`, `UserKey`, `Asterisk` | the server's own settings, on the Server page and in the setup guide: the heartbeat, the alert webhook, the offsite copy (the same `Cloud` as a snapshot's), company sign-in, the dashboard password, the portal password | muted |
-| `Gauge`, `ChartNoAxesColumn`, `SquareAsterisk`, `ShieldCheck`, `DatabaseBackup` | a site's sections, there and in the Sites row menu: Overview, Audience, Secrets, Access, Backups | `secondary-foreground` |
+| `Gauge`, `Workflow`, `ChartNoAxesColumn`, `SquareAsterisk`, `ShieldCheck`, `DatabaseBackup` | a site's sections, there and in the Sites row menu: Overview, Services, Audience, Secrets, Access, Backups | `secondary-foreground` |
+| `AppWindow`, `Cog`, `CalendarClock`, `Database` | a service on the Services canvas and in its table: a server, a worker, a scheduled service, one that keeps a database live by its backup command | muted, on a tile |
+| `MousePointer2`, `Files`, `Waypoints`, `Plug`, `CircleDashed` | the canvas's other cards: visitors through Caddy, a site's static files, the egress proxy or any host, the connectors, another process | muted, on a tile |
 
 Navigation borrows no row's icon: Sites is not a `Globe`, which says
 *Public*, nor Secrets a `KeyRound`, which says a code; a note under every
@@ -734,7 +737,8 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | The guides | Step 2 of 3, Before you start, One command to run first, Check again, Next, Back, Save and continue, Save, Done; Create a check, Paste its ping URL, Ping URL, Wait for the first ping, Waiting for the monitor's next pass, Last pass 26s ago, Next pass; Choose where messages go, Paste the Slack address, Webhook address, Message format, From the address, Keep the current one, read from the address, as you chose; Create a bucket, Enter its details, Change its details, Endpoint, Bucket, Access key, Secret key, Region, Folder, Optional, Leave empty to keep it, Encryption passphrase, New passphrase, Generate, Copy, I saved it; Register the app, Issuer, Client ID, Client secret, Allowed domains, Admin emails, Provider name | Submit, Finish, Wizard, URL for a webhook (Webhook address), Prefix, Access key ID |
 | Toasts | Setup guide hidden. Every setting stays on the Server page., Undo, Offsite copy skipped. You can set it up on the Server page., The setup guide is back on Sites., The server is set up. The setup guide is gone., Heartbeat removed., Dismiss | Success, Done! |
 | Connectors | Connector, Add connector, Change, Remove connector, Requests, Grant, Withdraw, Granted, Granted, asked for, Asked, not granted, No such connector, Not asked for, Site removed, Base address, Header, Changed, Write-only (in the dialog and the sheet, never in a row) | Integration, Secret, Token, Revoke access, Grants |
-| Site sections | Overview, Audience, Secrets, Access, Backups; the breadcrumb *All sites > cms*; *Switch site* | Settings, Details, Sharing, Guests, Members |
+| Site sections | Overview, Services, Audience, Secrets, Access, Backups; the breadcrumb *All sites > cms*; *Switch site* | Settings, Details, Sharing, Guests, Members, Map, Topology |
+| The Services canvas | Visitors, Through Caddy, over HTTPS, Static files, Egress proxy, These hosts, and no other, Connectors, Lent by the machine, Any host, Another process; Server, Internal server, Database, Background, Scheduled, main service; All other paths, Every path; Open now, Seen before, Routed by Caddy, Declared; 2 open, 19h ago, command line, routed (a lit line's badge); 3 connections open, Last seen 2h ago, Declared in API_URL, Every service gets INFERENCE_URL, Declared on its command line; Loopback only, Loopback, out through the proxy, Outbound network; Zoom in, Zoom out, Fit to view, Actual size, Reset layout; See how they connect; Connections, From, To | Graph, Node, Edge, Topology, Upstream, Downstream, Dependency |
 | The machine | Server | VM, host |
 | Discrepancy | Refusal, issues; Error, Warning | Alert, Critical |
 | Verdict | All clear, `N errors, N warnings`, Stale data, No data | OK, Healthy |
@@ -777,6 +781,7 @@ One page per served file, the site in `?s=`:
 | Connectors | `/connectors/` | `connectors/index.html` |
 | Server, the owner's alone | `/server/` | `server/index.html` |
 | A site's Overview | `/site/?s=cms` | `site/index.html` |
+| A site's Services | `/site/services/?s=cms` | `site/services/index.html` |
 | A site's Audience | `/site/audience/?s=cms` | `site/audience/index.html` |
 | A site's Secrets | `/site/secrets/?s=cms` | `site/secrets/index.html` |
 | A site's Access | `/site/access/?s=cms` | `site/access/index.html` |
@@ -1199,7 +1204,7 @@ banners of one line each. Then two panels side by side, a single column below
 ```
 | Service             cms.service [Restart] |  | Site                                  |
 | State     Running  up 20h                 |  | Address   cms.example.com â           |
-| Memory    131 of 256 MB  [====|--||]  51% |  | Access    [Lock] Restricted  4 people >|
+| Memory    (o) 131 of 256 MB              |  | Access    [Lock] Restricted  4 people >|
 | CPU       5%                              |  | Secrets   3 variables  1 not set     > |
 | Restarts  0                               |  | Backups   Last snapshot 45m ago     > |
 | Port      3043                            |  | Audience  1,148 visits in 30 days   > |
@@ -1208,8 +1213,8 @@ banners of one line each. Then two panels side by side, a single column below
 ```
 
 Both are facts lists of 44 px lines (`FactRow` in components/site-card.tsx),
-the label in a 6.5 rem column (5.5 in a panel under 24 rem, `@container/facts`,
-where the memory track also shortens). A caption that explains a value, "of
+the label in a 6.5 rem column (5.5 in a panel under 24 rem, `@container/facts`).
+A caption that explains a value, "of
 one core, over the last minute", "Automatic restarts by systemd", the peak,
 the folder's path, the date, waits in its tooltip and reaches a screen reader
 beside the value; a value in trouble says it beside it, in its tone: "3045
@@ -1217,9 +1222,9 @@ Nothing listens on it", "7 Automatic restarts by systemd". No big figure, no
 dot on a fine state.
 
 **Service** is the project's main unit: its state and how long it has been up
-(the date and systemd's words in the tooltip), its memory on one line, the
-amount, a 120 px track ticked at the service's thresholds with the peak
-marked across it, and the share, amber or red past them, its CPU, its
+(the date and systemd's words in the tooltip), its memory as everywhere
+else (`MemoryUsage`), the ring and "131 of 256 MB", the share and the peak in
+its tooltip, amber or red past the service's bounds, its CPU, its
 restarts, its port (*None* for a worker). A service that is down says why
 under its state, "The service isn't running, so it has no memory in use.",
 and shows its memory peak. *Main service* beside others; *Main unit* for the
@@ -1261,6 +1266,104 @@ paths*, *Internal*, *Background*, *Runs hourly* or the expression as written,
 the timer and the port in the tooltip), its memory while it runs, and its
 next run, or since when it runs. On two lines the unit goes, the name's
 tooltip keeping it.
+
+**A site's Services.** Each of an app's services, and who talks to whom,
+on a canvas: the one view of the dashboard that is drawn rather than
+listed, Railway's way, since what it shows is a graph. It takes the whole
+width beside the sidebar (`wide` on `SitePage`, the header aligned on it) and
+the height the page leaves under the header, a well (`sunk`, `shadow-well`)
+dotted with the `input` hairline every 22 px of the map, the dots moving and
+scaling with it. Behind the title's (i): what a solid and a dashed line say,
+and that the server reads its connections once a minute and remembers each
+for a week. The header counts the services. A static site, or a folder with
+no manifest, has no entry in the sidebar, the tabs or the row menu; reached
+by its address, it reads "blog runs no service" with *Open its Overview*. A
+reading from a collector older than connections says so in an attention
+banner: the map then holds what sitesolide.json declares.
+
+```
+ [Visitors       ]  /v1/*   +- playground  Loopback, out through the proxy -------------+   [Connectors ]
+ [cms.example.com] -------> | [platform] ----> [api] ----> [inference]                  | ->[slack      ]
+ [Restricted     ] --All--> | [indexer ] ---------------> [db        ]                  | ->[Egress proxy]
+                            | [evals   ] - - -^                                         |   [api.ex.com ]
+                            +-----------------------------------------------------------+
+ [- Open now  - Seen before, or routed  - - Declared]                        [Reset layout | - 100% + | Fit]
+```
+
+- **What it draws** (`buildMap` in `lib/service-map.ts`): *Visitors*, when
+  the site serves pages, its address and its general access as the Access
+  section words it; *Static files* when Caddy serves a `publicDir` first; a
+  card per service; on the right, what leaves the machine, *Egress proxy*
+  with its hosts, *Connectors* with their names, *Any host* for outbound
+  network; *Another process* when one that is none of the site's services
+  was seen calling one. The services and the files sit inside the project's
+  walls, a dashed frame titled by the slug in mono and how far the walls let
+  them go, *Loopback only*, *Loopback, out through the proxy*, *Outbound
+  network*.
+- **A service's card**, 236 px, a panel (`card`, the hairline,
+  `shadow-panel`): its kind on a 32 px tile, its name, the unit in the
+  name's tooltip, its kind in words under it, *main service* beside the
+  main one; its state only when not fine, in its tone, the card's hairline
+  red for an error; its port as a mono chip, red when nothing listens;
+  a scheduled one's schedule, words for systemd's shorthands and mono
+  otherwise; a database's kept folder; then one muted line, its memory as
+  everywhere (`MemoryUsage`), its CPU and uptime, or a scheduled one's last
+  run over its next. The card is a button that opens the service's sheet.
+- **The columns** (`assignLayers`, `columns`): visitors on the left, each
+  service right of its furthest caller, what calls nothing in the first
+  column of services beside the public ones, what leaves the machine last;
+  each column ordered near the middle of what reaches it. An edge crossing
+  a column takes a lane through it, between two cards rather than behind
+  one. Top to bottom instead when that shows the map at least 20 % larger,
+  and always under 640 px, the frame's title then under the services.
+- **The lines** (`routeEdges`), a circuit's: out of a card square to the
+  side, along to a channel of its own in the room between two columns,
+  across there, and on into the next card, every bend rounded at 10 px and
+  through its lanes when it crosses columns; the channels sharing a room
+  14 px apart, of two going down the one that starts higher turning further
+  on, of two going up the one that starts lower, so that runs do not cross
+  where they need not; the columns' order (`columns`) swept three times by
+  what reaches and what is reached, then two neighbours swapped while that
+  crosses fewer lines, or as many but shorter. The ends sharing a side are
+  spread 12 px apart in the order of their other end, an arrow at the end a
+  line reaches. A card dragged out of its column turns its lines once,
+  halfway; a line that runs back, or within one column, is a curve. A
+  route's label sits on its first turn across, a lane's on the lane. *Open now*, connections open at
+  the last reading, a 2 px `secondary-foreground` line; *Seen before*, and
+  *Routed by Caddy* for visitors' routes no connection was seen on yet, a
+  1.5 px `tick` line; *Declared*, a sibling's port named in the manifest and
+  never seen used, dashed. A variable every service receives draws from each
+  only until one is seen using it, and never from a database. A route
+  carries its paths as a mono label, *All other paths*, or *Every path* for
+  the one service that takes them all; the other lines carry none until
+  their card is hovered, focused or open, when they take the accent and a
+  badge short enough for the room between two columns (`edgeBadge`), "2
+  open", "19h ago", the variable that declares it, `API_URL`, or "command
+  line", the whole sentence being the sheet's, and the rest of the map
+  fades. Every label slides along its own line to the place nearest its
+  middle that covers no card and no other label, 4 px of room kept around
+  each (`placeLabels`), the routes' first, so that a lit badge never moves
+  them; a lit one stands above the cards should no place be free.
+- **Gestures.** The ground drags the map, the wheel pans it, Ctrl and the
+  wheel or a pinch zooms, from 30 to 200 %; with the map focused, the arrows
+  move it, plus and minus zoom, zero fits it. A card drags where its reader
+  wants it, from 4 px, the frame and the lines following, kept in this
+  browser per site and per orientation (`service-map:<slug>`), with *Reset
+  layout* while any is moved; on a phone a finger on a card moves the map
+  instead. The map fits itself once its cards are measured, and again when
+  its shape changes, never at a refresh. *Fit to view*, the zoom's figure
+  (*Actual size*) and its buttons sit at the bottom right on the raised
+  surface, the legend at the bottom left, gone on a phone where the (i)
+  says it.
+- **The sheet** (`?service=<unit>`): the name, its state, its kind; its
+  facts, *Up*, *Memory*, *CPU*, *Restarts*, *Port*, *Paths*, *Keeps*,
+  *Schedule*, *Last run*, *Next run*, *Timeout*, *Unit*; *Connections*, one
+  line each, *From* or *To* the other end and a route's paths, what declares
+  it under it, how sure it is on the right, "3 open", "19h ago", *Routed*,
+  *Declared*, the surest first; *Logs*, `sitesolide logs --follow` to copy;
+  then the site's deployments under *Recent*.
+- The Overview's **Services** table carries *See how they connect* in its
+  header, a quiet link to this section.
 
 **A site's Audience.** Behind the title's (i): how a visit is counted, no
 cookie and a fingerprint the day's salt destroys, when a site becomes
@@ -1788,7 +1891,9 @@ screenshots of the bench, in light and in dark:
   skipped;
 - the home page, Activity, People and Tokens; the home page under Platform,
   on a fresh machine (`BENCH_FRESH=1`) and with the portal down
-  (`BENCH_PLATFORM_DOWN=1`); the five sections of a site,
+  (`BENCH_PLATFORM_DOWN=1`); the six sections of a site, the Services
+  canvas of `playground`, its sheet, a card dragged, of `mailer` and of
+  `hiring`, light and dark,
   the Overview of a service in a restart loop and of a locked static site,
   of `mailer` and of `reports`,
   the Secrets of a site with a store, and of the dashboard itself;

@@ -301,6 +301,7 @@ describe("what a row says of its usage", () => {
   test("memory against its limit, at the service's own bounds, nothing when nothing runs", () => {
     expect(memoryUsage(site({ service: service({ memory: 64 * MB, peak: 80 * MB, limit: 256 * MB }) }))).toEqual({
       memory: 64 * MB,
+      peak: 80 * MB,
       limit: 256 * MB,
       share: 25,
       level: "normal",
@@ -308,7 +309,7 @@ describe("what a row says of its usage", () => {
     // A peak at 80 % of the limit warns, as the server's discrepancy does; past 90 % now, critical.
     expect(memoryUsage(site({ service: service({ memory: 100 * MB, peak: 205 * MB, limit: 256 * MB }) }))?.level).toBe("warn")
     expect(memoryUsage(site({ service: service({ memory: 240 * MB, peak: 250 * MB, limit: 256 * MB }) }))?.level).toBe("critical")
-    expect(memoryUsage(site({ service: service({ memory: 40 * MB, peak: null, limit: null }) }))).toEqual({ memory: 40 * MB, limit: null, share: null, level: "normal" })
+    expect(memoryUsage(site({ service: service({ memory: 40 * MB, peak: null, limit: null }) }))).toEqual({ memory: 40 * MB, peak: null, limit: null, share: null, level: "normal" })
     expect(memoryUsage(site({ type: "static", service: null }))).toBeNull()
     expect(memoryUsage(site({ service: service({ active: "failed" }) }))).toBeNull()
   })

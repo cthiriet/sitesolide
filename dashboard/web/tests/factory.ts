@@ -51,6 +51,9 @@ export function site(partial: Partial<Site> = {}): Site {
     services: [],
     bytes: 22 * 1024 * 1024,
     deployed: null,
+    publicDir: null,
+    network: { outbound: false, egress: [], connectors: [] },
+    links: [],
     secrets: [],
     ...partial,
   }
@@ -69,6 +72,7 @@ export function siteService(partial: Partial<SiteService> = {}): SiteService {
     internal: false,
     service: service(),
     schedule: null,
+    backup: null,
     ...partial,
   }
 }

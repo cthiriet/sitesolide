@@ -11,7 +11,9 @@ export type {
   Snapshot,
   RawMachine,
   Service,
+  Network,
   Site,
+  SiteLink,
   SiteService,
 } from "../../../src/state"
 

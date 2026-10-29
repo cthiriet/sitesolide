@@ -390,14 +390,43 @@ const FOLDERS: FakeFolder[] = [
     manifest: {
       slug: "playground",
       description: "Model playground: web app, API and model",
+      env: { INFERENCE_URL: "http://127.0.0.1:3049" },
+      egress: ["api.anthropic.com", "huggingface.co"],
+      connectors: ["slack"],
       services: {
-        platform: { start: "/srv/sites/playground/app/.venv/bin/python -m playground.platform --port 3047", port: 3047 },
-        api: { start: "/srv/sites/playground/app/.venv/bin/python -m playground.api --port 3048", port: 3048, routes: ["/v1/*"] },
+        platform: {
+          start: "/srv/sites/playground/app/.venv/bin/python -m playground.platform --port 3047",
+          port: 3047,
+          env: { API_URL: "http://127.0.0.1:3048" },
+        },
+        api: {
+          start: "/srv/sites/playground/app/.venv/bin/python -m playground.api --port 3048",
+          port: 3048,
+          routes: ["/v1/*"],
+          env: { DATABASE_URL: "postgresql://playground@127.0.0.1:3050/playground" },
+        },
         inference: {
           start: "/srv/sites/playground/app/.venv/bin/python -m playground.inference --port 3049",
           port: 3049,
           internal: true,
           memory: "768M",
+        },
+        db: {
+          start: "/usr/lib/postgresql/17/bin/postgres -D /srv/sites/playground/data/pg -p 3050 -k /srv/sites/playground/data",
+          port: 3050,
+          internal: true,
+          memory: "512M",
+          backup: { folder: "pg", command: "/srv/sites/playground/app/bin/pg-backup" },
+        },
+        indexer: {
+          start: "/srv/sites/playground/app/.venv/bin/python -m playground.indexer",
+          internal: true,
+          env: { DATABASE_URL: "postgresql://playground@127.0.0.1:3050/playground" },
+        },
+        evals: {
+          start: "/srv/sites/playground/app/.venv/bin/python -m playground.evals --api http://127.0.0.1:3048",
+          schedule: "*-*-* 03:00",
+          timeout: "45m",
         },
       },
     },
@@ -405,7 +434,11 @@ const FOLDERS: FakeFolder[] = [
     units: {
       "playground.api": { memory: 38 * MB, peak: 40 * MB, limit: 256 * MB, sinceMs: 2 * HOUR, cpu: 0.2 },
       "playground.inference": { memory: 237 * MB, peak: 239 * MB, limit: 768 * MB, sinceMs: 2 * HOUR, cpu: 1.4 },
+      "playground.db": { memory: 96 * MB, peak: 131 * MB, limit: 512 * MB, sinceMs: 6 * DAY, cpu: 0.6 },
+      "playground.indexer": { memory: 52 * MB, peak: 61 * MB, limit: 256 * MB, sinceMs: 2 * HOUR, cpu: 0.4 },
+      "playground.evals": { ...IDLE, limit: 256 * MB, run: { result: "success", status: 0, endedMs: 19 * HOUR, tookMs: 21 * MINUTE } },
     },
+    timers: { "playground.evals.timer": { lastMs: 19 * HOUR + 21 * MINUTE, nextMs: 5 * HOUR } },
     bytes: 1.1 * GB,
     deployedMs: 2 * HOUR,
   },
@@ -417,6 +450,7 @@ const FOLDERS: FakeFolder[] = [
     manifest: {
       slug: "mailer",
       description: "Transactional emails and the morning digest",
+      egress: ["api.postmarkapp.com"],
       services: {
         queue: { start: "bun run worker.ts", internal: true },
         digest: { start: "bun run digest.ts", schedule: "Mon..Fri 08:00", timeout: "15m" },
@@ -777,9 +811,10 @@ function reading(now: number) {
     monitor: monitorStatus(generatedAt),
     // hiring (3045) does not listen: it is looping; nor does the portal (3026) once its unit failed.
     ports: (SHOWCASE
-      ? [3040, 3041, 3022, 3043, 3044, 3045, 3026, 3029, 3047, 3048, 3049]
-      : [3040, 3041, 3022, 3043, 3044, 3026, 3029, 3047, 3048, 3049]
+      ? [3040, 3041, 3022, 3043, 3044, 3045, 3026, 3029, 3047, 3048, 3049, 3050, 3128, 3129]
+      : [3040, 3041, 3022, 3043, 3044, 3026, 3029, 3047, 3048, 3049, 3050, 3128, 3129]
     ).filter((port) => !(PLATFORM_DOWN && port === 3026)),
+    links: links(generatedAt),
     blocks,
     machine: {
       memoryTotal: 11.6 * GB,
@@ -793,6 +828,31 @@ function reading(now: number) {
     },
     previous: { generated: generatedAt - MINUTE, cpu },
   };
+}
+
+/**
+ * The connections the collector would have seen on the loopback (src/links.ts):
+ * Caddy reaching each public service, playground's services calling each
+ * other, its database and the egress proxy, some open now, others seen
+ * earlier and remembered; mailer's worker out through the proxy.
+ */
+function links(generatedAt: number) {
+  const link = (from: string, port: number, open: number, agoMs = 0) => ({ from: `${from}.service`, port, open, seen: generatedAt - agoMs });
+  return [
+    link("caddy", 3040, 2),
+    link("caddy", 3043, 3),
+    link("caddy", 3047, 6),
+    link("caddy", 3048, 3),
+    link("playground", 3048, 2),
+    link("playground.api", 3049, 1),
+    link("playground.api", 3050, 4),
+    link("playground.api", 3128, 1),
+    link("playground.api", 3129, 0, 2 * HOUR),
+    link("playground.indexer", 3050, 1),
+    link("playground.indexer", 3128, 0, 40 * MINUTE),
+    link("playground.evals", 3048, 0, 19 * HOUR + 4 * MINUTE),
+    link("mailer", 3128, 1),
+  ];
 }
 
 /** The preview codes in force, which the bench's gatekeeper draws and takes away. */

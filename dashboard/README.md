@@ -191,6 +191,36 @@ service. A project with services, none public, and no `publicDir` serves no
 page: its address answers a line saying so, and the page says it beside the
 address rather than present it as a site.
 
+## Who talks to whom
+
+A site's Services section draws its services on a canvas, and the lines
+between them come from two places.
+
+**What the machine saw.** At each pass the collector runs `ss -tnpH state
+established` and keeps the client end of every connection that reaches a port
+listening on the loopback, counted by the unit of the process holding it,
+which `/proc/<pid>/cgroup` names: `caddy.service` reaching a site's port,
+`lab.api.service` reaching `lab.db`'s, a service reaching the egress proxy
+on 3128 or its connectors on 3129. Only root may ask `ss` the process of
+every socket, which is why the collector reads it. A link not open at a
+pass is remembered from the previous reading, closed, for a week: a call
+that comes and goes between two passes shows once a pass falls on it, and
+stays. `src/links.ts` reads the lines and decides what they say; the
+collector, as for everything else, only hands them over. The previous
+reading's links sit in the dashboard's own directory, which its account
+owns: each is checked, its unit a name systemd would write, its port and
+dates bounded, before it is kept.
+
+**What the manifest declares.** `src/state.ts` puts the links under each
+site: a sibling's port named on the loopback in a service's `env` or its
+`start`, `http://127.0.0.1:3049`, declares a link from that service; one
+named in the project's `env`, which every service receives, declares it from
+each. A link another site's service opened is none of this site's business,
+and one opened by a process that is none of its services reads as
+*Another process*, named no further. A reading from a collector older than
+this carries no links: the page then says the map holds what the manifest
+declares alone.
+
 ## The password
 
 On a new machine, the script draws it, shows it once, and prints its argon2id
@@ -910,9 +940,9 @@ them mint one, and in a project the sections their role there opens:
 
 | Role | Sections |
 |---|---|
-| Viewer | Overview, Audience, Access, read only: its general access, its people with access, whom to ask to add someone, and what each role can do |
+| Viewer | Overview, Services, Audience, Access, read only: its general access, its people with access, whom to ask to add someone, and what each role can do |
 | Developer | the same and Secrets, values write-only; *Restart* in the Overview's Service panel |
-| Admin | Overview, Audience, Secrets, values write-only too, Access, where they give people access, and Backups |
+| Admin | Overview, Services, Audience, Secrets, values write-only too, Access, where they give people access, and Backups |
 
 A page that is not theirs, reached by its address, says so in an empty state
 rather than an error, and the service refuses it too.

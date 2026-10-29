@@ -16,6 +16,7 @@ import { ServerPage } from "@/components/pages/server"
 import { AccessSection } from "@/components/pages/site-access"
 import { BackupsSection } from "@/components/pages/site-backups"
 import { OverviewSection } from "@/components/pages/site-overview"
+import { ServicesSection } from "@/components/pages/site-services"
 import { AudienceSection } from "@/components/pages/site-audience"
 import { SecretsSection } from "@/components/pages/site-secrets"
 import { SecretsActionsProvider } from "@/components/secrets-actions"
@@ -25,6 +26,7 @@ import { cn } from "@/lib/utils"
 
 const SITE_SECTIONS: Record<Section, ComponentType<{ slug: string }>> = {
   overview: OverviewSection,
+  services: ServicesSection,
   audience: AudienceSection,
   secrets: SecretsSection,
   access: AccessSection,

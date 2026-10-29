@@ -8,7 +8,7 @@
  * takes its own from there; the card only arranges and names.
  */
 import { ABSENT, dateTime, duration, ago, plural, size, sizeOutOf } from "./format"
-import { serviceLevel, MEMORY_CRITICAL_SHARE, PEAK_WARNING_SHARE, type Level, type Tile } from "./gauges"
+import { serviceLevel, type Tile } from "./gauges"
 import {
   siteAccess,
   serviceState,
@@ -17,6 +17,8 @@ import {
   coresUsed,
   isAnchoredSite,
   memoryShare,
+  memoryReading,
+  type MemoryReading,
   restartsLabel,
   runLines,
   scheduleWords,
@@ -70,19 +72,6 @@ export function siteState(site: Pick<Site, "type" | "service">, discrepancies: r
 }
 
 // --- The service -----------------------------------------------------------------
-
-/**
- * The two ticks on a service's gauge, in place of the machine's: the peak warns
- * at 80 % of the ceiling, the current memory alarms at 90 %, the bounds of
- * `serviceLevel`. Spelled out in full, for Tailwind; the tests check that they
- * follow the constants.
- */
-export const SERVICE_THRESHOLD_POSITIONS: readonly { threshold: number; position: string }[] = [
-  { threshold: PEAK_WARNING_SHARE * 100, position: "left-[80%]" },
-  { threshold: MEMORY_CRITICAL_SHARE * 100, position: "left-[90%]" },
-]
-
-export const SERVICE_THRESHOLDS_TITLE = `Warning once the peak reaches ${PEAK_WARNING_SHARE * 100}% of the limit, critical above ${MEMORY_CRITICAL_SHARE * 100}%`
 
 export type ServiceGauge = {
   tile: Tile
@@ -159,9 +148,8 @@ export type ServiceRow = {
   state: ServiceState
   /** "47 of 256 MB" while it runs, null otherwise. */
   memory: string | null
-  /** Memory over its ceiling, for the bar; null without a known ceiling. */
-  memoryPercent: number | null
-  memoryLevel: Level
+  /** Its ring, its figure and their tooltip while it runs, the Sites list's: null otherwise. */
+  reading: MemoryReading | null
   restarts: string | null
   /** A scheduled service's last run and next one, under its word; null for any other. */
   runs: { last: RunLine | null; next: string | null } | null
@@ -206,8 +194,7 @@ export function serviceRows(site: Pick<Site, "services">, now: number): ServiceR
       listening: entry.listening,
       state,
       memory: !running ? null : service.limit === null ? size(service.memory) : sizeOutOf(service.memory, service.limit),
-      memoryPercent: running ? memoryShare(service.memory, service.limit) : null,
-      memoryLevel: running ? serviceLevel(service.memory, service.peak, service.limit) : "normal",
+      reading: running && service.memory !== null ? memoryReading(service.memory, service.peak, service.limit, true) : null,
       restarts: restartsLabel(service?.restarts ?? null),
       runs: entry.kind === "scheduled" ? runLines(entry, now) : null,
     }

@@ -138,5 +138,6 @@ export function siteIndicators(sources: SiteSources): Record<Section, Indicator 
   // a traffic figure would cry wolf every Monday. Who has access is a choice,
   // not a problem: Access only reports a disagreement. Backups neither: their
   // state is read by the section itself, and a failed run reaches the monitor.
-  return { overview: discrepancyIndicator(discrepancies), audience: null, secrets, access, backups: null }
+  // Services neither: a service in trouble is a discrepancy, which Overview already counts.
+  return { overview: discrepancyIndicator(discrepancies), services: null, audience: null, secrets, access, backups: null }
 }

@@ -1,5 +1,5 @@
 import { useMemo } from "react"
-import { ChartNoAxesColumn, ChevronLeft, DatabaseBackup, Gauge, History, KeySquare, Layers, LogOut, PanelLeft, Plug, ShieldCheck, SlidersHorizontal, SquareAsterisk, UsersRound, type LucideIcon } from "lucide-react"
+import { ChartNoAxesColumn, ChevronLeft, DatabaseBackup, Gauge, History, KeySquare, Layers, LogOut, PanelLeft, Plug, ShieldCheck, SlidersHorizontal, SquareAsterisk, UsersRound, Workflow, type LucideIcon } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -43,6 +43,7 @@ const MACHINE_ICONS: Record<MachinePage, LucideIcon> = {
 /** The icon of each section of a site, shared by the sidebar, the tabs and the Sites row menu. */
 export const SECTION_ICONS: Record<Section, LucideIcon> = {
   overview: Gauge,
+  services: Workflow,
   audience: ChartNoAxesColumn,
   secrets: SquareAsterisk,
   access: ShieldCheck,
@@ -77,7 +78,7 @@ function useNavEntries(): NavEntry[] {
       site,
       serverNow: now + offset,
     })
-    return sectionsFor(identity, page.slug).map((entry) => ({
+    return sectionsFor(identity, page.slug, site).map((entry) => ({
       key: entry.section,
       target: { name: "site", slug: page.slug, section: entry.section },
       title: entry.title,

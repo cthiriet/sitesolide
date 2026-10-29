@@ -313,3 +313,51 @@ describe("the previous snapshot, read back as root from the dashboard's director
     expect(lstatSync(join(ANALYTICS_DATA, "hotes.json")).isFile()).toBe(true);
   }, 30_000);
 });
+
+/**
+ * An `ss` that prints what the machine would: the listening ports for `-ltnH`,
+ * and for `-tnpH state established` the two ends of one connection to 3049,
+ * held by a process that no longer exists by the time the collector reads its
+ * cgroup.
+ */
+function fakeSs(): string {
+  const bin = join(D, "bin-ss");
+  mkdirSync(bin, { recursive: true });
+  const script = [
+    "#!/bin/sh",
+    'case "$*" in',
+    '  *-ltnH*) printf "LISTEN 0 511 127.0.0.1:3049 0.0.0.0:*\\n" ;;',
+    "  *established*)",
+    "    printf '0 0 127.0.0.1:41000 127.0.0.1:3049 users:((\"bun\",pid=999999999,fd=9))\\n'",
+    "    printf '0 0 127.0.0.1:3049 127.0.0.1:41000 users:((\"bun\",pid=999999998,fd=4))\\n'",
+    "    ;;",
+    "  *) exit 1 ;;",
+    "esac",
+    "",
+  ].join("\n");
+  writeFileSync(join(bin, "ss"), script, { mode: 0o755 });
+  return bin;
+}
+
+describe("the links between processes", () => {
+  test("seen now, and remembered from the reading before, its malformed lines dropped", async () => {
+    const hourAgo = Date.now() - 3_600_000;
+    writeFileSync(
+      join(DASHBOARD_DATA, "state.json"),
+      JSON.stringify({
+        generated: hourAgo,
+        folders: [],
+        links: [
+          { from: "lab.api.service", port: 3050, open: 2, seen: hourAgo },
+          { from: "../../etc/passwd", port: 3050, open: 2, seen: hourAgo },
+        ],
+      }),
+    );
+    const raw = await collect(fakeSs());
+    expect(raw.ports).toEqual([3049]);
+    expect(raw.links).toEqual([
+      { from: null, port: 3049, open: 1, seen: raw.generated },
+      { from: "lab.api.service", port: 3050, open: 0, seen: hourAgo },
+    ]);
+  });
+});

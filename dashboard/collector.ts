@@ -29,6 +29,7 @@ import { $ } from "bun";
 import { hostTable } from "./src/audience";
 import { copyMonitorStatus, monitorRefusal, statusFileRefusal } from "./src/monitor";
 import { readAccount, readBounded, readGroup, writeAtomically, type Examination } from "./src/secrets/system";
+import { countLinks, readEstablished, rememberLinks, unitOfCgroup, type RawLink } from "./src/links";
 import { unitOf, type Raw, type RawFolder, type RawMachine, type RawUnit } from "./src/state";
 import { readManifest, scheduledServices } from "./borrowed/manifest";
 import { isTimerUnit, unitArgument, unitNames } from "./borrowed/unit";
@@ -312,6 +313,36 @@ async function ports(): Promise<number[]> {
 }
 
 /**
+ * The connections open on the loopback, by the unit that opened them and the
+ * port they reach, merged with those the previous reading remembered: who
+ * talks to whom, for a site's Services section. src/links.ts decides what the
+ * lines say; this only reads them.
+ *
+ * `-p` names the process holding each socket, which only root may ask of
+ * every process; its cgroup, read from /proc, names its unit. A process gone
+ * between the two readings counts under no unit. A failed `ss` keeps what was
+ * remembered: a blank reading would read as everything having stopped.
+ */
+async function links(listening: readonly number[], previous: unknown, now: number): Promise<RawLink[]> {
+  const output = await $`ss -tnpH state established`.nothrow().quiet();
+  if (output.exitCode !== 0) return rememberLinks([], previous, now);
+  const ends = readEstablished(output.stdout.toString(), new Set(listening));
+  const current = countLinks(
+    ends,
+    (pid) => {
+      // readFileSync and not Bun.file: procfs announces a size of zero bytes, see readMachine.
+      try {
+        return unitOfCgroup(readFileSync(`/proc/${pid}/cgroup`, "utf8"));
+      } catch {
+        return null;
+      }
+    },
+    now,
+  );
+  return rememberLinks(current, previous, now);
+}
+
+/**
  * The fragments in service, one file per app project, content included.
  *
  * The content and not a boolean: it is src/state.ts that decides what must be
@@ -391,13 +422,15 @@ const STATE_MAX_BYTES = 32 * 1024 * 1024;
 
 /**
  * What must be kept from the previous reading to compute a CPU rate: its date
- * and each unit's counter. The file that is about to be replaced is the only
- * place where that state lives, which saves the collector from holding one of
- * its own: it is launched afresh every minute by the timer, and therefore has
- * no memory between two passes.
+ * and each unit's counter; and the links it remembered, which this reading
+ * remembers in turn. The file that is about to be replaced is the only place
+ * where that state lives, which saves the collector from holding one of its
+ * own: it is launched afresh every minute by the timer, and therefore has no
+ * memory between two passes.
  *
  * A file that is missing, truncated or from an earlier version returns null,
- * and the rates are then displayed as blanks instead of lying.
+ * and the rates are then displayed as blanks instead of lying; its links are
+ * left as they stand, for rememberLinks to check one by one.
  *
  * Read as root from the dashboard's own data directory, which site-dashboard
  * owns: the same door as the audience snapshot's, and read the same way. A
@@ -408,13 +441,13 @@ const STATE_MAX_BYTES = 32 * 1024 * 1024;
  * without following a link, only if it is a regular file with a single name,
  * within a cap past which the rates simply start again from blank.
  */
-async function previousReading(): Promise<Raw["previous"]> {
+async function previousReading(): Promise<{ previous: Raw["previous"]; links: unknown }> {
   const content = readPlainText(STATE_FILE, STATE_MAX_BYTES);
-  if (content === null) return null;
+  if (content === null) return { previous: null, links: null };
 
   try {
     const previousRaw = JSON.parse(content) as Raw;
-    if (typeof previousRaw.generated !== "number" || !Array.isArray(previousRaw.folders)) return null;
+    if (typeof previousRaw.generated !== "number" || !Array.isArray(previousRaw.folders)) return { previous: null, links: null };
 
     const cpu: Record<string, number> = {};
     const keep = (key: string, unit: RawUnit | null | undefined): void => {
@@ -428,9 +461,10 @@ async function previousReading(): Promise<Raw["previous"]> {
       // a scheduled service between two runs, and neither is kept.
       for (const [unit, properties] of Object.entries(folder.units ?? {})) keep(unit, properties);
     }
-    return { generated: previousRaw.generated, cpu };
+    // The links it remembered, checked one by one by rememberLinks.
+    return { previous: { generated: previousRaw.generated, cpu }, links: previousRaw.links ?? null };
   } catch {
-    return null;
+    return { previous: null, links: null };
   }
 }
 
@@ -475,6 +509,7 @@ async function otherUnits(manifest: string | null): Promise<Record<string, RawUn
 
 async function collect(): Promise<Raw> {
   const folders: RawFolder[] = [];
+  const earlier = await previousReading();
 
   for (const entry of readdirSync(SITES_DIR, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -499,8 +534,10 @@ async function collect(): Promise<Raw> {
     });
   }
 
+  const generated = Date.now();
+  const listening = await ports();
   return {
-    generated: Date.now(),
+    generated,
     zone: ZONE,
     folders,
     codes: await text(CODES_FILE, "{}"),
@@ -509,10 +546,11 @@ async function collect(): Promise<Raw> {
     // the dashboard says so rather than showing an empty page.
     audience: readAudience(),
     monitor: readMonitorStatus(),
-    ports: await ports(),
+    ports: listening,
+    links: await links(listening, earlier.links, generated),
     blocks: readBlocks(),
     machine: await readMachine(),
-    previous: await previousReading(),
+    previous: earlier.previous,
   };
 }
 

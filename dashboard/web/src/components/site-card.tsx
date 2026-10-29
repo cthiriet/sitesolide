@@ -1,6 +1,7 @@
 import { useId, type ReactNode } from "react"
-import { AppWindow, CalendarClock, ChevronRight, Cog, type LucideIcon } from "lucide-react"
-import { Track } from "@/components/gauge"
+import { AppWindow, CalendarClock, ChevronRight, Cog, Workflow, type LucideIcon } from "lucide-react"
+import { buttonVariants } from "@/components/ui/button"
+import { MemoryUsage } from "@/components/gauge"
 import { ExternalLink } from "@/components/link"
 import { InternalLink } from "@/components/navigation"
 import { useData } from "@/components/data"
@@ -9,8 +10,6 @@ import { CellText, DataTable, gutterFor, type Column } from "@/components/data-t
 import { accessEntry } from "@/components/legend"
 import { accessKey } from "@/lib/legend"
 import {
-  SERVICE_THRESHOLD_POSITIONS,
-  SERVICE_THRESHOLDS_TITLE,
   addressSummary,
   serviceCard,
   serviceRows,
@@ -18,12 +17,11 @@ import {
   siteStorage,
   type Fact,
   type Reach,
-  type ServiceGauge,
   type ServiceRow,
 } from "@/lib/site-card"
-import { isAnchoredSite } from "@/lib/sites"
+import { isAnchoredSite, memoryReading } from "@/lib/sites"
 import { TONE_TEXT, severityTone, type Tone } from "@/lib/tones"
-import type { Discrepancy, Site } from "@/lib/types"
+import type { Discrepancy, Service, Site } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import type { Severity } from "@/lib/verdict"
 
@@ -133,28 +131,11 @@ export function SiteDiscrepancies({ discrepancies }: { discrepancies: readonly D
 
 // --- The service -----------------------------------------------------------------
 
-/**
- * The service's memory on one line: the amount, a 120 px track ticked at the
- * service's thresholds with its peak marked across it, and the share. The
- * peak's words are in the tooltip: it is what turns the bar amber.
- */
-function MemoryLine({ gauge }: { gauge: ServiceGauge }) {
-  const { tile } = gauge
-  const level = tile.level === "critical" ? "error" : tile.level === "warn" ? "attention" : "neutral"
+/** The service's memory, the Sites list's ring and figure, its limit written beside it; the share and the peak in its tooltip. */
+function MemoryLine({ service }: { service: Service }) {
   return (
-    <FactRow label="Memory" tone={level}>
-      <Explained detail={gauge.peakDetail}>{gauge.amount}</Explained>
-      <span className="relative w-16 shrink-0 @sm/facts:w-[7.5rem]">
-        <Track tile={tile} thresholds={SERVICE_THRESHOLD_POSITIONS} title={SERVICE_THRESHOLDS_TITLE} />
-        {gauge.peak !== null && (
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute -top-0.5 h-4 w-0.5 -translate-x-1/2 rounded-full bg-foreground"
-            style={{ left: `${gauge.peak}%` }}
-          />
-        )}
-      </span>
-      {tile.percent !== null && <span className={cn("tabular-nums", level === "neutral" && "text-muted-foreground")}>{tile.percent}%</span>}
+    <FactRow label="Memory">
+      <MemoryUsage reading={memoryReading(service.memory!, service.peak, service.limit, true)} muted={false} />
     </FactRow>
   )
 }
@@ -195,7 +176,7 @@ export function ServicePanel({ site, now, action }: { site: Site; now: number; a
           {/* Why there is no memory to show, or what an anchor does: said when the state is in trouble, on hover otherwise. */}
           {card.note !== null && card.gauge === null && marked && <span className="basis-full text-xs font-normal text-muted-foreground">{card.note}</span>}
         </FactRow>
-        {card.gauge !== null && <MemoryLine gauge={card.gauge} />}
+        {card.gauge !== null && site.service !== null && site.service.memory !== null && <MemoryLine service={site.service} />}
         {card.note !== null && card.gauge === null && !marked && (
           <li className="px-4 py-2.5 text-xs text-pretty text-muted-foreground">{card.note}</li>
         )}
@@ -309,13 +290,13 @@ const SERVICE_COLUMNS: readonly Column<ServiceRow>[] = [
   {
     key: "memory",
     head: "Memory",
-    // Room for the longest, "900 MB of 3.8 GB", on one line.
-    width: "9rem",
+    // Room for the ring and the longest figure, "900 MB of 3.8 GB", on one line.
+    width: "10.5rem",
     align: "end",
     // On two lines an empty cell goes, its dot with it; in columns it keeps its track.
     className: "@max-2xl/table:empty:hidden",
     // Nothing while it does not run: a scheduled service between two runs weighs nothing, and a stopped one says so in its state.
-    cell: (row) => row.memory,
+    cell: (row) => (row.reading === null ? null : <MemoryUsage reading={row.reading} className="justify-end" />),
   },
   {
     key: "when",
@@ -341,12 +322,24 @@ const SERVICE_COLUMNS: readonly Column<ServiceRow>[] = [
  * which the Service panel already describes whole, unless it is scheduled:
  * the Service panel then describes the project's anchor.
  */
-export function ServicesPanel({ site, now }: { site: Site; now: number }) {
+export function ServicesPanel({ site, now, map }: { site: Site; now: number; map?: string }) {
   const rows = serviceRows(site, now)
   if (rows.length === 0) return null
   const scheduled = rows.some((row) => row.runs !== null)
   return (
-    <Panel title="Services" count={rows.length} full>
+    <Panel
+      title="Services"
+      count={rows.length}
+      full
+      actions={
+        map === undefined ? undefined : (
+          <InternalLink href={map} className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "text-secondary-foreground")}>
+            <Workflow />
+            See how they connect
+          </InternalLink>
+        )
+      }
+    >
       <DataTable
         label={`Services of ${site.slug}`}
         caption="The main one first."

@@ -6,8 +6,9 @@
  * Two levels. The machine's: the home page, where the machine, its
  * discrepancies and the list of sites live, the machine's audit, the People
  * with a role somewhere, the Tokens that deploy without SSH, the
- * connectors the egress proxy lends, and the server's own settings. A site's: five sections, Overview,
- * Audience, Secrets, Access and Backups, the site as a parameter.
+ * connectors the egress proxy lends, and the server's own settings. A site's: six sections, Overview,
+ * Services, Audience, Secrets, Access and Backups, the site as a parameter; Services only for an app,
+ * the one kind that runs any.
  *
  * Every page is a file of the build, `site/secrets/index.html` for
  * `/site/secrets/`: Caddy serves `public/` through `file_server`, with no
@@ -25,11 +26,11 @@
  * equivalent, and navigation replaces the address with the new one.
  */
 import { isPerson, roleOn, type Person } from "./identity"
-import type { IdentityView, Role } from "./types"
+import type { IdentityView, Role, Site } from "./types"
 import type { Verdict } from "./verdict"
 
 /** A site's sections, in the order of the sidebar and the tabs. */
-export type Section = "overview" | "audience" | "secrets" | "access" | "backups"
+export type Section = "overview" | "services" | "audience" | "secrets" | "access" | "backups"
 
 /** The pages of the machine level. */
 export type MachinePage = "home" | "activity" | "people" | "tokens" | "connectors" | "server"
@@ -54,7 +55,7 @@ export const MACHINE_PAGES: readonly MachineEntry[] = [
  * the home page, the activity of their projects, Tokens for their own tokens
  * when a role or the create right lets them mint one, and in a site the
  * sections their role there opens, the steward's own table
- * (src/people/powers.ts): a Viewer its Overview, Audience and Access, read
+ * (src/people/powers.ts): a Viewer its Overview, Services, Audience and Access, read
  * only; a Developer its Secrets too, values write-only; an Admin everything
  * of the site. The rest is the owner's, hidden here and refused by the
  * service.
@@ -71,12 +72,12 @@ function personPages(identity: Person): readonly MachinePage[] {
 }
 
 const ROLE_SECTIONS: Readonly<Record<Role, readonly Section[]>> = {
-  viewer: ["overview", "audience", "access"],
-  developer: ["overview", "audience", "secrets", "access"],
-  admin: ["overview", "audience", "secrets", "access", "backups"],
+  viewer: ["overview", "services", "audience", "access"],
+  developer: ["overview", "services", "audience", "secrets", "access"],
+  admin: ["overview", "services", "audience", "secrets", "access", "backups"],
 }
 
-const OWNER_SECTIONS: readonly Section[] = ["overview", "audience", "secrets", "access", "backups"]
+const OWNER_SECTIONS: readonly Section[] = ["overview", "services", "audience", "secrets", "access", "backups"]
 
 /** The machine's pages this person may open, in the sidebar's order. */
 export function machinePagesFor(identity: IdentityView | null): readonly MachineEntry[] {
@@ -91,10 +92,14 @@ function allowedSections(identity: IdentityView | null, slug: string): readonly 
   return role === null ? ROLE_SECTIONS.viewer : ROLE_SECTIONS[role]
 }
 
-/** A site's sections this person may open, in the sidebar's order. */
-export function sectionsFor(identity: IdentityView | null, slug: string): readonly SectionEntry[] {
+/**
+ * A site's sections this person may open, in the sidebar's order. Given the
+ * site, Services goes for one that runs no service, a static site or a
+ * folder with no manifest: a section with nothing in it disappears.
+ */
+export function sectionsFor(identity: IdentityView | null, slug: string, site?: Pick<Site, "type"> | null): readonly SectionEntry[] {
   const allowed = allowedSections(identity, slug)
-  return SECTIONS.filter((entry) => allowed.includes(entry.section))
+  return SECTIONS.filter((entry) => allowed.includes(entry.section) && (entry.section !== "services" || site == null || site.type === "app"))
 }
 
 /** May this person open this page? A person asking for one that is not theirs is told so. */
@@ -106,6 +111,7 @@ export function mayOpen(page: Page, identity: IdentityView | null): boolean {
 /** The order of the sidebar and the tabs, inside a site. */
 export const SECTIONS: readonly SectionEntry[] = [
   { section: "overview", title: "Overview", path: "/site/" },
+  { section: "services", title: "Services", path: "/site/services/" },
   { section: "audience", title: "Audience", path: "/site/audience/" },
   { section: "secrets", title: "Secrets", path: "/site/secrets/" },
   { section: "access", title: "Access", path: "/site/access/" },

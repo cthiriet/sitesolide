@@ -221,7 +221,7 @@ export function OverviewSection({ slug }: { slug: string }) {
                 deployedBy={deployedBy}
               />
               <div className="min-w-0 @4xl/body:col-span-2 empty:hidden">
-                <ServicesPanel site={snapshot} now={now} />
+                <ServicesPanel site={snapshot} now={now} map={link("services") ?? undefined} />
               </div>
             </div>
           </>

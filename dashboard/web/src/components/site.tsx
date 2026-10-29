@@ -216,6 +216,7 @@ export function SitePage({
   description,
   actions,
   skeleton,
+  wide = false,
   children,
 }: {
   slug: string
@@ -226,6 +227,8 @@ export function SitePage({
   description?: ReactNode
   actions?: ReactNode
   skeleton: ReactNode
+  /** The whole width beside the sidebar, for a canvas, rather than the reading measure. */
+  wide?: boolean
   children: (site: Site) => ReactNode
 }) {
   const { identity } = useData()
@@ -240,8 +243,9 @@ export function SitePage({
         history={history}
         description={description}
         actions={actions}
+        wide={wide}
       />
-      <PageBody>
+      <PageBody className={cn(wide && "max-w-none")}>
         <WithSnapshot skeleton={skeleton}>
           {(snapshot) => {
             const site = snapshot.sites.find((candidate) => candidate.slug === slug)

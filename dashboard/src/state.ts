@@ -39,6 +39,8 @@ import { timerUnit } from "../borrowed/unit";
 import { duration, monitorAlerting, monitorDiscrepancies, type Alerting } from "./monitor";
 export type { Alerting } from "./monitor";
 import { MISSING_SECRET_SEVERITY, type StoreMissing } from "../borrowed/store-protocol";
+import { CONNECTORS_PORT, EGRESS_PROXY_PORT } from "../borrowed/egress";
+import type { RawLink } from "./links";
 
 /**
  * The landing is not served from `/srv/sites/landing` but from the bare
@@ -163,6 +165,14 @@ export type Raw = {
   monitor?: string | null;
   /** Ports listening on the loopback interface. */
   ports: number[];
+  /**
+   * The connections seen open on the loopback, by the unit that opened them
+   * and the port they reach, remembered for a while after they close: see
+   * src/links.ts. Optional, and it stays so: a reading dropped by a collector
+   * older than them does not carry it, and a site's map then shows what its
+   * manifest declares alone.
+   */
+  links?: RawLink[];
   /**
    * The fragments in service in `/etc/caddy/sites`, slug to content. The
    * content serves to confront the portal's door with what the manifest asks
@@ -295,6 +305,16 @@ export type Site = {
   services: SiteService[];
   bytes: number | null;
   deployed: number | null;
+  /** The folder Caddy serves files from before any service, `publicDir`, or null when it serves none beside them. */
+  publicDir: string | null;
+  /** Where its services may go beyond the loopback, as its manifest declares it. */
+  network: Network;
+  /**
+   * Who talks to whom among its services, from visitors through Caddy, and
+   * out through the egress proxy: what was seen open on the loopback, and
+   * what its manifest declares. Empty for a static site.
+   */
+  links: SiteLink[];
   /**
    * What the deployed manifest says its services read, names only, never a
    * value, which does not come in here: the runtime variables' names, then
@@ -327,6 +347,46 @@ export type SiteService = {
   service: Service | null;
   /** When it runs and how it ran, for a scheduled service alone. */
   schedule: Schedule | null;
+  /** The folder of the data folder it keeps live and saves by its own command, a database's, or null. */
+  backup: string | null;
+};
+
+/** Where a project's services may go beyond the loopback, from its manifest. */
+export type Network = {
+  /** `"network": "outbound"`: anywhere. */
+  outbound: boolean;
+  /** The hosts the egress proxy lets them reach, as written. */
+  egress: string[];
+  /** The connectors they ask the machine to lend them. */
+  connectors: string[];
+};
+
+/**
+ * One line of a site's map: who opens connections to what, how many were
+ * open at the last reading and when one last was, and what in the manifest
+ * names it.
+ */
+export type SiteLink = {
+  /**
+   * Who opens it: one of the site's services by unit, without `.service`;
+   * `caddy` for visitors, whom Caddy brings; `outside` for a process that is
+   * none of the site's services, named no further.
+   */
+  from: string;
+  /**
+   * What it reaches: one of the site's services by unit; `egress` for the
+   * egress proxy, on its way to a host of `egress`; `connectors` for a
+   * connector the machine lends.
+   */
+  to: string;
+  /** Connections open at the last reading. */
+  open: number;
+  /** When one was last seen open, null for a link only declared. */
+  seen: number | null;
+  /** What names the port it reaches: variables of `env`, or `start` for the command line; empty for a link only seen. */
+  declared: string[];
+  /** Declared in the project's `env`, which every service receives, and not in the service's own. */
+  shared: boolean;
 };
 
 /**
@@ -407,6 +467,12 @@ export type Snapshot = {
   sites: Site[];
   discrepancies: Discrepancy[];
   machine: RawMachine | null;
+  /**
+   * Did the collector read the connections on the loopback? False for a
+   * reading older than them: a site's map then holds what its manifest
+   * declares alone, and says so, rather than show no traffic.
+   */
+  connections: boolean;
   /**
    * How the monitor's heartbeat and webhook fared at its last pass, built from
    * the status the collector copies (src/monitor.ts). Null when the monitor
@@ -694,6 +760,82 @@ export function declaredSecrets(manifest: Manifest): string[] {
   return [...declaration.runtime, ...declaration.files];
 }
 
+/** Where the services may go beyond the loopback, read tolerantly: validate() judged the manifest at its deployment. */
+function readNetwork(manifest: Manifest | null): Network {
+  const names = (value: unknown): string[] => (Array.isArray(value) ? value.filter((name): name is string => typeof name === "string") : []);
+  return {
+    outbound: manifest?.network === "outbound",
+    egress: names(manifest?.egress),
+    connectors: names(manifest?.connectors),
+  };
+}
+
+/** A text that names `port` on the loopback: `http://127.0.0.1:3049`, `localhost:3049/v1`. */
+function namesPort(text: string, port: number): boolean {
+  return new RegExp(`(?:127\\.0\\.0\\.1|localhost|\\[::1\\]):${port}(?![0-9])`).test(text);
+}
+
+/**
+ * A site's map, from the links the collector saw and what the manifest
+ * declares.
+ *
+ * Seen: a connection opened by one of the site's services, by Caddy, or by
+ * another process, to a port one of its services listens on; and one a
+ * service of the site opened to the egress proxy or its connectors. Every
+ * other is another site's, and none of this one's business: whose they are
+ * goes no further than `outside`.
+ *
+ * Declared: a sibling's port named on the loopback by a service's own `env`
+ * or its `start`, or by the project's `env`, which every service receives.
+ * A service naming its own port declares nothing.
+ */
+export function siteLinks(manifest: Manifest, views: readonly ServiceView[], services: readonly SiteService[], seen: readonly RawLink[]): SiteLink[] {
+  const units = new Set(services.map((service) => service.unit));
+  const byPort = new Map<number, string>();
+  for (const service of services) if (service.port !== null) byPort.set(service.port, service.unit);
+  const found = new Map<string, SiteLink>();
+  const add = (from: string, to: string): SiteLink => {
+    const key = `${from}>${to}`;
+    let link = found.get(key);
+    if (link === undefined) {
+      link = { from, to, open: 0, seen: null, declared: [], shared: false };
+      found.set(key, link);
+    }
+    return link;
+  };
+
+  for (const raw of seen) {
+    const unit = raw.from?.endsWith(".service") ? raw.from.slice(0, -".service".length) : null;
+    const from = unit === "caddy" ? "caddy" : unit !== null && units.has(unit) ? unit : "outside";
+    const to =
+      byPort.get(raw.port) ??
+      (from === "caddy" || from === "outside" ? null : raw.port === EGRESS_PROXY_PORT ? "egress" : raw.port === CONNECTORS_PORT ? "connectors" : null);
+    if (to === null || from === to) continue;
+    const link = add(from, to);
+    link.open += raw.open;
+    link.seen = Math.max(link.seen ?? 0, raw.seen);
+  }
+
+  const own = manifest.services ?? {};
+  const shared = Object.entries(manifest.env ?? {}).filter(([, value]) => typeof value === "string");
+  // `services` was built from `views`, one for one and in their order: the main one's unit is unitOf's, the landing's included.
+  views.forEach((view, index) => {
+    const unit = services[index]?.unit ?? view.unit;
+    const env = view.name === null ? [] : Object.entries(own[view.name]?.env ?? {}).filter(([, value]) => typeof value === "string");
+    for (const [port, target] of byPort) {
+      if (target === unit) continue;
+      const names = env.filter(([, value]) => namesPort(value, port)).map(([name]) => name);
+      if (typeof view.start === "string" && namesPort(view.start, port)) names.push("start");
+      const common = shared.filter(([, value]) => namesPort(value, port)).map(([name]) => name);
+      if (names.length === 0 && common.length === 0) continue;
+      const link = add(unit, target);
+      link.declared.push(...names, ...common.filter((name) => !names.includes(name)));
+      link.shared = names.length === 0;
+    }
+  });
+  return [...found.values()];
+}
+
 /** The complete snapshot, sites sorted by slug and discrepancies sorted by severity. */
 export function buildSnapshot(raw: Raw): Snapshot {
   const table = readTable(raw.domains);
@@ -758,6 +900,7 @@ export function buildSnapshot(raw: Raw): Snapshot {
         internal: view.internal,
         service: main ? service : readService(view.unit, folder.units?.[view.unit] ?? null, raw.previous?.cpu[view.unit], windowMs),
         schedule: view.kind === "scheduled" ? readSchedule(view, folder.units) : null,
+        backup: view.backup !== null && typeof view.backup.folder === "string" ? view.backup.folder : null,
       };
     });
 
@@ -777,6 +920,9 @@ export function buildSnapshot(raw: Raw): Snapshot {
       services,
       bytes: folder.bytes,
       deployed: folder.deployed,
+      publicDir: app && typeof manifest?.publicDir === "string" ? manifest.publicDir : null,
+      network: readNetwork(manifest),
+      links: manifest === null || !app ? [] : siteLinks(manifest, views, services, raw.links ?? []),
       secrets: manifest === null ? [] : declaredSecrets(manifest),
     });
   }
@@ -790,6 +936,7 @@ export function buildSnapshot(raw: Raw): Snapshot {
     sites,
     discrepancies: sortDiscrepancies(discrepancies),
     machine: raw.machine,
+    connections: raw.links !== undefined,
     alerting: monitorAlerting(raw.monitor, raw.generated),
   };
 }

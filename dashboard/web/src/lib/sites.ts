@@ -267,6 +267,27 @@ export function memoryShare(memory: number | null, limit: number | null): number
   return Math.min(100, Math.round((memory / limit) * 100))
 }
 
+/** What a service's memory shows, the same everywhere: its ring's share and level, its figure, and the words of its tooltip. */
+export type MemoryReading = { percent: number | null; level: Level; text: string; title: string }
+
+/**
+ * A service's memory, or a site's running services' together, as the Sites
+ * list first drew it: an 18 px ring of it against the limit, in the level of
+ * the service's own bounds, and the figure beside it. `full` writes the limit
+ * after the figure, "47 of 256 MB", where there is room for it; the tooltip
+ * says the limit, the share and the peak in any case.
+ */
+export function memoryReading(memory: number, peak: number | null, limit: number | null, full = false): MemoryReading {
+  const percent = memoryShare(memory, limit)
+  const peakWords = peak === null ? "" : limit === null || limit <= 0 ? `; peak ${size(peak)}` : `; peak ${size(peak)}, ${Math.round((peak / limit) * 100)}%`
+  return {
+    percent,
+    level: serviceLevel(memory, peak, limit),
+    text: full && limit !== null ? sizeOutOf(memory, limit) : size(memory),
+    title: limit === null ? `${size(memory)}, no memory limit${peakWords}` : `${size(memory)} of its ${size(limit)} limit, ${percent}%${peakWords}`,
+  }
+}
+
 /**
  * A site's service, as the inventory row shows it: memory against the ceiling,
  * the CPU share of the last minute, the restarts. The site card shows more, see
