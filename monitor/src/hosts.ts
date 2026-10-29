@@ -58,12 +58,15 @@ export function readDomainTable(text: string | null): Array<[string, string]> {
 
 /**
  * Every host to probe, the bare domain and its www first, then each preview,
- * then each customer domain. The bare domain is probed even when the landing
- * has no directory: Caddy serves it all the same, with a certificate of its
- * own that has to be renewed.
+ * then each customer domain. The bare domain is probed even when no project
+ * serves it: Caddy answers it all the same, with a certificate of its own that
+ * has to be renewed. It belongs to the project the table routes it to, the
+ * one that declares the zone as its domain, or to the landing's directory of
+ * a machine from before.
  */
 export function servedTargets(zone: string, folders: readonly string[], domains: ReadonlyArray<[string, string]>): Target[] {
-  const landing = folders.includes(zone) ? zone : null;
+  const declared = domains.find(([domain]) => domain === zone)?.[1];
+  const landing = declared !== undefined && folders.includes(declared) ? declared : folders.includes(zone) ? zone : null;
   const targets: Target[] = [
     { host: zone, slug: landing },
     { host: `www.${zone}`, slug: landing },

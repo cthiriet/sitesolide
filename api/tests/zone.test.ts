@@ -91,15 +91,26 @@ describe("the script that writes the list", () => {
 });
 
 describe("a zone certified through a DNS provider", () => {
-  test("refuses every name of the zone as covered by the wildcard, listed or not", () => {
+  test("refuses every name under the zone as covered by the wildcard, listed or not", () => {
     // The answer of every release before the policy moved to a file, word for
     // word: the zone's blocks never ask, and a name that reaches the endpoint
     // must not get a second certificate.
     for (const files of [zoneFiles(DNS_POLICY, NAMES), zoneFiles(null, NAMES), zoneFiles(null, null)]) {
       const table = tableWith(files, `\t${ZONE} agency\n\tkanban.${ZONE} kanban`);
-      for (const host of [ZONE, `www.${ZONE}`, `kanban.${ZONE}`, `random.${ZONE}`, `a.b.${ZONE}`]) {
+      for (const host of [`kanban.${ZONE}`, `random.${ZONE}`, `a.b.${ZONE}`]) {
         expect({ host, decision: table.decide(host, T0) }).toEqual({ host, decision: { allowed: false, reason: "covered by the wildcard" } });
       }
+    }
+  });
+
+  test("allows the zone itself and its www: the bare domain is certified on demand", () => {
+    // The project that declares the zone serves it from the customer
+    // domains' block or its own app block, both on demand, and an app's
+    // block claims the www beside it. Two names, renewed, never multiplied.
+    for (const files of [zoneFiles(DNS_POLICY, NAMES), zoneFiles(null, NAMES), zoneFiles(null, null)]) {
+      const table = tableWith(files, "");
+      expect(table.decide(ZONE, T0)).toEqual({ allowed: true, reason: "the zone itself" });
+      expect(table.decide(`www.${ZONE}`, T0)).toEqual({ allowed: true, reason: "the zone's www" });
     }
   });
 

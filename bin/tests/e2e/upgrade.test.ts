@@ -132,7 +132,7 @@ describe("sitesolide upgrade, in front of the fake machine", () => {
     expect(checks.map((event) => event.step)).toEqual(IDS);
     expect(checks.find((event) => event.step === "api")).toMatchObject({ status: "todo", detail: "differs: api-release; would run bin/deploy-api.sh" });
     // Read only: the survey and the two components' checks, as root through sudo -n, nothing run.
-    expect(vm.logs()).toEqual(["ACCEPTED sudo -n sh -s upgrade:survey:check", "ACCEPTED sudo -n sh -s upgrade:caddy-config:check", "ACCEPTED sudo -n sh -s upgrade:api:check"]);
+    expect(vm.logs()).toEqual(["ACCEPTED sudo -n sh -s upgrade:survey:check", "ACCEPTED sudo -n sh -s upgrade:api:check", "ACCEPTED sudo -n sh -s upgrade:caddy-config:check"]);
   });
 
   test("the human checklist: each component's state in words, and the command for what is missing", async () => {

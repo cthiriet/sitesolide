@@ -113,13 +113,15 @@ export function isPortalReady(response: ProbeResponse): boolean {
 }
 
 /**
- * The hosts to question: the bare domain and www, served by the landing, then
- * `<slug>.<zone>` for each served directory. The landing's directory is
- * already covered by the bare domain, and a name that is not a slug has no
- * address under the zone.
+ * The hosts to question: the bare domain, served by the project that
+ * declares the zone or by an old landing's directory, then `<slug>.<zone>`
+ * for each served directory. Not www, which only sends to the bare domain: a
+ * redirect is not an answer here, and it would be named silent after every
+ * action. The landing's directory is already covered by the bare domain, and
+ * a name that is not a slug has no address under the zone.
  */
 export function servedHosts(zone: string, slugs: string[]): string[] {
-  const hosts = [zone, `www.${zone}`];
+  const hosts = [zone];
   for (const slug of [...slugs].sort()) {
     if (slug === zone || !isValidSlug(slug)) continue;
     hosts.push(`${slug}.${zone}`);

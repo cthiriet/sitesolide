@@ -951,8 +951,8 @@ export function buildEnvOf(manifest: Manifest): [string, string][] {
 
 /**
  * The served zone, for the one rule that depends on it: a customer domain
- * declared under it would get nothing, the wildcard and the apex already
- * covering it.
+ * declared under it would get nothing, the wildcard already covering it. The
+ * zone itself is the one name of it a project may declare, the bare domain.
  *
  * It comes from the environment rather than from a parameter because this
  * module is also embedded by the dashboard, which validates the same manifests
@@ -1155,10 +1155,13 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
     const domain = manifest.domain;
     if (typeof domain.name !== "string" || !isValidDomain(domain.name)) {
       errors.push("domain.name: invalid domain name");
-    } else if (zone !== "" && (domain.name === zone || domain.name.endsWith(`.${zone}`))) {
-      // The `ask` endpoint already refuses these domains: the wildcard and the
-      // apex cover them, and a manifest declaring them would get nothing.
-      errors.push(`domain.name: the ${zone} zone is already covered by the wildcard`);
+    } else if (zone !== "" && domain.name.endsWith(`.${zone}`)) {
+      // The `ask` endpoint already refuses these domains: the wildcard covers
+      // them, and a manifest declaring them would get nothing. The zone itself
+      // is not one of them: the bare domain is served by the project that
+      // declares it, as any customer domain, and its www by the wildcard
+      // block, which sends it there.
+      errors.push(`domain.name: ${domain.name} is under the ${zone} zone, which the wildcard already covers; the zone itself, ${zone}, may be declared`);
     }
     if (isHeadless(manifest)) {
       // Its address answers a line saying the project serves no page: a

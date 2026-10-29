@@ -154,7 +154,9 @@ HTTP-01 or TLS-ALPN-01, goes through the DNS-01 challenge too:
 `tunnel.caddy` sets a global issuer, Let's Encrypt with Cloudflare's DNS
 module and the machine's own token, which becomes the issuer of every policy
 that names none, the on-demand one of the customer domains and of each app's
-domain. The `ask` endpoint still decides which names get one. Caddy builds
+domain. The bare domain is one of them, the domain of the project that
+declares the zone, and the zone's own token certifies it with nothing more to
+allow. The `ask` endpoint still decides which names get one. Caddy builds
 the zone's issuer on top of that global one, every field the zone's policy
 leaves empty taken from it: the global issuer holds the zone's own
 directive and nothing else, so that the zone's comes out as it was, and a

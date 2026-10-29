@@ -3050,8 +3050,11 @@ async function checkTunnelRoute(domain: NonNullable<Manifest["domain"]>, config:
       const edge = !here && (await servedByEdge(name));
       const answer = edge ? await httpsAnswer(name, EDGE_ANSWER_MS) : null;
       const inactive = answer?.inactive ?? null;
-      const machine = answer?.code === "404" && isSwitchedOff(inactive) ? readCaddyHandshake(await executor.read(config, caddyHandshakeCommand(name))) : null;
-      return { name, here, edge, root: answer?.code ?? null, inactive, machine };
+      // The bare domain and its www, which Caddy answers before any activation: see tunnelRouteProblem.
+      const zone = name === config.zone || name === `www.${config.zone}`;
+      const asked = (answer?.code === "404" && isSwitchedOff(inactive)) || (zone && answer !== null && answer.code !== "502" && !answer.code.startsWith("unreachable"));
+      const machine = asked ? readCaddyHandshake(await executor.read(config, caddyHandshakeCommand(name))) : null;
+      return { name, here, edge, root: answer?.code ?? null, inactive, machine, zone };
     }),
   );
   const problems = readings.flatMap((reading) => {

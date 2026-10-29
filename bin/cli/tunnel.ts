@@ -271,6 +271,8 @@ export type EdgeReading = {
   inactive: string | null;
   /** What Caddy answers for the name on the machine's own loopback, readCaddyHandshake's; null when it was not asked or did not say. */
   machine: CaddyHandshake | null;
+  /** It is the zone itself or its www, which setup routed into the tunnel and Caddy answers before any activation. */
+  zone?: boolean;
 };
 
 /**
@@ -298,12 +300,20 @@ export type EdgeReading = {
  * static site's name, or an app's under a block deployed before the gate,
  * answers otherwise: --force is for that case, once its record is known to
  * point at the tunnel.
+ *
+ * The zone itself and its www, the bare domain a project declares, never
+ * answer that 502: setup routed them into the tunnel with the wildcard, and
+ * the ask endpoint allows them their certificates before any activation, so
+ * Caddy answers them already, the bare domain's 404 while no project serves
+ * it, www's redirect to it. They pass when the machine, asked on its loopback,
+ * answers what the edge relays, the same way.
  */
 export function tunnelRouteProblem(reading: EdgeReading, server: string): string | null {
   const { name, here, edge, root, inactive, machine } = reading;
   if (here) return `${name} points at ${server}, a record from before the tunnel, which nothing answers there now`;
   if (!edge) return `https://${name}${EDGE_TRACE_PATH} answers no trace of Cloudflare's: the name is not proxied there, or its edge certificate is not issued yet`;
   if (root === null || root === "502") return null;
+  if (reading.zone === true && machine?.kind === "answered" && String(machine.status) === root && machine.inactive === inactive) return null;
   if (root === "404" && isSwitchedOff(inactive)) {
     const own = machine?.kind === "answered" && machine.status === 404 ? machine.inactive : null;
     if (own !== null && own === inactive) return null;

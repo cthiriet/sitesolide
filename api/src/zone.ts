@@ -7,20 +7,26 @@ import { onDemandPolicy, parseZoneNames, ZONE_LABEL } from "./zone-names";
  * The served zone's own names, `<zone>`, `www.<zone>` and `<label>.<zone>`,
  * before the table of customer domains is even read.
  *
- * Two ways of certifying them, and the zone's TLS policy says which
- * (/etc/caddy/tls-zone.caddy, see bin/cli/tls.ts):
+ * The zone itself and `www.<zone>` are allowed whatever the zone's policy.
+ * The bare domain is served as a customer domain is, by the customer domains'
+ * block or by the block of the app that declares it, both certified on
+ * demand; `www.<zone>` by the wildcard block, which sends it to the bare
+ * domain, or by that app's block, which does the same on demand. Two names,
+ * renewed rather than multiplied: allowing them spends no limit.
  *
- *   a DNS provider   one wildcard certificate and the apex's, through a DNS-01
- *                    challenge. Caddy never asks for a name the zone's blocks
- *                    serve, and a name of the zone that reaches the ask
- *                    endpoint is refused, as it always was: a second
- *                    certificate for a name already covered would count
- *                    against the authority's limits.
+ * For the others, two ways of certifying them, and the zone's TLS policy says
+ * which (/etc/caddy/tls-zone.caddy, see bin/cli/tls.ts):
+ *
+ *   a DNS provider   one wildcard certificate, through a DNS-01 challenge.
+ *                    Caddy never asks for a name the zone's blocks serve, and
+ *                    a name of the zone that reaches the ask endpoint is
+ *                    refused, as it always was: a second certificate for a
+ *                    name already covered would count against the
+ *                    authority's limits.
  *   on demand        manual DNS, no API: one certificate per name, at its
- *                    first handshake, and Caddy asks first. Allowed: the zone
- *                    itself and `www.<zone>`, which the landing's block serves,
- *                    and `<label>.<zone>` for a label that is a site deployed
- *                    on the machine, which the wildcard block or the site's own
+ *                    first handshake, and Caddy asks first. Allowed:
+ *                    `<label>.<zone>` for a label that is a site deployed on
+ *                    the machine, which the wildcard block or the site's own
  *                    block serves. Nothing else: the zone's wildcard record
  *                    points every name at the machine, and a random name
  *                    allowed would let anyone spend the authority's fifty
@@ -125,10 +131,10 @@ export function createZone(options: ZoneOptions = {}): Zone {
     decide(host, now) {
       if (zone === "" || (host !== zone && !host.endsWith(`.${zone}`))) return null;
 
-      if (!onDemand.get(now)) return { allowed: false, reason: "covered by the wildcard" };
-
       if (host === zone) return { allowed: true, reason: "the zone itself" };
       if (host === `www.${zone}`) return { allowed: true, reason: "the zone's www" };
+
+      if (!onDemand.get(now)) return { allowed: false, reason: "covered by the wildcard" };
 
       const label = host.slice(0, -(zone.length + 1));
       if (!ZONE_LABEL.test(label)) return { allowed: false, reason: "not a single label under the zone" };

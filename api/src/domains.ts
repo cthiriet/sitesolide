@@ -74,12 +74,13 @@ export function createTable(path: string, ttlMs: number = DOMAIN_TABLE_TTL_MS, z
       const host = normalizeHost(raw);
       if (!host) return { allowed: false, reason: "invalid host name" };
 
-      // The main zone's names never reach the table. With a DNS provider they
-      // are served by the wildcard and by the apex certificate, both obtained
-      // through DNS-01, and authorizing one on demand would issue a second
-      // certificate for a name already covered. With manual DNS, the zone
-      // itself, its www and the sites deployed under it are allowed, and
-      // nothing else.
+      // The main zone's names are decided before the table. The zone itself
+      // and its www are allowed under any policy, the bare domain being
+      // certified on demand like a customer domain. With a DNS provider, the
+      // other names are the wildcard's, obtained through DNS-01, and
+      // authorizing one on demand would issue a second certificate for a name
+      // already covered. With manual DNS, the sites deployed under the zone
+      // are allowed, and nothing else.
       const zoned = zone.decide(host, now);
       if (zoned !== null) return zoned;
 

@@ -8,9 +8,9 @@ import { block, freePort, waitFor } from "./caddy-lab";
 
 /**
  * `.git` and the `.env` files, in a real Caddy: the file servers of a
- * generated block and of the Caddyfile's wildcard, landing and customer-domain
- * blocks answer 404 for them, at any depth, and serve every other file as
- * before.
+ * generated block and of the Caddyfile's wildcard and customer-domain blocks,
+ * the last one serving the bare domain too, answer 404 for them, at any depth,
+ * and serve every other file as before.
  *
  * The CLI no longer sends them (NEVER_SENT), but a `public/` that was a clone
  * may have left them on the machine before, and that is what `hide` is for.
@@ -52,14 +52,14 @@ const SERVED = ["/", "/index.html", "/style.css", "/nested/page.html", "/.well-k
 
 describe.skipIf(CADDY === null)("the file servers hide .git and .env, in Caddy", () => {
   const folder = mkdtempSync(join(tmpdir(), "hidden-caddy-"));
-  const ports = { block: freePort(), wildcard: freePort(), landing: freePort(), domain: freePort() };
+  const ports = { block: freePort(), wildcard: freePort(), domain: freePort() };
   let caddy: ReturnType<typeof Bun.spawn>;
   let service: ReturnType<typeof Bun.serve>;
 
   beforeAll(async () => {
-    for (const site of ["app", "static", "landing", "client"]) lay(join(folder, "sites", site, "public"));
+    for (const site of ["app", "static", "home", "client"]) lay(join(folder, "sites", site, "public"));
     mkdirSync(join(folder, "locks"));
-    writeFileSync(join(folder, "domains.map"), "client.localhost client\n");
+    writeFileSync(join(folder, "domains.map"), "client.localhost client\nlocalhost home\n");
 
     // The app's service: anything that is not a file reaches it.
     service = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("from the service") });
@@ -76,15 +76,12 @@ describe.skipIf(CADDY === null)("the file servers hide .git and .env, in Caddy",
     // header, the TLS policy and the paths change.
     const caddyfile = readFileSync(join(REPO_ROOT, "infra", "caddy", "Caddyfile"), "utf8");
     const wildcard = local(block(caddyfile, "*.{$SITESOLIDE_ZONE} {")).replace("*.{$SITESOLIDE_ZONE} {", `http://*.localhost:${ports.wildcard} {`);
-    const landing = local(block(caddyfile, "{$SITESOLIDE_ZONE}, www.{$SITESOLIDE_ZONE} {"))
-      .replace("{$SITESOLIDE_ZONE}, www.{$SITESOLIDE_ZONE} {", `http://landing.localhost:${ports.landing} {`)
-      .replace(`${folder}/sites/{$SITESOLIDE_ZONE}/public`, join(folder, "sites", "landing", "public"));
     const domain = local(block(caddyfile, "https:// {"))
       .replace("https:// {", `http://:${ports.domain} {`)
       .replace(/\ttls \{\n\t\ton_demand\n\t\}\n/, "");
     writeFileSync(
       join(folder, "Caddyfile"),
-      ["{", "\tadmin off", "\tauto_https off", "}", block(caddyfile, "(commun) {"), fragment, wildcard, landing, domain].join("\n"),
+      ["{", "\tadmin off", "\tauto_https off", "}", block(caddyfile, "(commun) {"), fragment, wildcard, domain].join("\n"),
     );
 
     // {$SITESOLIDE_SLUG} is the label carrying the slug, as bin/deploy-caddy.sh sets it.
@@ -109,8 +106,8 @@ describe.skipIf(CADDY === null)("the file servers hide .git and .env, in Caddy",
   const SITES = [
     ["a generated app block", () => ports.block, "app.localhost"],
     ["the wildcard block", () => ports.wildcard, "static.localhost"],
-    ["the landing's block", () => ports.landing, "landing.localhost"],
     ["the customer domains' block", () => ports.domain, "client.localhost"],
+    ["the customer domains' block, for the bare domain", () => ports.domain, "localhost"],
   ] as const;
 
   for (const [name, port, host] of SITES) {

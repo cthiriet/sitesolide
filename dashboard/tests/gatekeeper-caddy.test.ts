@@ -363,7 +363,7 @@ describe.skipIf(CADDY === null || OPENSSL === null || !PORTAL_FREE || SITE_PORT 
 
     expect(result).toMatchObject({ result: "ok", requested: true, installed: true });
     expect(result.message).toContain("sample.test-zone.invalid answers the portal's 401");
-    expect(result.message).toContain("3 other site(s) still answer");
+    expect(result.message).toContain("2 other site(s) still answer");
     expect(caddy!.pid).not.toBe(pidBefore);
 
     const response = await machine.probe(`sample.${ZONE}`, "/", 5000);

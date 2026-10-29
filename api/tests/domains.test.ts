@@ -78,10 +78,13 @@ describe("decide", () => {
     expect(table.decide("sample-agency.example.evil.test", T0).allowed).toBe(false);
   });
 
-  test("refuses the main zone, already covered by the wildcard and the apex", () => {
+  test("allows the main zone itself and its www, and refuses its other names, covered by the wildcard", () => {
     const table = createTable(tableOnDisk("\ttest-zone.invalid agency\n\tagency.test-zone.invalid agency"));
-    // Even listed by mistake, the zone must not get an individual certificate.
-    expect(table.decide("test-zone.invalid", T0).reason).toBe("covered by the wildcard");
+    // The bare domain is certified on demand, like a customer domain, listed
+    // or not; a name under the zone, even listed by mistake, must not get an
+    // individual certificate.
+    expect(table.decide("test-zone.invalid", T0)).toEqual({ allowed: true, reason: "the zone itself" });
+    expect(table.decide("www.test-zone.invalid", T0)).toEqual({ allowed: true, reason: "the zone's www" });
     expect(table.decide("agency.test-zone.invalid", T0).reason).toBe("covered by the wildcard");
   });
 

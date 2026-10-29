@@ -814,7 +814,7 @@ describe("Anyone with the code", () => {
 
     expect(result).toMatchObject({ result: "ok", requested: false, installed: false });
     expect(result.message).toBe(
-      "code set: validated, reloaded, library.test-zone.invalid answers the door page's 401 and opens with its code, 3 other site(s) still answer",
+      "code set: validated, reloaded, library.test-zone.invalid answers the door page's 401 and opens with its code, 2 other site(s) still answer",
     );
     expect(readManifest(s.disk.manifest!.text).manifest?.lock).toBe(true);
     expect(codesOf(s)).toEqual({ library: CODE });

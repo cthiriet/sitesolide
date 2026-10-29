@@ -53,12 +53,12 @@ component (active, enabled, its files present), plus:
 | backups | `backup.js` or one of its three units differs, or restic, the repository or its key is missing | `bin/deploy-backup.sh install`; the timer stays as it is |
 | egress proxy | `egress.js` or its unit differs | `bin/deploy-egress.sh` |
 | steward | `steward.js`, its unit or the portal relay's two units differ, or it started before the egress proxy's unit was last laid, or before the backups' folder existed | `bin/deploy-steward.sh` |
+| shared service | the release in service differs from `api/`, file by file, or its unit does | `bin/deploy-api.sh`, before the dashboard, whose deployment is the first to deposit the Caddyfile, whose certificates its ask endpoint allows |
 | dashboard | `sitesolide deploy --dry-run --compare` finds a difference: a file to send or delete, its manifest, a missing unit, its Caddy block; every new release, whose version its page names | `sitesolide deploy` in `dashboard/` |
 | collector | one of its two units differs | `bin/deploy-collector.sh` |
 | gatekeeper | `gatekeeper.js` or one of its templates differs, or the single template from before is still there | `bin/deploy-gatekeeper.sh` |
 | installer | `installer.js`, its template or its environment file differs | `bin/deploy-installer.sh` |
 | the Caddyfile | `/etc/caddy/Caddyfile` differs from the release's | `bin/deploy-caddy.sh`, which validates, reloads, verifies and restores on failure |
-| shared service | the release in service differs from `api/`, file by file, or its unit does | `bin/deploy-api.sh` |
 | portal | as the dashboard | `sitesolide deploy` in `portal/` |
 | monitor | `monitor.js`, its unit or its timer differs | `bin/deploy-monitor.sh` |
 
@@ -119,6 +119,69 @@ A machine upgrades one release at a time: from 0.1, follow
 then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
+
+## The bare domain, a project's domain
+
+**What the release brings.** The bare domain and its `www` had a block of
+their own in the Caddyfile, which served `/srv/sites/<zone>/public`, a folder
+no command writes, and relayed `/api/*` to port 3000, the contact form of a
+landing that has since become static. An installation had no way to put
+anything there. The bare domain is now a domain like a client's: the project
+that declares it, `"domain": { "name": "<zone>" }` then `sitesolide domain
+--activate`, serves it, a static site or an app (see
+[the manifest's `domain`](manifest.md#domain)). Until one does, it answers 404,
+as it did on a fresh machine. `www.<zone>` sends to it with a permanent
+redirect, the path kept, and serves nothing.
+
+Its certificate is obtained on demand at the first visit, as a client
+domain's: over HTTP-01 or TLS-ALPN-01 on a machine served directly, over
+DNS-01 with the zone's own token behind a Cloudflare Tunnel. It is no longer
+under the zone's policy: the ask endpoint allows the zone and its `www`
+whatever that policy.
+
+**What `sitesolide upgrade` brings**: the shared service, whose ask endpoint
+allows the bare domain, before anything deposits the new Caddyfile, the
+dashboard's deployment being the first that does: the upgrade now runs it
+right after the steward, so that the endpoint allows what the new Caddyfile
+asks for. `bin/deploy-caddy.sh` checks it too, whoever runs it: it does not
+deposit this Caddyfile over a shared service that refuses a bare domain a
+project declares. The monitor and the
+dashboard read the bare domain as the project's that declares it.
+
+Behind a Cloudflare Tunnel, `sitesolide domain --activate` on the bare domain
+no longer expects the connector's 502 a client's domain answers before its
+activation: Caddy answers the zone and its `www` already, and the check passes
+when the machine, asked on its loopback, answers what the edge relays.
+
+**Before it, on a machine whose bare domain serves a folder named after the
+zone**, a landing laid by hand: `bin/deploy-caddy.sh` stops before any write
+that would deposit this Caddyfile, since it would leave that folder unserved,
+and the upgrade stops with it, at the dashboard, whose deployment is the first
+to deposit it. So does the deployment of any app with this release's CLI, for
+the same reason: a static site's deploys, which deposit no Caddyfile, go on.
+Make the site a project first:
+
+1. Give it a manifest that declares the zone, a static site's for instance:
+
+   ```json
+   { "slug": "home", "publicDir": "public", "domain": { "name": "<zone>" } }
+   ```
+
+   A slug of your choice, not `landing`. Deploy it: `sitesolide deploy`. Its
+   preview answers at `https://home.<zone>`.
+
+2. Switch its domain on: `sitesolide domain --activate`. The table now routes
+   the zone to `home`. The Caddyfile in service still serves the old folder
+   on the bare domain, so nothing a visitor sees changes yet.
+
+3. Run `sitesolide upgrade`. The shared service first, then the dashboard,
+   whose deployment deposits the Caddyfile: it finds the zone declared and
+   allowed, and deposits; its verification queries the bare domain, which now
+   answers from `home`, and its `www`, which sends there.
+
+4. Once it answers, remove the old folder, and what served the old landing
+   beside it, by hand: its unit if it had one, its secrets' files, and its
+   `data/`, which may hold what visitors sent.
 
 ## A second block of service ports
 

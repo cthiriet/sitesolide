@@ -347,6 +347,8 @@ Two paths, and they must not be confused.
 get a wildcard, and it needs a token that can edit the zone. Every project under
 the zone shares that certificate. A block that diverged on TLS policy would
 silently get its own certificate instead, so they all import the same snippet.
+The bare domain is not under the wildcard: it is the domain of the project
+that declares it, and certified as a customer domain is, below.
 
 **A customer domain** gets its own certificate, issued on first request over
 Caddy's default challenges, HTTP-01 or TLS-ALPN-01, one picked at random and

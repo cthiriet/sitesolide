@@ -19,7 +19,7 @@ export const DOMAIN_TABLE_TTL_MS = 10_000;
 
 /**
  * Zone covered by the wildcard certificate, therefore barred from on demand
- * issuance.
+ * issuance, but for the zone itself and its www: see src/zone.ts.
  *
  * It comes from the environment, which the unit sets from the machine's
  * configuration. No default value: a ready made zone here would refuse someone

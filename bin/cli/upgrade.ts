@@ -9,12 +9,12 @@
  *   backups        the backup component       bin/deploy-backup.sh install, before the steward
  *   egress         the egress proxy           bin/deploy-egress.sh, the steward restarted after it
  *   steward        the steward                bin/deploy-steward.sh
+ *   api            the shared service         bin/deploy-api.sh, before anything deposits the Caddyfile
  *   dashboard      the dashboard              sitesolide deploy in dashboard/
  *   collector      the collector's units      bin/deploy-collector.sh, after the dashboard
  *   gatekeeper     the gatekeeper             bin/deploy-gatekeeper.sh, after the dashboard
  *   installer      the installer              bin/deploy-installer.sh, after the steward
  *   caddy-config   the Caddyfile              bin/deploy-caddy.sh
- *   api            the shared service         bin/deploy-api.sh
  *   portal         the portal                 sitesolide deploy in portal/
  *   monitor        the monitor                bin/deploy-monitor.sh
  *
@@ -23,7 +23,10 @@
  * egress proxy before the steward too, which must start again after it to
  * write the connectors' folder; the root components that only listen before
  * the dashboard, which accept the old one and the new one; the gatekeeper and
- * the installer, which embed the CLI's generators, after it.
+ * the installer, which embed the CLI's generators, after it; the shared
+ * service before the dashboard, whose deployment is the first to deposit the
+ * Caddyfile: its ask endpoint must allow every name the new Caddyfile
+ * certifies on demand before Caddy asks, the bare domain since 0.14.
  *
  * OUT OF DATE IS MEASURED, NEVER ASSUMED. Each component is a step of
  * bin/cli/steps.ts: a check that only reads, and a run, the very script or
@@ -423,6 +426,23 @@ export function upgradeComponents(): Component[] {
       inspect: (context) => journal(context, "sitesolide-steward"),
     },
     {
+      id: "api",
+      title: "shared service",
+      installed: { label: "installed", test: "test -e /srv/api/current" },
+      plan: "bin/deploy-api.sh",
+      check: (context) =>
+        machineState(context, "api", [
+          ...C.api,
+          kitFile(context, "api/deploy/sitesolide-api.service", `${UNITS}/sitesolide-api.service`),
+          {
+            label: "api-release",
+            test: `[ "$(${treeDigestCommand("/srv/api/current", API_LEFT_OUT)})" = '${treeDigest(join(context.deps.kitRoot, "api"), API_LEFT_OUT)}' ]`,
+          },
+        ]),
+      run: (context) => script(context, "deploy-api.sh"),
+      inspect: (context) => journal(context, "sitesolide-api"),
+    },
+    {
       id: "dashboard",
       title: "dashboard",
       installed: present("installed", "/srv/sites/dashboard/sitesolide.json"),
@@ -477,23 +497,6 @@ export function upgradeComponents(): Component[] {
       check: (context) => machineState(context, "caddy-config", [...C["caddy-config"], kitFile(context, "infra/caddy/Caddyfile", "/etc/caddy/Caddyfile", "caddyfile-current")]),
       run: (context) => script(context, "deploy-caddy.sh"),
       inspect: (context) => journal(context, "caddy"),
-    },
-    {
-      id: "api",
-      title: "shared service",
-      installed: { label: "installed", test: "test -e /srv/api/current" },
-      plan: "bin/deploy-api.sh",
-      check: (context) =>
-        machineState(context, "api", [
-          ...C.api,
-          kitFile(context, "api/deploy/sitesolide-api.service", `${UNITS}/sitesolide-api.service`),
-          {
-            label: "api-release",
-            test: `[ "$(${treeDigestCommand("/srv/api/current", API_LEFT_OUT)})" = '${treeDigest(join(context.deps.kitRoot, "api"), API_LEFT_OUT)}' ]`,
-          },
-        ]),
-      run: (context) => script(context, "deploy-api.sh"),
-      inspect: (context) => journal(context, "sitesolide-api"),
     },
     {
       id: "portal",

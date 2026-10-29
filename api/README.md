@@ -37,10 +37,11 @@ domain are refused:
 | Case | Answer | Why |
 |---|---|---|
 | Domain absent from the table | 403 | nothing ties it to a project |
-| The served zone and its subdomains, with a DNS provider | 403 | already covered by the wildcard and the apex |
+| The served zone's subdomains, with a DNS provider | 403 | already covered by the wildcard |
 | Invalid hostname, IP address | 403 | cannot be certified |
 
-With manual DNS the served zone's names are decided differently, see below.
+The zone itself and its `www` are always allowed, and with manual DNS the
+served zone's other names are decided differently, see below.
 
 Two consequences worth keeping in mind:
 
@@ -60,12 +61,14 @@ variable has to reach a running process.
 
 | The zone's policy | The zone's names | Why |
 |---|---|---|
-| a DNS provider's, or no file | all refused, `covered by the wildcard` | Caddy never asks for them; a second certificate for a covered name would count against the authority's limits. The answer of every release before the file, word for word |
-| `on_demand`, manual DNS | `<zone>` and `www.<zone>` allowed; `<label>.<zone>` allowed for a site deployed on the machine; every other name refused | the wildcard record points every name at the machine: a random name allowed would let anyone spend the authority's fifty certificates a week on the zone |
+| any | `<zone>` and `www.<zone>` allowed | the bare domain is the domain of the project that declares it, certified on demand by the customer domains' block or the app's own, and an app's block claims its www beside it. Two names, renewed, never multiplied |
+| a DNS provider's, or no file | every name under the zone refused, `covered by the wildcard` | Caddy never asks for them; a second certificate for a covered name would count against the authority's limits. The answer of every release before the file, word for word |
+| `on_demand`, manual DNS | `<label>.<zone>` allowed for a site deployed on the machine; every other name under the zone refused | the wildcard record points every name at the machine: a random name allowed would let anyone spend the authority's fifty certificates a week on the zone |
 
-A name allowed is always one Caddy routes: the zone and its www to the
-landing's block, a deployed site's label to the wildcard block or the site's
-own. A name of two labels or more under the zone never is, the wildcard
+A name allowed is always one Caddy routes: the zone to the customer domains'
+block or to the app that declares it, its www to the wildcard block, which
+sends it to the bare domain, or to that app's block, a deployed site's label
+to the wildcard block or the site's own. A name of two labels or more under the zone never is, the wildcard
 matching one label only, and the table of customer domains never decides a
 name of the zone, whatever it lists.
 
@@ -77,7 +80,7 @@ the machine from the folders there, by one script, `zoneNamesScript` in
 `sitesolide remove` once the folder is gone, `bin/deploy-caddy.sh` before each
 deposit, `bin/generate-domains.sh`, and the dashboard's installer for a token's
 deployment, from the copy the dashboard borrows. A folder whose name is not one
-DNS label, the landing's, is left out. The list
+DNS label, an old landing's named after the zone, is left out. The list
 is read like the table, with one difference: a name it lacks makes it read
 again once a second has passed since the last read, so that a site deployed a
 moment ago gets its certificate at the first handshake, and a flood of random

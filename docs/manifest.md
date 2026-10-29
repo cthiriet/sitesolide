@@ -57,13 +57,14 @@ The project's name, and the only one it has. It becomes a DNS label
 (`site-<slug>`) and, for an app, a systemd unit.
 
 Lowercase letters, digits and hyphens, not starting or ending with a hyphen, 63
-characters at most. `landing` is refused: it is reserved for the project that
-serves the bare domain. `machine` too: the backups keep the machine's own
-state, its secrets among them, under that name.
+characters at most. `landing` is refused: it is reserved for the landing an
+installation from before 0.14 served from a folder named after the zone.
+`machine` too: the backups keep the machine's own state, its secrets among
+them, under that name.
 
 So are the names of the services the machine runs, `caddy`, `ssh`, `cron`,
 `nftables` and the others `isSystemName` lists in `bin/cli/manifest.ts`, every
-`systemd-*` and `sitesolide-*`, `www`, which the landing serves, and
+`systemd-*` and `sitesolide-*`, `www`, which sends to the bare domain, and
 `public`: Caddy roots a host at `/srv/sites/<first label>/public`, and a host
 whose first label is empty, `.<zone>`, at `/srv/sites//public`, which is
 `/srv/sites/public`, the folder of a project of that name, its manifest and
@@ -758,6 +759,24 @@ on a domain switched on, a token's deployment that adds a name is refused,
 since it would switch the whole domain off. A domain under the served zone is refused, the wildcard
 already covers it, and so is a domain for a project that serves no page, see
 [A project that serves no page](#a-project-that-serves-no-page).
+
+**The bare domain** is the zone itself, and a project declares it as it would
+any domain, a static site or an app:
+
+```json
+"domain": { "name": "example.com" }
+```
+
+where `example.com` is the zone `sitesolide init` was given, then
+`sitesolide domain --activate`. It is served as a customer domain is: a
+static site's by Caddy's shared block for customer domains, which also sends
+`Strict-Transport-Security` there, an app's by its own block. Its certificate
+is obtained on demand at the first visit, over HTTP-01 or TLS-ALPN-01, or
+over DNS-01 with the zone's own token behind a Cloudflare Tunnel. Its `www`
+answers a permanent redirect to it, the path kept, from the wildcard block,
+or from the app's own block for an app; it serves nothing of its own. One
+project holds it at a time, as any name. Until one does, the bare domain
+answers 404.
 
 The domain is the site's address once it is active, with its aliases and the
 `www` of a second level domain, which the table adds by itself. An app's

@@ -59,10 +59,9 @@ describe("isPortalReady", () => {
 });
 
 describe("servedHosts", () => {
-  test("the bare domain, www, then each served slug, without the landing's directory", () => {
+  test("the bare domain, then each served slug, without www, which only sends there, nor the landing's directory", () => {
     expect(servedHosts("test-zone.invalid", ["test-zone.invalid", "cms", "calendar", "Not_A_Slug", "a.b"])).toEqual([
       "test-zone.invalid",
-      "www.test-zone.invalid",
       "calendar.test-zone.invalid",
       "cms.test-zone.invalid",
     ]);

@@ -58,7 +58,7 @@ function folder(prefix = "upgrade-"): string {
 }
 
 /** The order the components of a machine served directly are brought up to date in, as docs/upgrading.md gives it. */
-const ORDER = ["caddy-unit", "backups", "egress", "steward", "dashboard", "collector", "gatekeeper", "installer", "caddy-config", "api", "portal", "monitor"];
+const ORDER = ["caddy-unit", "backups", "egress", "steward", "api", "dashboard", "collector", "gatekeeper", "installer", "caddy-config", "portal", "monitor"];
 
 /** Every component, the tunnel's included, which a machine served directly does not carry. */
 const ALL = ["caddy-unit", "tunnel", ...ORDER.slice(1)];

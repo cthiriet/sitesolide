@@ -187,14 +187,21 @@ describe("validation", () => {
     expect(validate({ ...APP, secrets: ["MY_API_KEY"] })).toEqual([]);
   });
 
-  test("refuses a domain of the zone, already covered by the wildcard", () => {
+  test("refuses a domain under the zone, already covered by the wildcard", () => {
     // The `ask` endpoint already refuses them: a manifest that declares them
     // would obtain no certificate, and the manifest must say so right away.
-    for (const name of [ZONE, `notes.${ZONE}`]) {
+    for (const name of [`notes.${ZONE}`, `www.${ZONE}`, `a.b.${ZONE}`]) {
       expect(validate({ ...STATIC, domain: { name: name } }, ZONE)).toContainEqual(
         expect.stringContaining("wildcard"),
       );
     }
+  });
+
+  test("accepts the zone itself, the bare domain, for a static site and for an app", () => {
+    // Served as a customer domain is: the table routes a static site's, the
+    // app's own block claims an app's, and the ask endpoint allows the name.
+    expect(validate({ ...STATIC, domain: { name: ZONE } }, ZONE)).toEqual([]);
+    expect(validate({ ...APP, domain: { name: ZONE, aliases: ["sample-agency.example"] } }, ZONE)).toEqual([]);
   });
 
   test("with no zone declared, no domain is refused on that ground", () => {

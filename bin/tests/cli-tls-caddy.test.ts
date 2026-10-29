@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { generateFragment } from "../cli/fragment";
 import type { Manifest } from "../cli/manifest";
 import { CLOUDFLARE_POLICY, tlsZoneContent } from "../cli/tls";
+import { block } from "./caddy-lab";
 
 /**
  * The zone's TLS policy moved from the Caddyfile to a file of the machine,
@@ -72,6 +73,18 @@ function withoutHidden(json: unknown, path: string): unknown {
     Object.entries(json).map(([key, value]) => [key, key === "hide" && Array.isArray(value) ? value.filter((entry) => entry !== path) : withoutHidden(value, path)]),
   );
 }
+
+/** The landing's block of the reference, which this release no longer has: the bare domain is a domain of the table. */
+const LANDING_HEADER = "{$SITESOLIDE_ZONE}, www.{$SITESOLIDE_ZONE} {";
+
+/** The lines this release adds for the bare domain: www sent to it from the wildcard block, its HSTS in the nameless block. */
+const BARE_LINES = [
+  "\t@www host www.{$SITESOLIDE_ZONE}\n",
+  '\theader @www Strict-Transport-Security "max-age=31536000"\n',
+  "\tredir @www https://{$SITESOLIDE_ZONE}{uri} permanent\n",
+  "\t@bare host {$SITESOLIDE_ZONE}\n",
+  '\theader @bare Strict-Transport-Security "max-age=31536000"\n',
+];
 
 /** The configuration with no proxy handing on the visitor's address, which the landing's form proxy does since the Cloudflare Tunnel. */
 function withoutVisitorAddress(json: unknown): unknown {
@@ -153,11 +166,15 @@ describe.skipIf(CADDY === null)(`the zone's TLS policy in a file, in Caddy${WITH
     rmSync(folder, { recursive: true, force: true });
   });
 
-  test(`${REFERENCE}'s Caddyfile, and this one with the policy deploy-caddy.sh lays, give the same configuration`, () => {
+  test(`${REFERENCE}'s Caddyfile, and this one with the policy deploy-caddy.sh lays, give the same configuration, the bare domain aside`, () => {
     writeFileSync(policy, directive(tlsZoneContent(CLOUDFLARE_POLICY)));
-    writeFileSync(caddyfile, reference);
+    // The bare domain is this release's one change of structure: the
+    // landing's block taken out of the reference, the lines that replace it
+    // out of this one, and the rest must be the same configuration.
+    writeFileSync(caddyfile, reference.replace(block(reference, LANDING_HEADER), ""));
     const before = adapt(caddyfile);
-    writeFileSync(caddyfile, current);
+    for (const line of BARE_LINES) expect(current).toContain(line);
+    writeFileSync(caddyfile, BARE_LINES.reduce((text, line) => text.replace(line, ""), current));
     const after = adapt(caddyfile);
     expect({ code: before.code, after: after.code }).toEqual({ code: 0, after: 0 });
 
@@ -176,8 +193,13 @@ describe.skipIf(CADDY === null)(`the zone's TLS policy in a file, in Caddy${WITH
     // And the comparison is worth something: the zone's names, the app's
     // preview among them, are under the zone's policy, the DNS challenge's
     // or what stands in for it, and the customer domains under on demand.
-    const zone = policies(after.json).find((one) => one.subjects?.includes(`*.${ZONE}`));
-    expect(zone?.subjects).toEqual(expect.arrayContaining([ZONE, `www.${ZONE}`, `*.${ZONE}`, `${APP.slug}.${ZONE}`]));
+    // The bare domain is not one of them any more: no block names it.
+    writeFileSync(caddyfile, current);
+    const whole = adapt(caddyfile);
+    expect(whole.code).toBe(0);
+    const zone = policies(whole.json).find((one) => one.subjects?.includes(`*.${ZONE}`));
+    expect(zone?.subjects).toEqual(expect.arrayContaining([`*.${ZONE}`, `${APP.slug}.${ZONE}`]));
+    expect(zone?.subjects).not.toContain(ZONE);
     if (WITH_MODULE) {
       expect(zone?.issuers?.some((issuer) => issuer.challenges?.dns?.provider?.name === "cloudflare")).toBe(true);
     } else {
@@ -186,7 +208,7 @@ describe.skipIf(CADDY === null)(`the zone's TLS policy in a file, in Caddy${WITH
     expect(zone?.on_demand).toBeUndefined();
     // The customer domains keep theirs: on demand, with no subject, the
     // catch-all the app's own domain and the nameless block share.
-    expect(policies(after.json).some((one) => one.on_demand === true && one.subjects === undefined)).toBe(true);
+    expect(policies(whole.json).some((one) => one.on_demand === true && one.subjects === undefined)).toBe(true);
   });
 
   test("the Caddyfile does not adapt without the policy: no zone falls back to Caddy's defaults", () => {

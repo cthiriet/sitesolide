@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { generateFragment, SITE_VARIABLE, ZONE_HOST } from "../../bin/cli/fragment";
 import { domainHosts, type Manifest } from "../../bin/cli/manifest";
-import { IDENTITY_STRIP } from "../../bin/cli/portal";
 import { knownManifests } from "../../bin/tests/manifests";
 
 /**
@@ -64,11 +63,27 @@ describe("infra/caddy/Caddyfile", () => {
     expect(caddyfile).toInclude("/etc/caddy/locks/*.caddy");
   });
 
-  test("the landing, which reaches an app, takes the visitor's identity headers off", () => {
-    // Every block that reaches an app does, in the spellings the generator
-    // writes: a header a visitor sends must never pass for the portal's.
-    const landing = block(caddyfile, "{$SITESOLIDE_ZONE}, www.{$SITESOLIDE_ZONE} {");
-    for (const pattern of IDENTITY_STRIP) expect(landing).toInclude(`\trequest_header -${pattern}\n`);
+  test("has no block of the bare domain: the project that declares the zone serves it", () => {
+    // A block of the zone's own address here would take it from the app that
+    // declares the zone, and two blocks of one address fail the whole
+    // configuration. Nothing proxies to the landing's old service either.
+    const addresses = caddyfile.split("\n").filter((line) => !line.startsWith("\t") && !line.startsWith("#") && line.endsWith("{"));
+    expect(addresses.filter((line) => line.startsWith(ZONE_HOST) || line.startsWith(`www.${ZONE_HOST}`))).toEqual([]);
+    expect(caddyfile).not.toInclude("127.0.0.1:3000");
+  });
+
+  test("the zone's www only sends to the bare domain, ahead of the locks and the file server", () => {
+    // redir comes before handle and file_server in Caddy's order: whatever a
+    // lock or a public/ holds, www serves none of it.
+    const wildcard = block(caddyfile, "*.{$SITESOLIDE_ZONE} {");
+    expect(wildcard).toInclude(`\t@www host www.${ZONE_HOST}\n`);
+    expect(wildcard).toInclude(`\tredir @www https://${ZONE_HOST}{uri} permanent\n`);
+  });
+
+  test("the bare domain keeps the HSTS of its old block, and a client's domain gets none", () => {
+    const domains = block(caddyfile, "https:// {");
+    expect(domains).toInclude(`\t@bare host ${ZONE_HOST}\n\theader @bare Strict-Transport-Security "max-age=31536000"\n`);
+    expect(domains.split("\n").filter((line) => line.includes("Strict-Transport-Security"))).toHaveLength(1);
   });
 
   test("the static sites' domains close with their previews, each by the site its table names", () => {
@@ -88,11 +103,6 @@ describe("infra/caddy/Caddyfile", () => {
     // after respond.
     const domains = block(caddyfile, "https:// {");
     expect(domains).toInclude("\t@app file {\n\t\troot /etc/caddy/sites\n\t\ttry_files {folder}.caddy\n\t}\n\trespond @app 404\n");
-  });
-
-  test("does not import the locks in the landing's block", () => {
-    // No stanza is meant for it, and it reaches an app.
-    expect(block(caddyfile, "{$SITESOLIDE_ZONE}, www.{$SITESOLIDE_ZONE} {")).not.toInclude("/etc/caddy/locks");
   });
 });
 

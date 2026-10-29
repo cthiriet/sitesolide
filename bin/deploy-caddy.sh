@@ -33,6 +33,10 @@
 # the manifest the VM carries for its site. The portal of a deployed site is set
 # from the dashboard, and the VM is the source of truth: the script refuses to
 # contradict it and points to `sitesolide deploy`, which reads the door there.
+# And, when this run deposits the Caddyfile, a bare domain still served from
+# /srv/sites/<zone>/public, the block of the Caddyfile from before 0.14, which
+# no project's domain replaces yet, or a bare domain a project declares over a
+# shared service whose ask endpoint refuses it.
 #
 # WHAT KEEPS IT ALONE ON CADDY: the lock it shares with the dashboard's
 # gatekeeper, /run/sitesolide-gatekeeper/caddy.lock, taken before the guard and
@@ -174,6 +178,7 @@ compare() {
   fi
 }
 compare "$CADDYFILE" /etc/caddy/Caddyfile
+CADDYFILE_TO_DEPOSIT="$DIFFERENCES"
 for block in ${BLOCKS[@]+"${BLOCKS[@]}"}; do compare "$block" "/etc/caddy/sites/$(basename "$block")"; done
 
 # The zone's TLS policy, which the Caddyfile imports by name: a missing file
@@ -220,6 +225,68 @@ EOF
     exit 1
     ;;
 esac
+
+# The bare domain used to have a block of its own in the Caddyfile, serving
+# /srv/sites/<zone>/public, a folder no deployment writes. This Caddyfile has
+# none: the bare domain is the domain of the project that declares the zone,
+# and the table routes it. Deposited over a Caddyfile from before, it would
+# take that folder off the bare domain, which no line of the table replaces,
+# and the verification, which queries the bare domain only once the table
+# routes it, would not see it go. Said here, before the slightest write: what
+# to do is a deployment, not a Caddyfile. Only when this run deposits the
+# Caddyfile: over this one already in service, the folder is served by
+# nothing whatever the run does, and a project's block must still go out. A
+# connection that fails stops here too.
+#
+# A bare domain a project declares is certified on demand by this Caddyfile,
+# and the ask endpoint of a shared service from before 0.14 refuses it as
+# covered by the wildcard: deposited over it, the reload would leave the bare
+# domain without a certificate until that service is deployed, which
+# `sitesolide upgrade` does first. Asked of the endpoint itself, as Caddy
+# asks it, as root, the loopback rule letting only Caddy and root reach it.
+BARE_STATE="$(ssh "$SITESOLIDE_SERVER" "
+  if awk -v zone=$SITESOLIDE_ZONE '\$1 == zone { found = 1 } END { exit !found }' /etc/caddy/domaines.map 2>/dev/null; then echo declared
+  elif [ -n \"\$(ls -A /srv/sites/$SITESOLIDE_ZONE/public 2>/dev/null)\" ]; then echo stranded
+  else echo none; fi" || true)"
+case "$BARE_STATE" in
+  none) ;;
+  declared)
+    if [ -n "$CADDYFILE_TO_DEPOSIT" ]; then
+      asked="$(ssh "$SITESOLIDE_SERVER" "sudo curl -s -o /dev/null -w '%{http_code}' --max-time 5 'http://127.0.0.1:3001/interne/domaine-autorise?domain=$SITESOLIDE_ZONE'" || true)"
+      if [ "$asked" != 200 ]; then
+        cat >&2 <<EOF
+!! STOP: $SITESOLIDE_ZONE is a project's domain, which this Caddyfile certifies
+   on demand, and the shared service in service does not allow it (its ask
+   endpoint answered ${asked:-nothing}). Deposited, it would leave the bare
+   domain without a certificate. Deploy the shared service first,
+   bin/deploy-api.sh, or run sitesolide upgrade, which does. Nothing was changed.
+EOF
+        exit 1
+      fi
+    fi
+    ;;
+  stranded)
+    if [ -z "$CADDYFILE_TO_DEPOSIT" ]; then
+      echo "   note: /srv/sites/$SITESOLIDE_ZONE/public is served by nothing, the bare domain being a project's domain since 0.14: see docs/upgrading.md"
+    else
+      cat >&2 <<EOF
+!! STOP: /srv/sites/$SITESOLIDE_ZONE/public is served on the bare domain by a
+   block of the Caddyfile in service, which this Caddyfile no longer has.
+   Deposited, it would leave $SITESOLIDE_ZONE answering 404.
+   Make that site a project that declares the zone as its domain,
+   "domain": { "name": "$SITESOLIDE_ZONE" }, deploy it and activate it with
+   sitesolide domain --activate; or empty the folder if nothing should be
+   served there. See docs/upgrading.md. Nothing was changed.
+EOF
+      exit 1
+    fi
+    ;;
+  *)
+    echo "!! what serves the bare domain could not be read on $SITESOLIDE_SERVER: ${BARE_STATE:-no answer}" >&2
+    exit 1
+    ;;
+esac
+
 if [ -n "$SITESOLIDE_REMOVE" ]; then
   if ssh "$SITESOLIDE_SERVER" "sudo test -e /etc/caddy/sites/$SITESOLIDE_REMOVE"; then
     echo "   TO REMOVE  /etc/caddy/sites/$SITESOLIDE_REMOVE"
@@ -469,13 +536,18 @@ ssh "$SITESOLIDE_SERVER" "sudo rm -rf $WORK" >/dev/null 2>&1 || true
 # configuration that no longer answers on a domain. The sites are queried.
 echo "-> verification"
 ADDRESSES=()
-# The bare domain and www are the landing's, queried like any project only
-# when it serves something: a fresh machine has no landing yet, its two
-# addresses answer 404 by design, and a verification that counted them would
-# undo a correct first install.
-if ssh "$SITESOLIDE_SERVER" "test -n \"\$(ls -A /srv/sites/$SITESOLIDE_ZONE/public 2>/dev/null)\""; then
+# The bare domain is queried like any project, only when it serves something:
+# the table routes it to a folder whose public/ is not empty or whose service
+# is active. A fresh machine has no project declaring it yet, its address
+# answers 404 by design, and a verification that counted it would undo a
+# correct first install. www, which only sends to it, is queried with it, and
+# expected to send.
+if ssh "$SITESOLIDE_SERVER" "
+  folder=\$(awk -v zone=$SITESOLIDE_ZONE '\$1 == zone { print \$2; exit }' /etc/caddy/domaines.map 2>/dev/null)
+  [ -n \"\$folder\" ] && { [ -n \"\$(ls -A /srv/sites/\$folder/public 2>/dev/null)\" ] || systemctl is-active --quiet \"\$folder\"; }"; then
   ADDRESSES+=("https://$SITESOLIDE_ZONE/" "https://www.$SITESOLIDE_ZONE/")
 fi
+WWW_ADDRESS="https://www.$SITESOLIDE_ZONE/"
 
 # The addresses queried are those of the projects REALLY served, read on the VM
 # and not inferred from the repository. A folder of sites/ never deployed has no
@@ -550,6 +622,13 @@ FRESH=" "
 if [ -n "$ZONE_ON_DEMAND" ]; then
   for block in ${BLOCKS[@]+"${BLOCKS[@]}"}; do FRESH="${FRESH}https://$(basename "$block" .caddy).$SITESOLIDE_ZONE/ "; done
 fi
+# The bare domain's certificate moved from the zone's policy to on demand with
+# 0.14: deposited over a Caddyfile from before, this one may leave the first
+# handshake after the reload to obtain it, as for a fresh site's name. Its www
+# too, which an app's block certifies on demand. Waited for the same way.
+if [ -n "$CADDYFILE_TO_DEPOSIT" ]; then
+  FRESH="${FRESH}https://$SITESOLIDE_ZONE/ https://www.$SITESOLIDE_ZONE/ "
+fi
 ORDERED=()
 for address in ${ADDRESSES[@]+"${ADDRESSES[@]}"}; do
   if [[ "$FRESH" != *" $address "* ]]; then ORDERED+=("$address"); fi
@@ -572,7 +651,7 @@ for address in ${ORDERED[@]+"${ORDERED[@]}"}; do
   elif [ "$FAILURES" -eq 0 ] && [[ "$FRESH" == *" $address "* ]]; then
     patience="$FIRST_CERTIFICATE_S"
     if [ "$code" = 000 ]; then
-      echo "   $address: no answer yet; the zone is certified on demand, its first certificate is waited for up to $patience s"
+      echo "   $address: no answer yet; its name is certified on demand, its first certificate is waited for up to $patience s"
     fi
   fi
   waited=0
@@ -581,6 +660,15 @@ for address in ${ORDERED[@]+"${ORDERED[@]}"}; do
     waited=$((waited + 5))
     code="$(probe "$address")"
   done
+  # www sends to the bare domain and serves nothing: its one right answer is
+  # that permanent redirect, which on any other address would be a failure.
+  if [ "$address" = "$WWW_ADDRESS" ]; then
+    case "$code" in
+      301 | 308) printf "   %-44s %s (to the bare domain)\n" "$address" "$code" ;;
+      *) printf "   %-44s %s  FAILED, expected a redirect to the bare domain\n" "$address" "$code"; FAILURES=$((FAILURES + 1)) ;;
+    esac
+    continue
+  fi
   case "$code" in
     # 401 is the intended behaviour of a site that opens with a code, see
     # api/src/locks.ts, and of a site behind the portal, see portal/README.md.

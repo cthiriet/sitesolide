@@ -24,13 +24,14 @@
 {
 	email {$SITESOLIDE_ACME_EMAIL}
 
-	# Certificates for the clients' own domains, obtained on the first
-	# request. The "ask" endpoint is not optional: without it, anyone pointing
-	# their DNS at this machine would trigger issuances in our name. It answers
-	# 200 for the domains present in domaines.map and for those alone, and,
+	# Certificates for the clients' own domains and for the bare domain,
+	# obtained on the first request. The "ask" endpoint is not optional:
+	# without it, anyone pointing their DNS at this machine would trigger
+	# issuances in our name. It answers 200 for the domains present in
+	# domaines.map and for those alone, for the zone itself and its www, and,
 	# when the zone's own policy is on demand (manual DNS, see tls-zone below),
-	# for the zone, its www and the sites deployed under it; if it is stopped,
-	# no issuance takes place.
+	# for the sites deployed under it; if it is stopped, no issuance takes
+	# place.
 	on_demand_tls {
 		ask http://127.0.0.1:3001/interne/domaine-autorise
 	}
@@ -51,19 +52,21 @@
 #
 #   a DNS provider   `dns <module> {env.<CREDENTIAL>}`. The DNS-01 challenge
 #                    obtains the certificate without exposing a port, and it is
-#                    the only way to obtain a wildcard: one for *.zone, one for
-#                    the zone itself. It does require credentials able to modify
-#                    the zone, read from Caddy's environment: they cover only
-#                    the zone served, so this snippet must never be imported by
-#                    a block serving a client's own domain. Those domains go
-#                    through Caddy's default challenges, HTTP-01 or TLS-ALPN-01,
-#                    see the on-demand block at the end of the file. Cloudflare's
+#                    the only way to obtain a wildcard, the one for *.zone. It
+#                    does require credentials able to modify the zone, read
+#                    from Caddy's environment: they cover only the zone
+#                    served, so this snippet must never be imported by a block
+#                    serving a client's own domain. Those domains go through
+#                    Caddy's default challenges, HTTP-01 or TLS-ALPN-01, see
+#                    the on-demand block at the end of the file, and so does
+#                    the zone itself, the bare domain, served there or by the
+#                    block of the app that declares it. Cloudflare's
 #                    is the policy this snippet carried inline up to 0.6, and
 #                    bin/deploy-caddy.sh lays it on a machine from before.
 #   manual DNS       `on_demand`. No DNS API at all: the records are made by
 #                    hand, and each name gets its own certificate at its first
 #                    handshake, through HTTP-01 or TLS-ALPN-01, once the ask
-#                    endpoint above agrees. It agrees to the zone, its www and
+#                    endpoint above agrees. It agrees to the zone, its www,
 #                    the sites deployed under it, and to nothing else: the
 #                    wildcard record points every name here, and an allowed
 #                    random name would spend the authority's weekly limit.
@@ -140,43 +143,14 @@
 	header @revalidated ?Cache-Control "no-cache"
 }
 
-# The landing. The wildcard does not cover the bare domain: this block therefore
-# has its own certificate, for the name of the zone alone. www, for its part, is
-# a subdomain like any other and rests on the wildcard. With manual DNS, every
-# name has a certificate of its own, these two included.
-{$SITESOLIDE_ZONE}, www.{$SITESOLIDE_ZONE} {
-	import tls-zone
-	import commun
-
-	# The contact form, the landing's only dynamic route. It is served by the
-	# service of the landing itself, sitesolide-landing on port 3000, and not by
-	# the shared service on port 3001: every site carries its own code, the
-	# landing like a client. All the rest of the page is served by the
-	# file_server below, without waking Bun.
-	#
-	# A matcher set on reverse_proxy rather than a handle: the handles of a same
-	# block form an exclusive group, which reverse_proxy and file_server do not.
-	# See the header of stanza() in api/src/locks.ts.
-	@form path /api/*
-	reverse_proxy @form 127.0.0.1:3000 {
-		header_up X-Forwarded-For {client_ip}
-	}
-
-	# Nobody signs in on the landing, and the X-Sitesolide-* headers a visitor
-	# sends, in any spelling, are taken off before its service reads them, as in
-	# every block that reaches an app: see openStanza in bin/cli/portal.ts. The
-	# wildcard and the on-demand blocks below need none, they reach no app,
-	# only file_server and the preview locks' door page.
-	request_header -X-Sitesolide*
-	request_header -X_sitesolide*
-
-	root * /srv/sites/{$SITESOLIDE_ZONE}/public
-	file_server {
-		hide .git .env*
-	}
-
-	header Strict-Transport-Security "max-age=31536000"
-}
+# The bare domain has no block of this file. It is the domain of the project
+# that declares the zone itself in its manifest, `"domain": { "name": <zone> }`,
+# and it is served as any customer domain is: by the nameless block at the end
+# of this file for a static site, which the domain table routes, or by the
+# block of the app that declares it, in /etc/caddy/sites/. Until one does, it
+# falls to that nameless block and answers 404. A block of its own here would
+# take the address from the app, and two blocks of one address fail the whole
+# configuration.
 
 # All client sites on a subdomain, covered by a single wildcard certificate. No
 # per-client configuration.
@@ -184,6 +158,18 @@
 	import tls-zone
 	import commun
 	root * /srv/sites/{$SITESOLIDE_SLUG}/public
+
+	# www.<zone> serves nothing of its own: it sends to the bare domain, which
+	# answers whatever the project that declares the zone serves there, and 404
+	# while none does. No project is named www (isSystemName in
+	# bin/cli/manifest.ts). An app that declares the zone claims this name in
+	# its own block, more specific than this one, which sends it to the bare
+	# domain the same way. redir comes before the locks' handles and the file
+	# server in Caddy's order of directives, so nothing is served on this name,
+	# open or closed; the header comes before redir and goes out with it.
+	@www host www.{$SITESOLIDE_ZONE}
+	header @www Strict-Transport-Security "max-age=31536000"
+	redir @www https://{$SITESOLIDE_ZONE}{uri} permanent
 
 	# Neither a repository's history nor a .env is ever served, at any depth,
 	# whatever an earlier deployment left in public/: they answer 404. hide
@@ -223,18 +209,24 @@
 # These blocks are more specific than the zone wildcard and therefore come first.
 import /etc/caddy/sites/*.caddy
 
-# Clients' own domains, which the wildcard does not cover.
+# Clients' own domains, which the wildcard does not cover, and the bare domain.
 #
 # This block has no name: it collects everything that no preceding block claims,
 # and it is the domaines.map table that decides which directory is served.
 # Adding a client is therefore done without touching this file, as for previews.
+# The bare domain is one more line of that table, `<zone> <slug>`, once a
+# static site declares it; the table's `www.<zone>` line never reaches this
+# block, which the wildcard's precedes.
 #
 # The certificate goes through Caddy's default challenges, not through the DNS
 # challenge of the zone: the zone's DNS credentials, when it has any, can only
 # modify the zone served, and the client often keeps their DNS elsewhere. That
 # is why this block does not import tls-zone. Caddy enables HTTP-01 and
 # TLS-ALPN-01, picks one of them at random for each issuance, and tries the
-# other when it fails: ports 80 and 443 both have to reach the machine.
+# other when it fails: ports 80 and 443 both have to reach the machine. Behind
+# a Cloudflare Tunnel, infra/tunnel/tunnel.caddy makes the DNS-01 challenge
+# the default issuer instead, which certifies the bare domain with the zone's
+# own token.
 #
 # An application client site must not land here: its domain belongs to its own
 # file in /etc/caddy/sites/, otherwise Caddy would serve its static files
@@ -248,10 +240,17 @@ https:// {
 
 	map {host} {folder} {
 		# A domain still certified but removed from the table falls here, and
-		# receives a 404 rather than the content of another client.
+		# receives a 404 rather than the content of another client. So does the
+		# bare domain while no project declares it.
 		default "__unknown"
 		import /etc/caddy/domaines.map
 	}
+
+	# The zone is served over HTTPS alone, whoever serves it: the bare domain
+	# keeps the header its own block sent, before it became a domain of the
+	# table. Not a client's domain, which may move away from this machine.
+	@bare host {$SITESOLIDE_ZONE}
+	header @bare Strict-Transport-Security "max-age=31536000"
 
 	# A site that opens with a code closes on its own domain too: the
 	# preview locks recognise the site this block serves by this variable,

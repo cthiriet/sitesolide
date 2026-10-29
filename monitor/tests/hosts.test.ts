@@ -54,6 +54,23 @@ describe("what the machine serves", () => {
     ]);
   });
 
+  test("the bare domain and www belong to the project the table routes the zone to, before a landing's directory", () => {
+    const table: Array<[string, string]> = [
+      [ZONE, "home"],
+      [`www.${ZONE}`, "home"],
+    ];
+    expect(servedTargets(ZONE, ["home", ZONE], table)).toEqual([
+      { host: ZONE, slug: "home" },
+      { host: `www.${ZONE}`, slug: "home" },
+      { host: `home.${ZONE}`, slug: "home" },
+    ]);
+    // A line for a folder the machine no longer carries names nobody.
+    expect(servedTargets(ZONE, ["cms"], table).slice(0, 2)).toEqual([
+      { host: ZONE, slug: null },
+      { host: `www.${ZONE}`, slug: null },
+    ]);
+  });
+
   test("one certificate read per certificate: the wildcard once, the bare domain, each customer domain", () => {
     const targets = servedTargets(ZONE, ["cms", "shop", ZONE], [["sample-agency.example", "cms"]]);
     expect(certificateTargets(ZONE, targets)).toEqual([

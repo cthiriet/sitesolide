@@ -31,7 +31,8 @@ sitesolide setup root@203.0.113.10 --zone example.com --email you@example.com
 ## What you need first
 
 - **A domain, at any registrar.** Every project gets a subdomain of it, and the
-  machine serves the bare domain too. Where its DNS is served by Cloudflare,
+  bare domain is the domain of whichever project declares it, see
+  [the manifest's `domain`](manifest.md#domain). Where its DNS is served by Cloudflare,
   Route 53, Azure, DigitalOcean, Hetzner, Scaleway, Vultr, Akamai, OVHcloud,
   Gandi or Porkbun, setup creates the records and Caddy obtains one wildcard
   certificate, with credentials scoped to the zone; anywhere else, you create

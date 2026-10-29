@@ -179,6 +179,7 @@ describe("bin/deploy-caddy.sh holds the guard's lock to the end", () => {
       "FINGERPRINT",
       "FINGERPRINT",
       "TLS_ZONE",
+      "BARE",
       "BLOCKS",
       "LOCK release deploy-caddy",
     ]);

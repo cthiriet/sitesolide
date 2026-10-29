@@ -55,6 +55,10 @@
  * - `tls-zone-state`: what the reading of the zone's TLS policy answers, one
  *   of TLS_ZONE_STATES in bin/cli/tls.ts. A machine that carries a provider's
  *   policy unless the test lays it;
+ * - `bare-state` and `bare-served`: what bin/deploy-caddy.sh reads of the bare
+ *   domain, whether an old landing's folder serves it with no line of the
+ *   table, and whether the table routes it to a folder that serves. Neither,
+ *   unless the test lays them: a machine whose bare domain no project serves;
  * - `store.json`: the projects' stores of secrets the steward's owner socket
  *   lists, see `StoreState`: their variable names and files, never a value.
  *   A listing is always answered; a change is a write, refused unless the
@@ -120,6 +124,10 @@ export const SWITCHES = {
   standings: "standings.json",
   keepUnits: "keep-units",
   tlsZoneState: "tls-zone-state",
+  /** What bin/deploy-caddy.sh's reading of the bare domain answers: none, declared or stranded. none unless laid. */
+  bareState: "bare-state",
+  /** Present, the table routes the bare domain to a folder that serves, and deploy-caddy.sh probes it with its www. */
+  bareServed: "bare-served",
   store: "store.json",
   storePrepare: "store-prepare",
   /** The names tokens hold ahead of the machine carrying their project: see ClaimsState. */
@@ -294,6 +302,9 @@ const READ_FILE = new RegExp(
 const SCHEDULE = /systemd-analyze calendar "([^"]*)"/g;
 /** How the services stand after the restart, the units last, see stabilityCommand. */
 const STABILITY = new RegExp(`^systemctl show -p Id -p ActiveState -p SubState -p NRestarts -p ExecMainStatus ([a-z0-9. -]+) && echo ${MARKER_DONE}$`);
+/** What tells bin/deploy-caddy.sh's two readings of the bare domain, the state before anything leaves and the probe's. */
+export const BARE_STATE_MARK = "then echo declared";
+export const BARE_SERVED_MARK = "{ print $2; exit }";
 /** What bin/deploy-caddy.sh reads to tell a first install, before its guard. */
 export const FIRST_INSTALL_FILES = "test -f /etc/caddy/sitesolide.env && test -f /etc/caddy/domaines.map";
 /** The guard of bin/deploy-caddy.sh, which checks that the unit loads the zone variables. */
@@ -617,6 +628,19 @@ if (import.meta.main) {
     const laid = join(vm, SWITCHES.tlsZoneState);
     process.stdout.write(`${existsSync(laid) ? readFileSync(laid, "utf8").trim() : TLS_ZONE_STATES.dns}\n`);
     process.exit(0);
+  }
+  // What serves the bare domain, read by bin/deploy-caddy.sh before anything
+  // leaves, then before its probes: readings, hence always answered, from the
+  // switches the test lays.
+  if (command.includes(BARE_STATE_MARK)) {
+    record("BARE");
+    const laid = join(vm, SWITCHES.bareState);
+    process.stdout.write(`${existsSync(laid) ? readFileSync(laid, "utf8").trim() : "none"}\n`);
+    process.exit(0);
+  }
+  if (command.includes(BARE_SERVED_MARK)) {
+    record("BARE_SERVED");
+    process.exit(existsSync(join(vm, SWITCHES.bareServed)) ? 0 : 1);
   }
   if (command === LIST_BLOCKS) {
     record("BLOCKS");

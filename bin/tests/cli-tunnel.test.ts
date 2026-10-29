@@ -382,6 +382,20 @@ describe("a site's own domain behind a tunnel", () => {
     expect(tunnelRouteProblem(reading({ root: "404" }), server)).toContain("Caddy still holds its certificate from an earlier activation, for a static site or an app deployed before");
   });
 
+  test("the bare domain and its www, which Caddy answers before any activation, pass when the machine answers the same", () => {
+    const server = "203.0.113.10";
+    const reading = (fields: Partial<EdgeReading>): EdgeReading => ({ name: ZONE, here: false, edge: true, root: "404", inactive: null, machine: null, zone: true, ...fields });
+    // No project serves the bare domain yet: a 404 at the edge and on the loopback alike; www's redirect alike.
+    expect(tunnelRouteProblem(reading({ machine: { kind: "answered", status: 404, inactive: null } }), server)).toBeNull();
+    expect(tunnelRouteProblem(reading({ name: `www.${ZONE}`, root: "301", machine: { kind: "answered", status: 301, inactive: null } }), server)).toBeNull();
+    // Never on the edge's word alone, nor when the machine answers otherwise.
+    for (const machine of [null, { kind: "refused", exit: 60 }, { kind: "answered", status: 200, inactive: null }] as const) {
+      expect(tunnelRouteProblem(reading({ machine }), server)).toContain(`https://${ZONE}/ answers 404, not the connector's 502`);
+    }
+    // A name that is not the zone's gets no such pass, whatever the machine answers.
+    expect(tunnelRouteProblem(reading({ name: DOMAIN, zone: false, machine: { kind: "answered", status: 404, inactive: null } }), server)).toContain("not the connector's 502");
+  });
+
   test("the workstation waits for the edge longer than the edge waits for an origin it cannot reach", () => {
     // Cloudflare's 522 came after nineteen seconds on a zone's wildcard.
     expect(EDGE_ANSWER_MS).toBeGreaterThanOrEqual(25_000);
@@ -686,8 +700,10 @@ describe.skipIf(CADDY === null)(`the tunnel's certificate issuer, in Caddy${STOO
     expect(all).toHaveLength(without.length);
 
     // The one policy the nameless block of customer domains and the app's own
-    // domain share: the global issuer and no other, with the contact address
-    // the global `email` gives every ACME issuer.
+    // domain share, the bare domain's too: the global issuer and no other,
+    // with the contact address the global `email` gives every ACME issuer.
+    // Behind a tunnel the bare domain is certified through DNS-01, with the
+    // zone's own token.
     const onDemand = onDemandOf(all);
     expect(onDemand).toHaveLength(1);
     expect(onDemand[0]!.subjects).toBeUndefined();
@@ -700,7 +716,8 @@ describe.skipIf(CADDY === null)(`the tunnel's certificate issuer, in Caddy${STOO
     // one holds nothing the zone's directive does not: see the next test for
     // what the comparison sees otherwise.
     const zone = zoneOf(all);
-    expect(zone?.subjects).toEqual(expect.arrayContaining([ZONE, `www.${ZONE}`, `*.${ZONE}`, `${APP.slug}.${ZONE}`]));
+    expect(zone?.subjects).toEqual(expect.arrayContaining([`*.${ZONE}`, `${APP.slug}.${ZONE}`]));
+    expect(zone?.subjects).not.toContain(ZONE);
     expect(zone).toEqual(zoneOf(without));
     expect(zone?.on_demand).toBeUndefined();
     expect(zone?.issuers).toHaveLength(1);
