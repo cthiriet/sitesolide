@@ -224,6 +224,13 @@ export type CreateRequest = {
   nestedVirtualization?: boolean;
   /** The account the key logs into, where the provider lets the request name it. */
   login?: string;
+  /**
+   * The public address the provider hands out at boot, gone with the machine,
+   * where it would otherwise reserve one the machine keeps across a stop: one
+   * permission and one billed resource fewer, for a machine whose address may
+   * change.
+   */
+  ephemeralAddress?: boolean;
 };
 
 /** What a provider accepts beyond the fields every one of them takes. */
@@ -236,6 +243,7 @@ export type Supports = {
   disk?: boolean;
   nestedVirtualization?: boolean;
   login?: boolean;
+  ephemeralAddress?: boolean;
 };
 
 function sameRules(a: readonly Inbound[], b: readonly Inbound[]): boolean {
@@ -267,6 +275,7 @@ export function checkRequest(title: string, request: CreateRequest, supports: Su
   if (request.disk !== undefined && supports.disk !== true) refuse("the size or type of the disk");
   if (request.nestedVirtualization === true && supports.nestedVirtualization !== true) refuse("nested virtualization");
   if (request.login !== undefined && supports.login !== true) refuse("the account the key logs into");
+  if (request.ephemeralAddress === true && supports.ephemeralAddress !== true) refuse("an address it does not reserve");
 }
 
 /** A machine, as `list` shows it and `create` and `destroy` report it. */

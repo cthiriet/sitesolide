@@ -422,7 +422,30 @@ export function networkOf(address: string, netmask: string): string | null {
 
 /** What a type costs a month, in euros before VAT. */
 export function monthlyPrice(type: ScalewayServerType): number {
-  return typeof type.monthly_price === "number" ? type.monthly_price : type.hourly_price * HOURS_A_MONTH;
+  return typeof type.monthly_price === "number" && type.monthly_price > 0 ? type.monthly_price : type.hourly_price * HOURS_A_MONTH;
+}
+
+/** One product of Scaleway's public catalogue, as much of it as a price needs. */
+export type CatalogProduct = {
+  sku?: string;
+  product?: string;
+  status?: string;
+  unit_of_measure?: { unit?: string };
+  price?: { retail_price?: { units?: number | string; nanos?: number | string } };
+};
+
+/**
+ * {type: EUR an hour}, from the catalogue's products: what is sold now, by
+ * the hour, as an instance.
+ */
+export function catalogPrices(products: readonly CatalogProduct[]): Record<string, number> {
+  const prices: Record<string, number> = {};
+  for (const product of products) {
+    if (product.status !== "general_availability" || product.unit_of_measure?.unit !== "hour" || !product.sku?.startsWith("/instance/server/") || product.product === undefined) continue;
+    const price = Number(product.price?.retail_price?.units ?? 0) + Number(product.price?.retail_price?.nanos ?? 0) / 1e9;
+    if (Number.isFinite(price) && price > 0) prices[product.product] = price;
+  }
+  return prices;
 }
 
 /** `2 vCPU, 2 GB RAM, x86_64`: Scaleway gives memory in bytes, in GiB steps. */
@@ -741,11 +764,30 @@ export function scaleway(context: ProviderContext): Provider {
     return items;
   }
 
+  /**
+   * By 29/10 products/servers answered hourly_price 0 for every type: the
+   * prices are in the public Product Catalog now, which takes no key. A
+   * catalogue that cannot be read leaves the type as the Instance API gave it.
+   */
+  async function pricedTypes(zone: string): Promise<Record<string, ScalewayServerType>> {
+    const [types, prices] = await Promise.all([
+      mapAll<ScalewayServerType>(`${instance(zone)}/products/servers`, `read the types sold at ${zone}`),
+      listAll<CatalogProduct>("/product-catalog/v2alpha1/public-catalog/products", "products", `read the prices at ${zone}`, { product_types: "instance", zone }, "page_size")
+        .then(catalogPrices)
+        .catch((): Record<string, number> => ({})),
+    ]);
+    for (const [name, type] of Object.entries(types)) {
+      const price = prices[name];
+      if (!(type.hourly_price > 0) && price !== undefined) types[name] = { ...type, hourly_price: price, monthly_price: null };
+    }
+    return types;
+  }
+
   const catalogues = new Map<string, Promise<Record<string, ScalewayServerType>>>();
   function typesIn(zone: string): Promise<Record<string, ScalewayServerType>> {
     let read = catalogues.get(zone);
     if (read === undefined) {
-      read = mapAll<ScalewayServerType>(`${instance(zone)}/products/servers`, `read the types sold at ${zone}`);
+      read = pricedTypes(zone);
       // A failed read is not kept: the next one asks again.
       read.catch(() => catalogues.delete(zone));
       catalogues.set(zone, read);
@@ -981,7 +1023,7 @@ export function scaleway(context: ProviderContext): Provider {
   }
 
   /** The image's ID: `debian-13` and other labels through the Marketplace, for the zone and the type's architecture; an ID as given. */
-  async function resolveImage(request: CreateRequest, zone: string, type: ScalewayServerType, report: Report): Promise<string> {
+  async function resolveImage(request: CreateRequest, zone: string, type: ScalewayServerType, boot: BootVolume, report: Report): Promise<string> {
     const label = request.image === DEBIAN ? DEBIAN_LABEL : request.image;
     if (UUID.test(label)) {
       report(`   image ${label}, as given`);
@@ -989,7 +1031,11 @@ export function scaleway(context: ProviderContext): Provider {
     }
     let images: LocalImage[];
     try {
-      images = await listAll<LocalImage>("/marketplace/v2/local-images", "local_images", `find the image ${label}`, { image_label: label, zone, type: "instance_sbs", arch: type.arch }, "page_size");
+      // The image is a snapshot of the boot volume's own kind: Scaleway refuses an
+      // l_ssd root made from a Block Storage image, "requested volume type does
+      // not match the snapshot type".
+      const kind = boot.volume_type === "l_ssd" ? "instance_local" : "instance_sbs";
+      images = await listAll<LocalImage>("/marketplace/v2/local-images", "local_images", `find the image ${label}`, { image_label: label, zone, type: kind, arch: type.arch }, "page_size");
     } catch (error) {
       if (!(error instanceof ScalewayError) || error.status !== 404) throw error;
       images = [];
@@ -1563,7 +1609,7 @@ export function scaleway(context: ProviderContext): Provider {
         let sameKey: ScalewayKey | undefined;
         try {
           offer = await checkOffer(request, zone, boot, report);
-          image = await resolveImage(request, zone, offer.chosen, report);
+          image = await resolveImage(request, zone, offer.chosen, boot, report);
           if (request.key !== null) {
             keys = await listKeys();
             sameKey = heldKey(request.key, keys, earlier);

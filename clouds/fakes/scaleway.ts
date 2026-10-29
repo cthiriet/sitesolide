@@ -106,6 +106,8 @@ const ARM_TYPES = Object.entries(SERVER_TYPES)
 export const LOCAL_IMAGES = Object.keys(CATALOGUE).flatMap((zone, index) => [
   { id: `a7f47d5c-ffec-43b4-942e-32df38a782${String(index).padStart(2, "0")}`, arch: "x86_64", zone, compatible_commercial_types: X86_TYPES, label: "debian_trixie", type: "instance_sbs" },
   { id: `6a47ea3a-c145-478e-9e3c-0bde831dd6${String(index).padStart(2, "0")}`, arch: "arm64", zone, compatible_commercial_types: ARM_TYPES, label: "debian_trixie", type: "instance_sbs" },
+  // A local image boots an l_ssd root, the volume kind of the types that have one.
+  { id: `c3b1e2f0-5d4a-4e8b-9f61-7a2d0c4e95${String(index).padStart(2, "0")}`, arch: "x86_64", zone, compatible_commercial_types: X86_TYPES.filter((type) => SERVER_TYPES[type]!.volumes_constraint.max_size > 0), label: "debian_trixie", type: "instance_local" },
 ]);
 
 /** Money as the API writes it. */
@@ -698,6 +700,27 @@ export function createFakeScaleway(options: { pageSize?: number; transitionReads
       return error(404, { message: `no such route in the fake: ${method} ${path}`, type: "not_found" });
     }
 
+    // --- The public Product Catalog: where the prices are since products/servers answers 0.
+    if (path === "/product-catalog/v2alpha1/public-catalog/products" && method === "GET") {
+      const zone = query.get("zone");
+      const products = Object.entries(CATALOGUE)
+        .filter(([where]) => zone === null || where === zone)
+        .flatMap(([where, sold]) =>
+          Object.keys(sold).map((name) => {
+            const hourly = SERVER_TYPES[name]!.hourly_price;
+            return {
+              sku: `/instance/server/${name.toLowerCase().replace(/-/g, "_")}/${where}`,
+              product: name,
+              locality: { zone: where },
+              status: "general_availability",
+              unit_of_measure: { unit: "hour", size: 1 },
+              price: { retail_price: { currency_code: "EUR", units: Math.floor(hourly), nanos: Math.round((hourly % 1) * 1e9) } },
+            };
+          }),
+        );
+      return pageWithCount(url, "products", products);
+    }
+
     // --- Instances
     const zoned = /^\/instance\/v1\/zones\/([a-z0-9-]+)(\/.*)$/.exec(path);
     if (zoned === null) return error(404, { message: `no such route in the fake: ${method} ${path}`, type: "not_found" });
@@ -707,7 +730,8 @@ export function createFakeScaleway(options: { pageSize?: number; transitionReads
     const id = /^\/[a-z_]+\/([^/]+)/.exec(rest)?.[1] ?? "";
 
     if (method === "GET" && rest === "/products/servers") {
-      return pageOfMap(url, Object.keys(CATALOGUE[zone] ?? {}).map((name) => [name, SERVER_TYPES[name]!]));
+      // Priced 0, as the real one answers every type since October 2026.
+      return pageOfMap(url, Object.keys(CATALOGUE[zone] ?? {}).map((name) => [name, { ...SERVER_TYPES[name]!, hourly_price: 0, monthly_price: 0 }]));
     }
     if (method === "GET" && rest === "/products/servers/availability") {
       return pageOfMap(url, Object.entries(CATALOGUE[zone] ?? {}).map(([name, availability]) => [name, { availability }]));
@@ -726,7 +750,13 @@ export function createFakeScaleway(options: { pageSize?: number; transitionReads
       if (CATALOGUE[zone]?.[order.commercial_type] === undefined) {
         return error(400, { message: "invalid argument(s)", type: "invalid_arguments", details: [{ argument_name: "commercial_type", reason: "constraint", help_message: "unknown commercial type" }] });
       }
-      if (!LOCAL_IMAGES.some((image) => image.id === order.image && image.zone === zone)) return notFound("instance_image", order.image ?? "");
+      const ordered = LOCAL_IMAGES.find((image) => image.id === order.image && image.zone === zone);
+      if (ordered === undefined) return notFound("instance_image", order.image ?? "");
+      // What Scaleway answered on 29/10 to a Block Storage image under an l_ssd root.
+      if ((order.volumes?.["0"]?.volume_type === "l_ssd") !== (ordered.type === "instance_local")) {
+        const wanted = ordered.type === "instance_local" ? "l_ssd" : "sbs_volume";
+        return error(400, { message: "invalid argument(s)", type: "invalid_arguments", details: [{ argument_name: "volumes.0.volume_type", reason: "constraint", help_message: `requested volume type does not match the snapshot type, use '${wanted}' instead` }] });
+      }
       for (const ipId of order.public_ips ?? []) {
         const ip = ips.find((candidate) => candidate.id === ipId && candidate.zone === zone);
         if (ip === undefined) return notFound("instance_ip", ipId);

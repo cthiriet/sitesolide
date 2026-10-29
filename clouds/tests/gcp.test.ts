@@ -1111,6 +1111,22 @@ describe("devbox's order", () => {
   });
 });
 
+describe("an ephemeral address", () => {
+  test("reserves none: the instance takes the address Google hands out, and its destroy has none to release", async () => {
+    const { machine } = await openAs(DEVBOX).create(devboxRequest({ ephemeralAddress: true }), report);
+    expect(writes().some((write) => write.includes("/addresses"))).toBe(false);
+    const nic = (bodyOf("POST", /\/instances$/).networkInterfaces as { accessConfigs: Record<string, unknown>[] }[])[0]!;
+    expect(nic.accessConfigs).toEqual([{ type: "ONE_TO_ONE_NAT", name: "External NAT", networkTier: "PREMIUM" }]);
+    expect(printed).toContain("-> address: ephemeral, handed out at boot and gone with the instance");
+    expect(machine.ipv4).toBe(fake.instances[0]!.natIP);
+    expect(fake.addresses).toEqual([]);
+    fake.requests.length = 0;
+    await openAs(DEVBOX).destroy(machine, { deleteKey: false }, report);
+    expect(writes().some((write) => write.includes("/addresses"))).toBe(false);
+    expect(fake.instances).toEqual([]);
+  });
+});
+
 describe("what a request cannot ask, refused with no request sent", () => {
   test("checkRequest's refusals, then Google's own limits", async () => {
     const refused = async (extra: Partial<CreateRequest>) => (await refusal(openAs(DEVBOX).create(devboxRequest(extra), report))).failure;

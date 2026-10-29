@@ -292,6 +292,7 @@ describe("what Hetzner cannot be asked here", () => {
     const asked: [Partial<CreateRequest>, string][] = [
       [{ disk: { gb: 80 } }, "Hetzner cannot be asked the size or type of the disk here"],
       [{ nestedVirtualization: true }, "Hetzner cannot be asked nested virtualization here"],
+      [{ ephemeralAddress: true }, "Hetzner cannot be asked an address it does not reserve here"],
       [{ login: "dev" }, "Hetzner cannot be asked the account the key logs into here"],
       [{ inbound: [{ protocol: "icmp", port: 8, sources: ["0.0.0.0/0"] }] }, "Hetzner cannot be asked a icmp rule with a port here"],
       [{ inbound: [{ protocol: "tcp", port: 22, sources: [] }] }, "Hetzner cannot be asked a tcp rule open to no network here"],

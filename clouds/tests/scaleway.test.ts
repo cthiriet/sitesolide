@@ -16,6 +16,7 @@ import {
 } from "../src/provider";
 import {
   BOOT_VOLUME_BYTES,
+  catalogPrices,
   DEFAULT_API,
   discover,
   failureFrom,
@@ -998,10 +999,33 @@ describe("the firewall a request asks for", () => {
   });
 });
 
+describe("prices", () => {
+  test("come from the catalogue: an hourly instance sold now, never a retired one or one priced 0", () => {
+    const hour = { unit: "hour" };
+    expect(
+      catalogPrices([
+        { sku: "/instance/server/dev1_l/fr-par-1", product: "DEV1-L", status: "general_availability", unit_of_measure: hour, price: { retail_price: { units: 0, nanos: 42840000 } } },
+        { sku: "/instance/server/gp1_l/fr-par-1", product: "GP1-L", status: "general_availability", unit_of_measure: hour, price: { retail_price: { units: "0", nanos: "774180000" } } },
+        { sku: "/compute/dev1_xs/run_fr-par-1", product: "DEV1-XS", status: "retired", unit_of_measure: hour, price: { retail_price: { units: 0, nanos: 0 } } },
+        { sku: "/instance/server/vc1l/fr-par-1", product: "VC1-L", status: "retired", unit_of_measure: hour, price: { retail_price: { units: 0, nanos: 11000000 } } },
+        { sku: "/storage/block/snapshot/fr-par-1", product: "Snapshot", status: "general_availability", unit_of_measure: { unit: "gigabyte" }, price: { retail_price: { units: 0, nanos: 49000 } } },
+      ]),
+    ).toEqual({ "DEV1-L": 0.04284, "GP1-L": 0.77418 });
+  });
+
+  test("an order says what the catalogue says, the Instance API answering 0", async () => {
+    const { lines } = await create(open().provider, { type: "DEV1-M", disk: { gb: 40, type: "l_ssd" } });
+    expect(lines).toContain("   3 vCPU, 4 GB RAM, x86_64, 14.74 EUR a month before VAT, plus the IPv4 address");
+    expect(fake.requests.some((request) => request.path === "/product-catalog/v2alpha1/public-catalog/products" && new URLSearchParams(request.search).get("zone") === "fr-par-1")).toBe(true);
+  });
+});
+
 describe("the disk a request asks for", () => {
   test("a local SSD within what the type takes: ordered, tagged, and deleted with the server", async () => {
     const { outcome, lines } = await create(open().provider, { type: "DEV1-M", disk: { gb: 40, type: "l_ssd" } });
     expect(bodyOf("POST", /\/servers$/).volumes).toEqual({ "0": { volume_type: "l_ssd", size: 40_000_000_000 } });
+    // The local image: a Block Storage one under an l_ssd root is refused.
+    expect(new URLSearchParams(fake.requests.find((request) => request.path === "/marketplace/v2/local-images")!.search).get("type")).toBe("instance_local");
     expect(writes()).toContain("PATCH /instance/v1/zones/fr-par-1/volumes/:id");
     expect(fake.volumes.map((volume) => [volume.volume_type, volume.size, volume.tags])).toEqual([["l_ssd", 40_000_000_000, OURS("web")]]);
     expect(lines).toContain("   3 vCPU, 4 GB RAM, x86_64, 14.74 EUR a month before VAT, plus the IPv4 address");
@@ -1107,6 +1131,7 @@ describe("owners", () => {
 describe("what the provider cannot do is refused before any request", () => {
   const cases: [string, Partial<CreateRequest>, string][] = [
     ["nested virtualization on an instance", { nestedVirtualization: true }, "provider-unsupported"],
+    ["an address it does not reserve", { ephemeralAddress: true }, "provider-unsupported"],
     ["the account the key logs into", { login: "dev" }, "provider-unsupported"],
     ["an ICMP rule with a port", { inbound: [{ protocol: "icmp", port: 8, sources: ["0.0.0.0/0"] }] }, "provider-unsupported"],
     ["a TCP rule open to no network", { inbound: [{ protocol: "tcp", port: 22, sources: [] }] }, "provider-unsupported"],

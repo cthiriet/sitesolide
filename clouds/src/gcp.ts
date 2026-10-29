@@ -146,7 +146,7 @@ export const SCOPE = "https://www.googleapis.com/auth/compute";
 const TITLE = "Google Cloud";
 
 /** What a request may ask here beyond what every provider takes. Not keyless: the key is what the `ssh-keys` entry lets in. */
-export const SUPPORTS: Supports = { inbound: true, userData: true, disk: true, nestedVirtualization: true, login: true };
+export const SUPPORTS: Supports = { inbound: true, userData: true, disk: true, nestedVirtualization: true, login: true, ephemeralAddress: true };
 
 /**
  * The account Google's guest agent creates from the `ssh-keys` metadata
@@ -1506,8 +1506,16 @@ export function gcp(context: ProviderContext): Provider {
         report("   an earlier run made it for other rules: deleted");
       }
       for (const rule of rules) resources.push(await ensureRule(rule, reuse.get(rule.name) ?? null, report, made));
-      const { address, resource } = await ensureAddress(region, request.name, foundAddress, report, made);
-      resources.push(resource);
+      // A reserved address needs compute.addresses.create, which an account
+      // limited to instances lacks: Google refused one with 403 on 29/10.
+      let natIP: { natIP: string; networkTier: string } | null = null;
+      if (request.ephemeralAddress === true) {
+        report("-> address: ephemeral, handed out at boot and gone with the instance");
+      } else {
+        const { address, resource } = await ensureAddress(region, request.name, foundAddress, report, made);
+        resources.push(resource);
+        natIP = { natIP: address.address!, networkTier: address.networkTier ?? "PREMIUM" };
+      }
 
       report(`-> instance ${request.name}: ${request.type} at ${zone}, ${request.image}, logged into as ${login}`);
       // A token that needs renewing is renewed before the order leaves, so
@@ -1552,7 +1560,7 @@ export function gcp(context: ProviderContext): Provider {
           {
             network,
             ...(subnetwork === null ? {} : { subnetwork }),
-            accessConfigs: [{ type: "ONE_TO_ONE_NAT", name: "External NAT", natIP: address.address, networkTier: address.networkTier ?? "PREMIUM" }],
+            accessConfigs: [{ type: "ONE_TO_ONE_NAT", name: "External NAT", ...(natIP ?? { networkTier: "PREMIUM" }) }],
           },
         ],
       });

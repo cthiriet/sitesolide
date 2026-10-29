@@ -708,11 +708,14 @@ export function createFakeGcp(options: { pageSize?: number; operationPolls?: num
     if (nic.subnetwork !== undefined && !network.subnetworks.includes(nic.subnetwork)) return invalid("networkInterfaces[0].subnetwork", `'${nic.subnetwork}'.`);
     if (nic.subnetwork === undefined && !network.autoCreateSubnetworks) return invalid("networkInterfaces[0].subnetwork", "a subnetwork is required in a custom mode network.");
     const access = nic.accessConfigs?.[0];
-    const address = addresses.find((candidate) => candidate.region === region && candidate.address === access?.natIP);
-    if (access?.type !== "ONE_TO_ONE_NAT" || address === undefined || address.status !== "RESERVED") {
+    if (access?.type !== "ONE_TO_ONE_NAT") return invalid("networkInterfaces[0].accessConfigs[0].type", `'${String(access?.type)}'.`);
+    // No natIP: an ephemeral address, Google's for as long as the instance lives.
+    const ephemeral = access.natIP === undefined;
+    const address = ephemeral ? undefined : addresses.find((candidate) => candidate.region === region && candidate.address === access.natIP);
+    if (!ephemeral && (address === undefined || address.status !== "RESERVED")) {
       return invalid("networkInterfaces[0].accessConfigs[0].natIP", `'${String(access?.natIP)}'. The specified external IP address '${String(access?.natIP)}' was not found in region '${region}'.`);
     }
-    if ((access.networkTier ?? "PREMIUM") !== address.networkTier) return invalid("networkInterfaces[0].accessConfigs[0].networkTier", "the network tier of the address does not match.");
+    if (address !== undefined && (access.networkTier ?? "PREMIUM") !== address.networkTier) return invalid("networkInterfaces[0].accessConfigs[0].networkTier", "the network tier of the address does not match.");
 
     const metadata = ((input.metadata as { items?: { key: string; value: string }[] } | undefined)?.items ?? []).map((item) => ({ key: item.key, value: item.value }));
     const instance: FakeInstance = {
@@ -724,8 +727,8 @@ export function createFakeGcp(options: { pageSize?: number; operationPolls?: num
       labels: (input.labels as Labels | undefined) ?? {},
       tags: (input.tags as { items?: string[] } | undefined)?.items ?? [],
       metadata,
-      natIP: address.address,
-      networkTier: address.networkTier,
+      natIP: address?.address ?? `203.0.113.${(nextId % 200) + 20}`,
+      networkTier: address?.networkTier ?? access.networkTier ?? "PREMIUM",
       network: networkLink,
       subnetwork: nic.subnetwork ?? null,
       ...(nested ? { nestedVirtualization: true } : {}),
@@ -740,8 +743,10 @@ export function createFakeGcp(options: { pageSize?: number; operationPolls?: num
       stagingReads: 0,
     };
     instances.push(instance);
-    address.status = "IN_USE";
-    address.users = [instanceLink(instance)];
+    if (address !== undefined) {
+      address.status = "IN_USE";
+      address.users = [instanceLink(instance)];
+    }
     return Response.json(
       operation({ zone: zoneName }, "insert", instanceLink(instance), instance.id, () => {
         instance.status = "STAGING";
