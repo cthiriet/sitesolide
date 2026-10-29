@@ -208,10 +208,13 @@ describe.skipIf(CADDY === null)("the bare domain, declared by an app, in Caddy",
 });
 
 describe.skipIf(CADDY === null)("the whole Caddyfile, with an app that declares the bare domain", () => {
-  const WITH_MODULE = Bun.spawnSync([CADDY ?? "caddy", "list-modules"], { stdout: "pipe", stderr: "pipe" })
-    .stdout.toString()
-    .split("\n")
-    .some((line) => line.trim() === "dns.providers.cloudflare");
+  // Read only where Caddy is installed: the describe's body runs even when skipped.
+  const WITH_MODULE =
+    CADDY !== null &&
+    Bun.spawnSync([CADDY, "list-modules"], { stdout: "pipe", stderr: "pipe" })
+      .stdout.toString()
+      .split("\n")
+      .some((line) => line.trim() === "dns.providers.cloudflare");
   /** The DNS directive, or one a stock Caddy reads that gives the zone a policy of its own just as well: see cli-tls-caddy.test.ts. */
   const provider = (text: string): string => (WITH_MODULE ? text : text.replace("dns cloudflare {env.CLOUDFLARE_API_TOKEN}", "key_type p384"));
 
