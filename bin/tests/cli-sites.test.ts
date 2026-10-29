@@ -27,15 +27,22 @@ const SITES_PRESENT = SITES !== null && existsSync(SITES);
 /**
  * The folders that no manifest describes, and that expect none.
  *
- * The landing is one of them: `validate()` refuses this slug, its server folder
- * carries the name of the zone and not `landing`, and it has no subdomain to
- * check. The CLI does not deploy it.
+ * None since 0.14.0: the landing was the one exception, served from a folder
+ * named after the zone, until the bare domain became a project's domain and
+ * the landing the project `home`, which declares it.
  *
- * The exception is named here rather than guessed: any other folder without a
- * manifest makes the test below fail. A projects repository that has no
- * landing makes nothing fail, the test bearing only on the folders present.
+ * An exception is named here rather than guessed: any other folder without a
+ * manifest makes the test below fail. A projects repository without one of
+ * these folders makes nothing fail, the test bearing only on the folders present.
  */
-const WITHOUT_MANIFEST = ["landing"];
+const WITHOUT_MANIFEST: string[] = [];
+
+/**
+ * The folders whose project bears another name. The landing is the project
+ * `home`, whose address is the bare domain it declares rather than a subdomain
+ * named after either, and its folder kept the name the repository gives it.
+ */
+const SLUG_OF: Record<string, string> = { landing: "home" };
 
 const FOLDERS = SITES_PRESENT
   ? readdirSync(SITES, { withFileTypes: true })
@@ -96,7 +103,7 @@ describe.each(WITH_MANIFEST)("sites/%s/sitesolide.json", (slug) => {
   test("carries the slug of its folder", () => {
     // The slug decides the subdomain and the served folder: a discrepancy
     // would deploy the site at an address other than its own.
-    expect(manifest?.slug).toBe(slug);
+    expect(manifest?.slug).toBe(SLUG_OF[slug] ?? slug);
   });
 
   test("leaves no site.json beside it", () => {
