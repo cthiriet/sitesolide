@@ -1,14 +1,15 @@
 ---
 name: release
-description: Cut a release of sitesolide, from the last commit to production. Use when asked to release, tag, publish a version, write or fix release notes, or bring production to a new version.
-when_to_use: Requests such as "release this", "tag 0.4.3", "publish the release", "write the release notes", "fix the release list", or "upgrade production to the new version".
+description: Cut a release of sitesolide, from the last commit to the workstation's binary. Use when asked to release, tag, publish a version, or write or fix release notes.
+when_to_use: Requests such as "release this", "tag 0.4.3", "publish the release", "write the release notes", or "fix the release list". Not for upgrading a machine to a release.
 ---
 
 # Releasing sitesolide
 
 A release is a tag, `vX.Y.Z`, whose workflow (`.github/workflows/release.yml`)
 runs the tests, builds the binaries and publishes them on the tag's GitHub
-release. Then come the notes, the workstation's binary, and production.
+release. Then come the notes and the workstation's binary. Upgrading a
+machine is not part of a release.
 
 ## The format
 
@@ -18,9 +19,12 @@ Every release reads alike, from the first to the last.
 a release it creates and on one made by hand beforehand. Never pass `--title`,
 never add a product name or a tagline.
 
-**The version** is semantic. Before 1.0: a minor, `0.5.0`, when the release
-changes how people use sitesolide or asks an operator more than `sitesolide
-upgrade`; a patch, `0.4.3`, otherwise. When unsure, ask the author.
+**The version** is semantic. Before 1.0: a minor, `0.5.0`, for a new page or
+section, a new command, a change in how people use sitesolide, or anything
+that asks an operator more than `sitesolide upgrade`; a patch, `0.4.3`, for a
+fix or a feature added to an existing page. The precedents are in `gh release
+list` and `docs/upgrading.md`. Say which and why in one line; ask the author
+only when neither rule decides.
 
 **The notes**, in this order:
 
@@ -85,13 +89,8 @@ dash, no machine, domain or address of an installation, no secret.
    reads `vX.Y.Z` and that `gh api repos/cthiriet/sitesolide/releases/latest -q .tag_name`
    names the new tag.
 7. **The workstation's binary**: the install line above, then
-   `sitesolide --version`. Production is upgraded from this binary, never
+   `sitesolide --version`. Machines are upgraded from this binary, never
    from the checkout.
-8. **Production, only when the author asked for it.** `sitesolide upgrade
-   --dry-run` first, and read it. Then `sitesolide upgrade` at a quiet hour,
-   outside the hourly backup run (it starts a few minutes past the hour), and
-   check afterwards: no failed unit, the sites answer, the monitor's last
-   line reads `0 down`. `CLAUDE.md` says what is never done on that machine.
 
 Fixing the notes of a release already published changes its body only:
 `gh release edit <tag> --notes-file <file>`, the files and the tag untouched.
