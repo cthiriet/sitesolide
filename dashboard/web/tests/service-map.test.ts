@@ -298,13 +298,26 @@ describe("the labels", () => {
     expect(Math.abs(where.get("b")!.x - 150)).toBeGreaterThanOrEqual(64)
   })
 
-  test("a lit edge's badge is short enough for the room between two columns", () => {
+  test("an optional label with no free place is left out rather than laid over another", () => {
+    const short = { mid: { x: 50, y: 50 }, points: [{ x: 40, y: 50 }, { x: 60, y: 50 }] }
+    const where = placeLabels(
+      [
+        { id: "a", route: short, width: 60, height: 18 },
+        { id: "b", route: short, width: 60, height: 18, optional: true },
+      ],
+      [],
+    )
+    expect(where.has("a")).toBe(true)
+    expect(where.has("b")).toBe(false)
+  })
+
+  test("a lit edge's badge says what the line does not, short enough for the room between two columns", () => {
     const base = { open: 0, seen: null, declared: [] as string[] }
-    expect(edgeBadge({ ...base, state: "open", open: 2, seen: NOW }, NOW)).toEqual({ text: "2 open", mono: false })
-    expect(edgeBadge({ ...base, state: "seen", seen: NOW - 19 * 3_600_000 }, NOW)).toEqual({ text: "19h ago", mono: false })
-    expect(edgeBadge({ ...base, state: "declared", declared: ["API_URL", "start"] }, NOW)).toEqual({ text: "API_URL +1", mono: true })
-    expect(edgeBadge({ ...base, state: "declared", declared: ["start"] }, NOW)).toEqual({ text: "command line", mono: false })
-    expect(edgeBadge({ ...base, state: "routed" }, NOW)).toEqual({ text: "routed", mono: false })
+    expect(edgeBadge({ ...base, state: "open", open: 2, seen: NOW }, NOW)).toBe("2 open")
+    expect(edgeBadge({ ...base, state: "seen", seen: NOW - 19 * 3_600_000 }, NOW)).toBe("19h ago")
+    // A dashed line says it is declared, a route's label says where it goes: no badge repeats them.
+    expect(edgeBadge({ ...base, state: "declared", declared: ["API_URL"] }, NOW)).toBeNull()
+    expect(edgeBadge({ ...base, state: "routed" }, NOW)).toBeNull()
     // The room between two columns, less the room kept on either side.
     expect(labelWidth("19h ago", false)).toBeLessThan(104 - 2 * 16)
   })

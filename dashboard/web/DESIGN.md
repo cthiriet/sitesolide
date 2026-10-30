@@ -738,7 +738,7 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | Toasts | Setup guide hidden. Every setting stays on the Server page., Undo, Offsite copy skipped. You can set it up on the Server page., The setup guide is back on Sites., The server is set up. The setup guide is gone., Heartbeat removed., Dismiss | Success, Done! |
 | Connectors | Connector, Add connector, Change, Remove connector, Requests, Grant, Withdraw, Granted, Granted, asked for, Asked, not granted, No such connector, Not asked for, Site removed, Base address, Header, Changed, Write-only (in the dialog and the sheet, never in a row) | Integration, Secret, Token, Revoke access, Grants |
 | Site sections | Overview, Services, Audience, Secrets, Access, Backups; the breadcrumb *All sites > cms*; *Switch site* | Settings, Details, Sharing, Guests, Members, Map, Topology |
-| The Services canvas | Visitors, Through Caddy, over HTTPS, Static files, Egress proxy, These hosts, and no other, Connectors, Lent by the machine, Any host, Another process; Server, Internal server, Database, Background, Scheduled, main service; All other paths, Every path; Open now, Seen before, Routed by Caddy, Declared; 2 open, 19h ago, command line, routed (a lit line's badge); 3 connections open, Last seen 2h ago, Declared in API_URL, Every service gets INFERENCE_URL, Declared on its command line; Loopback only, Loopback, out through the proxy, Outbound network; Zoom in, Zoom out, Fit to view, Actual size, Reset layout; See how they connect; Connections, From, To | Graph, Node, Edge, Topology, Upstream, Downstream, Dependency |
+| The Services canvas | Visitors, Through Caddy, over HTTPS, Static files, Egress proxy, These hosts, and no other, Connectors, Lent by the machine, Any host, Another process; Server, Internal server, Database, Background, Scheduled, main service; All other paths, Every path; Open now, Seen before, Routed by Caddy, Declared; 2 open, 19h ago (a lit line's badge); 3 connections open, Last seen 2h ago, Declared in API_URL, Every service gets INFERENCE_URL, Declared on its command line; Loopback only, Loopback, out through the proxy, Outbound network; Zoom in, Zoom out, Fit to view, Actual size, Reset layout; See how they connect; Connections, From, To | Graph, Node, Edge, Topology, Upstream, Downstream, Dependency |
 | The machine | Server | VM, host |
 | Discrepancy | Refusal, issues; Error, Warning | Alert, Critical |
 | Verdict | All clear, `N errors, N warnings`, Stale data, No data | OK, Healthy |
@@ -1337,13 +1337,14 @@ banner: the map then holds what sitesolide.json declares.
   carries its paths as a mono label, *All other paths*, or *Every path* for
   the one service that takes them all; the other lines carry none until
   their card is hovered, focused or open, when they take the accent and a
-  badge short enough for the room between two columns (`edgeBadge`), "2
-  open", "19h ago", the variable that declares it, `API_URL`, or "command
-  line", the whole sentence being the sheet's, and the rest of the map
-  fades. Every label slides along its own line to the place nearest its
+  badge for what the line does not say, short enough for the room between
+  two columns (`edgeBadge`), "2 open", "19h ago"; none for a line only
+  declared, which its dashes say, the variable being the sheet's; and the
+  rest of the map fades. Every label slides along its own line to the place nearest its
   middle that covers no card and no other label, 4 px of room kept around
   each (`placeLabels`), the routes' first, so that a lit badge never moves
-  them; a lit one stands above the cards should no place be free.
+  them; a lit badge with no free place is left out rather than laid over a
+  card or another badge, its sheet saying it whole.
 - **Gestures.** The ground drags the map, the wheel pans it, Ctrl and the
   wheel or a pinch zooms, from 30 to 200 %; with the map focused, the arrows
   move it, plus and minus zoom, zero fits it. A card drags where its reader

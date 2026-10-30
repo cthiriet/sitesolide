@@ -659,15 +659,24 @@ export function ServiceMap({
       if (edge.label !== null) return [{ edge, text: edge.label, mono: edge.routes !== null && edge.routes.length > 0, lit: lit(edge) }]
       if (!lit(edge)) return []
       const badge = edgeBadge(edge, now)
-      return [{ edge, text: badge.text, mono: badge.mono, lit: true }]
+      return badge === null ? [] : [{ edge, text: badge, mono: false, lit: true }]
     })
     // The routes' first, which are always shown: a lit badge never moves them.
     shown.sort((a, b) => Number(a.edge.label === null) - Number(b.edge.label === null))
     const where = placeLabels(
-      shown.map(({ edge, text, mono }) => ({ id: edge.id, route: routes.get(edge.id)!, width: labelWidth(text, mono), height: LABEL_HEIGHT })),
+      shown.map(({ edge, text, mono }) => ({
+        id: edge.id,
+        route: routes.get(edge.id)!,
+        width: labelWidth(text, mono),
+        height: LABEL_HEIGHT,
+        optional: edge.label === null,
+      })),
       rects.values(),
     )
-    return shown.map((label) => ({ ...label, at: where.get(label.edge.id)! }))
+    return shown.flatMap((label) => {
+      const at = where.get(label.edge.id)
+      return at === undefined ? [] : [{ ...label, at }]
+    })
   }, [map, routes, rects, active, now])
   const hasMoved = Object.keys(ownMoves).length > 0
 

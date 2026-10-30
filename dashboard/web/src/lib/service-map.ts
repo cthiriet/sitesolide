@@ -691,7 +691,14 @@ export function routeEdges(
 // --- The labels ----------------------------------------------------------------------
 
 /** A label to place: its edge's route, and its size. */
-export type LabelRequest = { id: string; route: Pick<Route, "mid" | "points">; width: number; height: number }
+export type LabelRequest = {
+  id: string
+  route: Pick<Route, "mid" | "points">
+  width: number
+  height: number
+  /** Left out rather than laid over a card or another label when no place is free: a lit badge, whose words the sheet also says. */
+  optional?: boolean
+}
 
 /** Every this many pixels along its line, a place a label may take. */
 const LABEL_STEP = 6
@@ -702,7 +709,7 @@ const LABEL_CLEARANCE = 4
 export function labelWidth(text: string, mono: boolean): number {
   return Math.ceil(text.length * (mono ? 6.7 : 6.3)) + 16
 }
-export const LABEL_HEIGHT = 18
+export const LABEL_HEIGHT = 20
 
 /** Every point along a line, `step` apart, from its first point to its last. */
 export function alongLine(points: readonly Point[], step = LABEL_STEP): Point[] {
@@ -726,7 +733,9 @@ function overlap(a: Rect, b: Rect): number {
 /**
  * Where each label goes: on its own line, at the place nearest the one it
  * prefers that covers no card and no label placed before it, with a little
- * room around; where none is free, the place that covers the least. In the
+ * room around; where none is free, the place that covers the least, or, for
+ * an optional one, nowhere: a badge left out says less than one laid over
+ * another, and its sheet says it whole. In the
  * order asked, so that the labels always shown, the routes', keep their
  * place when a card's lit ones come.
  */
@@ -756,6 +765,8 @@ export function placeLabels(requests: readonly LabelRequest[], cards: Iterable<R
         best = point
       }
     }
+    // Covering something costs at least a thousand: a pixel of it outweighs any slide along a line.
+    if (request.optional === true && bestCost >= 1000) continue
     found.set(request.id, best)
     placed.push({ x: best.x - request.width / 2, y: best.y - request.height / 2, width: request.width, height: request.height })
   }
@@ -773,16 +784,14 @@ export const EDGE_WORDS: Record<EdgeState, string> = {
 }
 
 /**
- * A lit edge's badge on the canvas, short enough to sit between two columns:
- * "2 open", "19h ago", the variable that declares it, "routed". The whole
- * sentence is the sheet's and the badge's tooltip.
+ * A lit edge's badge on the canvas, short enough to sit between two columns,
+ * for what the line itself does not say: "2 open", "19h ago". None for a
+ * line only declared or routed. The whole sentence is the sheet's.
  */
-export function edgeBadge(edge: Pick<MapEdge, "state" | "open" | "seen" | "declared">, now: number): { text: string; mono: boolean } {
-  if (edge.state === "declared" && edge.declared.length > 0) {
-    const first = edge.declared[0] === "start" ? "command line" : edge.declared[0]!
-    return { text: edge.declared.length > 1 ? `${first} +${edge.declared.length - 1}` : first, mono: edge.declared[0] !== "start" }
-  }
-  return { text: edgeShort(edge, now).toLowerCase(), mono: false }
+export function edgeBadge(edge: Pick<MapEdge, "state" | "open" | "seen">, now: number): string | null {
+  // A declared line is dashed already, and its sheet names what declares it: a badge would only repeat a variable's name.
+  if (edge.state === "declared" || edge.state === "routed") return null
+  return edgeShort(edge, now).toLowerCase()
 }
 
 /** An edge's state in a word or two, beside the other end in a sheet: "3 open", "19h ago", "Routed", "Declared". */
