@@ -120,6 +120,40 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## Who talks to whom, on a site's Services
+
+**What the release brings.** A site that runs services has a Services
+section beside its Overview: a canvas of its services, Railway's way,
+visitors coming in through Caddy on the left, the services inside the
+project's walls, what leaves the machine on the right, the egress proxy with
+its hosts and the connectors. A line between two of them is a connection the
+machine saw, open at the last reading or earlier in the week, or a port a
+sibling names in its `env` or its `start`, declared and not seen yet. A
+service's card says its kind, its port, its state when it is not fine and
+what it holds; pressed, its sheet lists its connections, each way, and how
+sure each is. Cards drag where you want them, and stay there in your
+browser. A service's memory reads the same everywhere now, the Sites list's
+ring against its limit and the figure, on the Overview and in its Services
+table as on the canvas.
+
+**What `sitesolide upgrade` brings**: the dashboard, and with it the
+collector's script, which now also asks `ss` for the connections open on
+the loopback once a minute, and the unit of each process that opened one.
+Its unit does not change. Caddy is not reloaded.
+
+**What changes for you.**
+
+- **Every role that opens a site's Overview opens its Services**, a Viewer
+  included: what it shows is the Overview's services, drawn.
+- **The first map shows only what `sitesolide.json` declares**, and says so,
+  until the collector's first pass after the upgrade, a minute later; a
+  connection made between two passes shows once a pass falls on it, and is
+  remembered for a week.
+
+**Going back.** `sitesolide upgrade` with the previous binary. The links the
+collector remembered stay in the dashboard's reading, which the previous
+release ignores.
+
 ## The bare domain, a project's domain
 
 **What the release brings.** The bare domain and its `www` had a block of
