@@ -120,6 +120,19 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## Fewer badges on a site's Services
+
+**What the release brings.** A line only declared no longer carries the
+name of the variable that declares it on the canvas: its dashes already say
+it is declared, and its sheet still names the variable. A badge that finds
+no free place along its line, when a card is hovered, is left out rather
+than laid over a card or another badge.
+
+**What `sitesolide upgrade` brings**: the dashboard alone. Caddy is not
+reloaded.
+
+**Going back.** `sitesolide upgrade` with the previous binary.
+
 ## Who talks to whom, on a site's Services
 
 **What the release brings.** A site that runs services has a Services
