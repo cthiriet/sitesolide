@@ -58,7 +58,7 @@ import {
  * deploys these, whatever its scope. `www` is served by the landing's block,
  * `landing` names the landing's files.
  */
-export const RESERVED_SLUGS: readonly string[] = ["dashboard", "portal", "api", "analytics", "landing", "www"];
+export const RESERVED_SLUGS: readonly string[] = ["dashboard", "portal", "api", "landing", "www"];
 
 /** Why a slug can never be a token's, or null. `zone` names the landing's directory. */
 export function reservedReason(slug: string, zone: string): string | null {

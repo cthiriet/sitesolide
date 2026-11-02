@@ -519,7 +519,6 @@ describe("the release's kit, its components built", () => {
     const source = JSON.parse(readFileSync(join(REPO_ROOT, "dashboard", "sitesolide.json"), "utf8")) as Record<string, unknown>;
     delete source.build;
     expect(manifest("dashboard")).toEqual(source);
-    expect(readFileSync(join(REPO_ROOT, "analytics", "sitesolide.json"), "utf8")).toBe(readFileSync(join(kit, "analytics", "sitesolide.json"), "utf8"));
   });
 
   test("the dashboard's page names the release it was built from", () => {

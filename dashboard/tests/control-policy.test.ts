@@ -15,7 +15,7 @@ const site = (extra: Partial<Manifest> = {}): Manifest => ({ slug: "shop", publi
 
 describe("reserved slugs", () => {
   test("the platform's projects and the landing's directory, whatever the scope", () => {
-    for (const slug of ["dashboard", "portal", "api", "analytics", "landing", "www"]) {
+    for (const slug of ["dashboard", "portal", "api", "landing", "www"]) {
       expect(reservedReason(slug, ZONE)).toContain("reserved");
       const everything = identity({ slugs: [slug], create: true, public: true });
       expect(decideSlug(everything, slug, { exists: true, owner: null, zone: ZONE })).toMatchObject({ kind: "refused", error: "reserved" });
@@ -29,7 +29,7 @@ describe("reserved slugs", () => {
   test("a manifest naming one is refused reserved before its door or its scope is judged", () => {
     // `dashboard` is public on the machine: judged on its door first, a
     // private token was told "this site is public on the machine", a 422.
-    for (const slug of ["dashboard", "portal", "api", "analytics", "landing", "www", ZONE]) {
+    for (const slug of ["dashboard", "portal", "api", "landing", "www", ZONE]) {
       for (const onMachine of [false, true, null]) {
         expect(decideManifest(app({ slug }), NONE, onMachine, ZONE)).toMatchObject({ kind: "refused", error: "reserved" });
         expect(decideManifest(site({ slug, secrets: ["API_KEY"] }), NONE, onMachine, ZONE)).toMatchObject({ kind: "refused", error: "reserved" });
@@ -213,10 +213,10 @@ describe("ports", () => {
   ]);
 
   test("taken: the landing's, the shared service's, the platform's, and every other project's", () => {
-    // The dashboard's, the portal's and analytics' ports, deployed or not: a
+    // The dashboard's and the portal's ports, deployed or not: a
     // token's project there would refuse their first deployment, and the
     // loopback rule lets the dashboard reach the portal's.
-    expect([...takenPorts(deposited, "shop")].sort()).toEqual([3000, 3001, 3002, 3003, 3004, 3022, 3026, 3029]);
+    expect([...takenPorts(deposited, "shop")].sort()).toEqual([3000, 3001, 3002, 3003, 3004, 3022, 3026]);
     expect(takenPorts(new Map(), "portal").has(3026)).toBe(false);
   });
 

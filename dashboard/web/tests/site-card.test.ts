@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 import {
   SAME_DEPLOYMENT_MS,
   addressSummary,
-  audienceHeadline,
   deployedBy,
   headerState,
   kindLine,
@@ -575,13 +574,6 @@ describe("the Overview as a hub", () => {
     const portal = secretsHeadline(secretProject({ files: [secretFile({ state: "absent" }), secretFile({ name: "users.env", state: "unmanaged" })] }), NOW)
     expect(portal.text).toBe("2 files")
     expect(portal.problem).toEqual({ text: "Missing", tone: "error", more: 1, title: "portal.env: Missing. users.env: Unmanaged" })
-  })
-
-  test("the audience in one line, over the window analytics keeps", () => {
-    const measure = { views: 3000, visits: 1148, bounceRate: 40, timePerPage: 30, pagesPerVisit: 2.6, days: [], rankings: {} }
-    expect(audienceHeadline({ present: true, days: 30, sites: { cms: measure } }, "cms")).toEqual({ text: "1,148 visits in 30 days", measured: true })
-    expect(audienceHeadline({ present: true, days: 30, sites: {} }, "cms")).toEqual({ text: "Not measured yet", measured: false })
-    expect(audienceHeadline(null, "cms")).toEqual({ text: "No audience data", measured: false })
   })
 
   test("who deployed, only when Activity's latest success is the deployment the manifest dates", () => {

@@ -74,7 +74,6 @@ describe("what a person sees of the snapshot", () => {
       connections: true,
       alerting: { heartbeat: "unconfigured", webhook: "ok", undelivered: 0, at: NOW },
     },
-    audience: { present: true, age: 1, stale: false, days: 30, from: "", to: "", sites: { blog: {} as never, "secret-project": {} as never } },
   } as Reading;
 
   test("their projects alone, and nothing of the machine's own figures", () => {
@@ -84,7 +83,6 @@ describe("what a person sees of the snapshot", () => {
     expect(seen.snapshot.sites.map((one) => one.slug)).toEqual(["blog", "shop"]);
     expect(seen.snapshot.discrepancies.map((one) => one.message)).toEqual(["blog is down"]);
     expect(seen.snapshot.machine).toBeNull();
-    expect(Object.keys(seen.audience.sites)).toEqual(["blog"]);
     expect(JSON.stringify(seen)).not.toContain("secret-project");
   });
 

@@ -104,13 +104,13 @@ describe("the platform's own projects", () => {
   const shop = site({ slug: "shop" })
   const dashboard = site({ slug: "dashboard", platform: true, port: 3022 })
   const portal = site({ slug: "portal", platform: true, port: 3026, portal: restricted })
-  const analytics = site({ slug: "analytics", platform: true, type: "static", service: null, port: null })
-  const FLEET = [shop, dashboard, portal, analytics]
+  const api = site({ slug: "api", platform: true, type: "static", service: null, port: null })
+  const FLEET = [shop, dashboard, portal, api]
   const healthy = worstSeverities([])
 
   test("the list leaves out the healthy ones, and Platform lists every one of them", () => {
     expect(slugs(narrowSites(FLEET, healthy, state()).rows)).toEqual(["shop"])
-    expect(slugs(narrowSites(FLEET, healthy, state("kind=platform")).rows)).toEqual(["dashboard", "portal", "analytics"])
+    expect(slugs(narrowSites(FLEET, healthy, state("kind=platform")).rows)).toEqual(["dashboard", "portal", "api"])
   })
 
   /** A broken portal is exactly what the owner must see, at the top of the list. */
@@ -147,7 +147,7 @@ describe("the platform's own projects", () => {
   })
 
   test("a fresh machine holds nothing, and Platform everything", () => {
-    const fresh = [dashboard, portal, analytics]
+    const fresh = [dashboard, portal, api]
     expect(narrowSites(fresh, healthy, state()).rows).toEqual([])
     expect(narrowSites(fresh, healthy, state()).total).toBe(0)
     expect(narrowSites(fresh, healthy, state()).counts.kind.platform).toBe(3)

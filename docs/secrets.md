@@ -227,7 +227,7 @@ A Developer or an Admin unlocks by signing in again with the identity
 provider, for ten minutes: see
 [access.md](access.md#people-with-access-beside-tokens) and
 [dashboard/README.md](../dashboard/README.md#access). The platform's own
-projects, the dashboard, the portal, the shared service and analytics, are
+projects, the dashboard, the portal and the shared service, are
 the owner's alone.
 
 **The services of a project trust each other.** They run under one account

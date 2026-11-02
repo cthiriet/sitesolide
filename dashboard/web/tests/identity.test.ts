@@ -14,13 +14,13 @@ describe("what a person sees of the page", () => {
     expect(machinePagesFor(ALICE).map((entry) => entry.name)).toEqual(["home", "activity", "tokens"])
     expect(machinePagesFor(VIC).map((entry) => entry.name)).toEqual(["home", "activity"])
     expect(machinePagesFor({ ...VIC, create: true } as IdentityView).map((entry) => entry.name)).toEqual(["home", "activity", "tokens"])
-    expect(sectionsFor(ALICE, "shop").map((entry) => entry.section)).toEqual(["overview", "services", "audience", "access"])
-    expect(sectionsFor(ALICE, "blog").map((entry) => entry.section)).toEqual(["overview", "services", "audience", "secrets", "access"])
-    expect(sectionsFor(ALICE, "cms").map((entry) => entry.section)).toEqual(["overview", "services", "audience", "secrets", "access", "backups"])
+    expect(sectionsFor(ALICE, "shop").map((entry) => entry.section)).toEqual(["overview", "services", "access"])
+    expect(sectionsFor(ALICE, "blog").map((entry) => entry.section)).toEqual(["overview", "services", "secrets", "access"])
+    expect(sectionsFor(ALICE, "cms").map((entry) => entry.section)).toEqual(["overview", "services", "secrets", "access", "backups"])
     expect(machinePagesFor(OWNER)).toEqual(MACHINE_PAGES)
     expect(machinePagesFor(OWNER).map((entry) => entry.title)).toEqual(["Sites", "Activity", "People", "Tokens", "Connectors", "Server"])
     expect(sectionsFor(null, "blog")).toEqual(SECTIONS)
-    expect(SECTIONS.map((entry) => entry.title)).toEqual(["Overview", "Services", "Audience", "Secrets", "Access", "Backups"])
+    expect(SECTIONS.map((entry) => entry.title)).toEqual(["Overview", "Services", "Secrets", "Access", "Backups"])
   })
 
   test("Services only for a site that runs some: a static site's would be empty", () => {

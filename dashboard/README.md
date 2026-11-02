@@ -4,13 +4,13 @@ What the machine actually runs, at `dashboard.<zone>`, behind a password, on two
 levels. **The machine**: *Sites*, the home page, with the state of the machine,
 the discrepancies between what the repositories ask for and what the machine
 does, the only part of the dashboard that teaches you something, and the list
-of sites, where the platform's own projects, the dashboard, the portal and
-analytics, are listed under *Platform* and elsewhere only while they have an
+of sites, where the platform's own projects, the dashboard and the portal,
+are listed under *Platform* and elsewhere only while they have an
 issue or a restart pending; *Activity*, the audit of the whole machine, every component's in one
 log; *Tokens*, the tokens that deploy without SSH, and what they did; *People*, everyone with
 access to a project, their roles, and who may create projects; *Connectors*,
 the credentials the egress proxy lends to projects. **A site**: *Overview*,
-*Audience*, *Secrets*, *Access* and *Backups*, everything that concerns that
+*Services*, *Secrets*, *Access* and *Backups*, everything that concerns that
 site and only it, *Access* saying who may open it and who may do what on it.
 Someone with a role on a project signs in with their company account, and
 sees Sites and Activity reduced to their projects, and in a project the
@@ -87,52 +87,22 @@ privileged component stays as stupid as possible, and a display rule that
 changes is fixed by an ordinary `sitesolide deploy`, without touching what runs
 as root.
 
-## Audience goes through the same relay
+## Root writes into a directory it does not own
 
-The visit numbers come from another service, `analytics`, which receives page
-views from measured sites, aggregates them and drops a snapshot in its own data
-directory.
+**Root writes the snapshot in a directory site-dashboard owns**: a link put
+at the name it writes would have root overwrite, and hand over to that
+account, any file it can write. So it goes through the steward's
+`writeAtomically`: a temporary file of an unguessable name created by
+`O_EXCL | O_NOFOLLOW`, its mode and owner set on the open descriptor, then a
+rename onto `state.json`, which replaces a link without following it. Root
+reads back from there too, the previous snapshot, `state.json`, for the
+processor rates: opened without following a link, only if it is a regular
+file with a single name, 32 MiB at most, anything else starting the rates
+again from blank. A link there had root parse the file it pointed to into the
+reading, and a named pipe held the collector at every pass, so that the
+snapshot was never written again.
 
-**This service can neither open that database nor reach it.** Its unit replaces
-`/srv` with an empty mount, and the loopback rule reserves the services' ports
-to Caddy and root. The collector, already privileged and already passing every
-minute, is therefore the only path, and it carries two files in both directions:
-
-```
-/srv/sites/analytics/data/instantane.json  ->  state.json, `audience` field
-/srv/sites/analytics/data/hotes.json       <-  host to served directory
-```
-
-The downward one is the more interesting: `analytics` does not know which hosts
-the machine serves, since it sees neither the other projects' manifests nor
-Caddy's domain table. The collector writes it that table, which serves as its
-allow list: a deployed site becomes measurable within the minute with nothing to
-declare, and a host the machine does not serve writes nothing. It is the
-collector's only write outside that directory, declared in its unit, and it
-carries no secret: that correspondence is already readable in the Caddyfile and
-in DNS.
-
-**Root writes there, in a directory site-analytics owns**, and in its own,
-which site-dashboard owns: a link put at the name it writes would have root
-overwrite, and hand over to that account, any file it can write. Both files go
-through the steward's `writeAtomically`: a temporary file of an unguessable
-name created by `O_EXCL | O_NOFOLLOW`, its mode and owner set on the open
-descriptor, then a rename onto `hotes.json` or `state.json`, which replaces a
-link without following it. A `data` directory that is itself a link gets no
-host table at all. Root reads back from there too, the previous snapshot,
-`state.json`, for the processor rates: opened without following a link, only
-if it is a regular file with a single name, 32 MiB at most, anything else
-starting the rates again from blank. A link there had root parse the file it
-pointed to into the reading, and a named pipe held the collector at every
-pass, so that neither the snapshot nor analytics' host table was written
-again.
-
-The interpretation lives here, in [src/audience.ts](src/audience.ts): the
-snapshot carries only counts, and the bounce rate and average time are computed
-at display time. It carries **no visitor fingerprint**, which `analytics` checks
-on its side.
-
-## The monitor's status, by the same road
+## The monitor's status, read back the same way
 
 The monitor ([../monitor/README.md](../monitor/README.md)) runs every minute
 as its own system account, `sitesolide-monitor`, and leaves
@@ -726,7 +696,7 @@ below it:
 | Role | On that project | Unlock |
 |---|---|---|
 | **Can open** (`visitor`) | opens the site when its general access is restricted, and sees nothing in the dashboard | none |
-| **Viewer** | also sees the project in the dashboard: its state, audience and activity | none |
+| **Viewer** | also sees the project in the dashboard: its state and activity | none |
 | **Developer** | also restarts its service; lists its secret names, files and metadata; sets, generates, replaces and removes a variable of its store, sets and removes a file of it, and never reads a value back; deploys it with a token of their own, which may also restart it and, minted with *Manage secrets*, set, generate and remove any name of its store | to write, to mint a token; none for a token's change, minting it took one |
 | **Admin** | everything of the project but reading a secret back, the owner's alone: what a Developer does, restores its store's or a file's previous version, chooses its general access, Public, Restricted or Anyone with the code, reads its code and draws a new one, gives and takes away access to it, a role at most their own, lists and restores its backups; a token of theirs may also deploy it in the open, declare a domain and reach outside hosts | to write, restore, make a site public, give it a code or a new one, give a role above Can open or password access, mint a token |
 
@@ -777,7 +747,7 @@ their tokens are revoked.
 The table of powers is the steward's, [src/people/powers.ts](src/people/powers.ts),
 and the page reads it to offer what the steward will accept. Nothing in it
 reaches the machine itself: a role is never given on the platform's
-projects, `dashboard`, `portal`, `api`, `analytics` and the landing, and the
+projects, `dashboard`, `portal`, `api` and the landing, and the
 steward refuses a person any file it lays for root, `dashboard.env` and
 `portal.env` among them, whatever a registry edited by hand would claim. A
 password hash changes with the dashboard's own password, the owner's alone;
@@ -940,9 +910,9 @@ them mint one, and in a project the sections their role there opens:
 
 | Role | Sections |
 |---|---|
-| Viewer | Overview, Services, Audience, Access, read only: its general access, its people with access, whom to ask to add someone, and what each role can do |
+| Viewer | Overview, Services, Access, read only: its general access, its people with access, whom to ask to add someone, and what each role can do |
 | Developer | the same and Secrets, values write-only; *Restart* in the Overview's Service panel |
-| Admin | Overview, Services, Audience, Secrets, values write-only too, Access, where they give people access, and Backups |
+| Admin | Overview, Services, Secrets, values write-only too, Access, where they give people access, and Backups |
 
 A page that is not theirs, reached by its address, says so in an empty state
 rather than an error, and the service refuses it too.
@@ -1217,7 +1187,7 @@ from `portal.env` at each change:
   Removing someone from *People* takes them off every project and takes the
   create right back, the owner's alone.
 - **A role only goes on a deployed project**, never on the platform's own
-  (`dashboard`, `portal`, `api`, `analytics`, `landing`, `www`, the
+  (`dashboard`, `portal`, `api`, `landing`, `www`, the
   landing's folder); an entry of a project removed since can still be
   changed or removed.
 - **Password access is given once.** Asked again, it keeps its password;
@@ -1847,8 +1817,8 @@ Judged by the installer on the manifest it received, after `validate()`, and
 earlier by the steward and the dashboard: see
 [src/control/policy.ts](src/control/policy.ts).
 
-- **Reserved slugs**: `dashboard`, `portal`, `api`, `analytics`, `landing`,
-  `www` and the landing's directory, whatever the scope; a slug another token
+- **Reserved slugs**: `dashboard`, `portal`, `api`, `landing`, `www`
+  and the landing's directory, whatever the scope; a slug another token
   created; an existing slug the token was not granted.
 - **What a removed project left**: a new slug under which the backups' index
   still holds snapshots, in either repository, or a connector is still

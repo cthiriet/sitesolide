@@ -415,7 +415,7 @@ export function kitComponent(name: string): string {
   if (!isCompiled()) return source;
   if (!isKitPath(name) || name.includes("/") || !existsSync(join(source, "sitesolide.json"))) {
     throw new KitUnavailable(`the kit has no component named ${JSON.stringify(name)}`, [
-      "a component is a folder of the kit that holds a sitesolide.json: dashboard, portal, analytics",
+      "a component is a folder of the kit that holds a sitesolide.json: dashboard, portal",
     ]);
   }
   const copy = mkdtempSync(join(tmpdir(), `sitesolide-${name}-`));

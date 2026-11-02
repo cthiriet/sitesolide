@@ -118,8 +118,8 @@ over the loopback, and Cloudflare's edge sets the visitor's address in
 `Cf-Connecting-Ip`. `/etc/caddy/global.d/tunnel.caddy` ([the
 file](../infra/tunnel/tunnel.caddy)) has Caddy believe that header from `::1`
 alone, where the connector reaches it, and every block hands its app the
-result as `X-Forwarded-For`, one value, the visitor's: the analytics count
-visitors, and the dashboard's limiter counts each address on its own. A
+result as `X-Forwarded-For`, one value, the visitor's: an app counts its
+visitors by it, and the dashboard's limiter counts each address on its own. A
 visitor who sends their own `X-Forwarded-For` changes nothing, and Cloudflare
 refuses a request that carries its own `Cf-Connecting-Ip`.
 

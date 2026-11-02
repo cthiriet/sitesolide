@@ -27,7 +27,7 @@ export type RoleText = { label: string; can: string; yours: string }
 /** Each rung of the ladder, in the words of the page, from the lowest: each includes the ones below. */
 export const ROLE_TEXTS: Readonly<Record<AccessRole, RoleText>> = {
   visitor: { label: "Can open", can: "Opens the site when its access is restricted.", yours: "you open the site when its access is restricted" },
-  viewer: { label: "Viewer", can: "Also sees the project here: its state, audience and activity.", yours: "you see the project here: its state, audience and activity" },
+  viewer: { label: "Viewer", can: "Also sees the project here: its state and activity.", yours: "you see the project here: its state and activity" },
   developer: {
     label: "Developer",
     can: "Also deploys it, restarts it and writes its secrets, never reading one back.",
@@ -683,7 +683,7 @@ export function listCount(entries: readonly Pick<EntryView, "kind">[]): string {
  * (src/control/policy.ts): nobody is given a role on them. The page cannot
  * import that list; tests/access.test.ts reads it back from the policy.
  */
-export const PLATFORM_SLUGS: readonly string[] = ["dashboard", "portal", "api", "analytics", "landing", "www"]
+export const PLATFORM_SLUGS: readonly string[] = ["dashboard", "portal", "api", "landing", "www"]
 
 /** Is this project part of the platform: one of its own, or the landing, named after the zone. */
 export function isPlatform(slug: string, zone: string | null): boolean {

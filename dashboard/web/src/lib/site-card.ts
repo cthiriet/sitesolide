@@ -32,7 +32,7 @@ import { actorLabel } from "./audit"
 import { KIND_WORDS, siteKind, type Kind } from "./legend"
 import { fileProblems } from "./secrets"
 import type { Tone } from "./tones"
-import type { Audience, AuditRow, Discrepancy, ProjectView, Site, SiteService } from "./types"
+import type { AuditRow, Discrepancy, ProjectView, Site, SiteService } from "./types"
 import { countBySeverity, sortDiscrepancies } from "./verdict"
 
 /** A fact on the card: a label, its value, a clarification, and the value's tone. */
@@ -592,20 +592,6 @@ export function secretsHeadline(project: ProjectView, serverNow: number): Secret
           },
   }
 }
-
-/**
- * The Site panel's Audience, in one line: the visits over the window
- * analytics keeps, "1,148 visits in 30 days"; muted words when there is
- * nothing to count yet.
- */
-export function audienceHeadline(audience: Pick<Audience, "present" | "days" | "sites"> | null, slug: string): { text: string; measured: boolean } {
-  if (audience === null || !audience.present) return { text: "No audience data", measured: false }
-  const measure = audience.sites[slug]
-  if (measure === undefined) return { text: "Not measured yet", measured: false }
-  return { text: `${NUMBER.format(measure.visits)} ${measure.visits === 1 ? "visit" : "visits"} in ${plural(audience.days, "day")}`, measured: true }
-}
-
-const NUMBER = new Intl.NumberFormat("en-US")
 
 /** A deployment recorded this close to the manifest's date is the one that dated it. */
 export const SAME_DEPLOYMENT_MS = 15 * 60_000

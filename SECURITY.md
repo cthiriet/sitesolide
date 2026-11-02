@@ -17,7 +17,7 @@ A useful report says:
 - the version, from `sitesolide --version`, or the commit;
 - the component: the CLI, `setup`, a generated unit or Caddy block, the
   portal, the dashboard, the steward, the gatekeeper, the installer, the
-  shared service, the egress proxy, the backups, the monitor, analytics;
+  shared service, the egress proxy, the backups, the monitor;
 - who the attacker is, in the terms of
   [docs/concepts.md](docs/concepts.md#who-may-touch-what): a visitor, a
   person with a role on a project, a token, a project's own code, a

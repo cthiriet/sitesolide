@@ -66,10 +66,10 @@ describe("who may hold a store (rule 1)", () => {
   });
 
   test("the platform's projects are the owner's alone", () => {
-    const analytics = site("analytics", { slug: "analytics", ...APP });
-    expect(storeSlugRefusal("analytics", { ...owner, site: analytics })).toBeNull();
+    const api = site("api", { slug: "api", ...APP });
+    expect(storeSlugRefusal("api", { ...owner, site: api })).toBeNull();
     for (const context of [person, token]) {
-      for (const slug of ["analytics", "api"]) {
+      for (const slug of ["api"]) {
         expect(storeSlugRefusal(slug, { ...context, site: site(slug, { slug, ...APP }) })).toEqual({ error: "out-of-scope", message: `${slug} belongs to the platform, which stays the owner's` });
       }
     }

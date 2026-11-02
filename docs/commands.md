@@ -782,7 +782,7 @@ dependencies (...), as site-<slug> in its service's walls`. An install that
 wrote outside `app/`, needed root or a tool installed into `HOME` now fails with
 `install failed`, the code in place and the service not restarted: move that
 step into `build`, or install the tool on the machine. The platform's own
-manifests, the dashboard's and analytics' `bun install --production`, run in
+manifests, the dashboard's `bun install --production`, run in
 `app/` and need nothing more.
 
 **5. Leftovers.** A `.env` an earlier deploy put in `app/` stays there, since an

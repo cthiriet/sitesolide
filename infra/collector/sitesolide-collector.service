@@ -20,10 +20,9 @@ Type=oneshot
 User=root
 ExecStart=/usr/local/bin/bun run /srv/sites/dashboard/app/collector.ts
 
-# The zone, which the collector needs to name each site's address and to build
-# the host allowlist it hands to analytics. It has no default: a ready-made
-# value here would name the machine of whoever wrote the file. The same file
-# Caddy is given, so the two can never disagree on what zone is served.
+# The zone, which the collector needs to name each site's address. It has no
+# default: a ready-made value here would name the machine of whoever wrote the
+# file. The same file Caddy is given, so the two can never disagree on what zone is served.
 EnvironmentFile=/etc/caddy/sitesolide.env
 
 # This snapshot runs every minute and walks through every directory served. It
@@ -36,26 +35,12 @@ IOSchedulingClass=idle
 TimeoutStartSec=45
 
 # Confinement of what runs as root. It reads /srv and /etc/caddy, and writes
-# only into two data directories.
+# only into the dashboard's data directory.
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectHome=true
 ReadWritePaths=/srv/sites/dashboard/data
-
-# The table of hosts placed at analytics, host to directory served.
-#
-# It is the only write of this collector outside the directory of the dashboard,
-# and it is here rather than at the steward because it carries no secret: this
-# correspondence is already read in the Caddyfile and in the DNS. The analytics
-# service, for its part, cannot build it, its unit hiding from it the other
-# directories of /srv as well as /etc/caddy, and without it it refuses any
-# measurement.
-#
-# The directory may not exist: analytics is not necessarily deployed, and
-# systemd does not fail the unit for a missing ReadWritePaths when it is
-# prefixed with a dash.
-ReadWritePaths=-/srv/sites/analytics/data
 
 # ProtectSystem=full and not strict, on purpose. Strict would mount /run
 # read-only, and this script talks to systemd through a socket that lives there;

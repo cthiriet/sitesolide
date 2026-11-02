@@ -12,8 +12,7 @@
  * Nothing inside a project's directory is opened, not even its manifest: the
  * names are enough to know what to ask Caddy, and what systemd runs says the
  * rest. The rules are the platform's own, `isValidSlug` from the CLI that
- * writes those directories, and the same three sources as the dashboard's host
- * table (dashboard/src/audience.ts) and the gatekeeper's probes.
+ * writes those directories, and the same sources as the gatekeeper's probes.
  *
  * Pure.
  */

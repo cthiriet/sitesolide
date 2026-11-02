@@ -81,7 +81,6 @@ describe("where the store lives", () => {
 
   test("a slug may have a store unless it is storeless", () => {
     expect(slugHasStore("shop")).toBe(true);
-    expect(slugHasStore("analytics")).toBe(true);
     for (const slug of ["dashboard", "portal", "", "../x", "Shop"]) expect(slugHasStore(slug)).toBe(false);
   });
 

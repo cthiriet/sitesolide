@@ -28,7 +28,7 @@ export const RESERVED_PORTS: ReadonlyMap<number, string> = new Map([
 /**
  * The platform's services that sitesolide deploys like any project, by the
  * port their manifest declares, and the slug that deploys there:
- * `bin/tests/cli-ports.test.ts` reads the three manifests and fails if one of
+ * `bin/tests/cli-ports.test.ts` reads the two manifests and fails if one of
  * them moves without this table.
  *
  * Reserved whether they are deployed or not, for every other project: a
@@ -39,7 +39,6 @@ export const RESERVED_PORTS: ReadonlyMap<number, string> = new Map([
 export const PLATFORM_PORTS: ReadonlyMap<number, string> = new Map([
   [3022, "dashboard"],
   [PORTAL_PORT, PORTAL_SLUG],
-  [3029, "analytics"],
 ]);
 
 /** The ports no project may declare, by owner, `slug` aside: the platform's own exempt for their own port. */

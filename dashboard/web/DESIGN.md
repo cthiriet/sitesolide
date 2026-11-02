@@ -212,7 +212,7 @@ tabular by default, so numbers that get compared line up.
 | Role | Classes |
 |---|---|
 | Page title (`h1`) | `text-title` (22/28 px, 500, -0.025 em) |
-| Gauge figure, audience figure | `text-figure` (26/32 px, 500, -0.03 em) |
+| Gauge figure | `text-figure` (26/32 px, 500, -0.03 em) |
 | Panel title (`h2`) | `text-heading` (15/20 px, 600, -0.01 em) |
 | Dialog title | `text-[1.0625rem] leading-6 font-semibold tracking-[-0.01em]` (17/24 px, the landing page's card titles) |
 | Body text, cells | `text-sm` (14/20 px) |
@@ -299,7 +299,7 @@ Phone (< 768 px), inside a site
 +------------------------------------+
 |  content, px-4                     |
 +------------------------------------+
-| Overview  Audience  ...  Backups   |  mobile tabs, fixed, h-16, one row
+| Overview  Services  ...  Backups   |  mobile tabs, fixed, h-16, one row
 +------------------------------------+
 ```
 
@@ -325,10 +325,10 @@ return, the current site on a raised card (its initial on a tile, its name,
 then its kind when fine, "App", "Static site", and its state in its tone with
 a dot when not, "Restarting, 3 errors", quiet when fine like the Overview's
 header), which opens the site switcher, every site by name, a dot on those in
-trouble alone; then its six sections, Overview, Services, Audience, Secrets,
-Access and Backups, Services only for an app. Collapsed, the site is just its initial, with its dot while in
+trouble alone; then its five sections, Overview, Services, Secrets, Access
+and Backups, Services only for an app. Collapsed, the site is just its initial, with its dot while in
 trouble. On a phone the tabs follow the level: six for the
-owner's machine, six for an app, on one row.
+owner's machine, five for an app, on one row.
 
 **A person's shell.** Someone signed in with their company account sees the
 pages that are theirs and no other entry (`machinePagesFor` and `sectionsFor`
@@ -338,9 +338,9 @@ lets them mint a token. In a site, by their role there:
 
 | Role | Sections |
 |---|---|
-| Viewer | Overview, Services, Audience, Access read only: its general access and its people with access |
-| Developer | Overview, Services, Audience, Secrets, Access |
-| Admin | all six |
+| Viewer | Overview, Services, Access read only: its general access and its people with access |
+| Developer | Overview, Services, Secrets, Access |
+| Admin | all five |
 
 Their email sits above the sidebar's own controls, in `muted-foreground`. A
 page of the owner's, reached by its address, says *Only the owner's* in an
@@ -358,7 +358,7 @@ of the warning the verdict counts it by, a platform file missing as an
 error, unmanaged, a unit that does not read its store yet or a restart
 pending as attention; *Access* its general access disagreeing with `sitesolide.json`
 (error), and nothing else: who has access is a choice, not a problem.
-*Audience* and *Backups* report nothing. Zero is not shown.
+*Backups* reports nothing. Zero is not shown.
 
 ### 3.2 The screen decides the shell, the container decides the content
 
@@ -374,7 +374,6 @@ gutters, bottom margin, touch target size.
 | `@container/table`, every `DataTable` | `narrowBelow`, 42 rem unless the page says 36, 48 or 56 | one line per row in columns under a sticky head, otherwise two lines and no head |
 | `@container/filters`, every `FilterBar` | `@xl/filters:` (36 rem) | the search, a button per facet, the count and the sort; otherwise the search and one *Filter* button that opens a bottom sheet |
 | `@container/body` | `@4xl/body:` (56 rem) | two columns: a site's Overview |
-| Audience's rankings | `@2xl/body:`, `@5xl/body:` (42, 64 rem) | two panels a row, then three; one below; the chart's four figures a row from `@2xl/body:`, two by two below |
 | Activity's tables, one per day | `narrowBelow` 48 rem | five columns, otherwise two lines |
 | `@container/facts`, a site's Overview panels | `@sm/facts:` (24 rem) | a 6.5 rem label column, otherwise 5.5 rem |
 | `@container/people`, a site's people with access | `@xl/people:` (36 rem) | what a row is beside its name, otherwise under it |
@@ -623,7 +622,7 @@ with one meaning everywhere and its words in its tooltip (`lib/legend.ts`):
 | `Server`, `Cloud` | where a snapshot lives: on this server, in the offsite copy | muted |
 | `Layers`, `History`, `UsersRound`, `KeySquare`, `Plug`, `SlidersHorizontal` | the machine's pages in the sidebar, the tabs and the Sites row menu: Sites, Activity, People, Tokens, Connectors, Server | `secondary-foreground` |
 | `HeartPulse`, `BellRing`, `Cloud`, `LogIn`, `UserKey`, `Asterisk` | the server's own settings, on the Server page and in the setup guide: the heartbeat, the alert webhook, the offsite copy (the same `Cloud` as a snapshot's), company sign-in, the dashboard password, the portal password | muted |
-| `Gauge`, `Workflow`, `ChartNoAxesColumn`, `SquareAsterisk`, `ShieldCheck`, `DatabaseBackup` | a site's sections, there and in the Sites row menu: Overview, Services, Audience, Secrets, Access, Backups | `secondary-foreground` |
+| `Gauge`, `Workflow`, `SquareAsterisk`, `ShieldCheck`, `DatabaseBackup` | a site's sections, there and in the Sites row menu: Overview, Services, Secrets, Access, Backups | `secondary-foreground` |
 | `AppWindow`, `Cog`, `CalendarClock`, `Database` | a service on the Services canvas and in its table: a server, a worker, a scheduled service, one that keeps a database live by its backup command | muted, on a tile |
 | `MousePointer2`, `Files`, `Waypoints`, `Plug`, `CircleDashed` | the canvas's other cards: visitors through Caddy, a site's static files, the egress proxy or any host, the connectors, another process | muted, on a tile |
 
@@ -699,7 +698,7 @@ when the page stays readable, in an `ErrorState` when there is nothing to show.
   a history entry.
 - Shown from ten items (`FILTER_BAR_FROM`); always on Sites and Activity.
 
-**The platform's own projects**, the dashboard, the portal and analytics,
+**The platform's own projects**, the dashboard and the portal,
 known by their slug on their own port (`Site.platform`), have their item,
 *Platform*, last in the Kind menu and only while the server carries one.
 The list and every other value hold them only while they need the owner,
@@ -737,7 +736,7 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | The guides | Step 2 of 3, Before you start, One command to run first, Check again, Next, Back, Save and continue, Save, Done; Create a check, Paste its ping URL, Ping URL, Wait for the first ping, Waiting for the monitor's next pass, Last pass 26s ago, Next pass; Choose where messages go, Paste the Slack address, Webhook address, Message format, From the address, Keep the current one, read from the address, as you chose; Create a bucket, Enter its details, Change its details, Endpoint, Bucket, Access key, Secret key, Region, Folder, Optional, Leave empty to keep it, Encryption passphrase, New passphrase, Generate, Copy, I saved it; Register the app, Issuer, Client ID, Client secret, Allowed domains, Admin emails, Provider name | Submit, Finish, Wizard, URL for a webhook (Webhook address), Prefix, Access key ID |
 | Toasts | Setup guide hidden. Every setting stays on the Server page., Undo, Offsite copy skipped. You can set it up on the Server page., The setup guide is back on Sites., The server is set up. The setup guide is gone., Heartbeat removed., Dismiss | Success, Done! |
 | Connectors | Connector, Add connector, Change, Remove connector, Requests, Grant, Withdraw, Granted, Granted, asked for, Asked, not granted, No such connector, Not asked for, Site removed, Base address, Header, Changed, Write-only (in the dialog and the sheet, never in a row) | Integration, Secret, Token, Revoke access, Grants |
-| Site sections | Overview, Services, Audience, Secrets, Access, Backups; the breadcrumb *All sites > cms*; *Switch site* | Settings, Details, Sharing, Guests, Members, Map, Topology |
+| Site sections | Overview, Services, Secrets, Access, Backups; the breadcrumb *All sites > cms*; *Switch site* | Settings, Details, Sharing, Guests, Members, Map, Topology |
 | The Services canvas | Visitors, Through Caddy, over HTTPS, Static files, Egress proxy, These hosts, and no other, Connectors, Lent by the machine, Any host, Another process; Server, Internal server, Database, Background, Scheduled, main service; All other paths, Every path; Open now, Seen before, Routed by Caddy, Declared; 2 open, 19h ago (a lit line's badge); 3 connections open, Last seen 2h ago, Declared in API_URL, Every service gets INFERENCE_URL, Declared on its command line; Loopback only, Loopback, out through the proxy, Outbound network; Zoom in, Zoom out, Fit to view, Actual size, Reset layout; See how they connect; Connections, From, To | Graph, Node, Edge, Topology, Upstream, Downstream, Dependency |
 | The machine | Server | VM, host |
 | Discrepancy | Refusal, issues; Error, Warning | Alert, Critical |
@@ -756,7 +755,6 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | Passwords | Change password, Dashboard password, Generate a strong one, Set my own, New password, Copy password | Set hash, Regenerate |
 | Backups | Snapshot, Before restore, Last snapshot 45m ago, Hourly, Offsite copy, No offsite copy, Verified 9h ago, Last run failed, Details, Keeps, Last check, Last restore; Taken, Size, Where, On this server, In the offsite copy, encrypted; Restore, Restore this snapshot, Restore cms to Oct 25, 19:02, What comes back, What is set aside, Restoring..., Restored; Show all 37, Show the newest 12 | Backup file, Revert, Rollback, Recover |
 | Activity | Event, Actor, Action, Target, Source, Type, Date, Search activity, Any time, Last 24 hours, Last 7 days, Last 30 days, Custom range, From, To, Apply, Today, Yesterday, Recorded, Same actor, Same site, Same target, Load older, 50 events read, Nothing matches in the 250 latest events, Export, CSV, JSON lines, Clear filters; a type is Deployments, Access changes, Secrets, Sign-ins, Tokens, Backups, Egress; a source that is not read: Can't read, Needs updating, and its latest 50 entries under the log; an actor is Owner, The server, Someone, alice@example.com (token), Example Accounting (password access) | Log entry, Audit trail, Download, Reset, Details, Site or host |
-| Audience | Visits, Views, Pages per visit, Time on page; Pages, Entry pages, Hostnames, Sources, Campaigns, Visitors, Devices, Browsers, Systems, Languages; Show all; No visit recorded for cms yet; cms isn't measured yet; serves no page: there is nothing to measure | Analytics, Traffic, Pageviews, Unique visitors, Sessions |
 | Unreachable | Can't reach the dashboard., Can't reach the server's secrets., Can't reach the access service on the server. | is not answering |
 | Common actions | Refresh, Retry, Sign in, Sign out, Copy, Copied, Cancel, Close, Done, Manage, See, History, All activity, Recent | Reload, Try again, Log out, Submit, Audit, Logs |
 | Empty states | No issues, No sites match "x", No sites match these filters, No sites deployed yet, No project of yours yet, No project named x that you have a role on, Nobody else has access to cms yet, Nobody has access to a project yet, cms has no secret files, Not part of your role, Only the owner's | Nothing here! |
@@ -782,7 +780,6 @@ One page per served file, the site in `?s=`:
 | Server, the owner's alone | `/server/` | `server/index.html` |
 | A site's Overview | `/site/?s=cms` | `site/index.html` |
 | A site's Services | `/site/services/?s=cms` | `site/services/index.html` |
-| A site's Audience | `/site/audience/?s=cms` | `site/audience/index.html` |
 | A site's Secrets | `/site/secrets/?s=cms` | `site/secrets/index.html` |
 | A site's Access | `/site/access/?s=cms` | `site/access/index.html` |
 | A site's Backups | `/site/backups/?s=cms` | `site/backups/index.html` |
@@ -791,7 +788,8 @@ Older addresses keep their file and redirect client-side, with no history
 entry (`LEGACY_PATHS` in `lib/pages.ts`): `/sites/?site=cms` and
 `/secrets/?site=cms` from before the per-site page, `/guests/` to the home
 page, `/team/` to Tokens, `/members/` to People, and a site's
-`/site/guests/`, `/site/sharing/` and `/site/members/` to its Access, `?s=`
+`/site/guests/`, `/site/sharing/` and `/site/members/` to its Access, and
+`/site/audience/`, from before Audience was removed, to its Overview, `?s=`
 kept. A section without `?s=` goes to the home page.
 
 **Sites (the home page).** Is anything wrong on the machine, and which site
@@ -1207,8 +1205,7 @@ banners of one line each. Then two panels side by side, a single column below
 | Memory    (o) 131 of 256 MB              |  | Access    [Lock] Restricted  4 people >|
 | CPU       5%                              |  | Secrets   3 variables  1 not set     > |
 | Restarts  0                               |  | Backups   Last snapshot 45m ago     > |
-| Port      3043                            |  | Audience  1,148 visits in 30 days   > |
-                                                | Disk      48 MB                       |
+| Port      3043                            |  | Disk      48 MB                       |
                                                 | Deployed  20h ago  by alice (token)   |
 ```
 
@@ -1244,8 +1241,7 @@ restricted site; *Secrets*, from Developer up, what the store keeps counted,
 "3 variables, 1 file", then the Secrets section's first problem in its tone
 and "+N" for the others (`secretsHeadline`, the same problems as the
 sidebar's badge); *Backups*, for the owner and an Admin, the last snapshot's
-age in the Backups section's words, in attention when the last run failed;
-*Audience*, the visits over analytics' window, "1,148 visits in 30 days".
+age in the Backups section's words, in attention when the last run failed.
 Around them, the facts that are no section: *Address*, the address that
 answers, a domain not answering as asked in its state's word ("Pending:
 example.net"), the other addresses muted under it, "Serves no page"
@@ -1365,29 +1361,6 @@ banner: the map then holds what sitesolide.json declares.
   then the site's deployments under *Recent*.
 - The Overview's **Services** table carries *See how they connect* in its
   header, a quiet link to this section.
-
-**A site's Audience.** Behind the title's (i): how a visit is counted, no
-cookie and a fingerprint the day's salt destroys, when a site becomes
-measured, how the bounce rate and the time on page read. One panel for the
-chart, its head the four figures, *Visits*, *Views*, *Pages per visit* and
-*Time on page*, the first three the tabs that switch the series below, the
-current one ruled in the accent; time on page, kept for the period alone,
-is a figure and no tab. The plot is 220 px tall on every screen, its three
-graduations and three dates text beside it; a crosshair snaps to the
-nearest day with the value then the day in its tooltip, the arrow keys
-walk the days, a table carries them for a screen reader, and pages per
-visit leaves a day nobody came empty rather than draw a fall. Then three
-panels, *Pages* (Pages, Entry pages, Hostnames), *Sources* (Sources,
-Campaigns) and *Visitors* (Devices, Browsers, Systems, Languages): each
-ranking a tab, a tab with no row left out, a panel left with one ranking
-titled by it; a mono head naming the rows and what they count; rows of
-36 px, the bar a pale accent fill behind the row, as long as its share of
-the first; the first six, then *Show all 9*, the whole ranking in a sheet,
-`?ranking=pages`. A site the measurement does not know says so in one
-line, "cms isn't measured yet: it joins the list within a minute of a
-deployment.", "mailer serves no page: there is nothing to measure."; one
-with no visit yet gives the tag to paste, with its copy button; numbers
-older than ten minutes, a banner.
 
 **A site's Secrets.** One object, the site's variables; their history is in
 Activity, behind the header's *History* (`type=secrets`), and the intro
@@ -1584,7 +1557,7 @@ cms yet." Under the list, one quiet line: "Also open it without being
 listed: the owner, and owner@example.com, set on the server to open every
 site.", or "The owner also opens it."
 
-A project of the platform (portal, dashboard, api, analytics, landing, www,
+A project of the platform (portal, dashboard, api, landing, www,
 and the landing named after the zone) shows one panel: how it opens, the same
 row without *Change*, then "portal is part of the platform. Only the owner
 opens it when restricted; no one can be given a role on it."
@@ -1740,83 +1713,72 @@ and no table.
     above the list every time. Closed, and said again beside each choice of
     a role's menu.
 
-33. **Four figure tiles above the Audience chart**, the "big number, small
-    label" tiles of point 1, over a chart that drew one of them again: the
-    figures are the chart's head, and its tabs.
-34. **Nine ranking panels**, each row 48 px with its bar on a line of its
-    own under the text: three panels of tabs, rows of 36 px, the bar
-    behind the row, the first six and the rest in a sheet.
-35. **Time on page as a tab**: the snapshot keeps it for the whole period
-    and no day of it, and a tab would draw a line that does not exist.
-36. **A "How measurement works" link** beside an unmeasured site: the
-    dashboard links to no documentation site, whose address would name a
-    machine (CLAUDE.md); the (i) says how.
-37. **Activity's strip of sources**, five green *Read* on every visit: a
+33. **Activity's strip of sources**, five green *Read* on every visit: a
     source read is not news, one that could not be read keeps its banner.
-38. **Five filter fields**, Actor, Action, Site or host, From and To, on a
+34. **Five filter fields**, Actor, Action, Site or host, From and To, on a
     row of their own under the source chips and an *Access changes*
     toggle: one search and three facets; the address still takes an actor,
     an action and a target, which the History links write.
-39. **A Details chevron on every row**, opening its fields under it: the
+35. **A Details chevron on every row**, opening its fields under it: the
     row opens the sheet.
-40. **The dotted action and the note under every sentence**, rows of 63 px:
+36. **The dotted action and the note under every sentence**, rows of 63 px:
     both are the sheet's, but a failure's note, which says why, beside its
     sentence.
-41. **An age on every row of an older day**, "3d ago" twenty times under
+37. **An age on every row of an older day**, "3d ago" twenty times under
     one heading: the heading says the day, the row its time.
-42. **Runs folded only while consecutive**: an hourly backup between other
+38. **Runs folded only while consecutive**: an hourly backup between other
     events was never folded, and the log stayed full of routine. The same
     event folds within its day, at its newest.
 
-43. **A *May create projects* checkbox on every person's row**: a right
+39. **A *May create projects* checkbox on every person's row**: a right
     given by a click while scrolling, in a column empty for nearly everyone,
     and a form for it under the list. The row's menu gives and takes it, a
     quiet tag says who holds it, and the form is the header's *Let someone
     create projects*.
-44. **Domains in a panel of their own** under People: the same question,
+40. **Domains in a panel of their own** under People: the same question,
     who gets in, answered twice. One list, its *Type* facet to narrow it.
-45. **A Grants panel of every pair**, its count the grants' while its rows
+41. **A Grants panel of every pair**, its count the grants' while its rows
     were the pairs, 3 over 6: a granted pair needs no decision. What waits
     is *Requests*, which counts its rows; a granted pair lives in its
     connector's row and sheet.
-46. **Created, used and until in a token's row, its made-by line, Write-only
+42. **Created, used and until in a token's row, its made-by line, Write-only
     on every connector**: the row keeps what a decision needs, Last used and
     Expires; the rest, and what is true of every connector, is in the sheet
     and the dialog.
-47. **The New token dialog at its full height**: 1002 px of content in an
+43. **The New token dialog at its full height**: 1002 px of content in an
     868 px dialog, every project in two columns and four permissions always
     open. Six rows of projects with a filter, the permissions closed until
     one is on or needed, and a summary line in view of *Create token*.
-48. **Who added a person, and when, in People's sheet**: the People route
+44. **Who added a person, and when, in People's sheet**: the People route
     carries each person's roles, not who gave them. It is on the person's
     row in each project's Access section.
-49. **A status line and an activity panel in Secrets**, "Running, up 20h,
+45. **A status line and an activity panel in Secrets**, "Running, up 20h,
     cms" under the panel's title and a log of the site's operations below
     it: the Overview says the service, Activity the history. A restart
     pending is the panel's pill, and its button the primary only then.
-50. **Upload file and Add variable as two buttons at the panel's foot**,
+46. **Upload file and Add variable as two buttons at the panel's foot**,
     and Build secrets and Public variables as two panels: one *Add* menu in
     the panel's header, one disclosure with its count.
-51. **Masked dots in place of a value**: they say nothing the name does not,
+47. **Masked dots in place of a value**: they say nothing the name does not,
     and invite a read. A value shows on the owner's demand, otherwise
     nothing does.
-52. **The Backups' Schedule table and its activity panel**, five rows and
+48. **The Backups' Schedule table and its activity panel**, five rows and
     six "Scheduled run, Done": one status row, the rest behind *Details*,
     the runs in Activity.
-53. **Kind and Where in words on every snapshot**, "Scheduled" and "Server
+49. **Kind and Where in words on every snapshot**, "Scheduled" and "Server
     and offsite" twelve times, and a *Restore* button on each: a tag for a
     before-restore snapshot alone, two icons for where, *Restore* under the
     pointer and in the row menu.
-54. **Navigation drawn with the rows' icons**, Sites as a `Globe` and
+50. **Navigation drawn with the rows' icons**, Sites as a `Globe` and
     Secrets as a `KeyRound`, the icons that say *Public* and a code one
     column away: the sites are a stack, the secrets a masked value.
-55. **Running and a green dot on the site's card in the sidebar**, on every
+51. **Running and a green dot on the site's card in the sidebar**, on every
     healthy site, the word the rows had stopped saying: the card says what
     the site is when fine, its state in its tone when not.
-56. **A leftover grant in red** among Connectors' requests, under a verdict
+52. **A leftover grant in red** among Connectors' requests, under a verdict
     saying *All clear*: it lends nothing until a project of that name asks
     again, a warning like a Caddy fragment with no folder.
-57. **The server's own settings in the dashboard site's Secrets alone**, as
+53. **The server's own settings in the dashboard site's Secrets alone**, as
     variables of files named by their file: point 8 keeps everything about
     a site in that site, and these are about no site. The heartbeat, the
     alert webhook, the passwords, company sign-in and the offsite copy are
@@ -1826,7 +1788,7 @@ and no table.
     restart that applied nothing. They get a machine page of their own,
     Server, in words and in the order they are read, with a guide for each;
     the files stay in those Secrets, for repairs, one link away.
-58. **Four ways to the same settings**, mockups A to D: a page, each setting
+54. **Four ways to the same settings**, mockups A to D: a page, each setting
     in a sheet where its state shows, a guided list on the home page, a
     command menu. One row component in two places was kept: the Server page
     holds every setting for good, the guide on Sites only what is missing,
@@ -1853,8 +1815,8 @@ on no list, refused with `no-role`. It seeds an expired password access on
 `inventory`, and alice's token `alice-ci`, paused on `brand`, where she is a
 Viewer now. Two projects serve no page: `mailer`, a worker beside two
 scheduled services, the hourly one's last run failed outside the showcase,
-and `reports`, whose every service is scheduled. The platform's own three,
-`dashboard`, `portal` and `analytics`, sit under Platform. Variants:
+and `reports`, whose every service is scheduled. The platform's own two,
+`dashboard` and `portal`, sit under Platform. Variants:
 `BENCH_PORT`, `BENCH_STALE=1`, `BENCH_NO_STEWARD=1`, `BENCH_NO_PORTAL=1`,
 `BENCH_NO_SSO=1` (no provider: everyone added gets password access),
 `BENCH_NO_EGRESS=1`, `BENCH_NO_BACKUPS=1`, `BENCH_OLD_STEWARD=1`,

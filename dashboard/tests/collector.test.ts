@@ -20,9 +20,8 @@ import type { Raw } from "../src/state";
  * The collector, run as its timer runs it, on a test tree, when the account
  * that owns a directory it reads or writes as root lays a trap there.
  *
- * Three such directories: the monitor's state directory, which its account,
- * sitesolide-monitor, owns; analytics' data directory, which site-analytics
- * owns; and the dashboard's own, which site-dashboard owns. A link put in the
+ * Two such directories: the monitor's state directory, which its account,
+ * sitesolide-monitor, owns; and the dashboard's own, which site-dashboard owns. A link put in the
  * right place would have root copy a file only root may read into a snapshot
  * site-dashboard reads, or overwrite a file of somebody else's, and chown it
  * to the account that laid the link.
@@ -39,7 +38,6 @@ const COLLECTOR = join(import.meta.dir, "..", "collector.ts");
 const D = mkdtempSync(join(tmpdir(), "collector-"));
 const SITES = join(D, "srv", "sites");
 const DASHBOARD_DATA = join(SITES, "dashboard", "data");
-const ANALYTICS_DATA = join(SITES, "analytics", "data");
 const MONITOR = join(D, "var", "lib", "sitesolide-monitor");
 const ETC = join(D, "etc");
 /** A file only root could read on the machine, and what must never leak of it. */
@@ -52,7 +50,7 @@ afterAll(() => rmSync(D, { recursive: true, force: true }));
 
 beforeEach(() => {
   rmSync(D, { recursive: true, force: true });
-  for (const folder of [DASHBOARD_DATA, ANALYTICS_DATA, MONITOR, ETC, join(SITES, "shop", "data")]) mkdirSync(folder, { recursive: true });
+  for (const folder of [DASHBOARD_DATA, MONITOR, ETC, join(SITES, "shop", "data")]) mkdirSync(folder, { recursive: true });
   writeFileSync(SECRET_FILE, `${SECRET}\n`);
   writeFileSync(VICTIM, "untouched");
 });
@@ -69,9 +67,6 @@ async function collect(path: string | null = null): Promise<Raw> {
       CODES_FILE: join(D, "locks-codes.json"),
       DOMAINS_FILE: join(D, "domaines.map"),
       BLOCKS_FOLDER: join(D, "blocks"),
-      AUDIENCE_FILE: join(ANALYTICS_DATA, "instantane.json"),
-      HOSTS_FILE: join(ANALYTICS_DATA, "hotes.json"),
-      HOSTS_OWNER: "",
       MONITOR_FILE: join(MONITOR, "status.json"),
     },
     stdout: "pipe",
@@ -224,54 +219,7 @@ describe("the monitor's status, copied as root from the monitor's directory", ()
   });
 });
 
-describe("the audience snapshot, copied as root from analytics' directory", () => {
-  const AUDIENCE = join(ANALYTICS_DATA, "instantane.json");
-
-  test("a snapshot of the directory's owner is copied as it stands", async () => {
-    writeFileSync(AUDIENCE, '{"version":1}');
-    expect((await collect()).audience).toBe('{"version":1}');
-  });
-
-  test("a symbolic link in its place is not followed, and what it points to never reaches the snapshot", async () => {
-    symlinkSync(SECRET_FILE, AUDIENCE);
-    const raw = await collect();
-    expect(raw.audience ?? null).toBeNull();
-    expect(JSON.stringify(raw)).not.toContain(SECRET);
-  });
-
-  test("a hard link to a file elsewhere is refused too", async () => {
-    linkSync(SECRET_FILE, AUDIENCE);
-    const raw = await collect();
-    expect(raw.audience ?? null).toBeNull();
-    expect(JSON.stringify(raw)).not.toContain(SECRET);
-  });
-});
-
-describe("the files the collector writes as root into directories it does not own", () => {
-  test("a link at the old temporary name of the host table is not followed", async () => {
-    symlinkSync(VICTIM, join(ANALYTICS_DATA, "hotes.json.tmp"));
-    await collect();
-    expect(readFileSync(VICTIM, "utf8")).toBe("untouched");
-    const hosts = JSON.parse(readFileSync(join(ANALYTICS_DATA, "hotes.json"), "utf8")) as { hosts: unknown };
-    expect(typeof hosts.hosts).toBe("object");
-  });
-
-  test("a link in place of the host table is replaced, never written through", async () => {
-    symlinkSync(VICTIM, join(ANALYTICS_DATA, "hotes.json"));
-    await collect();
-    expect(readFileSync(VICTIM, "utf8")).toBe("untouched");
-    expect(lstatSync(join(ANALYTICS_DATA, "hotes.json")).isFile()).toBe(true);
-    // No temporary file left behind.
-    expect(readdirSync(ANALYTICS_DATA)).toEqual(["hotes.json"]);
-  });
-
-  test("analytics' data directory replaced by a link: nothing is written through it", async () => {
-    rmSync(ANALYTICS_DATA, { recursive: true });
-    symlinkSync(join(SITES, "shop", "data"), ANALYTICS_DATA);
-    await collect();
-    expect(readdirSync(join(SITES, "shop", "data"))).toEqual(["shop.db"]);
-  });
-
+describe("the snapshot the collector writes as root into a directory it does not own", () => {
   test("a link at the old temporary name of the snapshot is not followed", async () => {
     symlinkSync(VICTIM, join(DASHBOARD_DATA, "state.json.tmp"));
     const raw = await collect();
@@ -304,13 +252,11 @@ describe("the previous snapshot, read back as root from the dashboard's director
 
   test("a named pipe in its place neither hangs the collector nor stops the snapshot", async () => {
     // A pipe nobody writes into held root's collector on its open until the
-    // unit's timeout, at every pass, and nothing was ever written again: the
-    // snapshot, nor analytics' host table.
+    // unit's timeout, at every pass, and nothing was ever written again.
     expect(Bun.spawnSync(["mkfifo", STATE]).exitCode).toBe(0);
     const raw = await collect();
     expect(raw.previous).toBeNull();
     expect(lstatSync(STATE).isFile()).toBe(true);
-    expect(lstatSync(join(ANALYTICS_DATA, "hotes.json")).isFile()).toBe(true);
   }, 30_000);
 });
 

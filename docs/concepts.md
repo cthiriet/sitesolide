@@ -303,8 +303,8 @@ one whose services all listen on nothing: it has nothing of its own to call.
 Behind a [Cloudflare Tunnel](tunnel.md), two more lines. Caddy takes the
 visitor's address from the `Cf-Connecting-Ip` header of a request that comes
 from `::1`, where the tunnel's connector reaches it, and hands it to every app
-as `X-Forwarded-For`: the analytics and the dashboard's limiter of failed
-attempts count by it. The rule lets the connector's account alone, not even
+as `X-Forwarded-For`: an app's own counts and the dashboard's limiter of
+failed attempts go by it. The rule lets the connector's account alone, not even
 root, open a connection from `::1` to Caddy's 443; anyone may still reach
 Caddy on `127.0.0.1`, where it believes no header.
 
@@ -708,6 +708,5 @@ runs on the machine, in the installer, with the same decisions: see
 - [dashboard/README.md](../dashboard/README.md), the dashboard, the steward and the gatekeeper
 - [dashboard/src/backup/README.md](../dashboard/src/backup/README.md), the data snapshots and their restore
 - [portal/README.md](../portal/README.md), the owner's password, password access, signing in with a company account, the projection it decides from and the identity headers
-- [analytics/README.md](../analytics/README.md), how a visit is counted, and why it is anonymous
 - [monitor/README.md](../monitor/README.md), what is checked every minute, and who hears of it
 - [egress/README.md](../egress/README.md), the hosts a project may reach, and the credentials it is lent

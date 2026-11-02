@@ -231,8 +231,8 @@ A port another project declares on the machine is refused, measured before the
 build and again under the Caddy lock, just before the manifest is deposited, so
 that two deployments running side by side cannot both take it. So are 3000 and
 3001, the landing's and the shared service's, and the platform's own, 3022 for
-the dashboard, 3026 for the portal and 3029 for analytics, whether they are
-deployed yet or not.
+the dashboard and 3026 for the portal, whether they are deployed yet or
+not.
 
 Those blocks are not arbitrary: a nftables rule reserves them to Caddy and
 root, so no service can reach another one. Outside them, a service would be

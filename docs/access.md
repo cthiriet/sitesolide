@@ -45,7 +45,7 @@ Admin the highest, and each role includes the ones below it:
 | Role | On that project |
 |---|---|
 | Can open (`can-open` in the CLI, `visitor` in the API) | opens its site when its general access is Restricted, and nothing in the dashboard |
-| Viewer | also sees the project in the dashboard: its state, audience and activity |
+| Viewer | also sees the project in the dashboard: its state and activity |
 | Developer | also deploys it with a token of their own, restarts its service, and sets, generates, replaces and removes its secrets without ever reading one back: the dashboard shows them names, the server never hands them a value |
 | Admin | everything of the project but reading a secret back: restores its secrets' previous version, chooses its general access, Public, Restricted or Anyone with the code, and a new code, gives people access to it, a role at most their own, and restores its backups |
 
@@ -119,9 +119,9 @@ in a project the sections their role opens:
 
 | Role | A project's sections |
 |---|---|
-| Viewer | Overview, Services, Audience, and Access read only: its general access, its people with access, and whom to ask to add someone |
+| Viewer | Overview, Services, and Access read only: its general access, its people with access, and whom to ask to add someone |
 | Developer | the same, and Secrets, whose values they write and never read back |
-| Admin | everything: Overview, Services, Audience, Secrets, whose values they write and never read back either, Access, where they give people access, and Backups |
+| Admin | everything: Overview, Services, Secrets, whose values they write and never read back either, Access, where they give people access, and Backups |
 
 The rest of the dashboard is the owner's, hidden and refused: People,
 Connectors, and every project they hold no role on.

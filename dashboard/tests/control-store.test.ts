@@ -399,7 +399,7 @@ describe("the steward: a deployed project's store", () => {
     expect(b.journal().at(-1)).toMatchObject({ operation: "set", result: "rejects", actor: `token:${flagless.token.id}`, slug: "kanban", detail: "no secrets permission" });
     const { secret } = await b.ownerToken({ slugs: ["kanban"], secrets: true });
     const journaled = b.journal().length;
-    for (const slug of ["cms", "dashboard", "portal", "analytics", "landing"]) {
+    for (const slug of ["cms", "dashboard", "portal", "api", "landing"]) {
       for (const response of [await list(b, secret, slug), await change(b, secret, slug, { A: "b" }), await generate(b, secret, slug), await removeFile(b, secret, slug)]) {
         expect(await body(response)).toMatchObject({ status: 404, error: "not-found" });
       }

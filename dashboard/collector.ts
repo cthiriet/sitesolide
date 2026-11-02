@@ -23,10 +23,9 @@
  *
  *   SITES_DIR=/tmp/attempt/srv STATE_FILE=/tmp/state.json OWNER= bun collector.ts
  */
-import { lstatSync, readFileSync, readdirSync, statSync, type Stats } from "node:fs";
+import { readFileSync, readdirSync, statSync, type Stats } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { $ } from "bun";
-import { hostTable } from "./src/audience";
 import { copyMonitorStatus, monitorRefusal, statusFileRefusal } from "./src/monitor";
 import { readAccount, readBounded, readGroup, writeAtomically, type Examination } from "./src/secrets/system";
 import { countLinks, readEstablished, rememberLinks, unitOfCgroup, type RawLink } from "./src/links";
@@ -39,21 +38,6 @@ const CODES_FILE = process.env.CODES_FILE ?? "/etc/caddy/locks-codes.json";
 const DOMAINS_FILE = process.env.DOMAINS_FILE ?? "/etc/caddy/domaines.map";
 const BLOCKS_DIR = process.env.BLOCKS_FOLDER ?? "/etc/caddy/sites";
 const STATE_FILE = process.env.STATE_FILE ?? "/srv/sites/dashboard/data/state.json";
-
-/**
- * The snapshot the `analytics` service drops, and the host table it is given
- * back in exchange.
- *
- * These two files are the only exchange between the two services, and it goes
- * through no network: `analytics` cannot reach the dashboard, the dashboard
- * cannot open its database, and the loopback rule reserves their ports to Caddy
- * and to root. The collector, already privileged and already passing every
- * minute, carries both in the direction that suits.
- */
-const AUDIENCE_FILE =
-  process.env.AUDIENCE_FILE ?? "/srv/sites/analytics/data/instantane.json";
-const HOSTS_FILE = process.env.HOSTS_FILE ?? "/srv/sites/analytics/data/hotes.json";
-const HOSTS_OWNER = process.env.HOSTS_OWNER ?? "site-analytics:site-analytics";
 
 /**
  * The status the monitor leaves after each pass (monitor/README.md), in the
@@ -73,13 +57,12 @@ const MONITOR_MAX_BYTES = 1024 * 1024;
 const ZONE = requiredZone();
 
 /**
- * The zone served, which the dashboard turns into each site's address and on
- * which the host table handed to `analytics` is built.
+ * The zone served, which the dashboard turns into each site's address.
  *
  * NO DEFAULT NAMES A MACHINE. A ready made zone here would be the one of this
- * file's author: an installation elsewhere would display his addresses, and
- * the host table would let his domains through instead of the ones of the
- * machine it runs on. The collector therefore stops rather than guess.
+ * file's author: an installation elsewhere would display his addresses, not
+ * the ones of the machine it runs on. The collector therefore stops rather
+ * than guess.
  *
  * The value comes from the workstation's configuration, written by `sitesolide
  * init`, and reaches the machine through the unit's environment, as it does
@@ -152,9 +135,6 @@ async function text(path: string, incomplete: string | null = null): Promise<str
   }
 }
 
-/** The audience snapshot holds a few days of counts per host: a few kilobytes, sixteen megabytes is far beyond it. */
-const AUDIENCE_MAX_BYTES = 16 * 1024 * 1024;
-
 /**
  * A file another account may have put in place, read as root: opened without
  * following a link, and only if it is a regular file with a single name,
@@ -173,29 +153,6 @@ function readPlainText(path: string, max: number, owner: number | null = null): 
   if (info.link || !info.regular || info.links > 1 || (owner !== null && info.uid !== owner)) return null;
   if (examination.bytes === null) return null;
   return new TextDecoder().decode(examination.bytes);
-}
-
-/**
- * The audience snapshot as `analytics` left it, or null when it could not be
- * read as it should be.
- *
- * Read as root from analytics' own data directory, which makes it a door like
- * the monitor's status: a compromised analytics service could put a symbolic
- * link, or a hard link, at instantane.json pointing at /etc/sitesolide/*.env,
- * and root would copy the secret into the reading site-dashboard reads. So the
- * file is opened without following a link, only if it is a regular file with
- * a single name, owned by its directory's owner, and smaller than a cap. Its
- * content is passed as it stands: it is analytics' own data, which src/state.ts
- * judges with no privilege.
- */
-function readAudience(): string | null {
-  let folder: Stats;
-  try {
-    folder = statSync(dirname(AUDIENCE_FILE));
-  } catch {
-    return null;
-  }
-  return readPlainText(AUDIENCE_FILE, AUDIENCE_MAX_BYTES, folder.uid);
 }
 
 /**
@@ -415,7 +372,7 @@ async function readMachine(): Promise<RawMachine | null> {
 }
 
 /**
- * The previous snapshot holds the audience snapshot it copied, AUDIENCE_MAX_BYTES
+ * The previous snapshot holds the monitor's status it copied, a megabyte
  * at most, and the machine's reading beside it, a few hundred kilobytes.
  */
 const STATE_MAX_BYTES = 32 * 1024 * 1024;
@@ -433,11 +390,11 @@ const STATE_MAX_BYTES = 32 * 1024 * 1024;
  * left as they stand, for rememberLinks to check one by one.
  *
  * Read as root from the dashboard's own data directory, which site-dashboard
- * owns: the same door as the audience snapshot's, and read the same way. A
+ * owns: the same door as the monitor's status, and read the same way. A
  * symbolic link there had root parse whatever file it pointed to and copy its
  * date and its keys into the reading; a named pipe held the collector on its
- * open until the unit's timeout, at every pass, so that neither the snapshot
- * nor analytics' host table was ever written again. So the file is opened
+ * open until the unit's timeout, at every pass, so that the snapshot
+ * was never written again. So the file is opened
  * without following a link, only if it is a regular file with a single name,
  * within a cap past which the rates simply start again from blank.
  */
@@ -542,9 +499,6 @@ async function collect(): Promise<Raw> {
     folders,
     codes: await text(CODES_FILE, "{}"),
     domains: await text(DOMAINS_FILE),
-    // Missing as long as `analytics` has not run once, which is a normal state:
-    // the dashboard says so rather than showing an empty page.
-    audience: readAudience(),
     monitor: readMonitorStatus(),
     ports: listening,
     links: await links(listening, earlier.links, generated),
@@ -575,8 +529,8 @@ function ownerIds(owner: string): { uid: number; gid: number } | null {
 }
 
 /**
- * Writing as root into a directory another account owns, the dashboard's or
- * analytics', both `site-<slug>` 0750.
+ * Writing as root into a directory another account owns, the dashboard's,
+ * `site-dashboard` 0750.
  *
  * That account may put anything at any name there, and a path-based write
  * follows what it finds: a link at the temporary name had `Bun.write`
@@ -597,40 +551,7 @@ function writeSnapshot(raw: Raw): void {
   writeOwned(STATE_FILE, `${JSON.stringify(raw)}\n`, 0o600, OWNER);
 }
 
-/**
- * Drops the host table at `analytics`, which cannot build it.
- *
- * It is this collector's only write outside the dashboard's directory, and it
- * is declared as such in its unit. It carries no secret: the host to directory
- * correspondence is already read in the Caddyfile and in DNS. What it brings
- * `analytics` is the one thing it cannot know on its own, and without which it
- * refuses every measurement.
- *
- * The directory is not created if it is missing: `analytics` may not be
- * deployed on this machine, and putting a directory in its place would mask
- * that it is missing. Nor is it written through a link: `O_NOFOLLOW` guards
- * the last name only, and a `data` that pointed elsewhere would carry the
- * table there.
- */
-function writeHosts(raw: Raw): void {
-  const folder = dirname(HOSTS_FILE);
-  let isFolder = false;
-  try {
-    isFolder = lstatSync(folder).isDirectory();
-  } catch {
-    return;
-  }
-  if (!isFolder) {
-    console.error(`collector: ${folder} is not a plain directory, the host table is not written`);
-    return;
-  }
-
-  const content = `${JSON.stringify({ generated: raw.generated, hosts: hostTable(raw) })}\n`;
-  writeOwned(HOSTS_FILE, content, 0o640, HOSTS_OWNER);
-}
-
 const raw = await collect();
 await $`mkdir -p ${dirname(STATE_FILE)}`.nothrow().quiet();
 writeSnapshot(raw);
-writeHosts(raw);
 console.log(`${raw.folders.length} folders collected → ${STATE_FILE}`);

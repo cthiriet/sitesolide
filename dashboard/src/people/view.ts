@@ -13,7 +13,7 @@ import type { Roles } from "./protocol";
 
 /**
  * The reading as a member may see it: their sites, the discrepancies of their
- * sites, their sites' audience. The machine's own figures, its memory, disk
+ * sites. The machine's own figures, its memory, disk
  * and load, how its alerting fares, and its discrepancies that name no site,
  * are the owner's.
  *
@@ -28,9 +28,7 @@ import type { Roles } from "./protocol";
 export function memberReading(reading: Reading, roles: Roles): Reading {
   if (!reading.present) return reading;
   const slugs = new Set(Object.keys(roles));
-  const { snapshot, audience } = reading;
-  const sites: Record<string, (typeof audience.sites)[string]> = {};
-  for (const [slug, measure] of Object.entries(audience.sites)) if (slugs.has(slug)) sites[slug] = measure;
+  const { snapshot } = reading;
   return {
     ...reading,
     snapshot: {
@@ -47,6 +45,5 @@ export function memberReading(reading: Reading, roles: Roles): Reading {
       machine: null,
       alerting: null,
     },
-    audience: { ...audience, sites },
   };
 }

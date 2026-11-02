@@ -507,8 +507,8 @@ describe("ports taken on the machine", () => {
     expect(portConflicts({ ...APP, slug: "other", port: 3026 }, new Map())).toEqual([
       "port 3026 is already declared by the platform's portal, deployed or not",
     ]);
-    expect(portConflicts(lab({ web: { start: "/x", port: 3029 } }), new Map())).toEqual([
-      "port 3029 (service web) is already declared by the platform's analytics, deployed or not",
+    expect(portConflicts(lab({ web: { start: "/x", port: 3022 } }), new Map())).toEqual([
+      "port 3022 (service web) is already declared by the platform's dashboard, deployed or not",
     ]);
     expect(portConflicts({ ...APP, slug: "portal", port: 3026 }, new Map())).toEqual([]);
     expect(portConflicts({ ...APP, slug: "dashboard", port: 3022 }, new Map())).toEqual([]);

@@ -466,20 +466,18 @@ export function SitePanel({
   plainAccess,
   secrets,
   backups,
-  audience,
   deployedBy = null,
 }: {
   site: Site
   now: number
   /** The address of each section the reader may open. */
-  links: { access: string; secrets: string | null; backups: string | null; audience: string | null }
+  links: { access: string; secrets: string | null; backups: string | null }
   /** Who is on the list, in a few words, once read. */
   people: string | null
   /** A Viewer or a Developer reads Applied rather than the Caddy block. */
   plainAccess: boolean
   secrets: Headline | null
   backups: Headline | null
-  audience: Headline | null
   /** Who made the last deployment, when Activity knows it. */
   deployedBy?: string | null
 }) {
@@ -496,11 +494,6 @@ export function SitePanel({
         {backups !== null && links.backups !== null && (
           <FactRow label="Backups" href={links.backups}>
             <Head headline={backups} />
-          </FactRow>
-        )}
-        {audience !== null && links.audience !== null && (
-          <FactRow label="Audience" href={links.audience}>
-            <Head headline={audience} />
           </FactRow>
         )}
         {siteStorage(site, now).map((fact) =>

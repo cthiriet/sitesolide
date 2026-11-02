@@ -647,8 +647,8 @@ sudo systemctl start caddy
 # a directory of the account's, so copied rather than refused.
 sudo systemctl start sitesolide-collector.service
 sudo grep -o '"monitor":"{\\"[a-z]*' /srv/sites/dashboard/data/state.json  # "monitor":"{\"version
-sudo stat -c '%U:%G %a' /srv/sites/dashboard/data/state.json /srv/sites/analytics/data/hotes.json
-# site-dashboard:site-dashboard 600, site-analytics:site-analytics 640: the fchown on the descriptor
+sudo stat -c '%U:%G %a' /srv/sites/dashboard/data/state.json
+# site-dashboard:site-dashboard 600: the fchown on the descriptor
 
 # A link at status.json is refused, and its target never reaches the snapshot.
 sudo ln -sf /etc/sitesolide/dashboard-monitor.env /var/lib/sitesolide-monitor/status.json

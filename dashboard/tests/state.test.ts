@@ -697,24 +697,21 @@ describe("the platform's own projects", () => {
   const platformOf = (folders: RawFolder[]) =>
     Object.fromEntries(buildSnapshot(raw(folders)).sites.map((site) => [site.slug, site.platform]));
 
-  test("the dashboard, the portal and analytics, each on its own port", () => {
-    const slugs = ["dashboard", "portal", "analytics"];
+  test("the dashboard and the portal, each on its own port", () => {
+    const slugs = ["dashboard", "portal"];
     expect(platformOf(slugs.map((slug) => folder(slug, app(slug, portOf(slug)), { unit: unit() })))).toEqual({
-      analytics: true,
       dashboard: true,
       portal: true,
     });
   });
 
-  /** An owner may deploy a project of their own named analytics, the platform's being optional. */
   test("a project of the owner's under one of their names, or on one of their ports, is not", () => {
     expect(
       platformOf([
-        folder("analytics", { slug: "analytics", publicDir: "public", port: portOf("analytics") }),
         folder("portal", app("portal", 3050), { unit: unit() }),
         folder("shop", app("shop", portOf("dashboard")), { unit: unit() }),
       ]),
-    ).toEqual({ analytics: false, portal: false, shop: false });
+    ).toEqual({ portal: false, shop: false });
   });
 
   test("the landing is the owner's site, and an unreadable manifest names no port", () => {

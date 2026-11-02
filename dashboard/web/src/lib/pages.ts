@@ -6,8 +6,8 @@
  * Two levels. The machine's: the home page, where the machine, its
  * discrepancies and the list of sites live, the machine's audit, the People
  * with a role somewhere, the Tokens that deploy without SSH, the
- * connectors the egress proxy lends, and the server's own settings. A site's: six sections, Overview,
- * Services, Audience, Secrets, Access and Backups, the site as a parameter; Services only for an app,
+ * connectors the egress proxy lends, and the server's own settings. A site's: five sections, Overview,
+ * Services, Secrets, Access and Backups, the site as a parameter; Services only for an app,
  * the one kind that runs any.
  *
  * Every page is a file of the build, `site/secrets/index.html` for
@@ -21,8 +21,9 @@
  *
  * Older addresses keep their file so bookmarks keep working: `/sites/`,
  * `/secrets/` and `/guests/` from before the per-site page, `/team/` and
- * `/members/` from before Tokens and People, and a site's Guests, Sharing and
- * Members from before its one Access section. They are read like their
+ * `/members/` from before Tokens and People, a site's Guests, Sharing and
+ * Members from before its one Access section, and its Audience, removed, which
+ * opens its Overview. They are read like their
  * equivalent, and navigation replaces the address with the new one.
  */
 import { isPerson, roleOn, type Person } from "./identity"
@@ -30,7 +31,7 @@ import type { IdentityView, Role, Site } from "./types"
 import type { Verdict } from "./verdict"
 
 /** A site's sections, in the order of the sidebar and the tabs. */
-export type Section = "overview" | "services" | "audience" | "secrets" | "access" | "backups"
+export type Section = "overview" | "services" | "secrets" | "access" | "backups"
 
 /** The pages of the machine level. */
 export type MachinePage = "home" | "activity" | "people" | "tokens" | "connectors" | "server"
@@ -55,7 +56,7 @@ export const MACHINE_PAGES: readonly MachineEntry[] = [
  * the home page, the activity of their projects, Tokens for their own tokens
  * when a role or the create right lets them mint one, and in a site the
  * sections their role there opens, the steward's own table
- * (src/people/powers.ts): a Viewer its Overview, Services, Audience and Access, read
+ * (src/people/powers.ts): a Viewer its Overview, Services and Access, read
  * only; a Developer its Secrets too, values write-only; an Admin everything
  * of the site. The rest is the owner's, hidden here and refused by the
  * service.
@@ -72,12 +73,12 @@ function personPages(identity: Person): readonly MachinePage[] {
 }
 
 const ROLE_SECTIONS: Readonly<Record<Role, readonly Section[]>> = {
-  viewer: ["overview", "services", "audience", "access"],
-  developer: ["overview", "services", "audience", "secrets", "access"],
-  admin: ["overview", "services", "audience", "secrets", "access", "backups"],
+  viewer: ["overview", "services", "access"],
+  developer: ["overview", "services", "secrets", "access"],
+  admin: ["overview", "services", "secrets", "access", "backups"],
 }
 
-const OWNER_SECTIONS: readonly Section[] = ["overview", "services", "audience", "secrets", "access", "backups"]
+const OWNER_SECTIONS: readonly Section[] = ["overview", "services", "secrets", "access", "backups"]
 
 /** The machine's pages this person may open, in the sidebar's order. */
 export function machinePagesFor(identity: IdentityView | null): readonly MachineEntry[] {
@@ -112,7 +113,6 @@ export function mayOpen(page: Page, identity: IdentityView | null): boolean {
 export const SECTIONS: readonly SectionEntry[] = [
   { section: "overview", title: "Overview", path: "/site/" },
   { section: "services", title: "Services", path: "/site/services/" },
-  { section: "audience", title: "Audience", path: "/site/audience/" },
   { section: "secrets", title: "Secrets", path: "/site/secrets/" },
   { section: "access", title: "Access", path: "/site/access/" },
   { section: "backups", title: "Backups", path: "/site/backups/" },
@@ -146,6 +146,7 @@ export const LEGACY_PATHS: Readonly<Record<string, Legacy>> = {
   "/site/guests/": { kind: "section", section: "access", param: SITE_PARAM },
   "/site/sharing/": { kind: "section", section: "access", param: SITE_PARAM },
   "/site/members/": { kind: "section", section: "access", param: SITE_PARAM },
+  "/site/audience/": { kind: "section", section: "overview", param: SITE_PARAM },
 }
 
 /**

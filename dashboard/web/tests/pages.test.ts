@@ -198,7 +198,7 @@ describe("the address of a page", () => {
       ...SECTIONS.map((entry) => entry.path),
       ...Object.keys(LEGACY_PATHS),
     ]
-    expect(Object.keys(LEGACY_PATHS).sort()).toEqual(["/guests/", "/members/", "/secrets/", "/site/guests/", "/site/members/", "/site/sharing/", "/sites/", "/team/"])
+    expect(Object.keys(LEGACY_PATHS).sort()).toEqual(["/guests/", "/members/", "/secrets/", "/site/audience/", "/site/guests/", "/site/members/", "/site/sharing/", "/sites/", "/team/"])
     expect(paths.sort()).toEqual(expected.sort())
   })
 })

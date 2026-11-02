@@ -7,7 +7,6 @@
  * stupid as possible, and a display rule that changes is then fixed by an
  * ordinary `sitesolide deploy`, without touching what runs as root.
  */
-import { buildAudience, type Audience } from "./audience";
 import { STALE_AFTER_MS, buildSnapshot, type Raw, type Snapshot } from "./state";
 
 export type Reading =
@@ -17,17 +16,6 @@ export type Reading =
       snapshot: Snapshot;
       age: number;
       stale: boolean;
-      /**
-       * The audience measurement, copied into the same reading by the
-       * collector.
-       *
-       * It travels with the state of the machine rather than through a route
-       * of its own: it is the same file, read once, and the page therefore has
-       * no second call to make to display one more tab. Its age is its own,
-       * the service that produces it being able to stop without the collector
-       * stopping.
-       */
-      audience: Audience;
     };
 
 /**
@@ -60,7 +48,6 @@ export function analyse(content: string | null, now: number): Reading {
   return {
     present: true,
     snapshot: buildSnapshot(raw),
-    audience: buildAudience(raw, now),
     age,
     // The timer passes every minute. Three minutes without a new collection
     // means that the timer no longer runs, and that is precisely what a

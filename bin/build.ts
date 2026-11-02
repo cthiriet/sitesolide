@@ -43,7 +43,7 @@ export function binaryName(target: Target): string {
 // Not clouds/: only the CLI imports the providers, and the binary bundles them.
 // No script of the kit reaches them (settings.ts, tls.ts and portal-guard.ts,
 // which the scripts run with `bun`, import nothing from there).
-export const KIT_FOLDERS = ["analytics", "api", "bin", "dashboard", "egress", "infra", "monitor", "portal"] as const;
+export const KIT_FOLDERS = ["api", "bin", "dashboard", "egress", "infra", "monitor", "portal"] as const;
 
 /**
  * What stays out of the kit although it sits in those folders, and why. Each

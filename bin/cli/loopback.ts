@@ -90,7 +90,7 @@ export const CADDY_HTTPS_PORT = 443;
  * and any project's service can: Caddy cannot tell one account from another
  * by an address they share, and believing the header there let a project's
  * service open 127.0.0.1:443 with any address in it and be counted as that
- * visitor, by the analytics and by the dashboard's limiter (measured on the
+ * visitor, by the dashboard's limiter (measured on the
  * test machine, 25 October 2026). Nor another address of 127.0.0.0/8: a
  * connection to it still leaves from 127.0.0.1, as `ip route get` says.
  *

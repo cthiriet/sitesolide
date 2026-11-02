@@ -57,11 +57,10 @@ describe("the port chosen", () => {
       for (let port = 3002; port <= last; port++) if (!PLATFORM_PORTS.has(port)) taken[`p${port}`] = app(`p${port}`, port);
       return machine(taken);
     };
-    // The dashboard's 3022, the portal's, analytics' 3029: skipped, none of
+    // The dashboard's 3022 and the portal's 3026: skipped, neither of
     // them deployed on these machines.
     expect(choosePort("shop", upTo(3021))).toEqual({ kind: "free", port: 3023 });
     expect(choosePort("shop", upTo(3025))).toEqual({ kind: "free", port: 3027 });
-    expect(choosePort("shop", upTo(3028))).toEqual({ kind: "free", port: 3030 });
   });
 
   test("a project the machine already carries keeps its port: its unit listens there", () => {
@@ -136,7 +135,7 @@ describe("the port written back", () => {
 test("the platform's ports are the ones its manifests declare", () => {
   // A drift here would give a project the dashboard's port, and refuse the
   // dashboard's next deployment.
-  const manifests = ["dashboard", "portal", "analytics"].map((name) => {
+  const manifests = ["dashboard", "portal"].map((name) => {
     const { manifest } = readManifest(readFileSync(join(REPO_ROOT, name, "sitesolide.json"), "utf8"));
     if (manifest === undefined || manifest.port === undefined) throw new Error(`${name}/sitesolide.json declares no port`);
     return { slug: manifest.slug, port: manifest.port };

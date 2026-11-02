@@ -13,7 +13,7 @@ import { freshness } from "@/lib/backups"
 import { historyRequest } from "@/lib/history"
 import { isPerson, mayRestart, roleOn } from "@/lib/identity"
 import { sectionsFor, siteUrl, type Section } from "@/lib/pages"
-import { audienceHeadline, deployedBy, headerState, kindLine, secretsHeadline } from "@/lib/site-card"
+import { deployedBy, headerState, kindLine, secretsHeadline } from "@/lib/site-card"
 import { siteAddress } from "@/lib/sites"
 import { TONE_TEXT } from "@/lib/tones"
 import type { AuditRow, BackupsView, Discrepancy, Site } from "@/lib/types"
@@ -148,7 +148,7 @@ function OverviewSkeleton() {
  * order. A static site runs no service: the Site panel is alone.
  */
 export function OverviewSection({ slug }: { slug: string }) {
-  const { now, offset, identity, snapshot: data, reading, secrets } = useData()
+  const { now, offset, identity, snapshot: data, secrets } = useData()
   const { site, discrepancies, project } = useSite(slug)
   const allowed = new Set<Section>(sectionsFor(identity, slug).map((entry) => entry.section))
   const link = (section: Section) => (allowed.has(section) ? siteUrl(slug, section) : null)
@@ -157,7 +157,6 @@ export function OverviewSection({ slug }: { slug: string }) {
   const backups = useBackups(slug, allowed.has("backups"))
   const person = isPerson(identity)
   const deployedBy = useDeployedBy(slug, site?.deployed ?? null)
-  const audience = reading !== null && reading.present ? reading.audience : null
 
   // The secrets line: what the store keeps, once the steward has said it; nothing to say for a site it does not list.
   const secretsLine: Headline | null = !allowed.has("secrets")
@@ -183,11 +182,6 @@ export function OverviewSection({ slug }: { slug: string }) {
         ? { state: "loading" }
         : { state: "ready", content: <Muted>{secrets.problem === null ? "None" : "Can't read them right now"}</Muted> }
 
-  const audienceLine: Headline | null = link("audience") === null ? null : (() => {
-    const headline = audienceHeadline(audience, slug)
-    return { state: "ready", content: headline.measured ? <span className="tabular-nums">{headline.text}</span> : <Muted>{headline.text}</Muted> }
-  })()
-
   return (
     <SitePage
       slug={slug}
@@ -212,12 +206,11 @@ export function OverviewSection({ slug }: { slug: string }) {
               <SitePanel
                 site={snapshot}
                 now={now}
-                links={{ access: siteUrl(slug, "access"), secrets: link("secrets"), backups: link("backups"), audience: link("audience") }}
+                links={{ access: siteUrl(slug, "access"), secrets: link("secrets"), backups: link("backups") }}
                 people={people}
                 plainAccess={person && roleOn(identity, slug) !== "admin"}
                 secrets={secretsLine}
                 backups={backups}
-                audience={audienceLine}
                 deployedBy={deployedBy}
               />
               <div className="min-w-0 @4xl/body:col-span-2 empty:hidden">

@@ -120,6 +120,33 @@ then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
 
+## Audience removed
+
+**What the release brings.** The dashboard no longer has an *Audience*
+section, and the platform no longer ships `analytics`: every project already
+measures its visits with the tool it chose, and a second count that nobody
+read cost a service, a port and a write as root every minute. The collector
+no longer copies a snapshot from `analytics` nor writes it a host table, the
+Site panel of a site's Overview loses its *Audience* line, and a bookmark to
+`/site/audience/` opens the site's Overview. Port 3029 and the slug
+`analytics` are no longer kept for the platform.
+
+**What `sitesolide upgrade` brings**: the dashboard and the collector.
+Caddy is not reloaded.
+
+**What stays by hand.** A machine that deployed `analytics` keeps running
+it, now listed among the owner's sites rather than under *Platform*, with
+its database of visits. Take it off once nothing reads it any more, and
+remove the `<script>` tag pointing at `analytics.<zone>/a.js` from the
+measured sites first, or their pages keep asking for it:
+
+```bash
+sitesolide remove --confirm analytics
+```
+
+**Going back.** `sitesolide upgrade` with the previous binary brings the
+section back; `analytics` itself is deployed again from that release's kit.
+
 ## Fewer badges on a site's Services
 
 **What the release brings.** A line only declared no longer carries the

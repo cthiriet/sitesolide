@@ -271,7 +271,7 @@ export function isValidSlug(slug: string): boolean {
  * label is empty, `.<zone>`, still matches it, rooted at `/srv/sites//public`,
  * which is `/srv/sites/public`: a project of that name would have its
  * manifest and its code served from there, past its portal or its lock. The platform's own projects, the
- * dashboard, the portal and analytics, are not here: their owner deploys them
+ * dashboard and the portal, are not here: their owner deploys them
  * with this very validation. A token may not, see RESERVED_SLUGS in
  * dashboard/src/control/policy.ts.
  */

@@ -3,7 +3,7 @@
  *
  * The monitor (monitor/README.md) runs every minute under an account of its
  * own and leaves a small status; the collector copies it into the reading,
- * like the audience snapshot, since this service reads nothing of the machine
+ * like the domain table, since this service reads nothing of the machine
  * itself. This module turns it into discrepancies, so that a site the monitor
  * sees down over HTTPS, a certificate about to expire or a failed backup sit
  * in the panel that already answers "is the machine all right", with no page

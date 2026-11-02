@@ -679,7 +679,7 @@ describe("what reaches a Caddy block or a unit", () => {
 
   test("every manifest of the repository and of the sites repository still passes", () => {
     const repo = join(import.meta.dir, "..", "..");
-    const folders = ["portal", "dashboard", "analytics", "examples/bun-app", "examples/static-site", "examples/background"];
+    const folders = ["portal", "dashboard", "examples/bun-app", "examples/static-site", "examples/background"];
     const projects = join(repo, "bin", "tests", "e2e", "projects");
     folders.push(...readdirSync(projects).map((name) => join("bin", "tests", "e2e", "projects", name)));
     for (const folder of folders) {
@@ -800,7 +800,6 @@ describe("secrets, the forms", () => {
   test("an app has a store, but a static site and the two storeless projects", () => {
     expect(hasStore(APP)).toBe(true);
     expect(hasStore(SERVICES)).toBe(true);
-    expect(hasStore({ ...APP, slug: "analytics" })).toBe(true);
     expect(hasStore(STATIC)).toBe(false);
     expect(STORELESS_SLUGS).toEqual(["dashboard", "portal"]);
     for (const slug of STORELESS_SLUGS) expect(hasStore({ ...APP, slug })).toBe(false);

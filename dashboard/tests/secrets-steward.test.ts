@@ -3685,10 +3685,10 @@ describe("a project's store: the owner's routes on the dashboard's socket", () =
 
   test("the platform's own projects: the owner's", async () => {
     const bench = await mount();
-    addStoreProject(bench, "analytics", { start: "/usr/local/bin/bun run server.ts", port: 3030 });
+    addStoreProject(bench, "api", { start: "/usr/local/bin/bun run server.ts", port: 3030 });
     const token = await unlock(bench);
-    expect((await bench.call("PUT", "/store/variable", { token, slug: "analytics", name: "SALT_KEY", value: "x" })).status).toBe(201);
-    expect((await bench.owner("PUT", "/store/variable", { slug: "analytics", name: "OTHER", value: "x" })).status).toBe(200);
+    expect((await bench.call("PUT", "/store/variable", { token, slug: "api", name: "SALT_KEY", value: "x" })).status).toBe(201);
+    expect((await bench.owner("PUT", "/store/variable", { slug: "api", name: "OTHER", value: "x" })).status).toBe(200);
   });
 });
 
@@ -3927,11 +3927,11 @@ describe("a token's store, handed over by the control routes", () => {
     const made = await ops.change(request(), { slug: "fresh", set: [["A", "1"]], remove: [] }, TOKEN, true, still);
     expect(made.status).toBe(201);
     expect(readFileSync(storeOf(bench, "fresh").env, "utf8")).toBe("A=1\n");
-    addStoreProject(bench, "analytics", { start: "/usr/local/bin/bun run server.ts", port: 3030 });
-    for (const slug of ["analytics", "dashboard"]) {
+    addStoreProject(bench, "api", { start: "/usr/local/bin/bun run server.ts", port: 3030 });
+    for (const slug of ["api", "dashboard"]) {
       expect((await ops.change(request(), { slug, set: [["A", "1"]], remove: [] }, TOKEN, true, still)).status).toBe(403);
     }
-    expect(existsSync(storeOf(bench, "analytics").folder)).toBe(false);
+    expect(existsSync(storeOf(bench, "api").folder)).toBe(false);
   });
 
   test("a refusal under the lock comes back as it stands, and nothing is written", async () => {

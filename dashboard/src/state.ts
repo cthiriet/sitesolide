@@ -144,21 +144,8 @@ export type Raw = {
   /** Content of `/etc/caddy/domains.map`, as it stands. */
   domains: string | null;
   /**
-   * The snapshot dropped by the `analytics` service, as it stands.
-   *
-   * That confined service cannot open the visits database, and the loopback
-   * rule forbids it to reach the service that holds it: the collector is the
-   * only path, and it copies this file as it copies the domain table.
-   * `src/audience.ts` interprets it.
-   *
-   * Optional, and it stays so: a reading dropped by a collector older than
-   * this measurement does not carry it, and the dashboard must open all the
-   * same in the minute that follows a deployment.
-   */
-  audience?: string | null;
-  /**
    * The monitor's status, /var/lib/sitesolide-monitor/status.json, as it
-   * stands, copied by the collector like the audience snapshot.
+   * stands, copied by the collector like the domain table.
    * `src/monitor.ts` interprets it. Optional for the same reason: a collector
    * older than the monitor does not carry it.
    */
@@ -275,10 +262,10 @@ export type Site = {
    */
   headless: boolean;
   /**
-   * One of the platform's own projects, the dashboard, the portal or
-   * analytics, known by its slug deployed on that project's own port,
+   * One of the platform's own projects, the dashboard or the portal,
+   * known by its slug deployed on that project's own port,
    * `PLATFORM_PORTS` of bin/cli/services.ts. Neither a list of slugs, which
-   * would hide an owner's own project named `analytics`, nor a manifest key,
+   * would hide an owner's own project named `portal`, nor a manifest key,
    * which a token could set to hide a project from the owner. The landing is
    * the owner's site, and not one of them.
    */

@@ -17,8 +17,8 @@
  *   discrepancies of both severities; two projects that serve no page,
  *   `mailer`, a worker beside two scheduled services whose hourly one's
  *   last run failed, and `reports`, whose every service is scheduled; the
- *   platform's own three, `dashboard`, `portal` and `analytics`, each on its
- *   own port, which the Sites page lists under Platform;
+ *   platform's own two, `dashboard` and `portal`, each on its own port,
+ *   which the Sites page lists under Platform;
  * - a fake steward on a Unix socket, which follows `src/secrets/protocol.ts`
  *   and the real one's guard rails: every deployed site and its portal, the
  *   platform's own files alone, the dashboard's and the portal's, one of them
@@ -368,24 +368,6 @@ const FOLDERS: FakeFolder[] = [
     deployedMs: 4 * DAY,
   },
   {
-    slug: "analytics",
-    manifest: {
-      slug: "analytics",
-      description: "Audience measurement of the projects, ingestion only",
-      publicDir: "public",
-      start: "bun run server.ts",
-      port: 3029,
-      routes: ["/e"],
-      memory: "256M",
-      portal: true,
-      portalExempt: ["/e", "/a.js"],
-    },
-    unit: { memory: 36 * MB, peak: 52 * MB, limit: 256 * MB, sinceMs: 4 * DAY, cpu: 0.3 },
-    bytes: 2 * MB,
-    deployedMs: 4 * DAY,
-    portal: true,
-  },
-  {
     slug: "playground",
     manifest: {
       slug: "playground",
@@ -622,112 +604,6 @@ function monitorStatus(generatedAt: number): string {
   });
 }
 
-/**
- * The snapshot `analytics` would drop, copied by the collector.
- *
- * Three sites: one that receives people, one that is starting out, one that has
- * received nothing yet because its tag is not in place. The three states the
- * Audience section must know how to show.
- */
-function audience(generatedAt: number): string {
-  const day = (daysBack: number) => new Date(generatedAt - daysBack * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-
-  /**
-   * A month as a small business sees it: busier on weekdays, quiet on Sundays,
-   * a slow climb, day-to-day noise, and a spike the day a flyer went out. The
-   * shape is then scaled so that the days add up to the totals the page shows
-   * beside them. Seeded, so that every run of the bench draws the same month.
-   */
-  const curve = (
-    totals: { visits: number; views: number },
-    shape: { seed: number; growth: number; since?: number; spike?: { daysBack: number; boost: number } },
-  ) => {
-    let state = shape.seed;
-    const random = () => {
-      // mulberry32: small, and the same sequence on every machine.
-      state = (state + 0x6d2b79f5) | 0;
-      let t = Math.imul(state ^ (state >>> 15), 1 | state);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-    // Sunday to Saturday.
-    const week = [0.5, 1.12, 1.18, 1.12, 1.06, 0.94, 0.62];
-    const weights = Array.from({ length: 30 }, (_, index) => {
-      const daysBack = 29 - index;
-      if (shape.since !== undefined && daysBack > shape.since) return { visits: 0, views: 0 };
-      const weekday = new Date(generatedAt - daysBack * DAY).getUTCDay();
-      const trend = 1 + (shape.growth * index) / 29;
-      const noise = 0.88 + random() * 0.24;
-      let boost = 1;
-      if (shape.spike !== undefined && daysBack === shape.spike.daysBack) boost = shape.spike.boost;
-      if (shape.spike !== undefined && daysBack === shape.spike.daysBack - 1) boost = 1 + (shape.spike.boost - 1) / 3;
-      const visits = (week[weekday] ?? 1) * trend * noise * boost;
-      return { visits, views: visits * (1.8 + random() * 0.6) };
-    });
-    const scale = (key: "visits" | "views", total: number) => {
-      const sum = weights.reduce((acc, w) => acc + w[key], 0);
-      const values = weights.map((w) => (sum === 0 ? 0 : Math.round((w[key] * total) / sum)));
-      // The rounding error goes to the busiest day, so that the sum is exact.
-      const busiest = values.indexOf(Math.max(...values));
-      values[busiest] = (values[busiest] ?? 0) + total - values.reduce((acc, v) => acc + v, 0);
-      return values;
-    };
-    const visits = scale("visits", totals.visits);
-    const views = scale("views", totals.views);
-    return visits.map((v, index) => ({ day: day(29 - index), views: Math.max(views[index] ?? 0, v), visits: v }));
-  };
-
-  const lines = (values: [string, number][]) => values.map(([value, total]) => ({ value, total }));
-
-  // Each ranking under the name analytics/src/snapshot.ts gives it, the column
-  // of its database, French on the machine: a key the real snapshot does not
-  // carry would show here a panel production never draws.
-
-  return JSON.stringify({
-    generatedAt: generatedAt - 20_000,
-    timeZone: "Europe/London",
-    days: 30,
-    from: day(29),
-    to: day(0),
-    sites: {
-      "blog": {
-        totals: { views: 2417, visits: 1148, bounces: 402, timedViews: 1502, seconds: 128671 },
-        days: curve({ visits: 1148, views: 2417 }, { seed: 7, growth: 0.45, spike: { daysBack: 9, boost: 1.65 } }),
-        rankings: {
-          chemin: lines([["/", 902], ["/posts/one-server", 641], ["/posts/launch-week", 388], ["/changelog", 311], ["/about", 175]]),
-          entree: lines([["/", 714], ["/posts/one-server", 249], ["/changelog", 185]]),
-          source: lines([["Google", 508], ["direct", 344], ["Hacker News", 141], ["LinkedIn", 92], ["newsletter", 63]]),
-          campagne: lines([["launch-week", 84]]),
-          appareil: lines([["mobile", 701], ["bureau", 338], ["tablette", 109]]),
-          navigateur: lines([["Chrome", 502], ["Safari", 431], ["Firefox", 128], ["Edge", 87]]),
-          systeme: lines([["iOS", 388], ["Android", 327], ["Windows", 271], ["macOS", 162]]),
-          langue: lines([["en", 1021], ["fr", 87], ["de", 40]]),
-          hote: lines([["blog.example.net", 1908], ["blog.example.com", 509]]),
-        },
-      },
-      "careers": {
-        totals: { views: 63, visits: 41, bounces: 29, timedViews: 38, seconds: 1824 },
-        days: curve({ visits: 41, views: 63 }, { seed: 11, growth: 0.6, since: 12 }),
-        rankings: {
-          chemin: lines([["/", 44], ["/jobs/product-designer", 19]]),
-          entree: lines([["/", 41]]),
-          source: lines([["direct", 27], ["Google", 14]]),
-          appareil: lines([["mobile", 33], ["bureau", 8]]),
-          navigateur: lines([["Safari", 24], ["Chrome", 17]]),
-          systeme: lines([["iOS", 24], ["Android", 11], ["Windows", 6]]),
-          langue: lines([["en", 41]]),
-          hote: lines([["careers.example.net", 63]]),
-        },
-      },
-      "launch": {
-        totals: { views: 0, visits: 0, bounces: 0, timedViews: 0, seconds: 0 },
-        days: curve({ visits: 0, views: 0 }, { seed: 1, growth: 0 }),
-        rankings: {},
-      },
-    },
-  });
-}
-
 function reading(now: number) {
   const generatedAt = process.env.BENCH_STALE === "1" ? start - 10 * MINUTE : now;
   const cpu: Record<string, number> = {};
@@ -807,12 +683,11 @@ function reading(now: number) {
       ? ""
       : "\tblog.example.net blog\n\tnews.example.net blog\n\tcareers.example.net careers\n" +
         (SHOWCASE ? "\tdocs.example.net docs\n" : ""),
-    audience: audience(generatedAt),
     monitor: monitorStatus(generatedAt),
     // hiring (3045) does not listen: it is looping; nor does the portal (3026) once its unit failed.
     ports: (SHOWCASE
-      ? [3040, 3041, 3022, 3043, 3044, 3045, 3026, 3029, 3047, 3048, 3049, 3050, 3128, 3129]
-      : [3040, 3041, 3022, 3043, 3044, 3026, 3029, 3047, 3048, 3049, 3050, 3128, 3129]
+      ? [3040, 3041, 3022, 3043, 3044, 3045, 3026, 3047, 3048, 3049, 3050, 3128, 3129]
+      : [3040, 3041, 3022, 3043, 3044, 3026, 3047, 3048, 3049, 3050, 3128, 3129]
     ).filter((port) => !(PLATFORM_DOWN && port === 3026)),
     links: links(generatedAt),
     blocks,

@@ -17,18 +17,11 @@ export type {
   SiteService,
 } from "../../../src/state"
 
-/**
- * The audience measurement, from the same contract as the service. It comes in
- * the same reading as the machine state: one call, one file.
- */
-export type { Audience, DayCount, Row, Measure } from "../../../src/audience"
-
 export type Reading =
   | { present: false; reason: string }
   | {
       present: true
       snapshot: import("../../../src/state").Snapshot
-      audience: import("../../../src/audience").Audience
       age: number
       stale: boolean
     }
