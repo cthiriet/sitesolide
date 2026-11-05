@@ -1,9 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { AUDIT_FLOOR_MS, AUDIT_RETENTION_MS, COLLAPSE_WINDOW_MS, auditStore, guestStore, openDatabase, PRAGMAS, sharingStore } from "../src/database";
+import { AUDIT_FLOOR_MS, AUDIT_RETENTION_MS, COLLAPSE_WINDOW_MS, auditStore, openDatabase, PRAGMAS } from "../src/database";
 import { DATA_DIR } from "../src/config";
-import type { Guest } from "../src/database";
-import { DEFAULT_POLICY } from "../src/sharing";
 
 // Safety rail: tests/setup.ts must have diverted DATA_DIR before any import,
 // failing which these tests would write next to the portal's database.
@@ -56,100 +54,23 @@ describe("openDatabase", () => {
   });
 });
 
-describe("the guest access store, read-only", () => {
-  const db = openDatabase(join(DATA_DIR, "guests.db"));
-  const store = guestStore(db);
+describe("the tables from before the steward kept who may open a site", () => {
+  test("are no longer created, and a database that has them keeps them, untouched, beside the audit", () => {
+    const fresh = openDatabase(join(DATA_DIR, "fresh.db"));
+    expect(fresh.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all()).toEqual([{ name: "audit" }]);
+    fresh.close();
 
-  /** A row as the portal wrote it before the steward kept access: nothing writes one any more. */
-  function lay(guest: Guest, hash: string, seenAt: number | null = null): void {
-    db.query("INSERT INTO invites (id, hote, libelle, empreinte, cree_a, expire_a, vu_a) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
-      guest.id,
-      guest.host,
-      guest.label,
-      hash,
-      guest.createdAt,
-      guest.expiresAt,
-      seenAt,
-    );
-  }
-
-  function guest(id: string, rest: Partial<Guest> = {}): Guest {
-    return { id, host: "forum.test-zone.invalid", label: "Alice", createdAt: 1_000, expiresAt: null, seenAt: null, ...rest };
-  }
-
-  test("an access is found back by its identifier and by its hash, never by the password", () => {
-    const laid = guest("AAAAAAAAAAAAAAA1", { expiresAt: 5_000 });
-    lay(laid, "e".repeat(64));
-    expect(store.byId(laid.id)).toEqual(laid);
-    expect(store.byHash("e".repeat(64))).toEqual(laid);
-    expect(store.byHash("f".repeat(64))).toBeNull();
-    expect(store.byId("AAAAAAAAAAAAAAAZ")).toBeNull();
-  });
-
-  test("two accesses never shared a hash", () => {
-    lay(guest("AAAAAAAAAAAAAAA2"), "2".repeat(64), 7_000);
-    expect(() => lay(guest("AAAAAAAAAAAAAAA3"), "2".repeat(64))).toThrow();
-    expect(store.byId("AAAAAAAAAAAAAAA2")?.seenAt).toBe(7_000);
-  });
-
-  test("an access read back carries no hash", () => {
-    lay(guest("AAAAAAAAAAAAAAA4", { createdAt: 9_000 }), "4".repeat(64));
-    // Found first: a null read back would carry no hash either.
-    const found = store.byHash("4".repeat(64));
-    expect(found?.id).toBe("AAAAAAAAAAAAAAA4");
-    expect(JSON.stringify(found)).not.toInclude("4".repeat(64));
-  });
-
-  test("offers nothing that writes", () => {
-    expect(Object.keys(store).sort()).toEqual(["byHash", "byId"]);
-  });
-});
-
-describe("a database from before sharing", () => {
-  test("gains its tables at the next opening, and keeps its guests", () => {
-    // The state of a database in service today: the invites table alone.
-    const path = join(DATA_DIR, "before-sharing.db");
+    // A portal's database from before 0.4: its two tables, as it wrote them.
+    const path = join(DATA_DIR, "from-before.db");
     const old = openDatabase(path);
-    old.run("DROP TABLE sharing");
-    old.run("DROP TABLE audit");
-    old.run(
-      "INSERT INTO invites (id, hote, libelle, empreinte, cree_a) VALUES ('AAAAAAAAAAAAAAA9', 'forum.test-zone.invalid', 'Alice', 'h', 1)",
-    );
-    expect(old.query("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([{ name: "invites" }]);
+    old.run("CREATE TABLE invites (id TEXT PRIMARY KEY, hote TEXT NOT NULL, libelle TEXT NOT NULL, empreinte TEXT NOT NULL UNIQUE, cree_a INTEGER NOT NULL, expire_a INTEGER, vu_a INTEGER)");
+    old.run("CREATE TABLE sharing (host TEXT PRIMARY KEY, mode TEXT NOT NULL, people TEXT NOT NULL, domains TEXT NOT NULL, updated_at INTEGER NOT NULL)");
+    old.run("INSERT INTO invites (id, hote, libelle, empreinte, cree_a) VALUES ('AAAAAAAAAAAAAAA9', 'forum.test-zone.invalid', 'Alice', 'h', 1)");
     old.close();
-
     const db = openDatabase(path);
-    expect(guestStore(db).byId("AAAAAAAAAAAAAAA9")?.label).toBe("Alice");
-    expect(sharingStore(db).get("forum.test-zone.invalid")).toEqual(DEFAULT_POLICY);
+    expect(db.query("SELECT count(*) AS n FROM invites").get()).toEqual({ n: 1 });
     expect(auditStore(db).recent(10)).toEqual([]);
-  });
-});
-
-describe("the sharing store, read-only", () => {
-  const db = openDatabase(join(DATA_DIR, "sharing.db"));
-  const store = sharingStore(db);
-  const HOST = "forum.test-zone.invalid";
-
-  test("a site never shared gets the narrowest policy", () => {
-    expect(store.get("never.test-zone.invalid")).toEqual(DEFAULT_POLICY);
-  });
-
-  test("reads back a policy as the portal wrote it before the steward kept access", () => {
-    db.run(
-      `INSERT INTO sharing (host, mode, people, domains, updated_at) VALUES ('${HOST}', 'domain', '["bob@acme.test"]', '["acme.test"]', 2000)`,
-    );
-    expect(store.get(HOST)).toEqual({ mode: "domain", people: ["bob@acme.test"], domains: ["acme.test"] });
-  });
-
-  test("a row this version cannot read falls back to the admins alone, never wider", () => {
-    db.run("INSERT INTO sharing (host, mode, people, domains, updated_at) VALUES ('odd.test-zone.invalid', 'everyone', '[]', '[]', 1)");
-    db.run("INSERT INTO sharing (host, mode, people, domains, updated_at) VALUES ('broken.test-zone.invalid', 'people', 'not json', '[]', 1)");
-    expect(store.get("odd.test-zone.invalid")).toEqual(DEFAULT_POLICY);
-    expect(store.get("broken.test-zone.invalid")).toEqual(DEFAULT_POLICY);
-  });
-
-  test("offers nothing that writes", () => {
-    expect(Object.keys(store).sort()).toEqual(["get"]);
+    db.close();
   });
 });
 

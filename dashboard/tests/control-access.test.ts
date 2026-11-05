@@ -76,7 +76,7 @@ function bench(options: { access?: boolean; full?: () => boolean; changesPerHour
   const journal: AccessEvent[] = [];
   const hostOf = (slug: string) => `${slug}.${ZONE}`;
   const store = createAccessStore({
-    system: createAccessSystem({ stateFolder: state, portalKeyFolder: join(root, "portal-key"), groupsFile: join(root, "group"), portalGroup: "", portalDataFolder: join(root, "portal-data") }, false),
+    system: createAccessSystem({ stateFolder: state, portalKeyFolder: join(root, "portal-key"), groupsFile: join(root, "group"), portalGroup: "" }),
     zone: ZONE,
     hostOf,
     journal: async (event) => void journal.push(event),

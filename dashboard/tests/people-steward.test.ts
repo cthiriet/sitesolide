@@ -143,7 +143,7 @@ async function mount(): Promise<Bench> {
     now: () => clock.t,
   };
   const access = {
-    ...createAccessSystem({ stateFolder: state, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "", portalDataFolder: join(root, "portal-data") }, false),
+    ...createAccessSystem({ stateFolder: state, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "" }),
     now: () => clock.t,
   };
   const revoked: [string, string][] = [];
@@ -879,27 +879,20 @@ describe("leaving", () => {
   });
 });
 
-describe("the steward's start, never waiting on the migration", () => {
-  test("while the registry is being made, the access routes say so and everything else answers", async () => {
+describe("the steward's start on a machine without a registry", () => {
+  test("the access routes say so while it is begun, everything else answers meanwhile, and it is there right after", async () => {
     const bench = await mount();
-    // No registry yet, and a portal's database that does not read: the migration cannot finish.
     rmSync(join(bench.root, "state", "access.json"), { force: true });
-    mkdirSync(join(bench.root, "portal-data"), { recursive: true });
-    writeFileSync(join(bench.root, "portal-data", "portal.db"), "not a database");
-    writeFileSync(join(bench.root, "state", "members.json"), JSON.stringify({ members: [] }));
-    for (const [table, path] of [["owner", "/people"], ["dashboard", "/people"], ["owner", "/access?slug=blog"]] as const) {
-      const response = table === "owner" ? await bench.asRoot("GET", path) : await bench.call("GET", path);
-      expect({ path, status: response.status }).toEqual({ path, status: 503 });
-      expect(await response.json()).toMatchObject({ error: "migrating" });
-    }
-    // The steward's other routes answer meanwhile.
+    const first = await bench.asRoot("GET", "/people");
+    expect(first.status).toBe(503);
+    expect(await first.json()).toMatchObject({ error: "not-ready" });
     expect((await bench.call("GET", "/projects")).status).toBe(200);
     expect((await bench.call("GET", "/log")).status).toBe(200);
-    // The owner's way out, over the owner's socket alone.
-    expect((await bench.call("POST", "/access/migrate", { withoutPortal: true })).status).toBe(404);
-    const migrated = await bench.asRoot("POST", "/access/migrate", { withoutPortal: true });
-    expect(migrated.status).toBe(200);
+    // The old routes of the registry's making are gone with it.
+    expect((await bench.asRoot("POST", "/access/migrate", { withoutPortal: true })).status).toBe(404);
+    for (let tries = 0; tries < 200 && !existsSync(join(bench.root, "state", "access.json")); tries++) await Bun.sleep(5);
     expect((await bench.asRoot("GET", "/people")).status).toBe(200);
+    expect((await bench.call("GET", "/people")).status).toBe(200);
   });
 });
 

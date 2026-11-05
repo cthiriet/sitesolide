@@ -368,10 +368,9 @@ describe.skipIf(CADDY === null)("the fragment of a protected site, in Caddy", ()
     expect(entry.status).toBe(401);
     expect(entry.headers.get("set-cookie")).toBeNull();
     project({});
-    // Giving access is the steward's: the portal's routes that did it answer 410.
+    // Giving access is the steward's: the portal has no route that does it.
     const created = await admin("/admin/guests", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ host: HOST, label: "Alice", durationS: 3600 }) });
-    expect(created.status).toBe(410);
-    expect(await created.json()).toMatchObject({ error: "moved" });
+    expect(created.status).toBe(404);
   });
 
   test("the administration is never reached through the site: Caddy does not relay it", async () => {

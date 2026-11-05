@@ -214,7 +214,7 @@ export type AccessRegistry = {
   state: "current" | "old" | "down";
   zone: string;
   signIn: { configured: boolean; allowedDomains: string[]; admins: string[]; providerName: string | null };
-  portal: { reading: "steward" | "portal" | "unreadable" | "unknown"; writtenAt: number | null };
+  portal: { reading: "steward" | "unreadable" | "unknown"; writtenAt: number | null };
   projects: Record<string, { general: "public" | "restricted" | "code" | null; entries: EntryView[] }>;
   creators: string[];
 };

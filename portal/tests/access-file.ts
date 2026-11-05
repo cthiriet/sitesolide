@@ -24,23 +24,17 @@ export function grant(rest: Partial<PasswordGrant> = {}): PasswordGrant {
 
 let folders = 0;
 
-/**
- * A folder of its own under the diverted DATA_DIR, standing in for both
- * sides: the steward's `access.json`, and the portal's data folder where it
- * leaves its mark.
- */
+/** A folder of its own under the diverted DATA_DIR, standing in for the steward's `access.json`. */
 export function accessFolder(name: string) {
   const folder = join(DATA_DIR, `access-${name}-${folders++}`);
   rmSync(folder, { recursive: true, force: true });
   mkdirSync(folder, { recursive: true });
   const file = join(folder, "access.json");
-  const mark = join(folder, "access-from-steward");
   let writes = 0;
 
   return {
     folder,
     file,
-    mark,
     /**
      * As the steward writes it: a whole new file renamed over the one in
      * place, never the same file written twice. Text is written as given,
@@ -54,8 +48,8 @@ export function accessFolder(name: string) {
     remove(): void {
       rmSync(file, { force: true });
     },
-    reader(legacy: AccessReaderOptions["legacy"] = null, log: (line: string) => void = () => {}, extra: Pick<AccessReaderOptions, "now" | "read"> = {}): AccessReader {
-      return createAccessReader({ file, mark, legacy, log, ...extra });
+    reader(log: (line: string) => void = () => {}, extra: Pick<AccessReaderOptions, "now" | "read"> = {}): AccessReader {
+      return createAccessReader({ file, log, ...extra });
     },
   };
 }

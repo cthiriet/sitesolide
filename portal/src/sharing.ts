@@ -1,56 +1,17 @@
 /**
  * Who may open a site with their work account: the shape of an email and of
- * a domain, the sign-in settings the portal reads from its environment, and
- * the site's sharing policy as the portal kept it before the steward's
- * registry, read now only until a first projection (src/projection.ts) and
- * by the steward, which carries it over once.
+ * a domain, and the sign-in settings the portal reads from its environment.
+ * Who may open which site is the steward's registry, which the portal reads
+ * through its projection (src/projection.ts).
  *
  * Pure and with no import at all: the dashboard borrows this
  * file, its page included, so that the page refuses an address with the exact
  * rule the portal applies, and the steward borrows the names of the settings
  * it lets the dashboard write into `portal.env`.
- *
- * ## The three modes
- *
- * Cumulative, from the narrowest to the widest:
- *
- * - `admins`, the default and what every site had before sharing existed: the
- *   owner's password, the admin emails, and the password guests;
- * - `people`: the above, plus the listed emails;
- * - `domain`: the above, plus everyone whose verified email belongs to one of
- *   the listed domains, everyone at `acme.com` for instance.
- *
- * "Public" is not a mode: it is the portal turned off, which the site's Access
- * section already does through the gatekeeper, Caddy included. A policy only
- * ever touches the portal's database.
- *
- * Both lists are kept whatever the mode, the way `portalExempt` is kept when
- * the door comes off: going back from `admins` to `people` reopens the site to
- * the same people instead of starting from an empty list.
  */
-
-export const SHARING_MODES = ["admins", "people", "domain"] as const;
-
-export type SharingMode = (typeof SHARING_MODES)[number];
-
-export type Policy = {
-  mode: SharingMode;
-  /** Lowercase, sorted, without duplicates. */
-  people: string[];
-  /** Lowercase, sorted, without duplicates, without a leading `@`. */
-  domains: string[];
-};
-
-/** What a site with no stored policy gets: exactly what it had before sharing existed. */
-export const DEFAULT_POLICY: Policy = { mode: "admins", people: [], domains: [] };
 
 /** RFC 5321's path limit, which no real address reaches. */
 export const EMAIL_MAX = 254;
-
-/** Beyond this, a site is no longer shared with people one by one: a domain says it better. */
-export const PEOPLE_MAX = 500;
-
-export const DOMAINS_MAX = 50;
 
 const LABEL = "[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?";
 const DOMAIN_PATTERN = new RegExp(`^${LABEL}(\\.${LABEL})+$`);
@@ -105,53 +66,6 @@ export function cleanEmail(value: unknown): string | null {
 /** The domain of an address already cleaned by `cleanEmail`. */
 export function domainOf(email: string): string {
   return email.slice(email.lastIndexOf("@") + 1);
-}
-
-export function isSharingMode(value: unknown): value is SharingMode {
-  return typeof value === "string" && (SHARING_MODES as readonly string[]).includes(value);
-}
-
-export type PolicyReading = { policy: Policy } | { error: string };
-
-function cleanList(values: unknown, clean: (value: unknown) => string | null, max: number, error: string): string[] | string {
-  if (values === undefined) return [];
-  if (!Array.isArray(values) || values.length > max) return error;
-  const cleaned = new Set<string>();
-  for (const value of values) {
-    const one = clean(value);
-    if (one === null) return error;
-    cleaned.add(one);
-  }
-  return [...cleaned].sort();
-}
-
-/**
- * A policy as the dashboard sends it, judged. Every entry must be valid: one
- * bad address refuses the whole change rather than saving the rest, the owner
- * would otherwise believe someone was added who was not.
- */
-export function readPolicy(body: unknown): PolicyReading {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) return { error: "invalid-policy" };
-  const { mode, people, domains } = body as Record<string, unknown>;
-  if (!isSharingMode(mode)) return { error: "invalid-mode" };
-  const cleanPeople = cleanList(people, cleanEmail, PEOPLE_MAX, "invalid-people");
-  if (typeof cleanPeople === "string") return { error: cleanPeople };
-  const cleanDomains = cleanList(domains, cleanDomain, DOMAINS_MAX, "invalid-domains");
-  if (typeof cleanDomains === "string") return { error: cleanDomains };
-  return { policy: { mode, people: cleanPeople, domains: cleanDomains } };
-}
-
-/**
- * What a verified email may do on a site, or `null` if the site is not shared
- * with it. Re-evaluated on every request by the gate: a person removed from
- * the list is refused from the next request on, cookie in hand.
- */
-export function identityRole(email: string, policy: Policy, admins: readonly string[]): "admin" | "member" | null {
-  if (admins.includes(email)) return "admin";
-  if (policy.mode === "admins") return null;
-  if (policy.people.includes(email)) return "member";
-  if (policy.mode === "domain" && policy.domains.includes(domainOf(email))) return "member";
-  return null;
 }
 
 // --- The sign-in settings --------------------------------------------------------

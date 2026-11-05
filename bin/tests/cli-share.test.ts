@@ -459,12 +459,9 @@ describe("share and people as the owner, over SSH to the steward's owner socket"
     }
   });
 
-  test("a portal that still reads its own tables, or cannot read the projection, is warned of", async () => {
-    machine.setAccess({ portal: { reading: "portal", writtenAt: null } });
-    let list = events((await owner(project(), ["share", "--json"])).output);
-    expect(list).toContainEqual({ type: "warning", message: "the portal on this machine still decides from its own tables: run sitesolide upgrade, which deploys it", details: [] });
+  test("a portal that cannot read the projection is warned of", async () => {
     machine.setAccess({ portal: { reading: "unreadable", writtenAt: null } });
-    list = events((await owner(project(), ["share", "--json"])).output);
+    const list = events((await owner(project(), ["share", "--json"])).output);
     expect(list.filter((event) => event.type === "warning").map((event) => event.message)).toEqual([
       "the portal cannot read who may open a site: only the owner's password and the admin emails open one; tell the owner of the machine (journalctl -u portal)",
     ]);
@@ -687,15 +684,10 @@ describe("share, over a fake transport", () => {
     expect(developer.results[0]!.fields.message).toContain("To deploy, create a token on the Tokens page");
   });
 
-  test("a portal that does not read the registry is warned of right after the first line", async () => {
-    for (const [reading, start] of [
-      ["portal", "!! the portal on this machine still decides from its own tables"],
-      ["unreadable", "!! the portal cannot read who may open a site"],
-    ] as const) {
-      const out = recorder();
-      await share(["share"], "kanban", fakeTransport(state({ portal: { reading, writtenAt: null } })).transport, out.output);
-      expect(out.said[1]).toStartWith(start);
-    }
+  test("a portal that cannot read the registry's projection is warned of right after the first line", async () => {
+    const out = recorder();
+    await share(["share"], "kanban", fakeTransport(state({ portal: { reading: "unreadable", writtenAt: null } })).transport, out.output);
+    expect(out.said[1]).toStartWith("!! the portal cannot read who may open a site");
     const quiet = recorder();
     await share(["share"], "kanban", fakeTransport(state({ portal: { reading: "unknown", writtenAt: null } })).transport, quiet.output);
     expect(quiet.said.some((line) => line.startsWith("!!"))).toBe(false);
@@ -769,22 +761,9 @@ describe("people, over a fake transport", () => {
         calls.push(`create ${email} ${create}`);
         return { ok: true, value: { person: person(email, { create, roles: { blog: "viewer" } }), change } };
       },
-      async migrateWithoutPortal() {
-        calls.push("migrate");
-        return { ok: true, value: { people: 3, projects: 2 } };
-      },
     };
     return { calls, transport };
   }
-
-  test("carried over without the portal's database, at the owner's word: said, and nothing listed first", async () => {
-    const { calls, transport } = peopleTransport();
-    const out = recorder();
-    expect(await people(["people", "--migrate-without-portal"], DASHBOARD, transport, out.output)).toBe(0);
-    expect(calls).toEqual(["migrate"]);
-    expect(out.said[0]).toContain("without the portal's database: 3 person(s)");
-    expect(out.results).toEqual([{ command: "people", fields: { migrated: true, withoutPortal: true, people: 3, projects: 2, changed: true } }]);
-  });
 
   test("the list, and its result", async () => {
     const { calls, transport } = peopleTransport();
@@ -1091,9 +1070,8 @@ describe("the pure parts", () => {
     expect(readPeopleArguments(["people", "a@acme.test", "b@acme.test", "--may-create"])).toMatchObject({ error: "usage" });
     expect(readPeopleArguments(["people", "@acme.test", "--may-create"])).toMatchObject({ error: "invalid" });
     expect(readPeopleArguments(["people", "a@acme.test", "--project", "blog"])).toMatchObject({ error: "unknown-option" });
-    expect(readPeopleArguments(["people", "--migrate-without-portal"])).toEqual({ action: "migrate" });
-    expect(readPeopleArguments(["people", "--migrate-without-portal", "--json"])).toEqual({ action: "migrate" });
-    expect(readPeopleArguments(["people", "a@acme.test", "--migrate-without-portal"])).toMatchObject({ error: "usage" });
+    // The registry's making from the stores before it is gone with them.
+    expect(readPeopleArguments(["people", "--migrate-without-portal"])).toMatchObject({ error: "unknown-option" });
   });
 
   test("an entry in words: its role, and for password access until when", () => {
@@ -1137,7 +1115,6 @@ describe("the pure parts", () => {
   test("the warnings about the portal", () => {
     expect(accessWarnings(state())).toEqual([]);
     expect(accessWarnings(state({ portal: undefined }))).toEqual([]);
-    expect(accessWarnings(state({ portal: { reading: "portal", writtenAt: null } }))[0]).toContain("run sitesolide upgrade");
     expect(accessWarnings(state({ portal: { reading: "unreadable", writtenAt: null } }))[0]).toContain("journalctl -u portal");
   });
 

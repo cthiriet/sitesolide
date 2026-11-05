@@ -252,7 +252,7 @@ async function mount(): Promise<Machine> {
   };
   const portalKey = folder("portal-key");
   const members = { ...createMembersSystem({ stateFolder: state, sitesDir: bench.sites, secretsFolder: bench.secrets, portalKeyFolder: portalKey, groupsFile: join(bench.root, "group"), portalGroup: "" }), now: () => clock.t };
-  const access = { ...createAccessSystem({ stateFolder: state, portalKeyFolder: portalKey, groupsFile: join(bench.root, "group"), portalGroup: "", portalDataFolder: join(bench.root, "portal-data") }, false), now: () => clock.t };
+  const access = { ...createAccessSystem({ stateFolder: state, portalKeyFolder: portalKey, groupsFile: join(bench.root, "group"), portalGroup: "" }), now: () => clock.t };
   let ownerStoreWritten: (slug: string) => Promise<void> = async () => undefined;
   const handler = createSteward(system, {
     secretsFolder: bench.secrets,

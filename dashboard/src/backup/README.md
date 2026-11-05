@@ -416,14 +416,12 @@ The dialog lists what the server does, then follows it phase by phase.
   page says the restore was cut short.
 - **The dashboard's own data is not restored from the dashboard**: the page
   doing it would cut itself off. Restore it by hand (below).
-- **Nor the portal's**: its data is its audit, its cookie key, and the
-  tables from before the access registry, which the steward carried over.
-  Who may open which site is not in it any more: it is the steward's
-  registry, `/var/lib/sitesolide-steward/access.json`, outside any project's
-  data, and the projection the steward writes for the portal. An old copy
-  would bring back an old audit, and from before the registry its old tables,
-  without the mark that keeps the portal from reading them, nobody deciding
-  it. Restore it by hand (below), knowing what it brings back.
+- **Nor the portal's**: its data is its audit and its cookie key. Who may
+  open which site is not in it: it is the steward's registry,
+  `/var/lib/sitesolide-steward/access.json`, outside any project's data, and
+  the projection the steward writes for the portal. An old copy would bring
+  back an old audit, nobody deciding it. Restore it by hand (below), knowing
+  what it brings back.
 
 Every restore is recorded in the component's audit with who asked, readable in
 the section's *Activity*. The owner's route records `owner` and refuses any
@@ -489,10 +487,7 @@ project and which time a snapshot holds, before anything is restored.
 For the landing, the folder is the zone's name, the account `site-landing` and
 the unit `sitesolide-landing`. For the dashboard, the unit is `dashboard`; for
 the portal, `portal`, and a copy of the portal brings back the audit of its
-time, and a copy from before the access registry the old tables of who could
-open which site, without the mark `data/access-from-steward`. The portal still
-reads the steward's projection while it is there, and leaves the mark again;
-only with the projection missing would it decide from those old tables, so
+time; the portal reads the steward's projection whatever its data holds, so
 check after the restore that `sudo curl -s http://127.0.0.1:3026/admin/access`
 answers `"reading":"steward"`.
 

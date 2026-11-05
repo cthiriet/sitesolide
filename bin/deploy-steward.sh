@@ -236,7 +236,7 @@ permissions="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' $OWNER_FOLDE
 [ "$permissions" = "700 root:root 600 root:root " ] || fail "$OWNER_FOLDER and its socket are '$permissions', expected 700 root:root and 600 root:root"
 code="$(ssh -n "$SITESOLIDE_SERVER" "sudo curl -s -o /dev/null -w '%{http_code}' --max-time 30 --unix-socket $OWNER_SOCKET http://steward/people" || true)"
 [ "$code" = "200" ] || fail "root does not get 200 on the owner's socket /people (got: ${code:-nothing})" \
-  "the access registry may not have been made from members.json and the portal's database: the journal says why"
+  "the access registry may not read, or may not be begun yet: the journal says why"
 code="$(ssh -n "$SITESOLIDE_SERVER" "sudo -u site-dashboard curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket $OWNER_SOCKET http://steward/people" || true)"
 [ "$code" = "000" ] || fail "site-dashboard reaches the owner's socket (code ${code:-nothing}): it must be root's alone"
 
@@ -267,7 +267,6 @@ code="$(ssh -n "$SITESOLIDE_SERVER" "sudo -u site-dashboard curl -s -o /dev/null
 code="$(ssh -n "$SITESOLIDE_SERVER" "sudo curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket $RELAY_SOCKET http://portal/admin/access" || true)"
 case "$code" in
   200) echo "   portal relay: root reaches the portal's admin API, 600 root:root" ;;
-  404) echo "   portal relay: root reaches a portal from before the access registry: sitesolide upgrade deploys it" ;;
   *) echo "   note: the portal does not answer through its relay yet (code ${code:-nothing}): the steward cannot say whether it reads the access projection until it is deployed" ;;
 esac
 

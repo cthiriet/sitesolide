@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { encodeProjection, type PasswordGrant, type Role, type SiteAccess } from "../src/access";
 import { DASHBOARD_AUDIENCE, encodeKey, generateKeyPair, verifyAssertion } from "../src/assertion";
@@ -206,11 +206,10 @@ beforeEach(async () => {
 });
 
 describe("where the portal reads who may open a site", () => {
-  test("the steward's projection, as GET /admin/access says, and the portal marks that it read one", async () => {
+  test("the steward's projection, as GET /admin/access says", async () => {
     const answer = (await (await admin("/admin/access")).json()) as { reading: string; writtenAt: number | null };
     expect(answer.reading).toBe("steward");
     expect(answer.writtenAt).toBeGreaterThan(0);
-    expect(existsSync(join(FOLDER, "access-from-steward"))).toBe(true);
   });
 });
 

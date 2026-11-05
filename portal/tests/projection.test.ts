@@ -1,10 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { encodeProjection, PROJECTION_MAX_BYTES } from "../src/access";
 import { createAccessReader, READ_RETRY_MS, readText, type Read } from "../src/projection";
 import { accessFolder, grant, projection, site, WRITTEN_AT } from "./access-file";
-import { memoryGuests, memorySharing } from "./memory";
 
 const HOST = "kanban.test-zone.invalid";
 const OTHER = "roster.test-zone.invalid";
@@ -22,25 +21,12 @@ const KANBAN = projection({
   [OTHER]: site("roster"),
 });
 
-/** The tables of a portal from before the steward, as the upgrade finds them. */
-function legacyTables() {
-  const sharing = memorySharing();
-  sharing.put(HOST, { mode: "domain", people: ["zoe@elsewhere.test"], domains: ["acme.test"] });
-  const guests = memoryGuests();
-  guests.add({ id: "InViTeInViTe0001", host: HOST, label: "Alice", createdAt: 1, expiresAt: NOW + 3_600_000, seenAt: null }, "c".repeat(64));
-  return { sharing, guests };
-}
-
 describe("reading the steward's projection", () => {
-  test("decides from the steward's file, and leaves its mark at the first good read", () => {
+  test("decides from the steward's file", () => {
     const access = accessFolder("good");
     access.write(KANBAN);
     const reader = access.reader();
-    expect(existsSync(access.mark)).toBe(false);
-
     expect(reader.state()).toEqual({ reading: "steward", writtenAt: WRITTEN_AT });
-    expect(existsSync(access.mark)).toBe(true);
-    expect(statSync(access.mark).mode & 0o777).toBe(0o600);
 
     expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBe("developer");
     expect(reader.roleOf(HOST, "bob@acme.test", ADMINS)).toBe("visitor");
@@ -125,7 +111,7 @@ describe("a read that fails on the way", () => {
         reads.push(failing ? "failed" : "read");
         return failing ? { failed: code } : readText(path);
       };
-      const reader = access.reader(null, (line) => lines.push(line), { now: () => now, read });
+      const reader = access.reader((line) => lines.push(line), { now: () => now, read });
 
       // The first read fails: nothing opens from the file, the owner's emails aside.
       expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBeNull();
@@ -156,7 +142,7 @@ describe("a read that fails on the way", () => {
     access.write("{ not json");
     let now = NOW;
     let reads = 0;
-    const reader = access.reader(null, () => {}, {
+    const reader = access.reader(() => {}, {
       now: () => now,
       read: (path) => {
         reads++;
@@ -188,7 +174,7 @@ describe("a projection that cannot be believed", () => {
     const access = accessFolder("malformed");
     const lines: string[] = [];
     access.write(KANBAN);
-    const reader = access.reader(null, (line) => lines.push(line));
+    const reader = access.reader((line) => lines.push(line));
     expect(reader.state().reading).toBe("steward");
 
     access.write(encodeProjection(KANBAN).replace('"developer"', '"member"'));
@@ -205,55 +191,37 @@ describe("a projection that cannot be believed", () => {
     expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBe("developer");
   });
 
-  test("a malformed file is no reason to fall back to the old tables, nor to leave the mark", () => {
-    const access = accessFolder("malformed-first");
-    access.write("{ not json");
-    const reader = access.reader(legacyTables());
-    expect(reader.state().reading).toBe("unreadable");
-    expect(reader.roleOf(HOST, "zoe@elsewhere.test", ADMINS)).toBeNull();
-    expect(reader.passwordByHash("c".repeat(64), HOST, NOW)).toBeNull();
-    expect(existsSync(access.mark)).toBe(false);
-  });
-
-  test("a missing file opens nothing once the mark says a projection was read, the old tables included", () => {
-    const access = accessFolder("missing-marked");
+  test("a file gone after one was read opens nothing, and the next one written decides again", () => {
+    const access = accessFolder("missing-after");
     access.write(KANBAN);
-    const reader = access.reader(legacyTables());
+    const reader = access.reader();
     expect(reader.state().reading).toBe("steward");
 
     access.remove();
     expect(reader.state()).toEqual({ reading: "unreadable", writtenAt: null });
     expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBeNull();
-    expect(reader.roleOf(HOST, "zoe@elsewhere.test", ADMINS)).toBeNull();
-    expect(reader.passwordByHash("c".repeat(64), HOST, NOW)).toBeNull();
-    expect(reader.passwordById(HOST, "InViTeInViTe0001", NOW)).toBeNull();
+    expect(reader.passwordByHash(HASH, HOST, NOW)).toBeNull();
     expect(reader.roleOf(HOST, "owner@acme.test", ADMINS)).toBe("admin");
-
-    // A portal restarted then: the mark is on disk, not in memory.
-    const restarted = access.reader(legacyTables());
-    expect(restarted.state().reading).toBe("unreadable");
-    expect(restarted.roleOf(HOST, "zoe@elsewhere.test", ADMINS)).toBeNull();
 
     access.write(KANBAN);
     expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBe("developer");
   });
 
-  test("a missing file, with no old tables to fall back on, opens nothing", () => {
-    const reader = accessFolder("missing-bare").reader(null);
+  test("a missing file opens nothing", () => {
+    const reader = accessFolder("missing-bare").reader();
     expect(reader.state()).toEqual({ reading: "unreadable", writtenAt: null });
     expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBeNull();
     expect(reader.roleOf(HOST, "owner@acme.test", ADMINS)).toBe("admin");
   });
 
-  test("a file behind a symbolic link is not read, nor marked", () => {
+  test("a file behind a symbolic link is not read", () => {
     const access = accessFolder("link");
     const real = join(access.folder, "elsewhere.json");
     writeFileSync(real, encodeProjection(KANBAN));
     symlinkSync(real, access.file);
-    const reader = access.reader(legacyTables());
+    const reader = access.reader();
     expect(reader.state().reading).toBe("unreadable");
     expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBeNull();
-    expect(existsSync(access.mark)).toBe(false);
   });
 
   test("a folder in its place, or a file beyond the bound, is not read", () => {
@@ -268,54 +236,4 @@ describe("a projection that cannot be believed", () => {
     expect(large.reader().state().reading).toBe("unreadable");
   });
 
-  test("a mark that cannot be written is said, and the projection decides all the same", () => {
-    const access = accessFolder("unmarkable");
-    access.write(KANBAN);
-    const lines: string[] = [];
-    const reader = createAccessReader({ file: access.file, mark: join(access.folder, "absent", "mark"), legacy: null, log: (line) => lines.push(line) });
-    expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBe("developer");
-    expect(lines.some((line) => line.includes("could not be written"))).toBe(true);
-  });
-});
-
-describe("before the steward writes its projection", () => {
-  test("the portal decides from its own tables as before: a member opens as visitor, an admin email as admin", () => {
-    const reader = accessFolder("legacy").reader(legacyTables());
-    expect(reader.state()).toEqual({ reading: "portal", writtenAt: null });
-    expect(reader.roleOf(HOST, "zoe@elsewhere.test", ADMINS)).toBe("visitor");
-    expect(reader.roleOf(HOST, "bob@acme.test", ADMINS)).toBe("visitor");
-    expect(reader.roleOf(HOST, "owner@acme.test", ADMINS)).toBe("admin");
-    expect(reader.roleOf(HOST, "eve@elsewhere.test", ADMINS)).toBeNull();
-    // A site with no policy of its own has the narrowest: the admins alone.
-    expect(reader.roleOf(OTHER, "zoe@elsewhere.test", ADMINS)).toBeNull();
-    expect(reader.roleOf(OTHER, "owner@acme.test", ADMINS)).toBe("admin");
-  });
-
-  test("a guest from before signs in by its hash, its cookie is found by its identifier, on its own host and until its expiry", () => {
-    const reader = accessFolder("legacy-guests").reader(legacyTables());
-    expect(reader.passwordByHash("c".repeat(64), HOST, NOW)).toEqual({ id: "InViTeInViTe0001", who: "Alice", hash: "", expiresAt: NOW + 3_600_000 });
-    expect(reader.passwordById(HOST, "InViTeInViTe0001", NOW)?.id).toBe("InViTeInViTe0001");
-
-    expect(reader.passwordByHash("c".repeat(64), OTHER, NOW)).toBeNull();
-    expect(reader.passwordById(OTHER, "InViTeInViTe0001", NOW)).toBeNull();
-    expect(reader.passwordByHash("d".repeat(64), HOST, NOW)).toBeNull();
-    expect(reader.passwordById(HOST, "InViTeInViTe0001", NOW + 3_600_000)).toBeNull();
-    expect(reader.passwordByHash("c".repeat(64), HOST, NOW + 3_600_000)).toBeNull();
-  });
-
-  test("once the steward writes, its projection alone decides, and the old tables are never read again", () => {
-    const access = accessFolder("legacy-then-steward");
-    const reader = access.reader(legacyTables());
-    expect(reader.roleOf(HOST, "zoe@elsewhere.test", ADMINS)).toBe("visitor");
-
-    access.write(KANBAN);
-    expect(reader.state().reading).toBe("steward");
-    expect(existsSync(access.mark)).toBe(true);
-    expect(reader.roleOf(HOST, "zoe@elsewhere.test", ADMINS)).toBeNull();
-    expect(reader.passwordById(HOST, "InViTeInViTe0001", NOW)).toBeNull();
-
-    access.remove();
-    expect(reader.state().reading).toBe("unreadable");
-    expect(reader.roleOf(HOST, "zoe@elsewhere.test", ADMINS)).toBeNull();
-  });
 });

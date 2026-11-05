@@ -46,9 +46,9 @@
  *   `/admin/audit` with sign-ins of every kind;
  * - access, with the steward's own access and sign-in routes
  *   (src/access/steward.ts, src/people/steward.ts) on the fake steward's
- *   socket, the registry made by the real migration from a `members.json`
- *   and a portal database from before it, written in the temporary
- *   directory: alice@example.com is a Developer on `cms`, an Admin on
+ *   socket, its registry written in the temporary directory as a machine
+ *   carries one made in 0.4.0 from the stores before it, entries the
+ *   migration gave among them: alice@example.com is a Developer on `cms`, an Admin on
  *   `calendar` and a Viewer on `brand`, bruno@example.com an Admin on `cms`
  *   and a Developer on `calendar`, chloe@example.com a Viewer on
  *   `calendar`, maya@example.com may create projects; people and a domain
@@ -77,7 +77,6 @@
  *   BENCH_NO_STEWARD=1  no steward: Secrets and Access say 502
  *   BENCH_NO_PORTAL=1     no portal: the sign-in page offers no provider, Activity can't read it
  *   BENCH_NO_SSO=1        a portal with passwords only: everyone outside gets password access
- *   BENCH_OLD_PORTAL=1    a portal that still reads its own lists: Access says changes don't reach it
  *   BENCH_NO_EGRESS=1     no egress proxy: Activity says it isn't installed
  *   BENCH_EMPTY=1             no snapshot at all: the "No snapshot" state
  *   BENCH_FRESH=1             a fresh machine: the platform's own projects alone, all well,
@@ -106,7 +105,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, normalize, resolve } from "node:path";
-import { Database } from "bun:sqlite";
 import { fixedRefusal } from "../src/gatekeeper/rules";
 import type { GeneralAccess, GeneralView } from "../src/access/protocol";
 import { generateCode } from "../borrowed/locks";
@@ -121,6 +119,7 @@ import { readPrivateKey, signAssertion } from "../borrowed/assertion";
 import { createMemberRoutes } from "../src/people/steward";
 import { createAccessRoutes, createAccessStore } from "../src/access/steward";
 import { createAccessSystem } from "../src/access/system";
+import { encodeRegistry, sortEntries, type Entry, type Registry } from "../src/access/registry";
 import { mintRefusals, scopeText } from "../src/people/tokens";
 import { generalNeedsUnlock, may, needsUnlock, powerRefusal, type Power } from "../src/people/powers";
 import { createMembersSystem } from "../src/people/system";
@@ -1204,50 +1203,51 @@ const sso =
         allowedDomains: ["example.com"],
       };
 
-// The stores from before the registry, which the real migration carries over
-// at the first read: alice's roles in members.json, and a portal database
-// whose sharing let people and a domain in, and whose guests had passwords.
-const portalData = join(folder, "portal-data");
-mkdirSync(portalData, { recursive: true });
-writeFileSync(
-  join(membersState, "members.json"),
-  JSON.stringify({
-    members: [
-      { email: "alice@example.com", roles: { cms: "developer", calendar: "admin", brand: "viewer" }, create: false, invitedBy: "owner", createdAt: start - 20 * DAY, updatedAt: start - 20 * DAY },
-      { email: "bruno@example.com", roles: { calendar: "developer", cms: "admin" }, create: false, invitedBy: "owner", createdAt: start - 12 * DAY, updatedAt: start - 3 * DAY },
-      { email: "chloe@example.com", roles: { calendar: "viewer" }, create: false, invitedBy: "alice@example.com", createdAt: start - 4 * DAY, updatedAt: start - 4 * DAY },
-      { email: "maya@example.com", roles: {}, create: true, invitedBy: "owner", createdAt: start - 2 * DAY, updatedAt: start - 2 * DAY },
-    ],
-  }),
-);
-{
-  // A fixture, written once and read once by the migration's checked copy.
-  const fixture = new Database(join(portalData, "portal.db"), { create: true, strict: true });
-  fixture.run("CREATE TABLE invites (id TEXT PRIMARY KEY, hote TEXT NOT NULL, libelle TEXT NOT NULL, empreinte TEXT NOT NULL UNIQUE, cree_a INTEGER NOT NULL, expire_a INTEGER, vu_a INTEGER)");
-  fixture.run("CREATE TABLE sharing (host TEXT PRIMARY KEY, mode TEXT NOT NULL, people TEXT NOT NULL, domains TEXT NOT NULL, updated_at INTEGER NOT NULL)");
-  const hashOf = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex");
-  const invite = fixture.query("INSERT INTO invites (id, hote, libelle, empreinte, cree_a, expire_a, vu_a) VALUES (?, ?, ?, ?, ?, ?, NULL)");
-  invite.run("benchGuest000001", "cms.example.com", "client@example.org", hashOf("bench one"), start - 6 * DAY - 19 * HOUR, start + 5 * HOUR);
-  invite.run("benchGuest000002", "calendar.example.com", "Example Accounting", hashOf("bench two"), start - DAY, start + 6 * DAY);
-  invite.run("benchGuest000005", "calendar.example.com", "auditor@partner.example", hashOf("bench five"), start - 3 * DAY, start + 14 * HOUR);
-  invite.run("benchGuest000003", "brand.example.com", "Bob and Carol", hashOf("bench three"), start - 41 * DAY, null);
-  invite.run("benchGuest000004", "inventory.example.com", "Dave, intern", hashOf("bench four"), start - 32 * DAY, start - 2 * DAY);
-  const policy = fixture.query("INSERT INTO sharing (host, mode, people, domains, updated_at) VALUES (?, ?, ?, ?, ?)");
-  policy.run("cms.example.com", "people", JSON.stringify(["alice@example.com", "editor@example.com"]), "[]", start - 2 * DAY);
-  policy.run("calendar.example.com", "domain", "[]", JSON.stringify(["example.com"]), start - 9 * DAY);
-  fixture.close();
-}
+// The registry as a machine upgraded through 0.4.0 carries it: made from
+// alice's roles in members.json and from a portal database whose sharing let
+// people and a domain in, and whose guests had passwords, carried with their
+// hashes and expiry; the entries the migration gave say `migration`.
+const hashOf = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex");
+const by = (who: string, role: Entry["role"], made: string, at: number, password?: Entry["password"]): Entry => ({ who, role, by: made, createdAt: at, updatedAt: at, ...(password === undefined ? {} : { password }) });
+const madeIn04: Registry = {
+  version: 1,
+  projects: {
+    brand: sortEntries([
+      by("alice@example.com", "viewer", "owner", start - 20 * DAY),
+      by("Bob and Carol", "visitor", "migration", start - 41 * DAY, { id: "benchGuest000003", hash: hashOf("bench three"), expiresAt: null }),
+    ]),
+    calendar: sortEntries([
+      by("@example.com", "visitor", "migration", start - 9 * DAY),
+      by("alice@example.com", "admin", "owner", start - 20 * DAY),
+      by("auditor@partner.example", "visitor", "migration", start - 3 * DAY, { id: "benchGuest000005", hash: hashOf("bench five"), expiresAt: start + 14 * HOUR }),
+      by("bruno@example.com", "developer", "owner", start - 12 * DAY),
+      by("chloe@example.com", "viewer", "alice@example.com", start - 4 * DAY),
+      by("Example Accounting", "visitor", "migration", start - DAY, { id: "benchGuest000002", hash: hashOf("bench two"), expiresAt: start + 6 * DAY }),
+    ]),
+    cms: sortEntries([
+      by("alice@example.com", "developer", "owner", start - 20 * DAY),
+      by("bruno@example.com", "admin", "owner", start - 12 * DAY),
+      by("client@example.org", "visitor", "migration", start - 6 * DAY - 19 * HOUR, { id: "benchGuest000001", hash: hashOf("bench one"), expiresAt: start + 5 * HOUR }),
+      by("editor@example.com", "visitor", "migration", start - 2 * DAY),
+    ]),
+    inventory: [by("Dave, intern", "visitor", "migration", start - 32 * DAY, { id: "benchGuest000004", hash: hashOf("bench four"), expiresAt: start - 2 * DAY })],
+  },
+  creators: [{ email: "maya@example.com", by: "owner", at: start - 2 * DAY }],
+  migration: { at: start - 20 * DAY, from: ["members.json", "portal.db"], setAside: [] },
+};
+const benchAccess = createAccessSystem({ stateFolder: membersState, portalKeyFolder, groupsFile: "/etc/group", portalGroup: "" });
+await benchAccess.writeRegistry(encodeRegistry(madeIn04));
 
 const benchJournal = async (event: { operation: string; result: "ok" | "rejects"; actor: string; member: string | null; slug?: string; detail: string | null }) =>
   record({ operation: event.operation, result: event.result, actor: event.actor, member: event.member, slug: event.slug ?? null, file: null, variable: null, detail: event.detail });
 
 const accessStore = createAccessStore({
-  system: createAccessSystem({ stateFolder: membersState, portalKeyFolder, groupsFile: "/etc/group", portalGroup: "", portalDataFolder: portalData }, false),
+  system: benchAccess,
   zone: "example.com",
   hostOf: (slug) => `${slug}.example.com`,
   journal: benchJournal,
 });
-// Made from the fixture above before anything asks, as the steward does at startup.
+// Its projection written before anything asks, as the steward does at startup.
 await accessStore.start();
 
 /** A person's live tokens, as the steward's control routes name them for a confirmation (src/control/steward.ts, `tokensOf`). */
@@ -1301,7 +1301,7 @@ const accessRoutes = createAccessRoutes({
     if (found === undefined) return null;
     return generalView(found);
   },
-  portalReading: async () => ({ reading: process.env.BENCH_OLD_PORTAL === "1" ? "portal" : "steward", writtenAt: Date.now() }),
+  portalReading: async () => ({ reading: "steward", writtenAt: Date.now() }),
   isUnlocked: async (value) => isValidToken({ token: value }),
   readBody: async (req, fields) => {
     const body = await readBody(req);
@@ -1859,7 +1859,7 @@ const portal =
           // How people sign in, and what the portal reads its access from,
           // like portal/src/admin.ts.
           "/admin/sharing": { GET: () => Response.json({ sso, sites: [] }) },
-          "/admin/access": { GET: () => Response.json({ reading: process.env.BENCH_OLD_PORTAL === "1" ? "portal" : "steward", writtenAt: Date.now() }) },
+          "/admin/access": { GET: () => Response.json({ reading: "steward", writtenAt: Date.now() }) },
           "/admin/audit": { GET: (req) => Response.json({ events: page(portalEvents, new URL(req.url).searchParams) }) },
 
           // A member's sign-in, as portal/src/dashboard.ts: the flow sealed
@@ -1916,7 +1916,7 @@ const portal =
 
 portalAddress = portal === null ? "" : `http://127.0.0.1:${portal.port}`;
 
-// The key pair, and the registry made from the stores above by the real migration.
+// The key pair, and the registry's projection.
 await memberRoutes.ensureKeys();
 await accessStore.ensure();
 

@@ -65,7 +65,7 @@ function bench(
   const tokens = options.tokens ?? {};
   const sessions = options.sessions ?? [];
   const zone = options.zone ?? ZONE;
-  const system = createAccessSystem({ stateFolder: state, portalKeyFolder: key, groupsFile: "/etc/group", portalGroup: "", portalDataFolder: join(root, "no-portal") }, false);
+  const system = createAccessSystem({ stateFolder: state, portalKeyFolder: key, groupsFile: "/etc/group", portalGroup: "" });
   const store = createAccessStore({
     system: options.clock === undefined ? system : { ...system, now: () => options.clock!.value },
     zone,

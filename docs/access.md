@@ -836,9 +836,9 @@ reader, with each of the four JSON readers.
   and the service starts without them. Set each with `sitesolide secrets set
   NAME`, or `sitesolide secrets generate NAME` for a random key, then
   `sitesolide restart`.
-- **A warning that the portal still decides from its own tables**: the machine
-  is halfway through an upgrade. What you give is kept, and opens the site
-  once the owner has run `sitesolide upgrade`, which deploys the portal.
+- **A warning that the portal cannot read who may open a site**: nothing you
+  give opens the site until it can. What you give is kept; tell the owner of
+  the machine.
 - **`edited-by-hand`**: a file of your project on the machine, its unit or its
   Caddy block, was changed by hand. The owner reads it and deploys once over SSH
   with `--force`; yours works again afterwards.

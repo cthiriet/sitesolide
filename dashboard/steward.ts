@@ -96,12 +96,6 @@ const PORTAL_GROUP = process.env.PORTAL_GROUP ?? "site-portal";
 const PORTAL_RELAY = process.env.PORTAL_RELAY_SOCKET ?? PORTAL_RELAY_SOCKET;
 
 /**
- * The portal's own data folder, read once, as a checked copy, when the access
- * registry is made from the stores before it: see src/access/system.ts.
- */
-const PORTAL_DATA_FOLDER = process.env.PORTAL_DATA_FOLDER ?? `${SITES_DIR}/portal/data`;
-
-/**
  * The check of the owners. Empty: neither uid check nor chown, and no check at
  * all of the hash's file, of the subdirectories nor of the gatekeeper's result,
  * for the workstation, where those accounts do not exist. Any other value
@@ -189,9 +183,7 @@ const handler = createSteward(system, {
         portalKeyFolder: PORTAL_KEY_DIR,
         groupsFile: GROUPS_FILE,
         portalGroup: OWNERS === "" ? "" : PORTAL_GROUP,
-        portalDataFolder: PORTAL_DATA_FOLDER,
       },
-      OWNERS !== "",
     ),
     zone: process.env.SITESOLIDE_ZONE ?? "",
     portal: PORTAL_RELAY === "" ? null : relayedPortal(PORTAL_RELAY),
@@ -250,11 +242,11 @@ memberTokens = control.tokensOf;
 ownerStoreWritten = control.ownerWroteStore;
 ownerStoreClaimed = control.storeClaimed;
 
-// The access registry: made from members.json and the portal's database at the
-// first start on this code, then its projection written again for the portal.
-// In the background, never in the sockets' way: until it is done the access
-// routes answer `migrating`, and an attempt that fails is tried again later
-// and later. Then, once, every token made someone's.
+// The access registry: begun empty on a machine without one, then its
+// projection written again for the portal. In the background, never in the
+// sockets' way: until it is done the access routes answer `not-ready`, and an
+// attempt that fails is tried again later and later. Then, once, every token
+// made someone's.
 void handler
   .startAccess()
   .then(async () => {

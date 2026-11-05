@@ -281,7 +281,7 @@ beforeAll(async () => {
       checkAccounts: false,
       members: {
         system: createMembersSystem({ stateFolder: state, sitesDir: sites, secretsFolder: secrets, portalKeyFolder: join(root, "portal-key"), groupsFile: join(root, "group"), portalGroup: "" }),
-        access: createAccessSystem({ stateFolder: state, portalKeyFolder: join(root, "portal-key"), groupsFile: join(root, "group"), portalGroup: "", portalDataFolder: join(root, "portal-data") }, false),
+        access: createAccessSystem({ stateFolder: state, portalKeyFolder: join(root, "portal-key"), groupsFile: join(root, "group"), portalGroup: "" }),
         zone: ZONE,
         portal: relayTo(() => PORTAL),
         revokeTokens: (email, actor) => control.revokeMember(email, actor),

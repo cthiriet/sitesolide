@@ -9,7 +9,6 @@
  *   sitesolide share --remove <email|@domain|name>...  take access away
  *   sitesolide people                                  everyone, their roles, who may create projects
  *   sitesolide people <email> --may-create|--no-create the right to create projects
- *   sitesolide people --migrate-without-portal         carry access over without the portal's database
  *
  * A role is one rung of a ladder, each including the ones below: `can-open`
  * (`visitor`, the name the machine keeps, is read too), `viewer`,
@@ -122,7 +121,6 @@ export const PEOPLE_USAGE = [
   "sitesolide people                everyone with access, their roles, who may create projects",
   "   <email> --may-create          let them create projects, Admin of what they create",
   "   <email> --no-create           take that right back",
-  "   --migrate-without-portal      when the portal's database does not read: carry the rest over without it",
 ];
 
 export type ShareRequest =
@@ -206,15 +204,11 @@ export function readShareArguments(arguments_: string[]): ShareRequest | Failure
   return { action: "give", who, role: role ?? "visitor", expiresInS: expires };
 }
 
-export type PeopleRequest = { action: "list" } | { action: "create"; email: string; create: boolean } | { action: "migrate" };
+export type PeopleRequest = { action: "list" } | { action: "create"; email: string; create: boolean };
 
 export function readPeopleArguments(arguments_: string[]): PeopleRequest | Failure {
   const rest = (arguments_[0] === "people" ? arguments_.slice(1) : arguments_).filter((argument) => argument !== "--json");
   if (rest.length === 0) return { action: "list" };
-  if (rest.includes("--migrate-without-portal")) {
-    if (rest.length !== 1) return usage("--migrate-without-portal takes nothing else", PEOPLE_USAGE);
-    return { action: "migrate" };
-  }
   let email: string | null = null;
   let create: boolean | null = null;
   for (const argument of rest) {
@@ -313,10 +307,9 @@ export function describeAccess(state: AccessState): string[] {
   return lines;
 }
 
-/** Warnings about the machine itself: a portal that does not read the registry yet. */
+/** Warnings about the machine itself: a portal that cannot read the registry's projection. */
 export function accessWarnings(state: AccessState): string[] {
   const reading = state.portal?.reading;
-  if (reading === "portal") return ["!! the portal on this machine still decides from its own tables: run sitesolide upgrade, which deploys it"];
   if (reading === "unreadable") return ["!! the portal cannot read who may open a site: only the owner's password and the admin emails open one; tell the owner of the machine (journalctl -u portal)"];
   return [];
 }
@@ -418,8 +411,6 @@ export type PeopleState = {
 export type PeopleTransport = {
   list: () => Promise<Reading<PeopleState>>;
   setCreate: (email: string, create: boolean) => Promise<Reading<{ person: PersonView; change: string; left?: Left }>>;
-  /** The registry made from members.json alone, the portal's database left out at the owner's word. */
-  migrateWithoutPortal: () => Promise<Reading<{ people: number; projects: number }>>;
 };
 
 /** `alpha: Developer, beta: Admin; may create projects`. */
@@ -462,17 +453,6 @@ export async function people(arguments_: string[], dashboardUrl: string, transpo
   if ("error" in request) {
     output.failed(request);
     return 1;
-  }
-  if (request.action === "migrate") {
-    const migrated = await transport.migrateWithoutPortal();
-    if (!migrated.ok) {
-      output.failed(migrated.failure);
-      return 1;
-    }
-    output.say(`-> access carried over on ${dashboardUrl} without the portal's database: ${migrated.value.people} person(s) signing in to the dashboard, ${migrated.value.projects} project(s) with people`);
-    output.say("   who could open which site, and password access, stay in the portal's database, read-only: give them again with sitesolide share");
-    output.succeeded("people", { migrated: true, withoutPortal: true, people: migrated.value.people, projects: migrated.value.projects, changed: true });
-    return 0;
   }
   const read = await transport.list();
   if (!read.ok) {
@@ -542,7 +522,6 @@ export function ownerReadCommand(
 export type OwnerWritePath =
   | "/access/entry"
   | "/people/person"
-  | "/access/migrate"
   | "/store"
   | "/store/variable"
   | "/store/generate"
@@ -679,13 +658,6 @@ export function sshPeople(run: RunOnMachine): PeopleTransport {
       if (!read.ok) return read;
       if (!isObject(read.value.person) || typeof read.value.change !== "string") return unreadable("answer");
       return { ok: true, value: read.value as unknown as { person: PersonView; change: string; left?: Left } };
-    },
-    async migrateWithoutPortal() {
-      const read = await askSteward(run, ownerWriteCommand("POST", "/access/migrate"), JSON.stringify({ withoutPortal: true }));
-      if (!read.ok) return read;
-      const { people: counted, projects } = read.value;
-      if (typeof counted !== "number" || typeof projects !== "number") return unreadable("answer");
-      return { ok: true, value: { people: counted, projects } };
     },
   };
 }

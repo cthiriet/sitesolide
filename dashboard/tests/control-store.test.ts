@@ -183,7 +183,7 @@ async function mount(options: { store?: boolean | "real"; secretChangesPerHour?:
   };
   const portalKey = folder("portal-key");
   const members = { ...createMembersSystem({ stateFolder: state, sitesDir: sites, secretsFolder: secrets, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "" }), now: () => clock.t };
-  const access = { ...createAccessSystem({ stateFolder: state, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "", portalDataFolder: join(root, "portal-data") }, false), now: () => clock.t };
+  const access = { ...createAccessSystem({ stateFolder: state, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "" }), now: () => clock.t };
   // The owner's writes into a store told to the control routes, as dashboard/steward.ts wires them.
   let ownerStoreWritten: (slug: string) => Promise<void> = async () => undefined;
   let ownerStoreClaimed: (slug: string) => Promise<boolean> = async () => false;

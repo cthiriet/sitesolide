@@ -1,23 +1,20 @@
 /**
- * The portal's database: the audit of sign-ins, and two tables from before
- * the steward kept who may open a site, `invites` and `sharing`, read-only:
- * a portal that finds no projection from the steward yet decides from them
- * as it did (src/projection.ts), the steward carries them over once into
- * its registry, and a rollback finds them as they were. Nothing writes them
- * any more.
+ * The portal's database: the audit of sign-ins.
+ *
+ * Two tables from before the steward kept who may open a site, `invites` and
+ * `sharing`, stay in a database the portal wrote up to 0.3 and are read by
+ * nothing; nothing creates them any more.
  *
  * The owner does not appear in it: their cookie is enough on its own, and
  * their password lives in the vault. A lost database loses the audit, never
  * who may open a site, which is the steward's.
  *
- * Every table is created if it is missing, at every opening, so that the
- * reads above find one even on a portal that never had them.
+ * Every table is created if it is missing, at every opening.
  *
  * No effect at import: `server.ts` opens the database, the tests open one of
  * their own.
  */
 import { Database } from "bun:sqlite";
-import { DEFAULT_POLICY, readPolicy, type Policy } from "./sharing";
 
 /**
  * Connection settings, applied in this order. A PRAGMA does not survive the
@@ -37,27 +34,6 @@ export const PRAGMAS = [
 ] as const;
 
 export const SCHEMA = [
-  // The hash is unique and indexed: the login finds the access through
-  // it, without going over the others.
-  `CREATE TABLE IF NOT EXISTS invites (
-     id        TEXT PRIMARY KEY,
-     hote      TEXT NOT NULL,
-     libelle   TEXT NOT NULL,
-     empreinte TEXT NOT NULL UNIQUE,
-     cree_a    INTEGER NOT NULL,
-     expire_a  INTEGER,
-     vu_a      INTEGER
-   )`,
-  // One row per site whose policy was ever set; a site without a row gets
-  // DEFAULT_POLICY. The lists are JSON arrays, read whole on every request of
-  // an identity: a few hundred addresses at most, see PEOPLE_MAX.
-  `CREATE TABLE IF NOT EXISTS sharing (
-     host       TEXT PRIMARY KEY,
-     mode       TEXT NOT NULL,
-     people     TEXT NOT NULL,
-     domains    TEXT NOT NULL,
-     updated_at INTEGER NOT NULL
-   )`,
   // The shape every component of the repository shares, so that one Activity
   // view can read them all side by side.
   `CREATE TABLE IF NOT EXISTS audit (
@@ -82,105 +58,12 @@ export function openDatabase(path: string): Database {
   return db;
 }
 
-/**
- * A row of `invites`, the password access the portal kept before the steward
- * did: read-only, for a portal that finds no projection yet, and carried
- * over once into the steward's registry.
- */
-export type Guest = {
-  id: string;
-  /** The host this password opens, and it alone. */
-  host: string;
-  /** For whom, as it was given. */
-  label: string;
-  /** Milliseconds, like `seenAt` and `expiresAt`. */
-  createdAt: number;
-  /** `null`: no deadline, until revocation. */
-  expiresAt: number | null;
-  /** Last accepted request, noted at most once a minute. */
-  seenAt: number | null;
-};
-
-/** The password access from before the steward kept it, read-only. The hash never leaves this place. */
-export type GuestStore = {
-  byId: (id: string) => Guest | null;
-  byHash: (hash: string) => Guest | null;
-};
-
-/**
- * One row as SQLite hands it back. The names are those of the columns, which
- * stay as they were written: renaming them would call for a migration of the
- * database in service.
- */
-type Row = {
-  id: string;
-  hote: string;
-  libelle: string;
-  cree_a: number;
-  expire_a: number | null;
-  vu_a: number | null;
-};
-
-const COLUMNS = "id, hote, libelle, cree_a, expire_a, vu_a";
-
-function toGuest(row: Row | null): Guest | null {
-  if (row === null) return null;
-  return {
-    id: row.id,
-    host: row.hote,
-    label: row.libelle,
-    createdAt: row.cree_a,
-    expiresAt: row.expire_a,
-    seenAt: row.vu_a,
-  };
-}
-
-/** The queries are prepared once, by `query` which keeps them in cache. */
-export function guestStore(db: Database): GuestStore {
-  const queries = {
-    byId: db.query<Row, [string]>(`SELECT ${COLUMNS} FROM invites WHERE id = ?`),
-    byHash: db.query<Row, [string]>(`SELECT ${COLUMNS} FROM invites WHERE empreinte = ?`),
-  };
-
-  return {
-    byId: (id) => toGuest(queries.byId.get(id)),
-    byHash: (hash) => toGuest(queries.byHash.get(hash)),
-  };
-}
-
-// --- Sharing ---------------------------------------------------------------------
-
-/** Each site's sharing from before the steward kept who may open it, read-only. */
-export type SharingStore = {
-  /** The site's policy, `DEFAULT_POLICY` when none was ever set. */
-  get: (host: string) => Policy;
-};
-
-type SharingRow = { mode: string; people: string; domains: string };
-
 function parseArray(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
     return null;
   }
-}
-
-/**
- * A stored row judged again with the rule the admin API applies. A row this
- * version cannot read, written by hand or by a later version, falls back to
- * `DEFAULT_POLICY`: closed to everyone but the admins, never open wider than
- * intended.
- */
-function toPolicy(row: SharingRow | null): Policy {
-  if (row === null) return DEFAULT_POLICY;
-  const reading = readPolicy({ mode: row.mode, people: parseArray(row.people), domains: parseArray(row.domains) });
-  return "policy" in reading ? reading.policy : DEFAULT_POLICY;
-}
-
-export function sharingStore(db: Database): SharingStore {
-  const query = db.query<SharingRow, [string]>("SELECT mode, people, domains FROM sharing WHERE host = ?");
-  return { get: (host) => toPolicy(query.get(host)) };
 }
 
 // --- Audit -----------------------------------------------------------------------

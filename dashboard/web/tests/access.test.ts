@@ -547,14 +547,13 @@ describe("what is sent and shown after a change", () => {
     expect(DEFAULT_PASSWORD_DURATION_S).toBe(7 * 24 * 3600)
   })
 
-  test("a refusal is the steward's words as they stand; a portal that reads its own lists, or none, is said", () => {
+  test("a refusal is the steward's words as they stand; a portal that reads no list is said", () => {
     expect(refusalText(0, null)).toContain("Can't reach the dashboard")
     expect(ACCESS_UNREACHABLE).not.toContain("steward")
     expect(refusalText(403, { error: "out-of-scope", message: "ann@acme.test may give at most Admin on cms" })).toBe("ann@acme.test may give at most Admin on cms")
     expect(refusalText(400, null)).toBe("Refused (400).")
     expect(readingProblem({ reading: "steward", writtenAt: NOW })).toBeNull()
     expect(readingProblem({ reading: "unknown", writtenAt: null })).toBeNull()
-    expect(readingProblem({ reading: "portal", writtenAt: null })).toMatchObject({ tone: "attention" })
     expect(readingProblem({ reading: "unreadable", writtenAt: null })).toMatchObject({ tone: "error" })
   })
 })

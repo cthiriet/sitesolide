@@ -101,9 +101,9 @@ password access, null otherwise. `changes` says what this call did, each
 (`role` null then), with `password` for password access just given.
 `message` is the line to send people who sign in with a company account, null
 until that is set up; the `send:` event comes only after a change that gives
-someone access with an account. A `warning` that the portal still decides
-from its own tables means the machine is halfway through an upgrade: tell the
-user, whose owner runs `sitesolide upgrade`; what was given is kept.
+someone access with an account. A `warning` that the portal cannot read who
+may open a site means nothing given opens it until it can: tell the user,
+whose owner reads the portal's journal; what was given is kept.
 
 Never done this way: changing a site's general access, Public, Restricted or
 Anyone with the code, which is the dashboard's, or `sitesolide lock` for the
@@ -450,7 +450,7 @@ port and is untouched.
 `share` needs the machine's side: a steward that keeps
 the access registry, and with a token the dashboard of the same release, which
 `sitesolide upgrade` brings both: see
-[upgrading.md](upgrading.md#access-one-registry).
+[upgrading.md](upgrading.md#the-operators-path-sitesolide-upgrade).
 
 A later release hardened what an agent, a token or a cloned folder can make
 `deploy` do: a dry run no longer runs the build, `install` runs as the project's

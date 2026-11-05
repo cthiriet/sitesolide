@@ -286,9 +286,7 @@ asks `GET /admin/access`, whether the portal decides from its projection, throug
 `sitesolide-portal-relay`, a systemd proxy that forwards a socket only root
 opens to the portal's port and to nothing else, so that the steward's own unit
 keeps no network at all. Nobody changes who may open a site through the
-portal any more: the steward writes the projection the portal reads, and the
-routes that did it, `PUT /admin/sharing/:host`, `/admin/guests` and
-`DELETE /admin/invites/:id`, answer `410 moved` to whoever asks.
+portal: the steward writes the projection the portal reads.
 
 And one set: a project that declares several `services` reaches its own ports,
 and nobody else's. Its front calls its API, its worker calls both, and a
@@ -578,7 +576,7 @@ rotates by line count: a refusal stays in the journal.
 | `deploy.start` | dashboard | `token:<id>` | slug | a token's deployment handed to the installer; the person's email in the `member` field, for a person's own token |
 | `deploy.success`, `deploy.failure` | dashboard | `token:<id>` | slug | how it ended, the error's code for a failure; the `member` field for a person's own token |
 | `access.add`, `access.change`, `access.remove` | steward | `owner`, an Admin's email, or `token:<id>` | slug, the person's email in the detail; the email alone for someone taken off every project | someone given access, their role changed, or their access taken away, as "who: Role", with the expiry of password access; a change refused, with the steward's reason, a minute holding twenty refusals at most, a token's bounded instead by its own 60 an hour |
-| `access.migrate` | steward | `system`, or `owner` without the portal's database | none | the registry made, once, from the stores before it: the counts carried over and set aside |
+| `access.migrate` | steward | `system`, or `owner` without the portal's database | none | the registry made, once, in 0.4.0, from the stores before it: the counts carried over and set aside; written by no release since, read where a machine's journal still holds it |
 | `people.create` | steward | `owner` | the person's email | the right to create projects given or taken back |
 | `dashboard.signin` | steward | the person's email | the person's email | a session opened, from an assertion it verified, with their roles and create right |
 | `dashboard.signin_failed` | steward | the email, or `anonymous` when the assertion did not verify | the email, or none | a sign-in refused: `can-open-only` for someone who only opens sites, `no-role` for someone on no list, an assertion replayed, signed by another key, expired, too old; a minute holds twenty refusals at most |

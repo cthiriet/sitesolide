@@ -36,7 +36,11 @@ export type Entry = {
 
 export type Creator = { email: string; by: string; at: number };
 
-/** What the migration could not carry as an entry, kept so that nothing is lost: see migrate.ts. */
+/**
+ * What the registry's making from the stores before it, in 0.4.0, could not
+ * carry as an entry: kept, read and written back as it stands, so that
+ * nothing it set aside is lost. Nothing makes one any more.
+ */
 export type SetAside = { source: "members" | "sharing" | "password"; slug: string | null; who: string; reason: string };
 
 export type Migration = { at: number; from: string[]; setAside: SetAside[] };
@@ -47,7 +51,7 @@ export type Registry = {
   projects: Record<string, Entry[]>;
   /** Who may create projects, sorted by email. */
   creators: Creator[];
-  /** When this registry was made from the stores before it, and what it set aside. Null for one begun empty. */
+  /** When this registry was made from the stores before it, in 0.4.0, and what it set aside. Null for one begun empty. */
   migration: Migration | null;
 };
 

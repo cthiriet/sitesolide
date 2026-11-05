@@ -157,7 +157,7 @@ async function mount(): Promise<Bench> {
   };
 
   const access = {
-    ...createAccessSystem({ stateFolder: state, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "", portalDataFolder: join(root, "portal-data") }, false),
+    ...createAccessSystem({ stateFolder: state, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "" }),
     now: () => clock.t,
   };
 

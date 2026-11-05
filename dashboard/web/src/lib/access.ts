@@ -762,12 +762,10 @@ export function refusalText(status: number, body: { error?: string; message?: st
 
 /**
  * What the portal on the machine reads, when it is worth a word: one that
- * still keeps its own lists does not see changes made here.
+ * cannot read the projection opens nothing from this list.
  */
 export function readingProblem(portal: AccessPageResponse["portal"]): { tone: "attention" | "error"; text: string } | null {
   switch (portal.reading) {
-    case "portal":
-      return { tone: "attention", text: "The portal on this server still reads its own lists, so changes here don't reach the site yet. Run sitesolide upgrade." }
     case "unreadable":
       return { tone: "error", text: "The portal can't read who has access: nobody on this list opens a restricted site until it can. Run sitesolide upgrade, then sitesolide status." }
     default:

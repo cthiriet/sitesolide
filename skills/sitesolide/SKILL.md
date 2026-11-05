@@ -130,7 +130,7 @@ Every error carries a `hint`: follow it. The usual ones:
   or the owner. `not-found`: the project is not deployed, or the person has no
   access to take away. `steward-outdated` or `not-available`: the machine
   needs `sitesolide upgrade`, the owner's to run. A warning that the portal
-  still decides from its own tables goes to the user.
+  cannot read who may open a site goes to the user.
 
 ## Never
 

@@ -34,7 +34,7 @@ export function relayedPortal(socket: string): PortalAdmin {
 }
 
 /** What the portal says it reads its access from, as the access answers carry it. */
-export type PortalReading = "steward" | "portal" | "unreadable" | "unknown";
+export type PortalReading = "steward" | "unreadable" | "unknown";
 
 /**
  * The most of the portal's answer the steward reads. The answer is two
@@ -64,22 +64,20 @@ async function boundedText(response: Response): Promise<string | null> {
 }
 
 /**
- * The portal's word, or `unknown` when it cannot be asked: no relay, a
- * portal down, or one from before the registry, which answers no such route
- * and reads its own tables still. An answer past MAX_ANSWER_BYTES is no
- * answer of the portal's either.
+ * The portal's word, or `unknown` when it cannot be asked: no relay, or a
+ * portal down. An answer past MAX_ANSWER_BYTES is no answer of the portal's
+ * either.
  */
 export async function portalReading(portal: PortalAdmin | null): Promise<{ reading: PortalReading; writtenAt: number | null }> {
   if (portal === null) return { reading: "unknown", writtenAt: null };
   try {
     const response = await portal.access();
-    if (response.status === 404) return { reading: "portal", writtenAt: null };
     const text = await boundedText(response);
     if (text === null) return { reading: "unknown", writtenAt: null };
     const body: unknown = JSON.parse(text);
     if (response.status !== 200 || typeof body !== "object" || body === null) return { reading: "unknown", writtenAt: null };
     const { reading, writtenAt } = body as Record<string, unknown>;
-    const known = reading === "steward" || reading === "portal" || reading === "unreadable" ? reading : "unknown";
+    const known = reading === "steward" || reading === "unreadable" ? reading : "unknown";
     return { reading: known, writtenAt: typeof writtenAt === "number" ? writtenAt : null };
   } catch {
     return { reading: "unknown", writtenAt: null };

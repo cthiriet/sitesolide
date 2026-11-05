@@ -84,12 +84,6 @@ export type { Role } from "../../borrowed/access";
 /** The registry's file, in the steward's state folder. */
 export const REGISTRY_NAME = "access.json";
 
-/** The registry before it: the dashboard's people and their roles, kept read-only once carried over. */
-export const LEGACY_REGISTRY_NAME = "members.json";
-
-/** The portal's database, where who could open a site and password access lived before the registry. */
-export const PORTAL_DATABASE = "portal.db";
-
 /** What the registry's file is read with: a few hundred entries per project are never near it. */
 export const REGISTRY_MAX_BYTES = 8 * 1024 * 1024;
 
@@ -187,12 +181,10 @@ export type AccessResponse = {
   signIn: SignInSettings;
   /**
    * What the portal on the machine reads who may open a site from: `steward`,
-   * this registry's projection; `portal`, its own tables still, a portal
-   * from before the registry, which the next `sitesolide upgrade` deploys;
-   * `unreadable`, the projection does not read and the portal opens nothing
-   * from it; `unknown`, it could not be asked.
+   * this registry's projection; `unreadable`, the projection does not read
+   * and the portal opens nothing from it; `unknown`, it could not be asked.
    */
-  portal: { reading: "steward" | "portal" | "unreadable" | "unknown"; writtenAt: number | null };
+  portal: { reading: "steward" | "unreadable" | "unknown"; writtenAt: number | null };
   /**
    * By `who`, the people whom removing from this project, or lowering to Can
    * open, takes out of the dashboard, no other role above Can open nor the

@@ -19,13 +19,6 @@ export const KEY_FILE = join(DATA_DIR, "key");
 export const DATABASE_FILE = join(DATA_DIR, "portal.db");
 
 /**
- * Left once the portal has read the steward's access projection: from then
- * on, a missing projection opens nothing, and the tables from before it are
- * never read again (src/projection.ts).
- */
-export const ACCESS_MARK_FILE = join(DATA_DIR, "access-from-steward");
-
-/**
  * In production, the portal only answers through Caddy, therefore on HTTPS:
  * which is what the `__Host-` prefix and the `Secure` attribute require. The
  * manifest sets `NODE_ENV=production`; a local lab on plain HTTP does not set

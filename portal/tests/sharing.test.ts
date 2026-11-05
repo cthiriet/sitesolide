@@ -1,23 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import {
-  DEFAULT_POLICY,
-  IDENTITY_VARIABLES,
-  PEOPLE_MAX,
-  cleanDomain,
-  cleanEmail,
-  domainOf,
-  identityRole,
-  maySignIn,
-  readList,
-  readPolicy,
-  type Policy,
-} from "../src/sharing";
+import { IDENTITY_VARIABLES, cleanDomain, cleanEmail, domainOf, maySignIn, readList } from "../src/sharing";
 
 const ADMINS = ["owner@acme.test"];
-
-function policy(rest: Partial<Policy>): Policy {
-  return { ...DEFAULT_POLICY, ...rest };
-}
 
 describe("an email", () => {
   test("is kept in lowercase, edges trimmed", () => {
@@ -80,71 +64,6 @@ describe("a domain", () => {
     expect(cleanDomain("*.acme.test")).toBeNull();
     expect(cleanDomain("acme.test/")).toBeNull();
     expect(cleanDomain("")).toBeNull();
-  });
-});
-
-describe("reading a policy from the dashboard", () => {
-  test("cleans, sorts and deduplicates both lists", () => {
-    expect(
-      readPolicy({ mode: "domain", people: ["Bob@acme.test", "alice@acme.test", "bob@ACME.test"], domains: ["@Acme.test"] }),
-    ).toEqual({ policy: { mode: "domain", people: ["alice@acme.test", "bob@acme.test"], domains: ["acme.test"] } });
-  });
-
-  test("absent lists are empty ones", () => {
-    expect(readPolicy({ mode: "admins" })).toEqual({ policy: DEFAULT_POLICY });
-  });
-
-  test("one bad entry refuses the whole change, rather than saving the rest", () => {
-    expect(readPolicy({ mode: "people", people: ["alice@acme.test", "nobody"] })).toEqual({ error: "invalid-people" });
-    expect(readPolicy({ mode: "domain", domains: ["acme.test", "com"] })).toEqual({ error: "invalid-domains" });
-  });
-
-  test("an unknown mode, public included, is refused: public is the portal turned off", () => {
-    expect(readPolicy({ mode: "public" })).toEqual({ error: "invalid-mode" });
-    expect(readPolicy({ mode: "everyone" })).toEqual({ error: "invalid-mode" });
-    expect(readPolicy(null)).toEqual({ error: "invalid-policy" });
-    expect(readPolicy([])).toEqual({ error: "invalid-policy" });
-  });
-
-  test("beyond the bound, a list is refused", () => {
-    const many = Array.from({ length: PEOPLE_MAX + 1 }, (_, i) => `p${i}@acme.test`);
-    expect(readPolicy({ mode: "people", people: many })).toEqual({ error: "invalid-people" });
-    expect(readPolicy({ mode: "people", people: "alice@acme.test" })).toEqual({ error: "invalid-people" });
-  });
-});
-
-describe("who a policy from before the steward lets in", () => {
-  test("admins: only the admin emails, as before sharing existed", () => {
-    const only = policy({ mode: "admins", people: ["alice@acme.test"], domains: ["acme.test"] });
-    expect(identityRole("owner@acme.test", only, ADMINS)).toBe("admin");
-    expect(identityRole("alice@acme.test", only, ADMINS)).toBeNull();
-    expect(identityRole("bob@acme.test", only, ADMINS)).toBeNull();
-  });
-
-  test("people: the listed emails as members, the admins as admins", () => {
-    const listed = policy({ mode: "people", people: ["alice@acme.test"], domains: ["acme.test"] });
-    expect(identityRole("alice@acme.test", listed, ADMINS)).toBe("member");
-    expect(identityRole("bob@acme.test", listed, ADMINS)).toBeNull();
-    expect(identityRole("owner@acme.test", listed, ADMINS)).toBe("admin");
-  });
-
-  test("domain: everyone at the domain, and the listed people from elsewhere", () => {
-    const wide = policy({ mode: "domain", people: ["contractor@elsewhere.test"], domains: ["acme.test"] });
-    expect(identityRole("bob@acme.test", wide, ADMINS)).toBe("member");
-    expect(identityRole("contractor@elsewhere.test", wide, ADMINS)).toBe("member");
-    expect(identityRole("eve@elsewhere.test", wide, ADMINS)).toBeNull();
-  });
-
-  test("a subdomain is not the domain, nor a domain that ends the same way", () => {
-    const wide = policy({ mode: "domain", domains: ["acme.test"] });
-    expect(identityRole("bob@sub.acme.test", wide, ADMINS)).toBeNull();
-    expect(identityRole("bob@notacme.test", wide, ADMINS)).toBeNull();
-  });
-
-  test("the admins pass whatever the policy says, even with nobody listed", () => {
-    for (const mode of ["admins", "people", "domain"] as const) {
-      expect(identityRole("owner@acme.test", policy({ mode }), ADMINS)).toBe("admin");
-    }
   });
 });
 

@@ -85,7 +85,7 @@ async function wire(registry: Registry, sites: string[]) {
   const now = () => clock.now;
   const journal: JournalRefusal[] = [];
   const accessSystem = {
-    ...createAccessSystem({ stateFolder: join(root, "state"), portalKeyFolder: join(root, "portal-key"), groupsFile: "/etc/group", portalGroup: "", portalDataFolder: join(root, "none") }, false),
+    ...createAccessSystem({ stateFolder: join(root, "state"), portalKeyFolder: join(root, "portal-key"), groupsFile: "/etc/group", portalGroup: "" }),
     now,
   };
   const store = createAccessStore({ system: accessSystem, zone: ZONE, hostOf: (slug) => `${slug}.${ZONE}`, journal: async () => {} });

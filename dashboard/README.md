@@ -742,14 +742,10 @@ tries again within the minute once the portal is deployed.
 **The portal decides from it, and stores no list any more.** It checks the
 file's inode, size and modification time at every request, one `stat`, and
 reads it again whole when they move, so a removal holds at the next request.
-A projection that does not read opens nothing but the owner's password and
-the admin emails. A portal that finds none and has never read one decides
-from its own tables of before, `sharing` and `invites`, read-only, so that
-the order of an upgrade opens and closes nothing; once it has read one, it
-leaves a mark, `data/access-from-steward`, and never reads those tables
-again. Its sessions stay its own. `GET /admin/access`, on the loopback, says
-what it decides from: `{ reading: "steward" | "portal" | "unreadable",
-writtenAt }`. The header a restricted site reads, `X-Sitesolide-Role`, now
+A projection that does not read, or none, opens nothing but the owner's
+password and the admin emails. Its sessions stay its own. `GET
+/admin/access`, on the loopback, says what it decides from: `{ reading:
+"steward" | "unreadable", writtenAt }`. The header a restricted site reads, `X-Sitesolide-Role`, now
 carries the role on this ladder: see [portal/README.md](../portal/README.md).
 
 **The steward asks it, through the relay, and tells nothing.** Every access
@@ -759,34 +755,32 @@ opens, `/run/sitesolide-portal-relay/portal.sock`, behind which systemd's own
 `systemd-socket-proxyd`, root with no capability and the loopback alone,
 forwards to the portal's port and to nothing else
 (infra/steward/sitesolide-portal-relay.socket). The steward's own unit keeps
-no network. `portal` is a portal still deciding from its own tables, from
-before the registry or before its first projection, which the page and
-`sitesolide share` say to upgrade; `unknown`, a portal the steward could not
-ask. Nothing is written through the relay: the portal reads, and is never
+no network. `unreadable` is a portal that cannot read the projection,
+which the page and `sitesolide share` say; `unknown`, a portal the steward
+could not ask. Nothing is written through the relay: the portal reads, and is never
 told.
 
-**The first registry is made from the stores before it**, once, at the
-steward's first start on this code: `members.json`, in its own state folder,
-and the portal's database, read as root from a checked copy. What is
-carried, what is set aside and why, and how to go back, are in
-[docs/migration.md](../docs/migration.md#access-the-registry-made-from-the-stores-before-it).
+**A machine without one begins it empty**, at the steward's start, written
+with its projection, in the background: until it is, the access routes
+answer `not-ready`, and an attempt that fails is tried again later and
+later. A registry made in 0.4.0 from the stores before it, `members.json` and
+the portal's database, keeps the record of what that making set aside, read
+and written back as it stands; nothing reads those stores any more.
 
-**Deleting it starts it over, and costs tokens.** A registry deleted while
-the steward runs is made again at the next request, from those same stores,
-read-only since and so as they stood at the first migration: every change
-of access made after it is gone, everyone given a role since with it, and
-until it is made again the access routes answer `migrating` and every
-person is refused. The sweep of the next 30 seconds (see [A person's own
+**Deleting it starts it over, empty, and costs tokens.** A registry deleted
+while the steward runs is begun again, empty, at the next request: every
+role and every access is gone, and until it is written the access routes
+answer `not-ready`. The sweep of the next 30 seconds (see [A person's own
 tokens](#a-persons-own-tokens)) then revokes the live tokens of everyone the
-rebuilt registry gives no rights, journaled `token.revoke` under `system`.
+empty registry gives no rights, journaled `token.revoke` under `system`.
 To undo a deletion made by mistake, put a copy of the file back, root
 `0600`:
 `sudo install -m 600 -o root -g root <copy> /var/lib/sitesolide-steward/access.json`.
 The steward reads it at the next decision and writes the portal's
-projection again from it; the changes made to the rebuilt registry
-meanwhile are lost, and the tokens the sweep revoked stay revoked, as every
-revoked token does: their holders mint new ones. The machine's backups hold
-the steward's state, as it stood an hour ago at most (src/backup/README.md,
+projection again from it; the changes made to the empty registry meanwhile
+are lost, and the tokens the sweep revoked stay revoked, as every revoked
+token does: their holders mint new ones. The machine's backups hold the
+steward's state, as it stood an hour ago at most (src/backup/README.md,
 "The machine's own state"); make your own copy all the same before you edit
 the file by hand.
 
@@ -1192,7 +1186,6 @@ reading, giving Can open, removing, is what the owner's session allows.
 | owner's, dashboard's | `GET /people` | everyone, their roles per project, the create right, the domains, the sign-in settings |
 | owner's, dashboard's | `PUT /people/person` `{ email, create }` | the create right; on the dashboard's, `token` to give it |
 | owner's, dashboard's | `DELETE /people/person` `{ email }` | someone taken off every project and the create right, signed out |
-| owner's | `POST /access/migrate` `{ withoutPortal: true }` | the registry made from members.json alone, the portal's database left out at the owner's word (`sitesolide people --migrate-without-portal`); the tokens are then made someone's at once |
 | dashboard's | `POST /access/person/list` `{ session, slug }` | a Viewer or above reads their project's access, the admin emails included |
 | dashboard's | `PUT /access/person/entry` `{ session, token?, slug, who, role, expiresInS? }` | an Admin gives access or changes a role, their unlock for a role above Can open, password access or a domain while none is listed |
 | dashboard's | `DELETE /access/person/entry` `{ session, slug, who }` | an Admin takes access away |
@@ -1255,106 +1248,6 @@ the owner's. A token's restart is the same code, journaled under
 | A replayed assertion | Its nonce is spent at the first session it opens, on disk; five minutes later it has expired anyway. |
 | A code carried to a site, a site's code carried here | A code says which it was minted for: a dashboard's is redeemed for an assertion only, a site's for a cookie only (portal/src/handoff.ts). |
 | A flood of refusals | Twenty refusals a minute enter the journal at most, failed sign-ins, refused changes of access and refused work together, so that a flood cannot push its history out; the rest are refused unrecorded. A token's refusals are bounded by its own hour instead, 60, and never take the minute's twenty: one token's twenty a minute kept every other refusal of that minute out, a failed sign-in included. |
-
-### Upgrading: access
-
-One registry for who may do what, the steward's, and the portal reading its
-projection, replacing the dashboard's people of `members.json` and the
-portal's own lists of who could open a site and of the passwords it handed
-out (its `sharing` and `invites` tables). `sitesolide upgrade` runs the four
-steps in their order, together; by hand:
-
-```bash
-bin/deploy-steward.sh               # 1. the registry, made once from the stores before it, and its projection
-cd dashboard && sitesolide deploy   # 2. the access routes, a site's Access section, People and Tokens
-bin/deploy-installer.sh             # 3. a person's deployment narrowed by the registry when it starts
-cd portal && sitesolide deploy      # 4. the projection read from the first request
-```
-
-**Before anything.** An app that reads `X-Sitesolide-Role` must be updated,
-and deployed, before step 4: the header now carries the role, and its old
-values, `member` and `guest`, are gone ([docs/upgrading.md](../docs/upgrading.md#access-one-registry)).
-And everyone with a role above Can open on a project, Viewer, Developer or
-Admin, now opens its site when it is restricted, which was not true before,
-the dashboard's roles and the portal's own lists being separate: read each
-restricted site's people with access afterwards, `sitesolide share` in its
-folder.
-
-1. **The steward.** Its unit does not change: the projection lies in
-   `/etc/sitesolide-portal`, already writable for the key, and the portal's
-   database is read under `ProtectSystem=strict` with the
-   `CAP_DAC_READ_SEARCH` it holds. At its first start it makes
-   `access.json` from `members.json` and a checked copy of the portal's
-   `portal.db`, writes the projection, then the registry, and journals
-   `access.migrate`, actor `system`, with the counts. The running portal,
-   the old one, keeps deciding from its own tables, which still say the
-   same: nothing opens or closes. `members.json` is never written again, nor
-   the portal's `sharing` and `invites` tables; they stay, read-only, until
-   the next release. The journal gains `access.add`, `access.change`,
-   `access.remove`, `access.migrate`, `people.create`, `dashboard.signin`,
-   `dashboard.signin_failed` and `dashboard.signout`, which an older
-   dashboard shows by their name; the `member.*` rows written before still
-   read. Beside the journal it starts the access log, `access-log.jsonl`,
-   seeded with the accepted changes of access the journal already holds (see
-   [How long each source keeps its
-   audit](#how-long-each-source-keeps-its-audit)). Once the registry reads,
-   it makes every token from before someone's, once
-   ([docs/upgrading.md](../docs/upgrading.md#access-one-registry)). The
-   relay stays, asked `GET /admin/access` now. Check: the script
-   ends on `access registry 600 root:root, its projection for the portal 640
-   root:site-portal`, and `sitesolide people` lists everyone with their
-   roles. A store that does not read leaves no registry: the script stops on
-   the owner's socket, every person is refused, and `sudo journalctl -u
-   sitesolide-steward | grep access:` says which store and why; the next
-   request, or the next start, tries again. A portal table whose values pass
-   16 MB is refused `oversized-table` before it is read; when the portal's
-   database is the one that does not read, `sitesolide people
-   --migrate-without-portal` carries the rest over without it.
-2. **The dashboard.** Its access routes, `/api/access`, `/api/people` and
-   `/api/v1/projects/<slug>/access`, speak to the steward, and its pages
-   follow the registry: one *Access* section per site, in place of its
-   *Access*, *Sharing*, *Guests* and *Members*; *People*, in place of
-   *Members*; *Tokens*, in place of *Team*, its routes now `/api/tokens` and
-   `/api/tokens/revoke`. The old addresses lead to the new pages. *Activity*
-   lists a change of general access as `access.general`, `door.update`
-   before, and the rows written before the registry in today's words.
-   Before step 1 the access routes answer that the steward does not keep
-   people with access yet. Check: a site's *Access* lists who could open it
-   before the upgrade, password access with its expiry, and *People*
-   everyone with their roles. A change made in the old dashboard between
-   step 1 and this step goes to the portal's old tables, which nothing reads
-   any more: run the steps together.
-3. **The installer.** It reads `access.json` when it starts. Check: a
-   person's token deploying a project where they were just lowered to Viewer
-   fails `out-of-scope`, nothing written. Before it, the older installer
-   reads `members.json`, frozen at the migration, and the steward's own
-   narrowing holds, a few seconds older.
-4. **The portal**, last. From its first request it decides from the
-   projection, and leaves the mark that keeps it from ever reading its old
-   tables again. Its old admin routes, `PUT /admin/sharing/:host`, `GET`
-   and `POST /admin/guests` and `DELETE /admin/invites/:id`, answer `410
-   moved` to whoever asks. Check, on the machine: `sudo curl -s
-   http://127.0.0.1:3026/admin/access` answers `"reading":"steward"`, and
-   `sitesolide share` no longer warns that the portal decides from its own
-   tables. A password the portal handed out before the upgrade still opens
-   its site, as password access, and a cookie set before it stays valid.
-
-**Rolling back** is the previous commit of the steward, the dashboard and
-the portal together, from a checkout of before: `bin/deploy-steward.sh`,
-then `sitesolide deploy` in `dashboard/`, then `sitesolide deploy --force`
-in `portal/`; and `bin/deploy-installer.sh`, since the newer installer would
-go on narrowing a person's deployment by `access.json`, which nothing writes
-any more. They read `members.json` and the portal's tables as they stood
-at the migration: every change of access made since is lost for them, and
-password access given since does not exist for them. `access.json`, the
-projection and the access log stay beside them, unread; `X-Sitesolide-Role`
-goes back to `member` and `guest`. Upgrading again keeps the registry as it stood; to
-make it afresh from the old stores, delete
-`/var/lib/sitesolide-steward/access.json` first, which loses the changes
-made after the first migration instead, and revokes the tokens of everyone
-the registry made afresh gives no rights (see [One registry, the
-steward's](#one-registry-the-stewards)). The detail is in
-[docs/migration.md](../docs/migration.md#going-back).
 
 ## The audit
 
@@ -2112,42 +2005,6 @@ bin/deploy-gatekeeper.sh            # 3. the same generator for the portal's blo
 
 The steward needs nothing: it judges tokens and slugs, not manifests.
 
-### Upgrading: access by token
-
-A release before the access registry gave tokens `GET` and `PUT
-/api/v1/projects/<slug>/sharing`, which the dashboard relayed to the portal's
-own tables, and `sitesolide share` read the portal on the loopback over the
-owner's SSH. Both roads are gone. A token now goes through
-`/api/v1/projects/<slug>/access` to the steward ([Access by
-token](#access-by-token)), the owner's SSH to the steward's owner socket, and
-neither touches the portal, which reads its projection. A machine that
-predates either needs nothing of that release: [Upgrading:
-access](#upgrading-access) brings it to the registry in one go.
-
-```bash
-bin/test.sh                         # 0. on the workstation
-sitesolide upgrade                  # 1. the steward, the dashboard, the installer, the portal
-```
-
-0. **The workstation.** Pull, then `bin/test.sh`: a CLI from before the
-   registry still asks `.../sharing`, which the API's catch-all answers
-   `not-found`, `no such route`, and the CLI says as `not-available`.
-1. **The machine.** Check, in the folder of a restricted site: `sitesolide
-   share` prints its general access and people with access, `over SSH, as the
-   owner`, and changes nothing; root asks the owner's socket with `curl`,
-   which `sitesolide setup` installs. Then with a token of yours that may
-   deploy that site, from a workstation with no server
-   (`SITESOLIDE_API=https://dashboard.<zone> SITESOLIDE_TOKEN=sst_...`):
-   `sitesolide share` prints the same `through https://dashboard.<zone>`;
-   `sitesolide share colleague@<your domain>` gives them Can open, and
-   *Activity* shows `access.add` under `token:<id>`; `sitesolide share
-   @gmail.com` is refused `out-of-scope` unless `gmail.com` is among
-   `OIDC_ALLOWED_DOMAINS`. Then `sitesolide share --remove colleague@<your
-   domain>` to put it back.
-
-**Rolling back** is [Upgrading: access](#upgrading-access)'s: the steward,
-the dashboard and the portal of before, together.
-
 ### Upgrading: a refused new project leaves nothing behind
 
 A verification on a test machine found that a new project the installer
@@ -2353,8 +2210,8 @@ The bench runs the real `server.ts` in a temporary directory, with a fake
 steward on a Unix socket, a simulated gatekeeper and a state file rewritten
 every thirty seconds. Nothing in it touches a machine, a real portal or a real
 vault. Its steward carries the real access and sign-in routes, its registry
-made by the real migration from a `members.json` and a portal database of
-before, and its portal signs people in: *Sign in with Google* on the sign-in
+written as a machine carries one made in 0.4.0 from the stores before it,
+and its portal signs people in: *Sign in with Google* on the sign-in
 page leads to a page of the bench's that signs in one of its people:
 alice@example.com, a Developer on `cms`, an Admin on `calendar` and a Viewer
 on `brand`; bruno@example.com, an Admin on `cms` and a Developer on
@@ -2362,8 +2219,8 @@ on `brand`; bruno@example.com, an Admin on `cms` and a Developer on
 Can open on `cms`, whose sign-in is refused `can-open-only`; or
 stranger@example.com, whom the registry does not name, refused `no-role`.
 maya@example.com may create projects. People and a domain can open `cms` and
-`calendar`, and five password accesses are carried over, the one on
-`inventory` expired. `BENCH_NO_SSO=1` runs a portal with no provider, where
+`calendar`, and five password accesses carried over in 0.4.0 still open, the
+one on `inventory` expired. `BENCH_NO_SSO=1` runs a portal with no provider, where
 everyone added gets password access. `mailer` and `reports` serve no page:
 a worker beside two scheduled services, the hourly one's last run failed, and
 a project whose every service is scheduled.

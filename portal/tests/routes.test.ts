@@ -7,7 +7,7 @@ import { readSignOut } from "../src/handoff";
 import { readSettings } from "../src/oidc";
 import { actorOf, createRoutes, type Options } from "../src/routes";
 import { accessFolder, grant, projection, site } from "./access-file";
-import { memoryAudit, memoryGuests, memorySharing } from "./memory";
+import { memoryAudit } from "./memory";
 
 // The diversion of DATA_DIR is checked rather than assumed: without it, a test
 // would write the portal's key where the service looks for it.
@@ -349,16 +349,6 @@ describe("a password access", () => {
     expect((await r.signIn(signIn({ motdepasse: "wrong" }))).status).toBe(401);
     expect((await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD }))).status).toBe(303);
   });
-
-  test("before the steward writes its projection, a guest of the portal's own table still gets in, as visitor", async () => {
-    const guests = memoryGuests();
-    guests.add({ id: "InViTeInViTe0001", host: HOST, label: "Alice", createdAt: START, expiresAt: null, seenAt: null }, guestHash(ACCESS_PASSWORD));
-    const r = routes({ access: accessFolder("routes-legacy").reader({ guests, sharing: memorySharing() }) });
-    const cookie = cookieOf(await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD })));
-    const opened = visit(r, cookie);
-    expect(opened.status).toBe(200);
-    expect(opened.headers.get("x-sitesolide-role")).toBe("visitor");
-  });
 });
 
 describe("/_portal/deconnexion", () => {
@@ -552,17 +542,6 @@ describe("an identity on /verifier", () => {
       const visitor = visit(r, `__Host-portal=${issueToken(KEY, HOST, NOW_S + 60, "PaSsWoRdAcCeSs01")}`);
       expect(Object.fromEntries(visitor.headers)).toEqual({ "x-sitesolide-role": "visitor" });
     }
-  });
-
-  test("before the steward writes its projection, a person the portal's own policy listed gets in, as visitor", () => {
-    const sharing = memorySharing();
-    sharing.put(HOST, { mode: "people", people: ["alice@acme.test"], domains: [] });
-    const r = routes({ settings: SETTINGS, access: accessFolder("routes-legacy-people").reader({ guests: memoryGuests(), sharing }) });
-    const alice = visit(r, identityCookie("alice@acme.test"));
-    expect(alice.status).toBe(200);
-    expect(alice.headers.get("x-sitesolide-role")).toBe("visitor");
-    expect(visit(r, identityCookie("owner@acme.test")).headers.get("x-sitesolide-role")).toBe("admin");
-    expect(visit(r, identityCookie("bob@acme.test")).status).toBe(401);
   });
 
   test("a POST from elsewhere is refused to an identity as to anyone", () => {

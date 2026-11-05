@@ -15,15 +15,12 @@
  * sets on everything it relays, or `X-Portal-Hote`, is refused. A fragment
  * badly written one day would therefore not expose these routes to the web.
  *
- * ## Who may open a site is the steward's now
+ * ## Who may open a site is the steward's
  *
- * The portal keeps no list of people any more: the steward holds the access
- * registry and writes the projection the portal reads (src/projection.ts).
- * The routes that changed who may open a site before it answer `410 moved`
- * to whoever asks, whatever the body: they change nothing, so there is no
- * actor to believe or refuse. Their tables stay in `portal.db`, read-only,
- * for a rollback. `GET /admin/access` says what the portal reads, for the
- * steward and the CLI.
+ * The portal keeps no list of people: the steward holds the access registry
+ * and writes the projection the portal reads (src/projection.ts).
+ * `GET /admin/access` says what the portal reads, for the steward and the
+ * CLI.
  */
 import type { AuditStore } from "./database";
 import type { Settings } from "./oidc";
@@ -71,15 +68,7 @@ export type AccessAdmin = {
   access: (req: Request) => Response;
   /** `GET /admin/sharing`: how people sign in, which the dashboard offers on its sign-in page. */
   sso: (req: Request) => Response;
-  /** The routes that changed who may open a site before the steward kept it. */
-  moved: (req: Request) => Response;
   audit: (req: Request) => Response;
-};
-
-/** What the moved routes answer. */
-export const MOVED = {
-  error: "moved",
-  message: "who may open a site is kept by the steward now: sitesolide share, or the dashboard's Access section",
 };
 
 export function createAccessAdmin(stores: { access: Pick<AccessReader, "state">; audit: AuditStore; settings: Settings | null }): AccessAdmin {
@@ -91,13 +80,7 @@ export function createAccessAdmin(stores: { access: Pick<AccessReader, "state">;
 
     sso(req) {
       if (isRelayed(req)) return respond({ error: "relayed-request" }, 403);
-      // `sites` stays, empty, for a dashboard from before the registry.
-      return respond({ sso: ssoView(stores.settings), sites: [] });
-    },
-
-    moved(req) {
-      if (isRelayed(req)) return respond({ error: "relayed-request" }, 403);
-      return respond(MOVED, 410);
+      return respond({ sso: ssoView(stores.settings) });
     },
 
     /** Most recent first; `before` is the id of the last event of the previous page. */

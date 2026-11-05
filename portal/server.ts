@@ -4,8 +4,8 @@ import { createAccessAdmin } from "./src/admin";
 import { PROJECTION_FILE } from "./src/access";
 import { createAccessReader } from "./src/projection";
 import { ASSERTION_KEY_FILE, createDashboardAdmin, dashboardOrigin, readKeyFile } from "./src/dashboard";
-import { auditStore, guestStore, openDatabase, sharingStore } from "./src/database";
-import { COOKIE_DURATION_S, PASSWORD_HASH, ONLINE, DATABASE_FILE, KEY_FILE, ACCESS_MARK_FILE, PORT, PUBLIC_URL } from "./src/config";
+import { auditStore, openDatabase } from "./src/database";
+import { COOKIE_DURATION_S, PASSWORD_HASH, ONLINE, DATABASE_FILE, KEY_FILE, PORT, PUBLIC_URL } from "./src/config";
 import { deriveKey, KEY_BYTES } from "./src/gate";
 import { handoffStore } from "./src/handoff";
 import { createProvider, readSettings } from "./src/oidc";
@@ -54,15 +54,10 @@ const database = openDatabase(DATABASE_FILE);
 const audit = auditStore(database);
 
 // Who may open each site: the steward's projection, read again whenever it
-// changes; this portal's own tables, read-only, until the steward first
-// writes it. See src/projection.ts.
-const access = createAccessReader({
-  file: process.env.ACCESS_FILE ?? PROJECTION_FILE,
-  mark: ACCESS_MARK_FILE,
-  legacy: { guests: guestStore(database), sharing: sharingStore(database) },
-});
+// changes. See src/projection.ts.
+const access = createAccessReader({ file: process.env.ACCESS_FILE ?? PROJECTION_FILE });
 const reading = access.state();
-console.log(`access: read from ${reading.reading === "steward" ? "the steward's projection" : reading.reading === "portal" ? "this portal's own tables, until the steward writes its projection" : "nowhere: only the owner's password and the admin emails open a site"}`);
+console.log(`access: read from ${reading.reading === "steward" ? "the steward's projection" : "nowhere: only the owner's password and the admin emails open a site"}`);
 
 const routes = createRoutes({
   key,
@@ -126,13 +121,9 @@ const server = Bun.serve({
     "/oidc/callback": { GET: sso.callback },
     "/oidc/signout": { GET: sso.signOut },
 
-    // Never relayed by Caddy: see src/admin.ts. Who may open a site is the
-    // steward's: the routes that changed it answer 410.
+    // Never relayed by Caddy: see src/admin.ts.
     "/admin/access": { GET: admin.access },
     "/admin/sharing": { GET: admin.sso },
-    "/admin/sharing/:host": { PUT: admin.moved },
-    "/admin/guests": { GET: admin.moved, POST: admin.moved },
-    "/admin/invites/:id": { DELETE: admin.moved },
     "/admin/audit": { GET: admin.audit },
     "/admin/dashboard/flow": { POST: dashboardAdmin.flow },
     "/admin/dashboard/redeem": { POST: dashboardAdmin.redeem },

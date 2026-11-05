@@ -4072,7 +4072,6 @@ function usage(zone: string | null): string {
     "  sitesolide people               everyone with access, their roles, who may create projects",
     "     <email> --may-create         let them create projects, Admin of what they create",
     "     <email> --no-create          take that right back",
-    "     --migrate-without-portal     carry access over without the portal's database, when it does not read",
     "  sitesolide lock   [--dry-run]   Anyone with the code: the site opens with a code, said once; or the one in force",
     "     --status                     wanted / installed / measured, without touching",
     "     --new-code                   a new code, the old one no longer opens it",

@@ -11,12 +11,8 @@
  * what needs no list: the owner's password and `OIDC_ADMIN_EMAILS`. It is
  * said once in the journal, and read again at the next change.
  *
- * **Before the steward writes it.** A portal deployed before the steward
- * that keeps the registry finds no file, and decides from its own tables as
- * it did, so that the order of an upgrade opens and closes nothing. The
- * first time it reads a projection it leaves a mark in its data folder:
- * from then on, a missing file opens nothing either, and its old tables, kept
- * read-only, are never read again.
+ * **Before the steward writes it**, on a machine being set up, a missing
+ * file is read the same way: nothing opens but what needs no list.
  *
  * **A failed read is tried again.** A file judged and refused stays refused
  * until it changes: reading it again would refuse it again. A read that
@@ -25,7 +21,7 @@
  * later, so that a passing error does not keep every restricted site closed
  * until the steward writes again.
  */
-import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import {
   EMPTY_PROJECTION,
   PROJECTION_MAX_BYTES,
@@ -37,11 +33,9 @@ import {
   type Projection,
   type Role,
 } from "./access";
-import type { Guest, GuestStore, SharingStore } from "./database";
-import { DEFAULT_POLICY, identityRole } from "./sharing";
 
-/** What the portal decides from: the steward's projection, its own tables before it, or nothing. */
-export type Reading = "steward" | "portal" | "unreadable";
+/** What the portal decides from: the steward's projection, or nothing. */
+export type Reading = "steward" | "unreadable";
 
 export type AccessReader = {
   /** Where the decisions come from now, and when the steward wrote what is read. */
@@ -57,10 +51,6 @@ export type AccessReader = {
 export type AccessReaderOptions = {
   /** The steward's projection. */
   file: string;
-  /** The mark left in the portal's data folder once a projection was read. */
-  mark: string;
-  /** The tables from before the steward kept access, read-only. */
-  legacy: { guests: Pick<GuestStore, "byId" | "byHash">; sharing: Pick<SharingStore, "get"> } | null;
   log?: (line: string) => void;
   /** Milliseconds; the tests hand their own. */
   now?: () => number;
@@ -131,18 +121,6 @@ export function readText(path: string): Read {
   }
 }
 
-/** Does this access from the portal's own table open this host, right now? */
-function legacyOpens(guest: Guest | null, host: string, now: number): guest is Guest {
-  return guest !== null && guest.host === host && (guest.expiresAt === null || guest.expiresAt > now);
-}
-
-function legacyGrant(guest: Guest | null, host: string, now: number): PasswordGrant | null {
-  if (!legacyOpens(guest, host, now)) return null;
-  // The hash is never read back here: the cookie names the access, the
-  // sign-in found it by its hash already.
-  return { id: guest.id, who: guest.label, hash: "", expiresAt: guest.expiresAt };
-}
-
 export function createAccessReader(options: AccessReaderOptions): AccessReader {
   const log = options.log ?? ((line: string) => console.log(line));
   const now = options.now ?? Date.now;
@@ -166,13 +144,8 @@ export function createAccessReader(options: AccessReaderOptions): AccessReader {
     const identity = identityOf(options.file);
     if (identity === null) {
       seen = null;
-      if (existsSync(options.mark) || options.legacy === null) {
-        current = { reading: "unreadable", projection: EMPTY_PROJECTION, index: new Map() };
-        say("missing", `access: ${options.file} is missing: only the owner's password and the admin emails open a site until the steward writes it again`);
-      } else {
-        current = { reading: "portal", projection: EMPTY_PROJECTION, index: new Map() };
-        say("portal", "access: no projection from the steward yet, deciding from this portal's own tables as before");
-      }
+      current = { reading: "unreadable", projection: EMPTY_PROJECTION, index: new Map() };
+      say("missing", `access: ${options.file} is missing: only the owner's password and the admin emails open a site until the steward writes it again`);
       return;
     }
     if (identity === seen) return;
@@ -196,13 +169,6 @@ export function createAccessReader(options: AccessReaderOptions): AccessReader {
       return;
     }
     current = { reading: "steward", projection: read, index: passwordIndex(read) };
-    if (!existsSync(options.mark)) {
-      try {
-        writeFileSync(options.mark, `${new Date().toISOString()}\n`, { mode: 0o600 });
-      } catch (e) {
-        log(`access: the mark ${options.mark} could not be written (${(e as Error).name})`);
-      }
-    }
     say(`steward:${read.writtenAt}`, `access: projection of ${new Date(read.writtenAt).toISOString()} read, ${Object.keys(read.sites).length} site(s)`);
   }
 
@@ -214,23 +180,17 @@ export function createAccessReader(options: AccessReaderOptions): AccessReader {
 
     roleOf(host, email, admins) {
       refresh();
-      if (current.reading === "portal" && options.legacy !== null) {
-        const role = identityRole(email, options.legacy.sharing.get(host) ?? DEFAULT_POLICY, admins);
-        return role === null ? null : role === "admin" ? "admin" : "visitor";
-      }
       return emailRole(current.projection.sites[host], email, admins);
     },
 
     passwordByHash(hash, host, now) {
       refresh();
-      if (current.reading === "portal" && options.legacy !== null) return legacyGrant(options.legacy.guests.byHash(hash), host, now);
       const found = current.index.get(hash);
       return found !== undefined && found.host === host && grantOpens(found.grant, now) ? found.grant : null;
     },
 
     passwordById(host, id, now) {
       refresh();
-      if (current.reading === "portal" && options.legacy !== null) return legacyGrant(options.legacy.guests.byId(id), host, now);
       const grant = current.projection.sites[host]?.passwords.find((one) => one.id === id);
       return grantOpens(grant, now) ? grant : null;
     },

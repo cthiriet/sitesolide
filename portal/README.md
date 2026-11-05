@@ -47,7 +47,6 @@ dashboard (site-dashboard) --> portal 127.0.0.1:3026 /admin/sharing (how people 
                                /admin/dashboard/flow, /admin/dashboard/redeem
                                never through Caddy
 root, the steward's relay   --> portal 127.0.0.1:3026 /admin/access, what the portal reads its access from
-either of them              --> PUT /admin/sharing/:host, /admin/guests, /admin/invites/:id: 410, moved to the steward
 ```
 
 Signing in happens on the site itself, at `/_portal/connexion` for a password,
@@ -505,16 +504,12 @@ owner's password and the admin emails, which need no list, still open every
 site. The journal says so once (`journalctl -u portal`), and the file is read
 again at its next change.
 
-**Before the steward writes it.** A portal that finds no projection, and has
-never read one, decides from its own tables as it did before the registry,
-`sharing` and `invites` in `data/portal.db`, which it no longer writes: so the
-order of an upgrade opens and closes nothing. Someone those tables let in
-opens as `visitor`, an admin email as `admin`. The first time the portal reads
-a projection it leaves a mark, `data/access-from-steward`: from then on a
-missing projection opens nothing either, and the old tables are never read
-again. `GET /admin/access` says which it reads, and the steward asks it
-through its relay, so that `sitesolide share` warns while the portal still
-decides from its own tables.
+**Before the steward writes it**, on a machine being set up, a missing
+projection opens nothing either. `GET /admin/access` says what the portal
+reads, and the steward asks it through its relay, so that `sitesolide share`
+warns while the portal cannot read it. The tables `sharing` and `invites`,
+where a portal up to 0.3 kept who could open a site, may still sit in
+`data/portal.db`: nothing reads them.
 
 The rules of an email and a domain live in `src/sharing.ts`, pure, which the
 dashboard and the steward borrow, the page included: the page refuses an
@@ -596,9 +591,8 @@ steward's relay:
 
 | Route | What it does |
 |---|---|
-| `GET /admin/access` | what the portal decides who may open a site from: `{ "reading", "writtenAt" }`, `reading` being `steward` (the projection), `portal` (its own tables, no projection read yet) or `unreadable` (a projection that does not read, or none since the mark), and `writtenAt` the projection's date when it reads one, null otherwise. The steward asks it through its relay, and says it in every access answer |
-| `GET /admin/sharing` | how people sign in: configured or not, the provider's name, the portal's address, the admin emails and allowed domains, never the client secret nor its identifier; and `sites: []`, kept empty for a dashboard from before the registry |
-| `PUT /admin/sharing/:host`, `GET` and `POST /admin/guests`, `DELETE /admin/invites/:id` | `410 moved`, to whoever asks: who may open a site is the steward's now |
+| `GET /admin/access` | what the portal decides who may open a site from: `{ "reading", "writtenAt" }`, `reading` being `steward` (the projection) or `unreadable` (a projection that does not read, or none), and `writtenAt` the projection's date when it reads one, null otherwise. The steward asks it through its relay, and says it in every access answer |
+| `GET /admin/sharing` | how people sign in: configured or not, the provider's name, the portal's address, the admin emails and allowed domains, never the client secret nor its identifier |
 | `GET /admin/audit?limit=&before=` | the audit, most recent first, by pages |
 | `POST /admin/dashboard/flow` | `{ binding, returnTo, chooseAccount, reauth }`: a flow sealed for the dashboard's host, a forced sign-in with `reauth`, and the address to send the browser to; `not-offered` without a provider |
 | `POST /admin/dashboard/redeem` | `{ code, binding }`: the code burnt, and, minted for the dashboard on this binding, an assertion signed for it, the path to come back to, and `reauth` |
@@ -611,11 +605,6 @@ through `sitesolide-portal-relay`, a socket only root opens, behind which
 systemd's proxy forwards to this port and nowhere else; it asks
 `GET /admin/access` alone now. None of these routes changes who may open a
 site: the steward writes that, in the projection, and nothing here can.
-
-**The routes that moved answer to anyone.** `PUT /admin/sharing/:host`,
-`GET` and `POST /admin/guests` and `DELETE /admin/invites/:id` change nothing
-any more: they answer `410 moved` whatever the body names and whoever asks,
-so there is no actor to believe or refuse.
 
 Caddy never relays them: a protected site forwards to the portal only
 `/_portal/*` and the `forward_auth` call to `/verifier`, and the portal's own
@@ -647,8 +636,8 @@ Rows from before the registry also name a password access's sign-in
 `guest:<access>`, its `method` `guest`, and read as they were written. A change of who may open
 a site is the steward's to record now, in its journal, under the owner, an
 Admin's email or `token:<id>`: `access.add`, `access.change`, `access.remove`,
-and `access.migrate` once, actor `system`, when the registry was made. The
-dashboard's *Activity* reads both.
+and `access.migrate` once, actor `system`, on a machine whose registry was
+made in 0.4.0 from the stores before it. The dashboard's *Activity* reads both.
 
 Never a password, a code or a token. What a stranger can cause is bounded where
 it happens: failed password attempts by the rate limiting, a row per attempt
@@ -924,32 +913,9 @@ the site's sign-in page; the next *Sign in with ...* goes to the provider and
 asks which account.
 
 **Signing in to the dashboard** needs this portal, the steward that lays its
-key, and the dashboard that asks: see [dashboard/README.md](../dashboard/README.md#upgrading-access).
+key, and the dashboard that asks: see [dashboard/README.md](../dashboard/README.md#the-key-pair).
 `sitesolide upgrade` runs all three. Check: `journalctl -u portal` says
 `dashboard sign-in offered`, and someone with a role signs in.
-
-**Who may open a site, from the steward.** The release of the access registry
-deploys the steward first: at its first start it makes the registry from the
-old stores and writes the projection, while this portal, the previous one,
-keeps deciding from its own tables, which still say the same. Then the
-dashboard and the installer, and this portal last, which `sitesolide upgrade`
-does in that order ([docs/upgrading.md](../docs/upgrading.md#access-one-registry)).
-From its first request the new portal reads the projection, and leaves the
-mark that keeps it from its old tables for good. Before it is deployed, update
-and deploy every app that reads `X-Sitesolide-Role`: `member` and `guest` are
-gone, see [Who came in](#who-came-in-the-identity-headers). Check, on the
-machine: `sudo curl -s http://127.0.0.1:3026/admin/access` answers
-`"reading":"steward"` and the projection's `writtenAt`; `journalctl -u portal`
-says `access: projection of ... read`; `sitesolide share` in a restricted
-site's folder lists its people with access and no warning about the portal; a
-password access given before the upgrade still opens its site, and a cookie
-set before it is still valid. Roll back: redeploy the previous commit of
-`portal/` with `--force`, with the steward and the dashboard of that commit
-([docs/migration.md](../docs/migration.md#going-back)). It reads its own
-tables again, as they stood when the registry was made, and leaves the
-projection unread: a change of access made since, and password access given
-since, do not exist for it, and `X-Sitesolide-Role` says `member` and `guest`
-again.
 
 **Rolling back identities.** The portal from before them reads the owner's and
 the password access's cookies as always and refuses the identity cookies, four

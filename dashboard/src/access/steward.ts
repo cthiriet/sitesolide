@@ -19,16 +19,11 @@
  * with the one written: a registry edited or repaired by hand, a projection
  * deleted or edited, and it is written again, in the queue.
  *
- * **The migration, once, never in a request's way.** At the first start on
- * this code there is no registry yet: it is made from `members.json` and the
- * portal's database (migrate.ts), written with its projection, journaled, and
- * never made again; the old stores are left as they were, read-only. It runs
- * in the background (`start`), the steward's sockets open meanwhile, and the
- * access routes answer `migrating` until it is done. One that cannot be read
- * is tried again, later and later, and nothing is guessed at: guessing at who
- * may do what is the one thing not to do. When the portal's database is the
- * one that does not read, the owner may carry the rest over without it
- * (`migrateWithoutPortal`), which the registry's migration record says.
+ * **Begun empty, never in a request's way.** A machine with no registry
+ * yet, a fresh one, begins it empty at the steward's start, written with its
+ * projection. In the background (`start`), the steward's sockets open
+ * meanwhile, and the access routes answer `not-ready` until it is done; an
+ * attempt that fails is tried again, later and later.
  *
  * **Who asks.** The owner, over SSH on the owner's socket, or in the
  * dashboard on its own, with the live unlock for what raises someone above
@@ -62,7 +57,6 @@ import { cleanEmail } from "../../borrowed/sharing";
 import { generatePassword } from "../password";
 import type { MemberPrincipal } from "../people/steward";
 import { createQueue, errorName, type Body, type Handler, type Routes } from "../secrets/requests";
-import { reportText, migrate, readMembersFile } from "./migrate";
 import {
   MAX_DASHBOARD_PEOPLE,
   OWNER,
@@ -105,7 +99,7 @@ import type { AccessSystem } from "./system";
 
 /** What the journal records of access: the actor this steward verified, never one a request named. */
 export type AccessEvent = {
-  operation: "access.add" | "access.change" | "access.remove" | "access.migrate" | "people.create" | "project.create" | "project.remove";
+  operation: "access.add" | "access.change" | "access.remove" | "people.create" | "project.create" | "project.remove";
   result: "ok" | "rejects";
   actor: string;
   /** The person the event is about, when it is an email. */
@@ -124,7 +118,6 @@ const STATUSES: Record<string, number> = {
   "too-many-changes": 429,
   failure: 500,
   "not-ready": 503,
-  migrating: 503,
   "log-full": 507,
 };
 
@@ -138,9 +131,9 @@ export const PASSWORD_LOCKED = "locked: giving password access needs the unlock,
 /** The answer while the registry does not read: no path, the steward's log says which file and why. */
 const REGISTRY_UNREADABLE = "the access registry does not read on the machine: the owner must read the steward's log, journalctl -u sitesolide-steward";
 
-/** The answer while the registry is being made from the stores before it. */
-export const MIGRATING =
-  "who may do what is being carried over from the stores before the access registry: try again in a minute; if it lasts, the owner reads journalctl -u sitesolide-steward";
+/** The answer while a machine without a registry begins it. */
+export const BEGINNING =
+  "the access registry is being begun on the machine: try again in a minute; if it lasts, the owner reads journalctl -u sitesolide-steward";
 
 /** The answer when the access log holds as many rows younger than 180 days as it keeps. */
 export const LOG_FULL =
@@ -164,9 +157,9 @@ export const TOKEN_LOG_SHARE = 0.5;
 export const CHANGES_PER_HOUR = 120;
 export const OWNER_SSH_CHANGES_PER_HOUR = 2_000;
 
-/** The first wait before a migration that failed is tried again, and the longest. */
-export const MIGRATION_RETRY_MS = 5_000;
-export const MIGRATION_RETRY_MAX_MS = 10 * 60_000;
+/** The first wait before an attempt to begin the registry that failed is tried again, and the longest. */
+export const BEGIN_RETRY_MS = 5_000;
+export const BEGIN_RETRY_MAX_MS = 10 * 60_000;
 
 // --- the store ---------------------------------------------------------------------
 
@@ -182,14 +175,14 @@ export type AccessStoreDependencies = {
    * counted? Absent: never.
    */
   logFull?: (share: number, reserve: number) => Promise<boolean>;
-  /** The wait between two migration attempts; the tests hand their own. */
+  /** The wait between two attempts to begin the registry; the tests hand their own. */
   sleep?: (ms: number) => Promise<void>;
 };
 
 export type AccessStore = {
   /** The steward's clock, the one every date of the registry is read by. */
   now: () => number;
-  /** The registry as it stands; `migrating` until it is made; or the refusal to send back. */
+  /** The registry as it stands; `not-ready` until it is begun; or the refusal to send back. */
   read: () => Promise<Registry | Response>;
   /**
    * A change, in the registry's queue: `task` reads the registry and gives
@@ -197,12 +190,10 @@ export type AccessStore = {
    * the projection is written, then the registry, when it changed.
    */
   change: <T>(task: (registry: Registry) => Promise<{ registry: Registry; value: T } | Response>) => Promise<T | Response>;
-  /** One attempt now: the registry made if it is missing, the projection written again from it. True once both are there. */
+  /** One attempt now: the registry begun empty if it is missing, the projection written again from it. True once both are there. */
   ensure: () => Promise<boolean>;
   /** The attempts in the background, later and later, until one succeeds; resolves then. */
   start: () => Promise<void>;
-  /** The owner's way out when the portal's database does not read: the registry made without it. */
-  migrateWithoutPortal: () => Promise<Response>;
   /** Is the access log full of rows younger than its retention? */
   full: (share: number, reserve?: number) => Promise<boolean>;
 };
@@ -292,63 +283,24 @@ export function createAccessStore(dependencies: AccessStoreDependencies): Access
       });
   }
 
-  /** The registry made from the stores before it, written with its projection; a refusal when one does not read. */
-  async function migrateNow(withoutPortal: boolean): Promise<Registry | Response> {
-    let membersText: string | null;
-    try {
-      membersText = await system.readLegacyMembers();
-    } catch (e) {
-      console.error(`access: members.json unreadable (${errorName(e)}), nothing carried over yet`);
-      return fail("failure", "the registry before this one, members.json, does not read: the owner must read the steward's log");
-    }
-    const members = readMembersFile(membersText);
-    if ("unreadable" in members) {
-      console.error(`access: ${members.unreadable}, nothing carried over yet`);
-      return fail("failure", "the registry before this one, members.json, does not read: the owner must read the steward's log");
-    }
-    const portal = withoutPortal ? ({ kind: "absent" } as const) : await system.readPortalDatabase();
-    if (portal.kind === "unreadable") {
-      console.error(`access: the portal's database does not read (${portal.reason}), nothing carried over yet, tried again later`);
-      return fail("failure", `who could open which site, from the portal's database, could not be carried over yet (${portal.reason}): the steward tries again; the owner may carry the rest over without it, sitesolide people --migrate-without-portal`);
-    }
-    const made =
-      membersText === null && portal.kind === "absent" && !withoutPortal
-        ? { registry: { ...EMPTY_REGISTRY, migration: { at: system.now(), from: [], setAside: [] } }, report: null }
-        : migrate(members, portal.kind === "read" ? portal.rows : null, dependencies.zone, system.now(), { withoutPortal });
-    const refused = await write(made.registry);
-    if (refused !== null) return refused;
-    if (made.report !== null) {
-      const line = reportText(made.report);
-      await journal({ operation: "access.migrate", result: "ok", actor: withoutPortal ? OWNER : "system", member: null, detail: withoutPortal ? `${line}, without the portal's database` : line });
-      console.log(`access: registry made from ${made.registry.migration?.from.join(" and ") || "nothing"}${withoutPortal ? ", without the portal's database, at the owner's request" : ""}: ${line}`);
-    } else {
-      console.log("access: registry begun empty, nothing before it");
-    }
-    return made.registry;
+  /** A registry begun empty, written with its projection: what a machine without one starts from. */
+  async function begin(): Promise<boolean> {
+    const refused = await write(EMPTY_REGISTRY);
+    if (refused !== null) return false;
+    console.log("access: registry begun empty");
+    return true;
   }
 
   /** The attempts running in the background, if any. */
   let running: Promise<void> | null = null;
-  /** Cuts the attempts' wait short: a registry the owner made meanwhile is taken up at once. */
-  let wake: (() => void) | null = null;
-
-  function pause(ms: number): Promise<void> {
-    return new Promise<void>((resolve) => {
-      wake = resolve;
-      void sleep(ms).then(resolve);
-    }).finally(() => {
-      wake = null;
-    });
-  }
 
   async function read(): Promise<Registry | Response> {
     const found = await readFile();
     if (found instanceof Response) return found;
     if (found === null) {
-      // Deleted by hand while running, or never made: made in the background,
-      // from the stores before it.
+      // Never made, or deleted by hand while running: begun in the background.
       void start();
-      return fail("migrating", MIGRATING);
+      return fail("not-ready", BEGINNING);
     }
     if (stale(found.text)) repair();
     return found.registry;
@@ -359,7 +311,7 @@ export function createAccessStore(dependencies: AccessStoreDependencies): Access
       const current = await readFile();
       if (current === null) {
         void start();
-        return fail("migrating", MIGRATING);
+        return fail("not-ready", BEGINNING);
       }
       if (current instanceof Response) return current;
       const out = await task(current.registry);
@@ -382,14 +334,14 @@ export function createAccessStore(dependencies: AccessStoreDependencies): Access
         await project(found.registry, found.text);
         return true;
       }
-      return !((await migrateNow(false)) instanceof Response);
+      return begin();
     });
   }
 
   function start(): Promise<void> {
     if (running !== null) return running;
     running = (async () => {
-      let wait = MIGRATION_RETRY_MS;
+      let wait = BEGIN_RETRY_MS;
       for (;;) {
         let done = false;
         try {
@@ -399,27 +351,13 @@ export function createAccessStore(dependencies: AccessStoreDependencies): Access
         }
         if (done) return;
         console.log(`access: the registry is tried again in ${Math.round(wait / 1000)} s`);
-        await pause(wait);
-        wait = Math.min(wait * 2, MIGRATION_RETRY_MAX_MS);
+        await sleep(wait);
+        wait = Math.min(wait * 2, BEGIN_RETRY_MAX_MS);
       }
     })().finally(() => {
       running = null;
     });
     return running;
-  }
-
-  async function migrateWithoutPortal(): Promise<Response> {
-    return serially(async () => {
-      const found = await readFile();
-      if (found instanceof Response) return found;
-      if (found !== null) return fail("conflict", "the access registry is already made: there is nothing left to carry over");
-      const migrated = await migrateNow(true);
-      if (migrated instanceof Response) return migrated;
-      // The attempts in the background find it at once, and what waits on
-      // them, the tokens made someone's, goes on now rather than minutes later.
-      wake?.();
-      return Response.json({ migration: migrated.migration, people: dashboardPeople(migrated).length, projects: Object.keys(migrated.projects).length });
-    });
   }
 
   return {
@@ -428,7 +366,6 @@ export function createAccessStore(dependencies: AccessStoreDependencies): Access
     change,
     ensure,
     start,
-    migrateWithoutPortal,
     full: async (share, reserve = 0) => (dependencies.logFull === undefined ? false : dependencies.logFull(share, reserve)),
   };
 }
@@ -875,14 +812,6 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
     return afterwards(answer, leaving ? { email, actor: OWNER } : null);
   }
 
-  /** The owner's way out, over the owner's socket alone: the registry made without the portal's database. */
-  async function migrateWithoutPortal(req: Request): Promise<Response> {
-    const body = await readBody(req, ["withoutPortal"]);
-    if (body instanceof Response) return body;
-    if (body.withoutPortal !== true) return fail("invalid", "withoutPortal: true, the portal's database left out of the migration");
-    return store.migrateWithoutPortal();
-  }
-
   // --- a person, through their session -------------------------------------------------
 
   /** The granter for a slug: the person's own role there, read from the registry in hand. */
@@ -959,7 +888,6 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
     owner: {
       "/access": { GET: ownerList },
       "/access/entry": { PUT: ownerGrant(true), DELETE: ownerRemove },
-      "/access/migrate": { POST: migrateWithoutPortal },
       "/people": { GET: people },
       "/people/person": { PUT: putPerson(true), DELETE: removePersonRoute },
     },

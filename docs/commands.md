@@ -55,7 +55,6 @@ sitesolide share                this project's general access and people with ac
 sitesolide people               everyone with access, their roles, who may create projects
    <email> --may-create         let them create projects, Admin of what they create
    <email> --no-create          take that right back
-   --migrate-without-portal     carry access over without the portal's database, when it does not read
 sitesolide lock   [--dry-run]   Anyone with the code: the site opens with a code, said once; or the one in force
    --status                     wanted / installed / measured, without touching
    --new-code                   a new code, the old one no longer opens it
@@ -457,9 +456,8 @@ projection and its registry, and records it in its journal under `owner`.
 Root is the owner: no unlock is asked. It touches nothing else, Caddy least of
 all. With a token, the command goes through the dashboard to the steward, and
 gives Can open alone: see [access.md](access.md#giving-access-to-what-you-deployed).
-While the portal on the machine still decides from its own tables, halfway
-through an upgrade, the command warns of it: `sitesolide upgrade` deploys the
-portal that reads the registry.
+While the portal on the machine cannot read the registry's projection, the
+command warns of it: nothing given opens a restricted site until it can.
 
 ## People
 
