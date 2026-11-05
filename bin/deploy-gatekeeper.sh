@@ -12,14 +12,13 @@
 # deliberate gesture. The script builds a single file on the workstation,
 # installs it as root:root under /usr/local/lib/sitesolide/, sets the four unit
 # templates (sitesolide-gatekeeper-on@, -off@, -code@ and -renew@, one per
-# gesture), removes the single template from before and reloads systemd.
+# gesture) and reloads systemd.
 #
 # It lays what the units open for writing and cannot create themselves, when
 # missing: /etc/caddy/locks, which the Caddyfile imports by glob,
 # /etc/caddy/locks-codes.json, an empty table of codes for the deployment
 # account in 0600, and /srv/garde, the door pages' folder. It never changes one
-# that is there, but to close the locks' fragment, verrous.caddy, to root and
-# Caddy's group when an earlier gatekeeper left it readable by every account.
+# that is there.
 #
 # IT LAUNCHES NO TRANSACTION. No `systemctl start` of the gatekeeper, no reload
 # of Caddy: the first transaction will come from the steward, on demand. The
@@ -49,9 +48,6 @@ UNITS=("sitesolide-gatekeeper-on@.service" "sitesolide-gatekeeper-off@.service" 
 LOCKS_FOLDER="/etc/caddy/locks"
 CODES_FILE="/etc/caddy/locks-codes.json"
 DOOR_PAGES_FOLDER="/srv/garde"
-# The single template from before wrote into the whole of /srv/sites: it must
-# not stay launchable next to the two new ones.
-PREVIOUS_TEMPLATE="sitesolide-gatekeeper@.service"
 TARGET_JS="/usr/local/lib/sitesolide/gatekeeper.js"
 UNITS_FOLDER="/etc/systemd/system"
 
@@ -125,8 +121,8 @@ else
   CADDY_LOCK="$(SITESOLIDE_SERVER="$SITESOLIDE_SERVER" bun "$REPO_ROOT/bin/portal-guard.ts" --lock take deploy-gatekeeper $$)" || exit 1
 fi
 
-# A transaction in progress is left to finish: removing the template from under
-# a running unit would leave it without a file, and nothing is urgent.
+# A transaction in progress is left to finish: its code and its templates are
+# replaced here, and nothing is urgent.
 in_progress="$(ssh -n "$SITESOLIDE_SERVER" "systemctl list-units --all --plain --no-legend --state=activating 'sitesolide-gatekeeper*' 2>/dev/null" || true)"
 if [ -n "$in_progress" ]; then
   fail "a gatekeeper transaction is in progress, try again in a minute" "$in_progress"
@@ -147,16 +143,10 @@ ssh -n "$SITESOLIDE_SERVER" "
   for unit in ${UNITS[*]}; do
     sudo install -m 0644 -o root -g root \"$REMOTE/\$unit\" \"$UNITS_FOLDER/\$unit\"
   done
-  sudo rm -f '$UNITS_FOLDER/$PREVIOUS_TEMPLATE'
   rm -rf $REMOTE
   # Laid when missing, never changed when there: a machine that has locked a
   # preview before carries them already.
   sudo test -d $LOCKS_FOLDER || sudo install -d -m 0755 -o root -g root $LOCKS_FOLDER
-  # The fragment in service carries every code in force in the clear, and a
-  # project's service reads /etc/caddy. This gatekeeper writes it 0640, root's
-  # and Caddy's group's; the one an earlier gatekeeper wrote stayed 0644 until
-  # the next lock. The group first, so that Caddy never meets it closed to it.
-  if sudo test -f $LOCKS_FOLDER/verrous.caddy; then sudo chgrp caddy $LOCKS_FOLDER/verrous.caddy && sudo chmod 0640 $LOCKS_FOLDER/verrous.caddy; fi
   sudo test -e $CODES_FILE || printf '{}\\n' | sudo install -m 0600 -o $DEPLOY_USER -g $DEPLOY_USER /dev/stdin $CODES_FILE
   sudo test -d $DOOR_PAGES_FOLDER || sudo install -d -m 0755 -o root -g root $DOOR_PAGES_FOLDER
   sudo systemctl daemon-reload
@@ -173,13 +163,8 @@ for unit in "${UNITS[@]}"; do paths="$paths '$UNITS_FOLDER/$unit'"; done
 permissions="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' $paths" | sort -u)"
 [ "$permissions" = "644 root:root" ] || fail "unexpected permissions on the code or the units: $permissions"
 
-if ssh -n "$SITESOLIDE_SERVER" "test -e '$UNITS_FOLDER/$PREVIOUS_TEMPLATE'"; then
-  fail "the template from before is still there: $UNITS_FOLDER/$PREVIOUS_TEMPLATE"
-fi
-
 # A template is only checked through an instance: the FILE:NAME syntax names it
-# without creating or starting anything (systemd 250 and above; measured on the
-# bench with systemd 257 for the template from before).
+# without creating or starting anything (systemd 250 and above).
 for unit in "${UNITS[@]}"; do
   instance="${unit/@.service/@verification.service}"
   verification="$(ssh -n "$SITESOLIDE_SERVER" "sudo systemd-analyze verify '$UNITS_FOLDER/$unit:$instance' 2>&1" || true)"
@@ -192,5 +177,5 @@ if ! ssh -n "$SITESOLIDE_SERVER" "sudo test -d $LOCKS_FOLDER && sudo test -f $CO
   fail "the preview locks' files are missing on the machine" "expected: $LOCKS_FOLDER, $CODES_FILE, $DOOR_PAGES_FOLDER"
 fi
 
-echo "   installed, four units verified, template from before removed, no transaction launched"
+echo "   installed, four units verified, no transaction launched"
 echo "   first transaction: from the dashboard, or sitesolide lock, by the steward"

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readLaunch, gatekeeperUnit } from "../src/gatekeeper/instance";
 
@@ -44,10 +44,6 @@ function values(text: string, key: string): string[] {
 }
 
 describe("the gatekeeper's four units", () => {
-  test("the single template from before is gone", () => {
-    expect(existsSync(join(FOLDER, "sitesolide-gatekeeper@.service"))).toBe(false);
-  });
-
   test("they differ only by their action", () => {
     const WORDS: Record<(typeof ACTIONS)[number], [string, string]> = {
       on: ["makes a site Restricted, one", "Restricted"],
@@ -152,28 +148,17 @@ describe("the gatekeeper's four units", () => {
 describe("bin/deploy-gatekeeper.sh", () => {
   const script = readFileSync(join(ROOT, "bin", "deploy-gatekeeper.sh"), "utf8");
 
-  test("it installs and checks the four units, and removes the template from before", () => {
+  test("it installs and checks the four units", () => {
     for (const action of ACTIONS) {
       expect(script).toContain(`sitesolide-gatekeeper-${action}@.service`);
     }
     expect(script).toContain("systemd-analyze verify");
-    expect(script).toContain("sitesolide-gatekeeper@.service");
-    expect(script).toMatch(/rm -f .*PREVIOUS_TEMPLATE/);
   });
 
   test("it lays the preview locks' files the units open for writing, and never changes one that is there", () => {
     for (const path of ['LOCKS_FOLDER="/etc/caddy/locks"', 'CODES_FILE="/etc/caddy/locks-codes.json"', 'DOOR_PAGES_FOLDER="/srv/garde"']) expect(script).toContain(path);
     expect(script).toContain("sudo test -e $CODES_FILE || ");
     expect(script).toContain("-m 0600 -o $DEPLOY_USER -g $DEPLOY_USER");
-  });
-
-  test("it closes the locks' fragment an earlier gatekeeper left open to every account", () => {
-    // Every code in force is in it in the clear, and a project's service
-    // reads /etc/caddy. The gatekeeper writes it 0640 to root and Caddy's
-    // group, but only at the next lock: the one in service stayed 0644, every
-    // site's code readable by any deployed app, until someone changed a lock.
-    // The group first, so that Caddy never meets it closed to its own group.
-    expect(script).toContain("sudo chgrp caddy $LOCKS_FOLDER/verrous.caddy && sudo chmod 0640 $LOCKS_FOLDER/verrous.caddy");
   });
 
   test("it starts no transaction", () => {

@@ -458,13 +458,7 @@ export function upgradeComponents(): Component[] {
       title: "gatekeeper",
       installed: present("installed", `${LIB}/gatekeeper.js`),
       plan: "bin/deploy-gatekeeper.sh",
-      check: async (context) =>
-        machineState(context, "gatekeeper", [
-          ...C.gatekeeper,
-          ...(await scriptFingerprints(context, "deploy-gatekeeper.sh")),
-          // The single template from before, which the script removes.
-          { label: "no-previous-template", test: `! test -e ${UNITS}/sitesolide-gatekeeper@.service` },
-        ]),
+      check: async (context) => machineState(context, "gatekeeper", [...C.gatekeeper, ...(await scriptFingerprints(context, "deploy-gatekeeper.sh"))]),
       run: (context) => script(context, "deploy-gatekeeper.sh"),
       inspect: (context) => `ssh ${context.server} 'ls -l ${LIB} ${UNITS}/sitesolide-gatekeeper-*'`,
     },

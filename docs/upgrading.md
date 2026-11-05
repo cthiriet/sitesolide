@@ -56,7 +56,7 @@ component (active, enabled, its files present), plus:
 | shared service | the release in service differs from `api/`, file by file, or its unit does | `bin/deploy-api.sh`, before the dashboard, whose deployment is the first to deposit the Caddyfile, whose certificates its ask endpoint allows |
 | dashboard | `sitesolide deploy --dry-run --compare` finds a difference: a file to send or delete, its manifest, a missing unit, its Caddy block; every new release, whose version its page names | `sitesolide deploy` in `dashboard/` |
 | collector | one of its two units differs | `bin/deploy-collector.sh` |
-| gatekeeper | `gatekeeper.js` or one of its templates differs, or the single template from before is still there | `bin/deploy-gatekeeper.sh` |
+| gatekeeper | `gatekeeper.js` or one of its templates differs | `bin/deploy-gatekeeper.sh` |
 | installer | `installer.js`, its template or its environment file differs | `bin/deploy-installer.sh` |
 | the Caddyfile | `/etc/caddy/Caddyfile` differs from the release's | `bin/deploy-caddy.sh`, which validates, reloads, verifies and restores on failure |
 | portal | as the dashboard | `sitesolide deploy` in `portal/` |
@@ -147,6 +147,16 @@ through it, and it no longer ran but to find nothing to do.
   answer 404 like any route it does not know. The registry's record of what
   its making set aside, and the entries it gave, are read and kept as they
   stand.
+- **The gatekeeper's install converts nothing any more.** It removed the
+  single template of the releases before 0.4, `sitesolide-gatekeeper@.service`,
+  and closed to Caddy's group a preview locks' fragment, `verrous.caddy`, an
+  earlier gatekeeper had left `0644`, which a gatekeeper since 0.6 writes
+  `0640` itself; `sitesolide upgrade` no longer counts a gatekeeper out of date
+  for that template. Check both once, reading only, if a machine skipped
+  0.4 or 0.6: `ssh <server> 'test ! -e
+  /etc/systemd/system/sitesolide-gatekeeper@.service && sudo stat -c "%U:%G %a"
+  /etc/caddy/locks/verrous.caddy'`, which answers `root:caddy 640`, or
+  nothing on a machine that never locked a preview.
 - **The workstation's configuration is read under its English keys alone.**
   `serveur`, `courriel` and `coffre`, renamed before 0.1, were still read
   and said to be outdated; `projets`, `projects` and `destinations` were

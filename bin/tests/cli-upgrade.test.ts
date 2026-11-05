@@ -94,7 +94,7 @@ const RUN_LABELS: Record<string, string[]> = {
   "deploy-backup.sh install": FINGERPRINTED["deploy-backup.sh"]!.map((path) => labelFor(path)),
   "deploy-egress.sh": FINGERPRINTED["deploy-egress.sh"]!.map((path) => labelFor(path)),
   "deploy-steward.sh": [...FINGERPRINTED["deploy-steward.sh"]!.map((path) => labelFor(path)), STEWARD_WRITES_BACKUPS.label],
-  "deploy-gatekeeper.sh": [...FINGERPRINTED["deploy-gatekeeper.sh"]!.map((path) => labelFor(path)), "no-previous-template"],
+  "deploy-gatekeeper.sh": FINGERPRINTED["deploy-gatekeeper.sh"]!.map((path) => labelFor(path)),
   "deploy-installer.sh": FINGERPRINTED["deploy-installer.sh"]!.map((path) => labelFor(path)),
   "deploy-monitor.sh": FINGERPRINTED["deploy-monitor.sh"]!.map((path) => labelFor(path)),
   "deploy-collector.sh": ["sitesolide-collector.service", "sitesolide-collector.timer"],
