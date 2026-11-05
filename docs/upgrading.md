@@ -147,6 +147,12 @@ through it, and it no longer ran but to find nothing to do.
   answer 404 like any route it does not know. The registry's record of what
   its making set aside, and the entries it gave, are read and kept as they
   stand.
+- **The workstation's configuration is read under its English keys alone.**
+  `serveur`, `courriel` and `coffre`, renamed before 0.1, were still read
+  and said to be outdated; `projets`, `projects` and `destinations` were
+  dropped with a word. A `config.json` that still carries the French keys now
+  reads as an incomplete configuration, naming what it lacks: rename them by
+  hand, or run `sitesolide init`.
 - **The tokens from before every token belonged to someone are no longer
   converted.** 0.4.0 to 0.16 made each one someone's at the steward's start,
   and wrote `team.json` as version 2; a `team.json` of version 1, or with no

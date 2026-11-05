@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  adoptLegacyKeys,
   composeConfig,
   configPath,
   dashboardAddress,
@@ -134,70 +133,10 @@ describe("merging the three sources", () => {
 });
 
 describe("a configuration written before the keys were translated", () => {
-  // Only one such file exists, the author's, and dropping the old keys would
-  // have turned it into an "incomplete configuration": a message that names the
-  // missing settings without ever saying they were renamed, and sends its
-  // reader editing the file blind.
-  const OLD = {
-    serveur: "me@elsewhere",
-    zone: "test.invalid",
-    courriel: "me@test.invalid",
-    coffre: "~/prod/vault",
-    projets: "~/prod/projects",
-  };
-
-  test("the old keys are read, not refused", () => {
-    const config = mergeConfig(OLD, {}, HOME, () => {});
-    expect(config.server).toBe("me@elsewhere");
-    expect(config.email).toBe("me@test.invalid");
-    expect(config.vault).toBe("/Users/test/prod/vault");
-  });
-
-  test("the keys for what the workstation no longer keeps are dropped, and named", () => {
-    // projects and destinations pointed at copies of the machine's units,
-    // blocks and secrets registry, which nothing reads any more.
-    const said: string[] = [];
-    const config = mergeConfig({ ...MINIMUM, projects: "~/p", destinations: "~/d" } as never, {}, HOME, (m) => said.push(m));
-    expect(config as Record<string, unknown>).not.toHaveProperty("projects");
-    expect(config as Record<string, unknown>).not.toHaveProperty("destinations");
-    expect(said[0]).toContain("keys no longer read: projects, destinations");
-    expect(said[0]).toContain("sitesolide init");
-  });
-
-  test("the warning names what to rename and what rewrites the file", () => {
-    const said: string[] = [];
-    mergeConfig(OLD, {}, HOME, (message) => said.push(message));
-    expect(said).toHaveLength(1);
-    expect(said[0]).toContain("serveur -> server");
-    expect(said[0]).toContain("courriel -> email");
-    expect(said[0]).toContain("coffre -> vault");
-    expect(said[0]).toContain("no longer read: projets");
-    expect(said[0]).toContain("sitesolide init");
-  });
-
-  test("a file that carries neither old key says nothing", () => {
-    const said: string[] = [];
-    mergeConfig(MINIMUM, {}, HOME, (message) => said.push(message));
-    expect(said).toEqual([]);
-  });
-
-  test("the new key wins over the old one, and the old one does not survive", () => {
-    // A file half rewritten by hand: what `init` writes is what counts, and the
-    // leftover must not come back out of the merge under its own name.
-    const { config, legacy } = adoptLegacyKeys({ ...OLD, server: "me@new" } as never);
-    expect(config.server).toBe("me@new");
-    expect((config as Record<string, unknown>).serveur).toBeUndefined();
-    expect(legacy).toContain("serveur");
-  });
-
-  test("the scripts under bin/ get the settings out of an old file too", () => {
-    // bin/config.sh evaluates settings.ts, which reads the file through
-    // readConfigFile: without the adoption, every script would set off with an
-    // empty server and ssh would complain about a missing hostname.
-    const values = settings(adoptLegacyKeys(OLD as never).config, {}, HOME);
-    expect(values.SITESOLIDE_SERVER).toBe("me@elsewhere");
-    expect(values.SITESOLIDE_EMAIL).toBe("me@test.invalid");
-    expect(values.SITESOLIDE_VAULT).toBe("/Users/test/prod/vault");
+  test("its French keys are no longer read: the file is incomplete, and says which settings", () => {
+    // Both configurations in service were rewritten with the current keys.
+    const old = { serveur: "me@elsewhere", zone: "test.invalid", courriel: "me@test.invalid" };
+    expect(() => mergeConfig(old as never, {}, HOME)).toThrow(/incomplete configuration: server, email/);
   });
 });
 

@@ -69,7 +69,7 @@ import { DNS_CHOICES, dnsEntry, dnsVariables, MANUAL, shownDns } from "./dns/reg
 import { fieldsToAsk, fromEnvironment, isFailure, missingFields, parseStdinCredentials, scrubSecrets, secretValues } from "./machine";
 import { ProviderError, type Credentials, type Fetch } from "../../clouds/src/provider";
 import { CADDY_RESTART, caddyRestartScript, policyPending, tlsZoneCheck, tlsZoneContent, tlsZoneRun, TLS_ZONE_FILE, TLS_ZONE_RESTARTED } from "./tls";
-import { ACME_STAGING, adoptLegacyKeys, composeConfig, CONFIG_DIR_VARIABLE, expandHome, privateFolder, writeConfig } from "./config";
+import { ACME_STAGING, composeConfig, CONFIG_DIR_VARIABLE, expandHome, privateFolder, writeConfig, type Config } from "./config";
 import {
   APT,
   BAN_ADVICE,
@@ -1498,7 +1498,7 @@ function configurationStep(): Step<SetupContext> {
     id: "configuration",
     title: "workstation configuration",
     check: async (context) => {
-      const file = adoptLegacyKeys(readJson(path(context)) as never).config;
+      const file = (readJson(path(context)) ?? {}) as Partial<Config>;
       const same =
         file.server === context.server &&
         file.zone === context.options.zone &&
@@ -1509,7 +1509,7 @@ function configurationStep(): Step<SetupContext> {
       return same ? { state: "done" } : { state: "missing", missing: [path(context)] };
     },
     run: async (context) => {
-      const previous = adoptLegacyKeys(readJson(path(context)) as never).config as Record<string, unknown>;
+      const previous = readJson(path(context)) ?? {};
       const config = composeConfig({ server: context.server, zone: context.options.zone, email: context.options.email }, context.contact === null ? {} : { contact: context.contact }, previous);
       // Cloudflare is what an absent key means: written only otherwise.
       if (context.options.dns === null || context.options.dns === "cloudflare") delete config.dns;
@@ -1729,7 +1729,7 @@ export async function runSetup(given: SetupOptions, deps: SetupDependencies): Pr
   // 1. The configuration in place, before anything leaves the workstation.
   const folder = privateFolder(deps.home, deps.environment);
   const configPath = join(folder, "config.json");
-  const file = adoptLegacyKeys(readJson(configPath) as never).config;
+  const file = (readJson(configPath) ?? {}) as Partial<Config>;
   // The DNS: what --dns says, else what the configuration recorded, else
   // Cloudflare. Manual means records by hand: listed, then waited for. A
   // configuration naming a provider since removed is refused, the way out

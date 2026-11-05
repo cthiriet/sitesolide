@@ -108,7 +108,6 @@ import { compareDirectives, countItemized, summariseDivergence } from "./cli/com
 import {
   ACME_STAGING,
   acmeStaging,
-  adoptLegacyKeys,
   composeConfig,
   configPath,
   dashboardAddress,
@@ -116,7 +115,6 @@ import {
   OPTIONAL_SETTINGS,
   writeConfig,
   IncompleteConfig,
-  legacyKeysWarning,
   projectsRepo,
   readConfig,
   readConfigFile,
@@ -3968,18 +3966,15 @@ function optionValue(arguments_: string[], name: string): string | undefined {
  * configuration would leave for theirs: better to refuse than to get the
  * recipient wrong.
  *
- * Re-run over a file written by an earlier version, it offers the old values
- * and writes them back under the current names, leaving out the keys no longer
- * read: that is what takes a configuration across a change without retyping it.
+ * Re-run over a file already there, it offers its values and writes them
+ * back, leaving out a key that is not among the settings.
  */
 async function initialise(arguments_: string[]): Promise<void> {
   const value = (name: string): string | undefined => optionValue(arguments_, `--${name}`);
 
   const existing = Bun.file(configPath());
   const onDisk = (await existing.exists()) ? ((await existing.json()) as Record<string, string>) : {};
-  const adopted = adoptLegacyKeys(onDisk);
-  if (adopted.legacy.length > 0) console.error(legacyKeysWarning(adopted.legacy));
-  const previous = adopted.config as Record<string, string>;
+  const previous = onDisk;
 
   const ask = (name: string, question: string, current?: string): string => {
     const given = value(name);

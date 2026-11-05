@@ -52,7 +52,7 @@ import { canonicalAddress } from "./cloudflare";
 import { CLOUDFLARE } from "./dns/cloudflare";
 import { DnsError, detectDns, recordLine, zoneRecords, type DnsEntry } from "./dns/dns";
 import { MANUAL } from "./dns/registry";
-import { adoptLegacyKeys, CONFIG_DIR_VARIABLE, expandHome, privateFolder } from "./config";
+import { CONFIG_DIR_VARIABLE, expandHome, privateFolder } from "./config";
 import {
   agentKeyName,
   agentKeys,
@@ -186,8 +186,7 @@ function shownPath(path: string, home: string): string {
 
 /**
  * What the configuration of that folder names, read as setup's guard reads
- * it: the file with its outdated keys adopted, the environment's server and
- * zone over the file's. Null only when it names neither a server nor a zone,
+ * it: the file, the environment's server and zone over the file's. Null only when it names neither a server nor a zone,
  * the one case where setup writes it without refusing.
  */
 export function configured(environment: Record<string, string | undefined>, folder: string): { server: string; zone: string; email: string } | null {
@@ -196,7 +195,7 @@ export function configured(environment: Record<string, string | undefined>, fold
   if (existsSync(path)) {
     try {
       const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
-      if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) file = adoptLegacyKeys(raw as never).config as Record<string, unknown>;
+      if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) file = raw as Record<string, unknown>;
     } catch {
       // Unreadable: setup refuses it on its own, with the reason.
     }

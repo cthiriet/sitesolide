@@ -46,13 +46,11 @@ changed:
 
 `zone`, `contact`, `destinations` and `sites` do not move.
 
-Nothing breaks if you do nothing: the CLI still reads the old keys, and says on
-its error output that they are outdated. To be done with it, rewrite the file,
-which keeps what it already holds and puts it back under the new names:
-
-```bash
-sitesolide init
-```
+The CLI reads the new keys alone: up to 0.16 it still read the old ones, and
+said they were outdated. A file that still carries them reads as an
+incomplete configuration, naming the settings it lacks: rename the keys in
+the file by hand, or run `sitesolide init`, which asks for the settings and
+writes them under their names.
 
 The environment variables the scripts of `bin/` share with the CLI took the
 `SITESOLIDE_` prefix at the same time, so that they do not collide with

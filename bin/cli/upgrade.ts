@@ -577,7 +577,7 @@ export async function runUpgrade(options: UpgradeOptions, deps: UpgradeDependenc
   const folder = privateFolder(deps.home, deps.environment);
   let config: Config;
   try {
-    config = mergeConfig(readJson(join(folder, "config.json")) as Partial<Config> | null, deps.environment, deps.home, (message) => out.say(`!! ${message}`));
+    config = mergeConfig(readJson(join(folder, "config.json")) as Partial<Config> | null, deps.environment, deps.home);
   } catch (error) {
     if (!(error instanceof IncompleteConfig)) throw error;
     return refuse(`missing settings: ${error.missing.join(", ")}`, [

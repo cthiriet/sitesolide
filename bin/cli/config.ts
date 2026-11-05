@@ -29,9 +29,7 @@
  * driven from the same workstation: see `privateFolder`.
  *
  * The keys and the environment variable names are the interface between this
- * module and the shell scripts of `bin/`. A file written before they were
- * translated still works: `adoptLegacyKeys` reads the French keys and says on
- * standard error that they are outdated. See `docs/migration.md`.
+ * module and the shell scripts of `bin/`.
  */
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -102,73 +100,6 @@ export function acmeStaging(config: Pick<Config, "acme">): boolean {
 export const REQUIRED_SETTINGS = ["server", "zone", "email"] as const;
 
 /**
- * The keys a configuration written before the translation carries, and what
- * each of them became.
- *
- * They are read, never written: `sitesolide init` only puts down the names on
- * the right. Dropping them would have turned an existing file into an
- * "incomplete configuration", a message that says nothing about the rename and
- * sends its reader editing the file blind.
- */
-export const LEGACY_KEYS = {
-  serveur: "server",
-  courriel: "email",
-  coffre: "vault",
-} as const satisfies Record<string, keyof Config>;
-
-/**
- * Keys an earlier configuration carried for what the workstation no longer
- * keeps: the generated blocks and units, and the secrets registry. They are
- * dropped on reading and named, so that `sitesolide init` gets run to rewrite
- * the file without them.
- */
-export const OBSOLETE_KEYS = ["projets", "projects", "destinations"] as const;
-
-/**
- * Fills in the English keys from the French ones and names those that were
- * found, so that the caller can say they are outdated. A file carrying both
- * keeps the English one: it is the one `init` writes.
- */
-export function adoptLegacyKeys(file: Partial<Config> | null): {
-  config: Partial<Config>;
-  legacy: string[];
-} {
-  if (file === null) return { config: {}, legacy: [] };
-  const raw = file as Partial<Config> & Record<string, unknown>;
-  const config: Partial<Config> = { ...file };
-  const legacy: string[] = [];
-  for (const name of OBSOLETE_KEYS) {
-    if (raw[name] === undefined) continue;
-    legacy.push(name);
-    delete (config as Record<string, unknown>)[name];
-  }
-  for (const [before, after] of Object.entries(LEGACY_KEYS) as [string, keyof Config][]) {
-    const value = raw[before];
-    if (value === undefined) continue;
-    legacy.push(before);
-    if (config[after] === undefined) (config as Record<string, unknown>)[after] = value;
-    delete (config as Record<string, unknown>)[before];
-  }
-  return { config, legacy };
-}
-
-/** What is said, once, when a configuration still carries the French keys. */
-export function legacyKeysWarning(legacy: readonly string[]): string {
-  const renamed = legacy.filter((name) => name in LEGACY_KEYS);
-  const dropped = legacy.filter((name) => !(name in LEGACY_KEYS));
-  const lines = [];
-  if (renamed.length > 0) {
-    const pairs = renamed.map((name) => `${name} -> ${LEGACY_KEYS[name as keyof typeof LEGACY_KEYS]}`).join(", ");
-    lines.push(`${configPath()} still uses the old keys: ${pairs}; they are read all the same`);
-  }
-  if (dropped.length > 0) {
-    lines.push(`${configPath()} carries keys no longer read: ${dropped.join(", ")}`);
-  }
-  lines.push(`"sitesolide init" rewrites the file with the current keys`);
-  return lines.join("\n");
-}
-
-/**
  * The variable that moves the whole private folder elsewhere: the
  * configuration and the vault with it.
  *
@@ -202,15 +133,12 @@ export function defaultPaths(home = homedir(), environment: Record<string, strin
  *
  * The tests and the scripts need it without waiting, and the file is a few
  * lines long. Its absence gives an empty object: that is the state of an
- * install that has not run `sitesolide init` yet. A file written with the old
- * keys comes back with the new ones, silently: the warning belongs to
- * `mergeConfig`, which every command goes through, and repeating it here would
- * print it twice per run.
+ * install that has not run `sitesolide init` yet.
  */
 export function readConfigFile(home = homedir(), environment: Record<string, string | undefined> = process.env): Partial<Config> {
   const path = configPath(home, environment);
   if (!existsSync(path)) return {};
-  return adoptLegacyKeys(JSON.parse(readFileSync(path, "utf8")) as Partial<Config>).config;
+  return JSON.parse(readFileSync(path, "utf8")) as Partial<Config>;
 }
 
 /**
@@ -257,9 +185,9 @@ export const OPTIONAL_SETTINGS = ["contact", "vault", "sites", "api", "dns", "ac
  * settings that name the machine, then each optional one given now or already
  * in the file. A file that stays silent about a path lets the defaults play,
  * and therefore never lies; the flag and the key carry the same name, so that
- * what is typed is what lands in the file. `previous` is the file as read, its
- * old keys already adopted: what an earlier version wrote is carried over
- * under the current names, and the keys no longer read are left out.
+ * what is typed is what lands in the file. `previous` is the file as read:
+ * what it already sets is carried over, and a key not among the settings is
+ * left out.
  */
 export function composeConfig(
   required: { server: string; zone: string; email: string },
@@ -305,18 +233,11 @@ export class IncompleteConfig extends Error {
  * set up the same way everywhere.
  *
  * Throws if the server, the zone or the contact address is missing: going on
- * without them would amount to guessing a machine. A file still carrying the
- * French keys is not missing anything: it is read, and `warn` says so.
+ * without them would amount to guessing a machine.
  */
-export function mergeConfig(
-  file: Partial<Config> | null,
-  environment: Record<string, string | undefined>,
-  home = homedir(),
-  warn: (message: string) => void = (message) => console.error(message),
-): Config {
+export function mergeConfig(file: Partial<Config> | null, environment: Record<string, string | undefined>, home = homedir()): Config {
   const defaults = defaultPaths(home, environment);
-  const { config: adopted, legacy } = adoptLegacyKeys(file);
-  if (legacy.length > 0) warn(legacyKeysWarning(legacy));
+  const adopted = file ?? {};
 
   const required: Record<(typeof REQUIRED_SETTINGS)[number], string | undefined> = {
     server: environment.SITESOLIDE_SERVER ?? adopted.server,

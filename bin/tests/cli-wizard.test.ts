@@ -447,12 +447,12 @@ describe("a workstation that already names a machine", () => {
     expect(run.shown.join("\n")).toContain("monitor: inactive");
   });
 
-  test("a configuration in outdated keys, or in the environment, counts as one", async () => {
+  test("a configuration in its file, or in the environment, counts as one", async () => {
     const folder = join(home, ".config", "sitesolide");
     mkdirSync(folder, { recursive: true });
-    writeFileSync(join(folder, "config.json"), JSON.stringify({ serveur: "deploy@198.51.100.30", zone: ZONE, courriel: "ada@test-zone.invalid" }));
-    const legacy = scripted([[/^What now/, "quit"]]);
-    expect(await runWizard(dependencies(legacy.prompter, {}, [], legacy.planConfirmed))).toBe(0);
+    writeFileSync(join(folder, "config.json"), JSON.stringify({ server: "deploy@198.51.100.30", zone: ZONE, email: "ada@test-zone.invalid" }));
+    const written = scripted([[/^What now/, "quit"]]);
+    expect(await runWizard(dependencies(written.prompter, {}, [], written.planConfirmed))).toBe(0);
     rmSync(join(folder, "config.json"));
     const environment = scripted([[/^What now/, "quit"]]);
     expect(await runWizard(dependencies(environment.prompter, { SITESOLIDE_SERVER: "deploy@198.51.100.31" }, [], environment.planConfirmed))).toBe(0);
