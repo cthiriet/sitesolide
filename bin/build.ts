@@ -56,7 +56,7 @@ export const LEFT_OUT: ReadonlyArray<readonly [RegExp, string]> = [
   [/\.test\.ts$/, "tests run in the repository, never from a kit"],
   [/\.md$/, "documentation, read in the repository"],
   [/(^|\/)\.gitignore$/, "git's, and a kit is no checkout"],
-  [/^bin\/(sitesolide|mcp|build)\.ts$/, "the CLI itself, which the binary is"],
+  [/^bin\/(sitesolide|build)\.ts$/, "the CLI itself, which the binary is"],
   [/^bin\/(test\.sh|deprecations\.ts)$/, "the repository's own checks"],
 ];
 

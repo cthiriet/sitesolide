@@ -982,7 +982,7 @@ export function servedContact(environment: Record<string, string | undefined> = 
 /**
  * What a JSON parser said, without what it quoted: Bun names the word it
  * stopped at, and a sitesolide.json that was a link to a secret would hand
- * that word to whoever reads the refusal, an agent through MCP included. A
+ * that word to whoever reads the refusal, an agent under `--json` included. A
  * quoted punctuation mark, `'}'`, stays: it says what was expected.
  */
 export function parserComplaint(error: unknown): string {

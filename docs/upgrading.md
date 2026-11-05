@@ -163,6 +163,28 @@ nothing reads any more, and its `connector.*` rows, pruned after 90 days.
 and the routes back, and that release's `bin/deploy-egress.sh` lays the
 folder again, empty, if it was removed.
 
+## The MCP server removed
+
+**What the release brings.** `sitesolide mcp` goes, with the tools it served:
+nothing used it, and an agent that runs commands drives the CLI itself with
+`--json`, the same commands with the same refusals and a `hint` on every
+error. `sitesolide mcp` is now a command the CLI does not know. `--json`, the
+hints, `llms.txt` and the skill stay, the skill naming the commands where it
+named the tools.
+
+**What `sitesolide upgrade` brings**: nothing of its own. The server ran on
+the workstation alone.
+
+**What stays by hand.** A client that registered the server fails to start it
+from now on: take it out. In Claude Code,
+`claude mcp remove --scope user sitesolide`, or the `sitesolide` entry of a
+repository's `.mcp.json`; in Codex, the `[mcp_servers.sitesolide]` table of
+`~/.codex/config.toml`; in Cursor, the `sitesolide` entry of
+`~/.cursor/mcp.json` or of a project's `.cursor/mcp.json`. A skill linked
+from a clone of this repository follows with its next pull.
+
+**Going back.** The previous binary serves it again, registered as before.
+
 ## Every DNS provider but Cloudflare removed
 
 **What the release brings.** `setup --dns` takes `cloudflare`, the default,

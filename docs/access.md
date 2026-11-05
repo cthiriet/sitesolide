@@ -571,11 +571,10 @@ The sheet shows the token's last ten lines; *Activity*, narrowed to the
 token, reads further back, until the journal drops the line.
 
 **For an agent**: `sitesolide secrets generate NAME` draws a random key on the
-server, which nobody sees, and the MCP tool `secrets_generate` does the same;
-`sitesolide secrets set NAME --stdin` is for the user to run, or for a value
-the agent generates itself and pipes; never a value read from the
-conversation, which the conversation then keeps. There is no MCP tool that
-sets a value. See [agents.md](agents.md#secrets-and-restarts).
+server, which nobody sees; `sitesolide secrets set NAME --stdin` is for the
+user to run, or for a value the agent generates itself and pipes; never a
+value read from the conversation, which the conversation then keeps. See
+[agents.md](agents.md#secrets-and-restarts).
 
 ### Over HTTPS, without the CLI
 

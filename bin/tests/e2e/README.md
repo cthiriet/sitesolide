@@ -140,10 +140,6 @@ written into `sitesolide.json` before anything leaves is checked for real. The
 folders it copies are the fixtures of `bin/tests/infer/`, which
 `cli-infer.test.ts` reads too.
 
-`mcp.test.ts` spawns `sitesolide mcp` and speaks the protocol to it over
-standard input and output, both eras of it. Its tools run the real CLI, in
-front of the fake VM, and the deploy tool only ever with `dry_run`.
-
 ## The binary
 
 `binary.test.ts` builds the binary this machine runs with `bin/build.ts`, then
@@ -152,9 +148,8 @@ with the system's tools and the fake ssh alone. It checks that the binary
 names no path of the repository, that two builds of the same tree give the
 same bytes, that `--version` and `--help` need nothing, that a command running
 a script unpacks the kit once, read-only, and that the script finds `bun` in
-it, that the dashboard deploys from the kit as built at release time, from a
-writable copy that leaves the kit untouched, and that `mcp` runs its tools
-with the binary itself. `help.test.ts` holds `help` and
+it, and that the dashboard deploys from the kit as built at release time, from a
+writable copy that leaves the kit untouched. `help.test.ts` holds `help` and
 `--version` to the same promise from a checkout. See `bin/cli/kit.ts`.
 
 ## The projects

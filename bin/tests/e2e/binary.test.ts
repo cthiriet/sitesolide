@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { binaryName, build, type Target } from "../../build";
 import { KIT_MARKER, removeTree, SHIM_FOLDER } from "../../cli/kit";
-import { forEachLine } from "../../cli/output";
 import { createFakeVm, type FakeVm } from "./fake-vm";
 import { REPO, TEST_EMAIL, TEST_ZONE, TESTS_ROOT } from "./run";
 
@@ -172,42 +171,4 @@ describe("a binary on a workstation that has never run it", () => {
     expect(snapshot()).toEqual(before);
     expect(temporaries()).toEqual(copiesBefore);
   });
-
-  test("mcp runs its tools with the binary itself, and says the release", async () => {
-    const station = workstation(join(TESTS_ROOT, "..", "infer", "bun-app"));
-    const server = Bun.spawn([binary, "mcp"], {
-      cwd: station.folder,
-      env: { HOME: station.home, XDG_CACHE_HOME: station.cache, PATH: SYSTEM_PATH },
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const received: Record<string, any>[] = [];
-    const reading = forEachLine(server.stdout, (line) => {
-      received.push(JSON.parse(line) as Record<string, any>);
-    });
-    const send = (message: object): void => {
-      server.stdin.write(`${JSON.stringify(message)}\n`);
-      server.stdin.flush();
-    };
-    const answer = async (id: number): Promise<Record<string, any>> => {
-      const deadline = Date.now() + 30_000;
-      while (Date.now() < deadline) {
-        const found = received.find((message) => message.id === id);
-        if (found !== undefined) return found;
-        await Bun.sleep(20);
-      }
-      throw new Error(`no answer to ${id}: ${JSON.stringify(received)}`);
-    };
-    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "binary", version: "1" } } });
-    expect((await answer(1)).result.serverInfo).toMatchObject({ name: "sitesolide", version: VERSION });
-    send({ jsonrpc: "2.0", method: "notifications/initialized" });
-    send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "detect", arguments: { folder: station.folder } } });
-    const detected = await answer(2);
-    expect(detected.result.isError).toBe(false);
-    expect(detected.result.structuredContent.result).toMatchObject({ command: "detect", kind: "bun" });
-    server.stdin.end();
-    await reading;
-    expect(await server.exited).toBe(0);
-  }, 60_000);
 });

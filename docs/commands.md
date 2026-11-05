@@ -2,7 +2,7 @@
 
 Every command runs from a project's folder, the one holding its
 `sitesolide.json`, except `setup`, `upgrade`, `refresh`, `init`, `status`,
-`login`, `mcp`, `machine`, `people`, `help` and `--version`. This is what `sitesolide --help` prints.
+`login`, `machine`, `people`, `help` and `--version`. This is what `sitesolide --help` prints.
 
 ```text
 sitesolide setup                alone at a terminal: pick a cloud, a region and a size, then order and install
@@ -75,7 +75,6 @@ sitesolide secrets              this project's secrets: names, sources, states, 
    remove-file <NAME>           take a file out of the store
    --restart                    with a change: then restart the service, and say whether it holds
 sitesolide run -- <command>     the workstation's own credentials for this project, from the vault, then run
-sitesolide mcp                  serve these commands to an agent, over MCP on stdio
 sitesolide login --url <https://dashboard.zone>
                                 a person with a token: deploy, set secrets and restart without SSH
    --token-stdin                read the token from standard input
@@ -297,7 +296,7 @@ With `--json`, the `result` carries `dryRun`, `all`, `projects` (each `slug`,
 `current`; `kept`; `reasons`, why it was refused; `url` and `status`, what
 the site answered), and the slugs by state: `refreshed`, `outdated`,
 `current`, `kept`, `refused`, `static`. It is the owner's command, like
-`upgrade`: refused with a token (`needs-ssh`), and not an MCP tool.
+`upgrade`: refused with a token (`needs-ssh`).
 
 ## Secrets
 
@@ -617,13 +616,12 @@ install can be run again without questions. See [setup.md](setup.md).
 ## For agents
 
 `--json` prints one JSON event per line on standard output, nothing else, and
-ends with a `result` or an `error` carrying a `hint`. `sitesolide mcp` serves
-`detect`, `deploy`, `status`, `logs`, `share` (and `access`, its read alone),
-`lock --status`, `secrets`, the listing, and `secrets_generate`, a value
-drawn on the server, as tools to an MCP client; no tool sets a value, which
-would come from the conversation. `setup`, `upgrade` and `refresh`, which
-change the machine itself or every app on it, are not tools.
-Both are described in [agents.md](agents.md).
+ends with a `result` or an `error` carrying a `hint`. An agent runs the
+commands themselves: `detect`, `deploy`, `status`, `logs`, `share`,
+`lock --status`, `secrets` and `secrets generate`, a value drawn on the
+server, never one set from the conversation; `setup`, `upgrade` and
+`refresh`, which change the machine itself or every app on it, only when the
+user asked. See [agents.md](agents.md).
 
 ## With a token
 

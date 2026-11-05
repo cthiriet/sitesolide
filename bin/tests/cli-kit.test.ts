@@ -427,7 +427,7 @@ describe("what the kit carries", () => {
 
   test("no test, no documentation, no Terraform, not the CLI itself, nothing that may hold a secret", () => {
     for (const file of files) {
-      expect({ file, left: /(^|\/)tests\/|\.test\.ts$|\.md$|\.tf$|\.tfvars|^bin\/(sitesolide|mcp|build|deprecations)\.ts$|^bin\/test\.sh$/.test(file) }).toEqual({ file, left: false });
+      expect({ file, left: /(^|\/)tests\/|\.test\.ts$|\.md$|\.tf$|\.tfvars|^bin\/(sitesolide|build|deprecations)\.ts$|^bin\/test\.sh$/.test(file) }).toEqual({ file, left: false });
       expect({ file, secret: NEVER_PACKED.test(file) }).toEqual({ file, secret: false });
       expect(KIT_FOLDERS.some((folder) => file.startsWith(`${folder}/`))).toBe(true);
     }

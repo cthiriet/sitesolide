@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { TOOLS } from "../mcp";
 import { REMOTE_USAGE } from "../cli/remote";
 
 /**
@@ -23,10 +22,18 @@ describe("the skill", () => {
     expect(`${front.description} ${front.when_to_use ?? ""}`.length).toBeLessThanOrEqual(1536);
   });
 
-  test("it names the tools the MCP server serves, and sends secrets to the dashboard", () => {
-    for (const tool of TOOLS) expect(text).toContain(`\`${tool.name}\``);
+  test("it names the command for each step an agent takes, under --json, and sends secrets to the dashboard", () => {
+    for (const command of ["detect --json", "deploy --dry-run --json", "deploy --json", "status --json", "logs --json", "share --json", "lock --status --json", "secrets --json", "secrets generate NAME --json", "restart --json"]) {
+      expect({ command, named: text.includes(`sitesolide ${command}`) }).toEqual({ command, named: true });
+    }
     expect(text).toContain("dashboard");
     expect(text).toContain("caddy stop");
+  });
+
+  test("it, llms.txt and docs/agents.md send an agent to the CLI alone: there is no MCP server", () => {
+    for (const path of ["skills/sitesolide/SKILL.md", "llms.txt", "docs/agents.md"]) {
+      expect({ path, mcp: /\bmcp\b/i.test(read(path)) }).toEqual({ path, mcp: false });
+    }
   });
 });
 

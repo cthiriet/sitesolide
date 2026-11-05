@@ -1,17 +1,19 @@
 # Agents
 
 Small software is more and more often written by an agent: Claude Code, Codex,
-Cursor. sitesolide gives an agent three ways in, and none of them gives it more
-than a person at a terminal has:
+Cursor. sitesolide gives an agent the CLI itself, and nothing that gives it
+more than a person at a terminal has:
 
-- **the CLI with `--json`**, for an agent that runs commands;
-- **an MCP server**, `sitesolide mcp`, for an agent that calls tools;
+- **the CLI with `--json`**, which an agent runs as you would;
 - **a skill**, `skills/sitesolide/SKILL.md`, which teaches the workflow.
 
-All three run the same commands, with the same refusals. A deploy an agent
-starts reads the general access the dashboard set, takes the Caddy lock,
-says which secrets the server lacks and rolls a broken Caddy block back
-exactly as yours would.
+The commands are yours, with the same refusals. A deploy an agent starts
+reads the general access the dashboard set, takes the Caddy lock, says which
+secrets the server lacks and rolls a broken Caddy block back exactly as yours
+would. Leave `sitesolide deploy`, `sitesolide share` and
+`sitesolide secrets generate` among the commands your client asks you about,
+rather than allowing them once and for all, so that every real deploy, every
+person let in and every key drawn is yours to approve.
 
 ## What an agent may do, and what stays yours
 
@@ -28,26 +30,25 @@ exactly as yours would.
 | list everyone with access, and who may create projects, with `people` | grant or take back the right to create projects, unless you asked for that person: it lets them into the dashboard |
 | with a token, restart a project's service | read or guess a secret, a provider's token included: no route hands a value back, to anyone but the owner in the dashboard |
 | list a project's secret names, what is missing, its files and its build's names, over the owner's SSH or with a token minted with *Manage secrets* | set a value read from the conversation, or put one on a command line |
-| draw a random key on the server for a name the project checks itself, a session secret, an internal token (`secrets_generate`), and remove the names you asked it to | replace a live secret: `secrets_generate` has no `replace`, and rotating a key is the user's decision |
+| draw a random key on the server for a name the project checks itself, a session secret, an internal token (`secrets generate`), and remove the names you asked it to | replace a live secret with `secrets generate --replace`: rotating a key is the user's decision |
 
 Secret values never pass through the agent. `sitesolide.json` lists names,
 under `secrets`, and the server holds the values, set by you: in the
 dashboard's *Secrets* section, or with `sitesolide secrets set NAME`, over
 your SSH or with a token minted with *Manage secrets*, which asks for the
 value without echoing it. An agent draws a random key on the server with
-`secrets_generate` (`sitesolide secrets generate NAME --json`), which nobody
-sees, for a key the project checks itself; a provider's key is yours to set.
-It pipes to `sitesolide secrets set NAME --stdin` only a value it generates
-itself, never one read from the conversation, which would keep it;
-`NAME=value` or a value as an argument is refused before anything is sent,
-so is a name that looks like a value, and under `--json` `set` never prompts.
-There is no MCP tool that sets a value, on purpose.
+`sitesolide secrets generate NAME --json`, which nobody sees, for a key the
+project checks itself; a provider's key is yours to set. It pipes to
+`sitesolide secrets set NAME --stdin` only a value it generates itself, never
+one read from the conversation, which would keep it; `NAME=value` or a value
+as an argument is refused before anything is sent, so is a name that looks
+like a value, and under `--json` `set` never prompts.
 
 **A deploy never stops on a missing runtime secret.** It warns, names them
 in the `result`'s `missingSecrets`, and goes on; a service that cannot start
 without one fails its restart and the deploy names it. The agent offers to
-generate the random keys with `secrets_generate`, asks you to set the
-others, then restarts. **A missing build secret stops it**, before anything is read on
+generate the random keys with `sitesolide secrets generate`, asks you to set
+the others, then restarts. **A missing build secret stops it**, before anything is read on
 the server or sent: a name under `secrets.build` is read from the
 environment of whoever deploys, else from
 `~/.config/sitesolide/secrets/<slug>.env` on the workstation, which the agent
@@ -58,29 +59,28 @@ starts like a provider's key.
 
 ## Giving access to what was deployed
 
-Building a small tool ends with "give it to the people who need it". Two
-tools, and one command behind both:
+Building a small tool ends with "give it to the people who need it". One
+command does both:
 
-- `access` (`sitesolide share --json`) reads a project's general access
-  (Public, Restricted to the people with access, or Anyone with the code), its
-  people with access, each with their role, and the line to send them;
-- `share` (`sitesolide share <who>... --json`) gives people access, by email
-  or a whole domain written `@acme.com`, with a role: `can-open` (Can open, the
+- `sitesolide share --json` reads a project's general access (Public,
+  Restricted to the people with access, or Anyone with the code), its people
+  with access, each with their role, and the line to send them;
+- `sitesolide share <who>... --json` gives people access, by email or a whole
+  domain written `@acme.com`, with a role (`--role`): `can-open` (Can open, the
   default), `viewer`, `developer` or `admin`, each including the ones below
-  it; or takes it away, with `remove`. One direction per call.
+  it; or takes it away, with `--remove`. One direction per call.
 
 **Giving access lets real people into the app and the data it holds**, from
-their next request, and from Viewer up into the project in the dashboard: the
-tool's description says so first. An agent asks the user before every call,
-naming the exact addresses, domains and role, gives access to those and nobody
-else, and reads `access` before and after to show the user who has it. Leave
-`share` on "ask" in your client.
+their next request, and from Viewer up into the project in the dashboard. An
+agent asks the user before every call, naming the exact addresses, domains
+and role, gives access to those and nobody else, and reads
+`sitesolide share --json` before and after to show the user who has it.
 
 **Password access is shown once.** Someone outside the company's domains, or
 anyone when signing in with a company account is not set up, is given Can open
 with a password the machine draws for them. It comes back once, in an `info`
 event and in the result's `changes`, for the user to send them: tell the user,
-and never store, log or repeat it anywhere else. `expires` sets how long it
+and never store, log or repeat it anywhere else. `--expires` sets how long it
 lasts, `24h`, `7d` (the default), `30d` or `never`.
 
 ```console
@@ -130,7 +130,7 @@ The refusals, each carrying its `hint`:
 
 ## Secrets and restarts
 
-`sitesolide secrets --json` (MCP `secrets`) lists what the project's services
+`sitesolide secrets --json` lists what the project's services
 find, never a value: each declared name, `set` or missing, the files read at
 `$CREDENTIALS_DIRECTORY/files_<name>`, the names its build takes from
 whoever deploys, and whether a restart is pending. It runs over the owner's
@@ -261,8 +261,8 @@ servers' ports itself, since its services name each other's in their `env`.
 folder's own code, and a dry run is what an agent tries first, on a folder it
 may have just cloned, from the workstation that holds root SSH to the machine:
 it shows the build as a `planned` event, and does not run it. Only a person
-typing `sitesolide deploy --dry-run --build` runs it in a dry run; the MCP
-tool never does. Likewise, a name inference would put into a command, a folder
+typing `sitesolide deploy --dry-run --build` runs it in a dry run, never an
+agent on its own. Likewise, a name inference would put into a command, a folder
 under `cmd/` or a server file, is declined unless it is made of letters,
 digits, dots, dashes and underscores, and a manifest outside your sites
 repository may only point `source` inside its own repository.
@@ -401,92 +401,6 @@ fails the connection at once rather than waiting for a keyboard an agent does
 not have. Load the key into the agent first, `ssh-add`, and connect once by
 hand so that the host key is known.
 
-## The MCP server
-
-`sitesolide mcp` speaks the Model Context Protocol on standard input and
-output. Each tool runs the CLI with `--json` in the folder it names and
-returns its events: the `result` or the `error`, and what led to it. It needs
-no dependency and no configuration of its own: the CLI's configuration is read
-by each command.
-
-| Tool | Arguments | Changes anything |
-|---|---|---|
-| `detect` | `folder`, `slug` | no, and reads no machine |
-| `deploy` | `folder`, `dry_run`, `accept_inferred`, `slug` | **yes**, the live site, unless `dry_run`, which runs not even the build |
-| `status` | | no |
-| `logs` | `folder`, `lines` | no |
-| `access` | `folder` | no |
-| `share` | `folder`, `who`, `role`, `expires`, `remove` | **yes**, who may open the app and its data, and from Viewer up who sees or changes the project in the dashboard |
-| `lock_status` | `folder` | no |
-| `secrets` | `folder` | no: the names the project's services find, which are missing, its files and its build's names, never a value |
-| `secrets_generate` | `folder`, `name`, `format`, `bytes`, `restart` | **yes**, a value drawn on the server for `name`, never returned; refused over a name already set, there being no `replace` |
-
-`setup`, `upgrade` and `refresh` are not tools: they change the machine
-itself, or every app on it, and run through the CLI, when the user asked. Neither is `people`: the right to create
-projects lets someone into the dashboard, which is the owner's to give, over
-their SSH. **No tool sets a secret**: it would take its value from the
-conversation, and the conversation would keep it. `secrets` reads names
-alone, and `secrets_generate` draws a value nobody sees, for a key the project
-checks itself, a session secret, an internal token, a database password
-before its first use; never a provider's key, which the user sets with
-`sitesolide secrets set NAME`. It has no `replace`: an agent never rotates a
-live secret. Nor is `restart` a tool: `deploy` restarts, and so does
-`secrets_generate` with `restart`. `folder` is an absolute path.
-`deploy`'s description says first that it changes the live server, and
-that a missing runtime secret does not stop it: its `result`'s
-`missingSecrets` lists them, `secrets_generate` makes the random keys, and the
-user sets the others; a missing build secret stops it before anything is
-sent. `share`'s description says that it gives real people access: leave
-both on "ask" in your client rather than allowing them once and for all, and
-`secrets_generate` too, so that every real deploy, every person let in and
-every key drawn is yours to approve.
-
-It speaks both eras of the protocol: 2026-07-28, with no handshake and the
-version on every request, and 2025-11-25 back to 2024-11-05, with `initialize`.
-`notifications/cancelled` interrupts a command as Ctrl-C would: the step in
-progress finishes, then it stops and releases the Caddy lock. A request whose id
-is still in flight is refused, so that an answer or a cancellation always names
-one command, and a message longer than a mebibyte is refused unread.
-
-### Registering it
-
-`install.sh` puts the `sitesolide` binary in `~/.local/bin`, see
-[install.md](install.md). With that on your `PATH`:
-
-**Claude Code**, for every project:
-
-```bash
-claude mcp add --scope user --transport stdio sitesolide -- sitesolide mcp
-```
-
-or in one repository, shared through its `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "sitesolide": { "type": "stdio", "command": "sitesolide", "args": ["mcp"] }
-  }
-}
-```
-
-**Codex**, in `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.sitesolide]
-command = "sitesolide"
-args = ["mcp"]
-```
-
-**Cursor**, in `~/.cursor/mcp.json` or a project's `.cursor/mcp.json`:
-
-```json
-{ "mcpServers": { "sitesolide": { "command": "sitesolide", "args": ["mcp"] } } }
-```
-
-**Any other client** that launches stdio servers: the command `sitesolide`,
-the argument `mcp`. Without it on the `PATH`, give the binary's full path, or
-from a checkout `bun /path/to/sitesolide/bin/sitesolide.ts mcp`.
-
 ## The skill
 
 `skills/sitesolide/SKILL.md` teaches an agent the workflow: detect, review the
@@ -501,16 +415,16 @@ ln -s "$PWD/skills/sitesolide" ~/.claude/skills/sitesolide
 ```
 
 or copy `skills/sitesolide/SKILL.md` into `~/.claude/skills/sitesolide/`, or,
-for one repository only, into its `.claude/skills/sitesolide/`. It works with
-the MCP server or without it, through the CLI.
+for one repository only, into its `.claude/skills/sitesolide/`. It drives the
+CLI with `--json`, nothing else.
 
 ## llms.txt
 
 `llms.txt`, at the root of the repository, is what an agent reads before it
 acts, in the [llmstxt.org](https://llmstxt.org) format: how to tell whether
-sitesolide is set up, the deploy loop, the `--json` contract, the MCP tools,
-tokens, access, a new server, the rules an agent never breaks, and links
-to these documents.
+sitesolide is set up, the deploy loop, the `--json` contract, what changes
+something, tokens, access, a new server, the rules an agent never breaks, and
+links to these documents.
 
 ## Upgrading from 0.1
 
@@ -524,17 +438,16 @@ they always did, the journal's JSON aside, which `logs --json` alone asks for.
 1. Pull the repository on the workstation. Check: `sitesolide detect` in a
    project folder prints a manifest, and `sitesolide deploy --dry-run --json`
    ends with a `result` line.
-2. Optionally, register the MCP server and link the skill, as above. Check:
-   `claude mcp list` shows `sitesolide` connected.
+2. Optionally, link the skill, as above.
 
-To roll back: check out the previous commit, `claude mcp remove sitesolide`,
-and remove the `~/.claude/skills/sitesolide` link.
+To roll back: check out the previous commit, and remove the
+`~/.claude/skills/sitesolide` link.
 
 One behaviour changed: an app whose manifest has no `port` used to be refused,
 and is now given one by `deploy`. Every manifest already deployed declares its
 port and is untouched.
 
-`share` and the `access` tool need the machine's side: a steward that keeps
+`share` needs the machine's side: a steward that keeps
 the access registry, and with a token the dashboard of the same release, which
 `sitesolide upgrade` brings both: see
 [upgrading.md](upgrading.md#access-one-registry).

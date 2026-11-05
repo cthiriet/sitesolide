@@ -16,7 +16,6 @@
  *   sitesolide secrets [set|generate|remove|set-file|remove-file]
  *                                   the project's store of secrets, see bin/cli/store-cli.ts
  *   sitesolide run -- <command>     the workstation's own credentials for it, then run
- *   sitesolide mcp                  the same commands, as tools for an agent
  *   sitesolide login --url <url>    a team member: a token instead of SSH
  *   sitesolide machine create       a VM from a cloud provider's API, see cli/machine.ts
  *   sitesolide setup                alone at a terminal, the wizard: see cli/wizard.ts
@@ -955,7 +954,7 @@ async function checkRemoteBlock(
  *
  * The build is the folder's own code, run by a shell on the workstation that
  * holds root SSH to the machine. A dry run is what an agent is told to try
- * first, through the MCP tool or `--json`, on a folder it may have just
+ * first, with `--json`, on a folder it may have just
  * cloned, before anyone has read it: running the build there turned "show me
  * what would happen" into "run this repository's code here". A dry run
  * therefore shows the step and skips it; whoever wants what it produces
@@ -4093,7 +4092,6 @@ function usage(zone: string | null): string {
     "     remove-file <NAME>           take a file out of the store",
     "     --restart                    with a change: then restart the service, and say whether it holds",
     "  sitesolide run -- <command>     the workstation's own credentials for this project, from the vault, then run",
-    "  sitesolide mcp                  serve these commands to an agent, over MCP on stdio",
     "  sitesolide login --url <https://dashboard.zone>",
     "                                  a person with a token: deploy, set secrets and restart without SSH",
     "     --token-stdin                read the token from standard input",
@@ -4188,15 +4186,10 @@ if (import.meta.main) {
   const folder = fromKit(() => workingFolder(process.cwd()));
   if (folder !== process.cwd()) say(`   the kit is read-only: working on a copy of this folder, ${folder}`);
 
-  // Neither reads the configuration: `detect` reads the folder alone, and
-  // `mcp` runs every tool call as a command of its own, which reads it then.
+  // It reads no configuration: `detect` reads the folder alone.
   if (command === "detect") {
     detect(folder, arguments_.includes("--write"), optionValue(arguments_, "--slug"));
     finish(command);
-    process.exit(0);
-  }
-  if (command === "mcp") {
-    await (await import("./mcp")).serve();
     process.exit(0);
   }
 

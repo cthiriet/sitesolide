@@ -1,6 +1,6 @@
 ---
 name: sitesolide
-description: Deploy a project folder to the user's own sitesolide server, and check on it afterwards. Use when the user asks to deploy, publish, ship or put online a site, an app or a tool, to give colleagues access to it, to see whether it is up, or to read its logs, in a setup that has the sitesolide CLI or its MCP server.
+description: Deploy a project folder to the user's own sitesolide server, and check on it afterwards. Use when the user asks to deploy, publish, ship or put online a site, an app or a tool, to give colleagues access to it, to see whether it is up, or to read its logs, in a setup that has the sitesolide CLI.
 when_to_use: Requests such as "deploy this", "put it online", "publish the site", "run this every hour on the server", "keep this bot running", "share this tool with my colleagues", "give alice access", "is it up?", "why does the site return 500?" or "show me the logs", and any folder holding a sitesolide.json.
 ---
 
@@ -12,15 +12,13 @@ it, installs a confined service and its Caddy block, and checks that the site
 answers over HTTPS. There is no staging: **what you deploy is live, for every
 visitor, at once.**
 
-Use the MCP tools when they are available (`detect`, `deploy`, `status`,
-`logs`, `access`, `share`, `lock_status`, `secrets`, `secrets_generate`).
-Otherwise run the CLI with `--json`: every line of standard output is one
-JSON event, the last one a `result` or an `error`.
+Run the CLI with `--json`: every line of standard output is one JSON event,
+the last one a `result` or an `error`.
 
 ## The workflow
 
-1. **Detect.** In a folder without `sitesolide.json`, call `detect` (or
-   `sitesolide detect --json`). It infers the manifest from the folder and
+1. **Detect.** In a folder without `sitesolide.json`, run
+   `sitesolide detect --json`. It infers the manifest from the folder and
    writes nothing. Read its `notes`: they name the secrets the code reads,
    which it declares by name under `secrets`, and the calls it makes to the
    network.
@@ -52,36 +50,37 @@ JSON event, the last one a `result` or an `error`.
      site: say so first (`docs/manifest.md`, "What fits on the machine");
    - the slug, which is the address: `<slug>.<their zone>`.
    Write `sitesolide.json` (`detect --write`, or by hand) and edit it there.
-3. **Dry run.** `deploy` with `dry_run: true` (`sitesolide deploy --dry-run
-   --json`). It reads the server, shows the generated unit and block and every
-   step, and changes nothing; it does not run the project's build either, which
-   is the folder's own code. Show the user what it plans. With a token instead
-   of SSH, a dry run is refused: review `sitesolide.json` with the user.
-4. **Deploy**, once the user agrees: `deploy` (`sitesolide deploy --json`). A
-   folder still without a manifest needs `accept_inferred: true` (`--yes`);
-   with a token, write it first with `sitesolide detect --write`.
+3. **Dry run.** `sitesolide deploy --dry-run --json`. It reads the server,
+   shows the generated unit and block and every step, and changes nothing; it
+   does not run the project's build either, which is the folder's own code.
+   Show the user what it plans. With a token instead of SSH, a dry run is
+   refused: review `sitesolide.json` with the user.
+4. **Deploy**, once the user agrees: `sitesolide deploy --json`. A folder
+   still without a manifest needs `--yes`; with a token, write it first with
+   `sitesolide detect --write`.
 5. **Read the result.** On success, give the user the `url`. When
    `manifestWritten` is true, `sitesolide.json` changed on disk (a port chosen,
    an inferred manifest, general access set from the dashboard): commit it.
    `missingSecrets` lists the declared names the server has no value for:
    the deploy went through without them. For a key the project checks
-   itself, a session secret or an internal token, offer `secrets_generate`
-   (`sitesolide secrets generate NAME --json`), which draws it on the server
+   itself, a session secret or an internal token, offer
+   `sitesolide secrets generate NAME --json`, which draws it on the server
    where nobody sees it; for a provider's key, ask the user to run
    `sitesolide secrets set NAME` in their own terminal. Then restart, with
-   `restart: true` or `sitesolide restart`.
+   `--restart` on the last change or `sitesolide restart --json`.
 6. **Give access to the people who need it.** A restricted site opens to its
-   people with access alone. Read `access` first (`sitesolide share --json`),
-   ask the user who should get in and with which role, then `share` with
-   exactly those addresses or that domain (`who`), and nobody else
+   people with access alone. Read `sitesolide share --json` first, ask the
+   user who should get in and with which role, then give it to exactly those
+   addresses or that domain, and nobody else
    (`sitesolide share alice@acme.com --json`, `@acme.com` for everyone at a
    domain). The role is Can open (`can-open`) unless the user names `viewer`,
-   `developer` or `admin`, which also let the person into the project in the
-   dashboard. Access lets real people into the app and its data: tell the user
-   who will get in, and wait for their yes. Give them the `message` of the
-   result to send. Someone outside the company's domains gets password access:
-   the password comes back once, in the result's `changes`, for the user to
-   send; never store or repeat it. `remove` takes access away.
+   `developer` or `admin` (`--role`), which also let the person into the
+   project in the dashboard. Access lets real people into the app and its
+   data: tell the user who will get in, and wait for their yes. Give them the
+   `message` of the result to send. Someone outside the company's domains gets
+   password access: the password comes back once, in the result's `changes`,
+   for the user to send; never store or repeat it. `--remove <email|@domain>`
+   takes access away.
 
 ## When it fails
 
@@ -98,10 +97,10 @@ Every error carries a `hint`: follow it. The usual ones:
 - **A secret is missing on the server.** The deploy did not stop: its
   result's `missingSecrets` names it, and the service may fail its restart
   without it. Generate a random key the project checks itself with
-  `secrets_generate`; for any other, tell the user to set it in the
-  dashboard's *Secrets* section or with `sitesolide secrets set NAME` in
-  their own terminal, which asks for the value without echoing it; then
-  restart. Never put a secret value in the repository, in `sitesolide.json`,
+  `sitesolide secrets generate NAME --json`; for any other, tell the user to
+  set it in the dashboard's *Secrets* section or with
+  `sitesolide secrets set NAME` in their own terminal, which asks for the
+  value without echoing it; then restart. Never put a secret value in the repository, in `sitesolide.json`,
   or in `env`: the validation refuses names and values that look like
   secrets, and a secret in git is a secret to change.
 - **A build secret is missing** (`build-secret-missing`). Nothing was sent:
@@ -109,12 +108,12 @@ Every error carries a `hint`: follow it. The usual ones:
   workstation's `~/.config/sitesolide/secrets/<slug>.env`. Tell the user to
   export it or add it there; never read that file, never ask for the value.
 - **The service fails at the restart, or the site answers 500 or 502.** Read
-  `logs` (`sitesolide logs --json --lines 100`): each entry has its unit,
-  priority and message. Priority 3 and below are errors. Fix the code, deploy
+  `sitesolide logs --json --lines 100`: each entry has its unit, priority and
+  message. Priority 3 and below are errors. Fix the code, deploy
   again.
 - **A service fell right after its restart.** The deploy watches every
   server and worker for ten seconds and names each one that stopped or was
-  restarted: read `logs`, fix the code, deploy again.
+  restarted: read the logs, fix the code, deploy again.
 - **A schedule systemd does not read.** The deploy stopped before writing
   anything: fix the expression in `schedule`, check it with the user, deploy
   again.
@@ -124,7 +123,7 @@ Every error carries a `hint`: follow it. The usual ones:
 - **A port is taken.** Delete `port` from `sitesolide.json`; deploy picks a free
   one and writes it back.
 - **The name already exists on the server.** Another project uses it: pick
-  another with `slug` (`--slug`), never deploy over it.
+  another with `--slug`, never deploy over it.
 - **Access refused.** `out-of-scope`: whoever asks may not give that. A token
   gives Can open alone, to people of the company's domains or one of those
   domains, never password access; ask the user to give it from the dashboard,
@@ -137,41 +136,40 @@ Every error carries a `hint`: follow it. The usual ones:
 
 - Never touch the server by hand: no `ssh`, no `sudo`, no `systemctl`, no
   editing files there, and never `caddy stop` or `caddy start`, which stop every
-  site at once. Everything goes through the CLI or the tools.
+  site at once. Everything goes through the CLI.
 - Never retry a refusal with `--force` or a workaround on your own.
 - Never remove a project, lock or unlock a preview, switch a domain, destroy a
   machine, upgrade it (`sitesolide upgrade`; `--dry-run` only reads), rewrite
   every app's units (`sitesolide refresh`; `--dry-run` only reads) or replace
   DNS records with `setup --dns-replace` unless the user asked for exactly
-  that: those are their commands, not tools.
+  that: those are their commands, not yours.
 - Never retry `setup` in a loop on a refused connection: most likely fail2ban
   banned this workstation, for 10 minutes.
 - Never give access to anyone the user did not name, nor a role they did not
   name, and never make a site Public: general access is theirs, from the
   dashboard.
 - Never read, print or guess a secret, nor ask the user to paste one. A
-  random key is drawn on the server, `secrets_generate`, and nobody sees it;
-  `sitesolide secrets set NAME --stdin` is for the user to run, or for a
-  value you generate yourself and pipe (`openssl rand -hex 32 | sitesolide
-  secrets set SESSION_SECRET --stdin --json`); never for a value from the
-  conversation, and never with the value as an argument. A name that looks
+  random key is drawn on the server, `sitesolide secrets generate NAME`, and
+  nobody sees it; `sitesolide secrets set NAME --stdin` is for the user to
+  run, or for a value you generate yourself and pipe (`openssl rand -hex 32
+  | sitesolide secrets set SESSION_SECRET --stdin --json`); never for a
+  value from the conversation, and never with the value as an argument. A name that looks
   like a value is refused `looks-like-value`, never quoted: tell the user it
-  may be in the shell's history and to change it at its source. No MCP tool
-  sets a value, on purpose. Never replace a live secret (`--replace`): that
-  is the user's.
+  may be in the shell's history and to change it at its source. Never
+  replace a live secret (`--replace`): that is the user's.
 
 ## Status and other reads
 
-`status` lists every project on the machine with its service state and
-memory; a scheduled service shows its schedule, its last run and how it
-ended, and its next run, and is `inactive` between two runs, which is not an
-outage. Its runs are in `logs`, beside the other services. `access`
-(`sitesolide share --json`) says a project's general access and its people
-with access, with their roles. `lock_status`
-(`sitesolide lock --status --json`) says whether a preview is closed behind an
-access code, without revealing the code.
+`sitesolide status --json` lists every project on the machine with its
+service state and memory; a scheduled service shows its schedule, its last
+run and how it ended, and its next run, and is `inactive` between two runs,
+which is not an outage. Its runs are in the logs, beside the other services.
+`sitesolide share --json` says a project's general access and its people
+with access, with their roles. `sitesolide lock --status --json` says
+whether a preview is closed behind an access code, without revealing the
+code.
 
-`secrets` (`sitesolide secrets --json`) lists the project's secret names,
+`sitesolide secrets --json` lists the project's secret names,
 each set or missing, its files and its build's names, never a value, and
 whether a restart is pending: over the owner's SSH, or with a token minted
 with *Manage secrets*, which also sets, generates and removes any name of the
@@ -181,7 +179,7 @@ refused. Only the owner reads a value back, in the dashboard. `unconfirmed`
 means a change was sent and no answer came: check with `sitesolide secrets
 --json`, then run the same command once more, never in a loop. `sitesolide
 restart --json`, for any token that deploys the project, restarts the
-service and ends in an `error` unless it holds: read `logs` then.
+service and ends in an `error` unless it holds: read the logs then.
 
 The full reference: `docs/agents.md` in the sitesolide repository, and
 `docs/manifest.md` for every key of `sitesolide.json`.

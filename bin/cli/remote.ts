@@ -40,8 +40,8 @@
  *
  * **An option this path does not carry is refused, never passed over.**
  * `deploy --dry-run` used to deploy for real here, and `--json` to print plain
- * text, so that the MCP tool's dry run replaced the live site and then
- * reported a failure inviting a retry. Both now behave as over SSH: `--json`
+ * text, so that an agent's dry run replaced the live site and then reported
+ * a failure inviting a retry. Both now behave as over SSH: `--json`
  * prints the same events and one final `result` or `error`, and a dry run is
  * refused, saying why, until the control API can judge without deploying.
  */

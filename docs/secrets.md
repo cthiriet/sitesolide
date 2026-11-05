@@ -215,7 +215,7 @@ empty file is listed *missing* too.
 
 **Only the owner reads a value back**, and only in the unlocked dashboard: a
 Developer's or an Admin's dashboard shows every value write-only. Nothing of
-the token API, the CLI, the MCP tools or the build returns one. Even a
+the token API, the CLI or the build returns one. Even a
 file's size is the owner's, in the dashboard and over SSH, which the listing
 shows the owner alone. A writer may still narrow a size down through the size
 refusals, by trying writes; that is no more than the code a writer may deploy

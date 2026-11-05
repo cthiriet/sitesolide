@@ -80,8 +80,8 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
 - **A monitor** that checks every site each minute; give it a heartbeat and it
   notices the machine itself dying. See [monitor/README.md](monitor/README.md).
 - **Agents first-class.** The CLI speaks `--json`, every error carrying a hint,
-  and `sitesolide mcp` serves deploy, logs and access to Claude Code, Codex or
-  Cursor.
+  for Claude Code, Codex or Cursor to deploy, read the logs and give access as
+  you would, and a skill teaches them the workflow.
 
 ## What it does not do
 
@@ -108,7 +108,7 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
 - [Commands](docs/commands.md): everything the CLI does
 - [People and tokens](docs/access.md): roles on a project, and deploying with a token instead of SSH
 - [Secrets](docs/secrets.md): what goes in `env`, in the server's store, in a file, or with whoever deploys, and why never in git
-- [Agents](docs/agents.md): `--json`, the MCP server and the skill
+- [Agents](docs/agents.md): `--json` and the skill
 - [Upgrading](docs/upgrading.md): from one release to the next on a running machine
 
 An agent starts with [llms.txt](llms.txt).
