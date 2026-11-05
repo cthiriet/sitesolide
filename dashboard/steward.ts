@@ -245,18 +245,11 @@ ownerStoreClaimed = control.storeClaimed;
 // The access registry: begun empty on a machine without one, then its
 // projection written again for the portal. In the background, never in the
 // sockets' way: until it is done the access routes answer `not-ready`, and an
-// attempt that fails is tried again later and later. Then, once, every token
-// made someone's.
+// attempt that fails is tried again later and later. Then the tokens of anyone
+// with no rights left go at once, rather than at the first sweep.
 void handler
   .startAccess()
-  .then(async () => {
-    for (let wait = 5_000; !(await control.migrateTokens()); wait = Math.min(wait * 2, 600_000)) {
-      console.log(`steward: tokens not made someone's yet, tried again in ${Math.round(wait / 1000)} s`);
-      await Bun.sleep(wait);
-    }
-    // Once made someone's: the tokens of anyone with no rights left go now.
-    await control.sweepTokens();
-  })
+  .then(() => control.sweepTokens())
   .catch((e: unknown) => console.error(`steward: access registry not ready (${(e as Error).name})`));
 
 // A person becomes Admin of what their token created once its installer has

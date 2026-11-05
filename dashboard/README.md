@@ -1076,7 +1076,7 @@ steward.js         src/control/steward.ts: the session and the unlock asked of t
   role back meanwhile keeps their tokens. Each is journaled as `token.revoke`
   under the owner or the Admin who took their last role above Can open; and a
   token whose person the registry no longer lets sign in is refused anyway.
-  Every 30 seconds, and once the tokens from before are made someone's, the
+  Every 30 seconds, and once the registry reads at its start, the
   steward also revokes the live tokens of anyone the registry gives no
   rights, journaled under `system`: someone taken out while their tokens could
   not be revoked, or out of a registry restored by hand, never finds them

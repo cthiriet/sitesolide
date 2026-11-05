@@ -33,10 +33,9 @@
  * give. One undone, nothing laid, gives its name back. No token creates a
  * name under which the machine still keeps a removed project's snapshots or
  * store of secrets (`judgeDeployment`): its creator would be their Admin.
- * The tokens from before every token belonged to someone are made someone's
- * once (`migrateTokens`), and the live tokens of anyone the registry gives no
- * rights are revoked every 30 seconds (`sweepTokens`), so that a person given
- * a role again never finds old tokens alive.
+ * The live tokens of anyone the registry gives no rights are revoked every
+ * 30 seconds (`sweepTokens`), so that a person given a role again never
+ * finds old tokens alive.
  *
  * **Two queues here**, the tokens' and the creations', in the order
  * src/people/steward.ts sets for every queue of this steward: the tokens'
@@ -149,7 +148,6 @@ import {
   forgetOwnership,
   liveTokensOf,
   MAX_UNCARRIED_NAMES,
-  migrateTeam,
   ownedBy,
   pruneTeam,
   readHolder,
@@ -273,8 +271,6 @@ export type ControlHandler = Handler & {
   tokensOf: (email: string) => Promise<LeavingToken[]>;
   /** `DELETE /tokens/project`: a project removed from the machine, its token ownership and its people with access forgotten. */
   owner: Handler;
-  /** Every token made someone's, once the access registry reads: true once done, false to try again later. */
-  migrateTokens: () => Promise<boolean>;
   /** The creations whose installer has finished, settled: the person Admin of what succeeded. */
   settleCreations: () => Promise<void>;
   /** The live tokens of anyone the registry gives no rights, revoked; the ones revoked. */
@@ -1829,36 +1825,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     });
   }
 
-  /**
-   * Every token made someone's, once: those whose email signs in to the
-   * dashboard become that person's, the others the owner's own. Waits for an
-   * access registry that reads: false, and nothing written, until then.
-   */
-  async function migrateTokens(): Promise<boolean> {
-    if (options.members === undefined) return true;
-    const members = options.members;
-    return serially(async () => {
-      const registry = await team();
-      if (registry instanceof Response) return false;
-      if (registry.version === 2) return true;
-      const people = new Map<string, boolean>();
-      for (const record of registry.tokens) {
-        const email = record.email.trim().toLowerCase();
-        if (record.member !== undefined || people.has(email)) continue;
-        const rights = await members.rights(email);
-        if (rights instanceof Response) return false;
-        people.set(email, rights !== null);
-      }
-      const migrated = migrateTeam(registry, (email) => people.get(email) === true);
-      if ((await save(migrated.team)) !== null) return false;
-      for (const record of migrated.persons) {
-        await members.journal({ operation: "token.create", result: "ok", actor: "system", member: record.member ?? null, detail: line(`${record.id}: now ${record.member}'s, narrowed to their roles; made by the owner before every token belonged to someone`) });
-      }
-      console.log(`control: tokens made someone's: ${migrated.persons.length} a person's, ${migrated.owner.length} the owner's own`);
-      return true;
-    });
-  }
-
   const routes: Record<string, Record<string, Handler>> = {
     "/tokens/list": { GET: listTokens },
     "/tokens/create": { POST: newToken },
@@ -1912,7 +1878,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     }),
     ownerWroteStore,
     storeClaimed,
-    migrateTokens,
     settleCreations,
     sweepTokens,
   });

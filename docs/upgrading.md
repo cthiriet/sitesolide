@@ -147,6 +147,11 @@ through it, and it no longer ran but to find nothing to do.
   answer 404 like any route it does not know. The registry's record of what
   its making set aside, and the entries it gave, are read and kept as they
   stand.
+- **The tokens from before every token belonged to someone are no longer
+  converted.** 0.4.0 to 0.16 made each one someone's at the steward's start,
+  and wrote `team.json` as version 2; a `team.json` of version 1, or with no
+  version, now does not read, and every token is refused until a human looks,
+  as for any registry that does not read.
 
 **What `sitesolide upgrade` brings**: the backups, their code and their run's
 unit, after the refusal above; the steward, the dashboard and the portal.

@@ -55,11 +55,11 @@ export type TokenRecord = Omit<TokenView, "owned" | "member" | "by"> & { hash: s
 
 export type Team = {
   /**
-   * 2 once every token belongs to someone: those of a person of People made
-   * theirs, the others the owner's (`migrateTeam`). 1, or absent, a registry
-   * from before.
+   * 2: every token belongs to someone, a person of People or the owner. The
+   * registries of before, 1 or no version, were made so at the first start
+   * of a steward of 0.4.0 to 0.16, and are no longer read.
    */
-  version: 1 | 2;
+  version: 2;
   tokens: TokenRecord[];
   /** slug -> id of the token that created it. */
   owners: Record<string, string>;
@@ -237,8 +237,9 @@ export function readTeam(text: string | null): Team | { unreadable: string } {
   } catch {
     return { unreadable: "team.json is not JSON" };
   }
-  if (!isObject(object) || !Array.isArray(object.tokens) || !isObject(object.owners) || (object.version !== undefined && object.version !== 1 && object.version !== 2)) {
-    return { unreadable: "team.json does not have the expected shape" };
+  if (!isObject(object) || !Array.isArray(object.tokens) || !isObject(object.owners)) return { unreadable: "team.json does not have the expected shape" };
+  if (object.version !== 2) {
+    return { unreadable: "team.json is from before every token belonged to someone: the steward of a release from 0.4.0 to 0.16 converts it at its start" };
   }
   if (!object.tokens.every(isRecord)) return { unreadable: "a token of team.json does not have the expected shape" };
   const owners: Record<string, string> = {};
@@ -251,7 +252,7 @@ export function readTeam(text: string | null): Team | { unreadable: string } {
   // A token minted before the `secrets` flag manages no secret: read false here,
   // written so at the next save.
   const tokens = (object.tokens as TokenRecord[]).map((record) => ({ ...record, scope: { ...record.scope, secrets: record.scope.secrets === true } }));
-  return { version: object.version === 2 ? 2 : 1, tokens, owners };
+  return { version: 2, tokens, owners };
 }
 
 export function encodeTeam(team: Team): string {
@@ -299,32 +300,6 @@ export function pruneTeam(team: Team, now: number, maxBytes: number): Team | nul
     else low = middle;
   }
   return without(high);
-}
-
-/**
- * Every token made someone's, once: one whose email names a person of
- * People becomes theirs, made by the owner, narrowed to their roles from then
- * on and revoked with them; any other becomes the owner's own, its email kept
- * as the label it always was. `isPerson`: does this email sign in to the
- * dashboard, a role above Can open or the create right. A registry already
- * migrated comes back as it is.
- */
-export function migrateTeam(team: Team, isPerson: (email: string) => boolean): { team: Team; persons: TokenRecord[]; owner: TokenRecord[] } {
-  if (team.version === 2) return { team, persons: [], owner: [] };
-  const persons: TokenRecord[] = [];
-  const owner: TokenRecord[] = [];
-  const tokens = team.tokens.map((record) => {
-    if (record.member !== undefined) return record;
-    const email = record.email.trim().toLowerCase();
-    if (EMAIL_SHAPE.test(email) && isPerson(email)) {
-      const made: TokenRecord = { ...record, member: email, by: OWNER_HOLDER };
-      persons.push(made);
-      return made;
-    }
-    owner.push(record);
-    return record;
-  });
-  return { team: { version: 2, tokens, owners: team.owners }, persons, owner };
 }
 
 /** The projects a token created, sorted. */

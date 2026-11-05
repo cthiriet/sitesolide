@@ -561,48 +561,6 @@ describe("a token the owner makes for a person", () => {
   });
 });
 
-describe("the tokens from before every token belonged to someone", () => {
-  function legacyTeam(b: Bench, emails: string[]): void {
-    const tokens = emails.map((email, index) => ({
-      id: `00000000000${index}`,
-      label: `token ${index}`,
-      email,
-      createdAt: 1,
-      expiresAt: null,
-      revokedAt: null,
-      lastUsedAt: null,
-      scope: { slugs: ["gamma"], create: false, outbound: false, domain: false, public: false },
-      hash: String(index).repeat(64).slice(0, 64),
-    }));
-    writeFileSync(join(b.root, "state", "team.json"), `${JSON.stringify({ tokens, owners: {} })}\n`);
-  }
-
-  test("made someone's once: a person of People's theirs, narrowed from then on; anyone else's the owner's own", async () => {
-    const b = bench();
-    legacyTeam(b, [ADA, "contractor@elsewhere.test", BOB]);
-    expect(await b.handler.migrateTokens()).toBe(true);
-    const tokens = ((await (await call(b, "GET", "/tokens/list")).json()) as { tokens: TokenView[] }).tokens.sort((x, y) => x.id.localeCompare(y.id));
-    expect(tokens.map((one) => [one.email, one.member, one.by])).toEqual([
-      [ADA, ADA, "owner"],
-      ["contractor@elsewhere.test", null, "owner"],
-      [BOB, BOB, "owner"],
-    ]);
-    expect(b.journal.filter((event) => event.operation === "token.create").map((event) => event.member)).toEqual([ADA, BOB]);
-    // Once: run again, nothing changes even for someone who signs in since.
-    expect(JSON.parse(readFileSync(join(b.root, "state", "team.json"), "utf8")).version).toBe(2);
-    expect(await b.handler.migrateTokens()).toBe(true);
-  });
-
-  test("a registry that does not read waits: nothing written, tried again later", async () => {
-    const b = bench();
-    legacyTeam(b, [ADA]);
-    const before = readFileSync(join(b.root, "state", "team.json"), "utf8");
-    b.members.rights = async () => Response.json({ error: "migrating", message: "later" }, { status: 503 });
-    expect(await b.handler.migrateTokens()).toBe(false);
-    expect(readFileSync(join(b.root, "state", "team.json"), "utf8")).toBe(before);
-  });
-});
-
 describe("a project removed from the machine", () => {
   const forget = (b: Bench, slug: unknown) =>
     b.handler.owner(new Request("http://steward/team/project", { method: "DELETE", body: JSON.stringify({ slug }) }));

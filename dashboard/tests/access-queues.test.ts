@@ -104,7 +104,6 @@ async function wire(registry: Registry, sites: string[]) {
     },
   );
   await store.ensure();
-  expect(await control.migrateTokens()).toBe(true);
 
   const post = (path: string, body: unknown) => control!(new Request(`http://steward${path}`, { method: "POST", body: JSON.stringify(body) }));
   const mint = async (holder: string, create: boolean, slugs: string[] = []) => {

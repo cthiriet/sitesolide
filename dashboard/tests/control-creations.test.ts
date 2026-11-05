@@ -161,7 +161,6 @@ async function wire(registry: Registry, sites: string[]) {
     },
   );
   await store.ensure();
-  expect(await control.migrateTokens()).toBe(true);
 
   const handler = control;
   const post = (path: string, body: unknown) => handler(new Request(`http://steward${path}`, { method: "POST", body: JSON.stringify(body) }));
