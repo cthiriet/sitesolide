@@ -42,17 +42,14 @@ export const CONTROL_SCHEMA = [
      created_at INTEGER NOT NULL,
      started_at INTEGER,
      finished_at INTEGER,
-     message TEXT
+     message TEXT,
+     -- The member whose own token asked for the deployment, null for an
+     -- owner's token, so that how it ended names them too. Last: the
+     -- databases made before it gained it by ALTER TABLE, up to 0.16.
+     member TEXT
    )`,
   `CREATE INDEX IF NOT EXISTS deployments_state ON deployments (state)`,
 ] as const;
-
-/**
- * Columns added since a table was first created, each read back before it is
- * added: `member`, the dashboard's member whose own token asked for a
- * deployment, null for an owner's token, so that how it ended names them too.
- */
-const ADDED_COLUMNS: readonly { table: string; column: string; definition: string }[] = [{ table: "deployments", column: "member", definition: "TEXT" }];
 
 export type { AuditEntry };
 
@@ -89,10 +86,6 @@ export type ControlStore = ReturnType<typeof createControlStore>;
 
 export function createControlStore(db: Database) {
   for (const statement of CONTROL_SCHEMA) db.run(statement);
-  for (const { table, column, definition } of ADDED_COLUMNS) {
-    const columns = db.query<{ name: string }, []>(`SELECT name FROM pragma_table_info('${table}')`).all();
-    if (!columns.some((one) => one.name === column)) db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-  }
 
   const queries = {
     audit: db.query<undefined, [string, string, string, string | null, string | null]>(

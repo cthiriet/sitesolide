@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,18 +23,15 @@ test("DATA_DIR is redirected to the test directory", () => {
 const WEEK = 7 * 24 * 60 * 60 * 1000;
 
 describe("the identity a session carries", () => {
-  test("a database from before members gains the column, its sessions the owner's", () => {
+  test("a new database carries the column, a session written without one the owner's", () => {
     const folder = mkdtempSync(join(tmpdir(), "sessions-"));
     try {
       const path = join(folder, "dashboard.db");
-      const before = new Database(path, { create: true });
-      before.run("CREATE TABLE sessions (empreinte TEXT PRIMARY KEY, cree_a INTEGER NOT NULL, vue_a INTEGER NOT NULL)");
-      before.run("INSERT INTO sessions VALUES ('h', 1, 1)");
-      before.close();
-      const after = openDatabase(path);
-      expect(after.query("SELECT identity FROM sessions WHERE empreinte = 'h'").get()).toEqual({ identity: "owner" });
-      // Opened twice, as server.ts does, it is not added twice.
-      after.close();
+      const made = openDatabase(path);
+      made.run("INSERT INTO sessions (empreinte, cree_a, vue_a) VALUES ('h', 1, 1)");
+      expect(made.query("SELECT identity FROM sessions WHERE empreinte = 'h'").get()).toEqual({ identity: "owner" });
+      // Opened twice, as server.ts does, nothing is made twice.
+      made.close();
       expect(() => openDatabase(path).close()).not.toThrow();
     } finally {
       rmSync(folder, { recursive: true, force: true });

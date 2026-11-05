@@ -30,8 +30,7 @@ export const PRAGMAS = [
 ] as const;
 
 export const SCHEMA = [
-  // `identity`: `owner`, or a member's email. A database from before members
-  // gains it through MIGRATIONS, its sessions all the owner's.
+  // `identity`: `owner`, or a member's email.
   `CREATE TABLE IF NOT EXISTS sessions (
      empreinte TEXT PRIMARY KEY,
      cree_a    INTEGER NOT NULL,
@@ -60,14 +59,6 @@ export const SCHEMA = [
 export const PASSWORD_HASH_KEY = "empreinte_mot_de_passe";
 
 /**
- * The columns a table gained after it was first created, and their
- * definition: `CREATE TABLE IF NOT EXISTS` leaves an existing table as it is.
- */
-export const MIGRATIONS: readonly { table: string; column: string; definition: string }[] = [
-  { table: "sessions", column: "identity", definition: "TEXT NOT NULL DEFAULT 'owner'" },
-];
-
-/**
  * `strict` throws on a missing parameter instead of silently binding it to
  * NULL and writing an incomplete row.
  */
@@ -75,10 +66,6 @@ export function openDatabase(path: string): Database {
   const base = new Database(path, { create: true, strict: true });
   for (const pragma of PRAGMAS) base.run(`PRAGMA ${pragma}`);
   for (const table of SCHEMA) base.run(table);
-  for (const { table, column, definition } of MIGRATIONS) {
-    const columns = base.query<{ name: string }, []>(`SELECT name FROM pragma_table_info('${table}')`).all();
-    if (!columns.some((one) => one.name === column)) base.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-  }
   return base;
 }
 
