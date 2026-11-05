@@ -189,7 +189,7 @@ and only then followed by the code.
 
 The same holds for the HTTP surface a deployed fragment or a served page
 already speaks: the routes `/interne/domaine-autorise`, `/verifier`, `/sante`,
-`/_portal/connexion`, `/_portal/deconnexion` and `/admin/invites/:id`, the
+`/_portal/connexion` and `/_portal/deconnexion`, the
 header `X-Portal-Hote` and the value `X-Portal: connexion`, and the portal's
 form fields `retour` and `motdepasse`. `/verifier` is the target of the
 `forward_auth` written into every fragment in service: renaming it cuts every
@@ -210,9 +210,9 @@ are defined and used inside a file that deploys whole.
 The configuration was in that group until the socle was translated: the keys of
 `~/.config/sitesolide/config.json` and the environment variables the shell
 scripts share with the CLI are English now, the latter carrying a `SITESOLIDE_`
-prefix. `bin/cli/config.ts` still reads the four old keys and says they are
-outdated, which is what a rename costs when it happens before publication
-rather than after.
+prefix. Up to 0.16, `bin/cli/config.ts` still read the old keys and said
+they were outdated, which is what a rename costs when it happens before
+publication rather than after; it reads the English ones alone now.
 
 A handful of accented strings in the tests are deliberate and stay: they are
 what proves that search ignores accents, that a body cap counts bytes rather
