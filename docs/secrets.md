@@ -455,5 +455,10 @@ it there. Restrict it to the one zone, `Zone / Zone / Read` and `Zone / DNS /
 Edit`, so that the machine holds no more than it needs. See
 [machine.md](machine.md) and [setup.md](setup.md).
 
-Up to 0.2 both lived in `~/.config/sitesolide/terraform/terraform.tfvars`;
-[upgrading.md](upgrading.md) says what to do with that folder.
+Up to 0.2 both lived in `~/.config/sitesolide/terraform/terraform.tfvars`.
+Nothing reads that folder any more, and it still holds those tokens and the
+machine's address: copy the tokens into your password manager, then keep the
+folder as a record or delete it. Never run `terraform apply` or `terraform
+destroy` against that state from a release after 0.2: with the `.tf` files
+gone, Terraform plans the destruction of everything it created, the server
+first.

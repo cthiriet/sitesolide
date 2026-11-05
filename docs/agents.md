@@ -426,39 +426,9 @@ sitesolide is set up, the deploy loop, the `--json` contract, what changes
 something, tokens, access, a new server, the rules an agent never breaks, and
 links to these documents.
 
-## Upgrading from 0.1
+## What only the machine can confirm
 
-Agents arrived in 0.2: a workstation on 0.2 or later has all of this, and
-[upgrading.md](upgrading.md) is the order from one release to the next.
-
-Everything here runs on the workstation. **Nothing changes on the machine**,
-and nothing has to be run there: the commands send the same remote commands
-they always did, the journal's JSON aside, which `logs --json` alone asks for.
-
-1. Pull the repository on the workstation. Check: `sitesolide detect` in a
-   project folder prints a manifest, and `sitesolide deploy --dry-run --json`
-   ends with a `result` line.
-2. Optionally, link the skill, as above.
-
-To roll back: check out the previous commit, and remove the
-`~/.claude/skills/sitesolide` link.
-
-One behaviour changed: an app whose manifest has no `port` used to be refused,
-and is now given one by `deploy`. Every manifest already deployed declares its
-port and is untouched.
-
-`share` needs the machine's side: a steward that keeps
-the access registry, and with a token the dashboard of the same release, which
-`sitesolide upgrade` brings both: see
-[upgrading.md](upgrading.md#the-operators-path-sitesolide-upgrade).
-
-A later release hardened what an agent, a token or a cloned folder can make
-`deploy` do: a dry run no longer runs the build, `install` runs as the project's
-account in its service's walls, `.git` and `.env` never leave, and more. Some of
-it does change the machine, and has an order: see [commands.md](commands.md),
-"Upgrading to the hardened deploy".
-
-**What only the machine can confirm**, on the first real deploy of each kind:
+On the first real deploy of each kind:
 
 - an inferred Python app's `start` uses `${PORT}`, which systemd expands from
   the unit's own `Environment=PORT=`: `systemctl show <slug> -p ExecStart` shows

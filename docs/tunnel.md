@@ -241,9 +241,9 @@ Cloudflare's edge rather than in the DNS:
   switched off too. The header shows the zone only on a domain switched off,
   whose preview address under that zone is public anyway. A static site's
   name answers a plain 404 instead, and an app's whose block predates that
-  404 the site itself (see [A domain switched off stops
-  answering](upgrading.md#a-domain-switched-off-stops-answering)): `--force`
-  is for those cases, once the record points at the tunnel.
+  404, written by a release before 0.13 and not deployed since, the site
+  itself: `--force` is for those cases, once the record points at the
+  tunnel.
 
 A name that fails is refused with the records to create; `--force` goes
 ahead anyway, as it does past the DNS check of a machine served directly.

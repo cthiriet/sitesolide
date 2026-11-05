@@ -1967,147 +1967,6 @@ bin/deploy-installer.sh             # 3. the installer's code, its template, its
 Revoking every token closes the API without touching anything else: *Tokens*,
 *Revoke* on each.
 
-### Upgrading: the manifest's strings, egress, the deployment cap
-
-A security review of the control API tightened what a manifest may write
-into a Caddy block or a unit (bin/cli/manifest.ts, fragment.ts, unit.ts),
-folded `egress` under the outbound permission, stopped deployments waiting for
-their archive from counting against the machine, and made the rate limiting
-read the address Caddy appends. Nothing changes on the machine until these
-steps run, and each one stands without the next.
-
-Before anything, on the workstation: `bin/test.sh`. Its manifest tests
-validate every manifest of the repository and of the sites repository with
-the new rules, which are the manifests deposited on the machine: a refusal
-there is a manifest to fix before deploying anything. None of them holds a
-`%`, so no unit in service diverges once the generator escapes it.
-
-```bash
-bin/deploy-installer.sh             # 1. the judge that counts: validate(), the scope, the generators
-cd dashboard && sitesolide deploy   # 2. the API's early refusals, the cap, the limiter, the Tokens page
-bin/deploy-gatekeeper.sh            # 3. the same generator for the portal's block
-```
-
-1. **The installer.** Check: a token deployment whose manifest carries
-   `"headers": { "X-Test": "{$CLOUDFLARE_API_TOKEN}" }` fails with
-   `invalid-manifest` and writes nothing; `examples/bun-app` still deploys.
-   Roll back: `bin/deploy-installer.sh` from the previous commit.
-2. **The dashboard.** Check: the same manifest is refused at
-   `POST /api/v1/deployments` before any upload; a token without outbound
-   network gets `egress: your token may not reach outside hosts`; the *Tokens*
-   page's outbound permission mentions the hosts a service lists. Roll back:
-   deploy the previous commit of `dashboard/`; no table changed.
-3. **The gatekeeper.** Check: making a site public, then restricted again,
-   from its *Access* section still works. Roll back: `bin/deploy-gatekeeper.sh` from the
-   previous commit.
-
-The steward needs nothing: it judges tokens and slugs, not manifests.
-
-### Upgrading: a refused new project leaves nothing behind
-
-A verification on a test machine found that a new project the installer
-refused, its archive above all (a `..`, a link), kept the account and the
-empty `/srv/sites/<slug>/{app,public,data}` created before the archive was
-judged: the zone's wildcard served that empty tree to everyone, and the
-token's `status` listed it as a public project of no type. The installer now
-removes what it created, units, tree, then account, when it stops before
-anything was served, and only for a project whose tree did not exist: an
-existing project, an account or a unit already on the machine are never
-touched. A stop from the Caddy step on keeps everything, as before. The same
-verification found a private token deploying `dashboard` told "this site is
-public on the machine" (422) instead of `reserved` (403): the dashboard now
-judges the reserved slugs first. Each step stands without the other.
-
-```bash
-bin/test.sh                         # 0. on the workstation
-bin/deploy-installer.sh             # 1. the installer, which undoes what it created
-cd dashboard && sitesolide deploy   # 2. the reserved slugs judged first
-```
-
-1. **The installer.** It now runs `/usr/sbin/userdel`, from the same package
-   as `useradd` on Debian and Ubuntu, under the template unit as it stands:
-   `/etc` is already writable for `useradd`. Check, with a token that may
-   create projects, from a workstation with no server: in a throwaway folder
-   holding a `server.ts`, a manifest `{ "slug": "undo-check", "start":
-   "/usr/local/bin/bun run server.ts", "install": "false" }` fails with
-   `install-failed`, and its log ends with `removed    /srv/sites/undo-check`
-   and `removed    site-undo-check`; on the machine, `getent passwd
-   site-undo-check` prints nothing and `ls /srv/sites/undo-check` finds
-   nothing. `examples/bun-app` still deploys. A `userdel` that fails says so
-   in the log and leaves the account: `sudo userdel site-<slug>` removes it.
-   Roll back: `bin/deploy-installer.sh` from the previous commit.
-2. **The dashboard.** Check: the same token deploying a folder whose manifest
-   names `"slug": "dashboard"` gets `reserved`, 403, "pick another slug".
-   Roll back: deploy the previous commit of `dashboard/`; no table changed.
-
-### Upgrading: secrets by token
-
-A token may now manage secrets ([Secrets by token](#secrets-by-token)).
-One thing changes at once: every token already minted restarts the services
-of the projects it deploys, 30 times an hour, a person's own while they are
-Developer or Admin there, journaled under the token; no box is ticked for it,
-a deployment restarting the service anyway. Secrets wait for someone to mint
-a token with *Manage secrets*: every token minted before lists and manages
-none. No file changes form:
-`team.json` keeps `version: 2`, a scope without `secrets` reads false, and
-the next save writes `secrets: false`; a steward rolled back reads it as it
-stands, the extra key ignored.
-
-```bash
-bin/test.sh                         # 0. on the workstation
-sitesolide upgrade                  # 1. the steward, the dashboard, the installer
-```
-
-0. **The workstation.** Pull, then `bin/test.sh`. The CLI brings `sitesolide
-   secrets`, `secrets set`, `secrets remove` and `restart` for a token; over
-   the owner's SSH both still point to the dashboard. Whoever works with a
-   token installs the new binary too: a previous one refuses `secrets` as
-   needing the owner's SSH and `restart` as a usage error.
-1. **The machine.** `sitesolide upgrade` redeploys, in its usual order, the
-   steward, with the three routes and the hourly bounds; the dashboard, with
-   the API's routes, *Manage secrets* in the *New token* dialog and *Token
-   activity* reading the journal; the installer, which named a missing
-   secret with `sitesolide secrets set` and stopped (since the store,
-   a missing secret never stops a deployment: see "Upgrading: the store of
-   secrets"). Should the versions meet otherwise, the
-   dashboard deployed alone or the steward's step failed, a new dashboard
-   answers the routes `not-available`, saying to upgrade, and refuses to mint
-   a token with the box ticked: "The server's steward predates this
-   permission: run sitesolide upgrade." An old dashboard in front of the new
-   steward offers none of the routes, which the CLI says as `not-available`.
-   Check, with a token minted with *Manage secrets* for a project whose
-   restart costs nothing, from a workstation
-   with no server: `sitesolide secrets` lists its names; `openssl rand -hex
-   16 | sitesolide secrets set UPGRADE_CHECK --stdin` sets one, which the
-   project's *Activity* and the token's sheet show under the token; then
-   `sitesolide secrets remove UPGRADE_CHECK --restart` takes it out and
-   restarts the service. A token without the permission is refused
-   `out-of-scope`, and still restarts.
-
-**Rolling back**: `sitesolide upgrade` with the previous binary. The
-previous steward ignores the new key and knows no secrets route, which the
-previous dashboard does not offer either; the values tokens set stay on the
-machine, and their lines in the journal.
-
-### Upgrading: the store of secrets
-
-Every app gets a store ([A project's store](#a-projects-store)), and Admin
-no longer reads a value back, from the moment the steward is upgraded.
-`sitesolide upgrade` brings the steward first, with the store's routes on
-both sockets, then the dashboard, with its page and the API's routes, and
-the installer, which lays the store's folders before a project's units; then
-the CLI. Nothing changes in a project until it is deployed again or
-refreshed: its units then read its store and hide `/etc/sitesolide`. Each
-unit in service is replaced without `--force`, since it equals what the
-previous release generated. A project that still read files of
-`/etc/sitesolide` moves to its store before the release that stops reading
-them: [docs/upgrading.md](../docs/upgrading.md).
-
-Should the versions meet otherwise: a new CLI facing an older steward warns
-that it cannot tell which secrets are set, and deploys; an older CLI, or an
-older installer, refuses a manifest that lists names before anything is
-pushed.
-
 ## Deployment, in this order
 
 ```bash
@@ -2175,9 +2034,8 @@ When the CLI's block generator changes the blocks it writes, as it did when its
 file servers began to hide `.git` and `.env*`, update the gatekeeper and the
 installer **before** redeploying other sites with the new CLI: until then, they
 take a block of the new generation for a hand edit, and refuse a portal change
-or a token's deploy of that site, changing nothing served. See
-[docs/commands.md](../docs/commands.md), "Upgrading to the hardened deploy", for
-the order of that release. The installer now also asks systemd what it knows of
+or a token's deploy of that site, changing nothing served. `sitesolide
+upgrade` runs them in that order. The installer also asks systemd what it knows of
 a unit name before writing anything (`systemctl show -p LoadState -p
 FragmentPath`), and stops on `system-unit` when it is a service of the machine.
 
