@@ -40,9 +40,6 @@
  * under `/tokens/person/`, which ask these routes for the person's session,
  * unlock and rights (src/people/tokens.ts).
  *
- * The paths under `/members/` answer too, for one release: a dashboard
- * deployed before the steward it speaks to still calls them.
- *
  * Every refusal is `{ error, message }`, the message in English, shown as it
  * stands. Beside the codes of src/secrets/protocol.ts: `signed-out` (401),
  * the session is unknown, expired, or its person was removed; `no-role`

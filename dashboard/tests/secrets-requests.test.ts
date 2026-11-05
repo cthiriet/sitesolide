@@ -85,10 +85,9 @@ describe("the requests in flight", () => {
     expect((await owner(new Request("http://steward/ok"))).status).toBe(200);
   });
 
-  test("a path renamed is served under its new name, and an unknown one never reaches a handler", async () => {
-    const serve = createServe({ maxInFlight: 4, log: "test", rename: (path) => (path.startsWith("/members/") ? `/people/${path.slice("/members/".length)}` : path) });
+  test("an unknown path never reaches a handler", async () => {
+    const serve = createServe({ maxInFlight: 4, log: "test" });
     const handle = serve({ "/people/key": { GET: async () => Response.json({ key: true }) } });
-    expect(await (await handle(new Request("http://steward/members/key"))).json()).toEqual({ key: true });
     expect(await (await handle(new Request("http://steward/people/key"))).json()).toEqual({ key: true });
     const unknown = await handle(new Request("http://steward/constructor"));
     expect({ status: unknown.status, body: await unknown.json() }).toEqual({ status: 404, body: { error: "not-found", message: "no such route" } });

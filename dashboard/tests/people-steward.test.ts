@@ -897,13 +897,11 @@ describe("the steward's start on a machine without a registry", () => {
 });
 
 describe("the routes under their names before", () => {
-  test("a dashboard deployed before this steward still reaches a person's routes under /members/", async () => {
+  test("a person's routes answer under /people/ alone: /members/, their name before, is gone", async () => {
     const bench = await mount();
     withAlice(bench);
     const session = await sessionOf(bench);
-    const old = await bench.call("POST", "/members/whoami", { session });
-    expect(old.status).toBe(200);
-    expect(await old.json()).toMatchObject({ identity: { kind: "person", email: ALICE } });
     expect((await bench.call("POST", "/people/whoami", { session })).status).toBe(200);
+    expect((await bench.call("POST", "/members/whoami", { session })).status).toBe(404);
   });
 });

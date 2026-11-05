@@ -442,7 +442,7 @@ describe("a person, end to end", () => {
     const { browser } = await signInAs(ALICE);
     const token = browser.jar.get("session")!;
     await browser.api("/api/signout", { method: "POST" });
-    const whoami = await steward(new Request("http://steward/members/whoami", { method: "POST", body: JSON.stringify({ session: token }) }));
+    const whoami = await steward(new Request("http://steward/people/whoami", { method: "POST", body: JSON.stringify({ session: token }) }));
     expect(whoami.status).toBe(401);
   });
 });
@@ -663,7 +663,7 @@ describe("a person's own tokens, end to end", () => {
     await takeOff(carol);
     const gone = await api("/api/v1/whoami", secret);
     expect(gone.status).toBe(401);
-    const all = (await (await control(new Request("http://steward/team/tokens"))).json()) as { tokens: { member: string | null; revokedAt: number | null }[] };
+    const all = (await (await control(new Request("http://steward/tokens/list"))).json()) as { tokens: { member: string | null; revokedAt: number | null }[] };
     expect(all.tokens.filter((one) => one.member === carol).every((one) => one.revokedAt !== null)).toBe(true);
     expect(installs).toEqual([]);
   });

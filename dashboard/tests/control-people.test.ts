@@ -120,7 +120,7 @@ function call(b: Bench, method: string, path: string, body?: unknown): Promise<R
 const SCOPE = { slugs: [] as string[], create: false, outbound: false, domain: false, public: false };
 
 async function mint(b: Bench, scope: Partial<typeof SCOPE>, session = "ada-session"): Promise<Response> {
-  return call(b, "POST", "/team/member/tokens", { session, token: `unlock-of-${session}`, label: "laptop", expiresAt: null, scope: { ...SCOPE, ...scope } });
+  return call(b, "POST", "/tokens/person/create", { session, token: `unlock-of-${session}`, label: "laptop", expiresAt: null, scope: { ...SCOPE, ...scope } });
 }
 
 async function minted(b: Bench, scope: Partial<typeof SCOPE>, session = "ada-session"): Promise<{ token: TokenView; secret: string }> {
@@ -160,13 +160,13 @@ describe("a person mints their own", () => {
     expect(readFileSync(join(b.root, "state", "team.json"), "utf8")).not.toContain(secret);
     expect(b.journal.at(-1)).toEqual({ operation: "token.create", result: "ok", actor: ADA, member: ADA, detail: `${token.id}: alpha, beta` });
     // The owner sees it among every token, with whose it is.
-    const all = (await (await call(b, "GET", "/team/tokens")).json()) as { tokens: TokenView[] };
+    const all = (await (await call(b, "GET", "/tokens/list")).json()) as { tokens: TokenView[] };
     expect(all.tokens.map((one) => [one.id, one.member])).toEqual([[token.id, ADA]]);
   });
 
   test("an email in the request is not theirs to choose: refused as a field, the token always carries the person's", async () => {
     const b = bench();
-    const response = await call(b, "POST", "/team/member/tokens", { session: "ada-session", token: "unlock-of-ada-session", label: "x", email: "ceo@acme.test", expiresAt: null, scope: SCOPE });
+    const response = await call(b, "POST", "/tokens/person/create", { session: "ada-session", token: "unlock-of-ada-session", label: "x", email: "ceo@acme.test", expiresAt: null, scope: SCOPE });
     expect(response.status).toBe(400);
   });
 
@@ -192,7 +192,7 @@ describe("a person mints their own", () => {
       ["token.create", "rejects"],
       ["token.create", "rejects"],
     ]);
-    expect((await (await call(b, "GET", "/team/tokens")).json()) as unknown).toEqual({ tokens: [] });
+    expect((await (await call(b, "GET", "/tokens/list")).json()) as unknown).toEqual({ tokens: [] });
   });
 
   test("a Viewer everywhere mints nothing, Can open somewhere changing nothing", async () => {
@@ -219,14 +219,14 @@ describe("a person mints their own", () => {
     const own = await minted(b, { slugs: ["alpha"] });
     setRoles(b, BOB, { gamma: "developer" });
     const bobs = await minted(b, { slugs: ["gamma"] }, "bob-session");
-    const listed = (await (await call(b, "POST", "/team/member/list", { session: "ada-session" })).json()) as { tokens: TokenView[]; rights: unknown; until: number | null };
+    const listed = (await (await call(b, "POST", "/tokens/person/list", { session: "ada-session" })).json()) as { tokens: TokenView[]; rights: unknown; until: number | null };
     expect(listed.tokens.map((one) => one.id)).toEqual([own.token.id]);
     expect(listed.rights).toEqual({ roles: { alpha: "developer", beta: "admin", gamma: "viewer" }, create: false });
     expect(listed.until).toBe(1_900_000_000_000);
-    expect(await message(await call(b, "POST", "/team/member/revoke", { session: "ada-session", id: bobs.token.id }))).toMatchObject({ status: 404, message: "no such token of yours" });
+    expect(await message(await call(b, "POST", "/tokens/person/revoke", { session: "ada-session", id: bobs.token.id }))).toMatchObject({ status: 404, message: "no such token of yours" });
     // No unlock needed to revoke.
     b.unlocked.delete("ada-session");
-    const revoked = await call(b, "POST", "/team/member/revoke", { session: "ada-session", id: own.token.id });
+    const revoked = await call(b, "POST", "/tokens/person/revoke", { session: "ada-session", id: own.token.id });
     expect(revoked.status).toBe(200);
     expect(b.journal.at(-1)).toEqual({ operation: "token.revoke", result: "ok", actor: ADA, member: ADA, detail: own.token.id });
     // A person mints another; an owner's token holder asks the owner.
@@ -235,7 +235,7 @@ describe("a person mints their own", () => {
       message: "this token was revoked: mint a new one from the dashboard's Tokens page if you still have a role there, then run sitesolide login again",
     });
     // The owner revokes any token, a person's included.
-    expect((await call(b, "POST", "/team/revoke", { id: bobs.token.id })).status).toBe(200);
+    expect((await call(b, "POST", "/tokens/revoke", { id: bobs.token.id })).status).toBe(200);
   });
 });
 
@@ -325,7 +325,7 @@ describe("a person who no longer signs in", () => {
       member: ADA,
       detail: `${one.token.id}, ${two.token.id}: ada@acme.test no longer has a role on this dashboard`,
     });
-    const all = (await (await call(b, "GET", "/team/tokens")).json()) as { tokens: TokenView[] };
+    const all = (await (await call(b, "GET", "/tokens/list")).json()) as { tokens: TokenView[] };
     expect(all.tokens.every((token) => token.revokedAt !== null)).toBe(true);
     expect(await b.handler.revokeMember(ADA, "owner")).toEqual([]);
   });
@@ -563,7 +563,7 @@ describe("a token the owner makes for a person", () => {
 
 describe("a project removed from the machine", () => {
   const forget = (b: Bench, slug: unknown) =>
-    b.handler.owner(new Request("http://steward/team/project", { method: "DELETE", body: JSON.stringify({ slug }) }));
+    b.handler.owner(new Request("http://steward/tokens/project", { method: "DELETE", body: JSON.stringify({ slug }) }));
 
   test("on the owner's socket, once the machine no longer carries it: its name free for another token, journaled", async () => {
     const b = bench();
@@ -595,9 +595,9 @@ describe("a project removed from the machine", () => {
 
   test("never on the dashboard's socket, and a slug of no shape refused", async () => {
     const b = bench();
-    const asDashboard = await call(b, "DELETE", "/team/project", { slug: "omega" });
+    const asDashboard = await call(b, "DELETE", "/tokens/project", { slug: "omega" });
     expect(await message(asDashboard)).toMatchObject({ status: 404, message: "no such route" });
     expect((await forget(b, "../x")).status).toBe(400);
-    expect((await b.handler.owner(new Request("http://steward/team/tokens"))).status).toBe(404);
+    expect((await b.handler.owner(new Request("http://steward/tokens/list"))).status).toBe(404);
   });
 });

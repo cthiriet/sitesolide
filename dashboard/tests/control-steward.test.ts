@@ -305,7 +305,7 @@ describe("routing", () => {
   test("an unknown route, a wrong method", async () => {
     const s = setup();
     expect(await (await call(s, "GET", "/control/nothing")).json()).toEqual({ error: "not-found", message: "no such route" });
-    expect((await call(s, "DELETE", "/team/tokens")).status).toBe(405);
+    expect(await (await call(s, "GET", "/team/tokens")).json()).toEqual({ error: "not-found", message: "no such route" });
     const refused = await call(s, "DELETE", "/tokens/list");
     expect(refused.status).toBe(405);
     expect(refused.headers.get("Allow")).toBe("GET");
@@ -391,17 +391,8 @@ describe("what a request may carry", () => {
   });
 });
 
-describe("the routes under their names before", () => {
-  test("a dashboard deployed before this steward still lists, creates and revokes under /team/", async () => {
-    const s = setup();
-    const created = await call(s, "POST", "/team/tokens", { token: UNLOCK, label: "Ada", holder: "owner", expiresAt: null, scope: SCOPE });
-    expect(created.status).toBe(201);
-    const { token } = (await created.json()) as { token: TokenView };
-    expect(((await (await call(s, "GET", "/team/tokens")).json()) as { tokens: TokenView[] }).tokens.map((one) => one.id)).toEqual([token.id]);
-    expect((await call(s, "POST", "/team/revoke", { id: token.id })).status).toBe(200);
-  });
-
-  test("a project removed is forgotten on the owner's socket under either name, its people with access with it", async () => {
+describe("a project removed", () => {
+  test("is forgotten on the owner's socket, its people with access with it", async () => {
     const root = mkdtempSync(join(tmpdir(), "control-forget-"));
     toClean.push(root);
     for (const folder of ["state", "sites", "units", "installer"]) mkdirSync(join(root, folder));
@@ -418,17 +409,14 @@ describe("the routes under their names before", () => {
         },
       },
     );
-    for (const path of ["/tokens/project", "/team/project"]) {
-      const response = await handler.owner(new Request(`http://steward${path}`, { method: "DELETE", body: JSON.stringify({ slug: "omega" }) }));
-      expect(await response.json()).toEqual({ slug: "omega", forgotten: null, access: 2 });
-    }
-    expect(forgotten).toEqual([
-      ["omega", "owner"],
-      ["omega", "owner"],
-    ]);
+    const response = await handler.owner(new Request("http://steward/tokens/project", { method: "DELETE", body: JSON.stringify({ slug: "omega" }) }));
+    expect(await response.json()).toEqual({ slug: "omega", forgotten: null, access: 2 });
+    expect(forgotten).toEqual([["omega", "owner"]]);
+    // The name before the rename is gone with it.
+    expect((await handler.owner(new Request("http://steward/team/project", { method: "DELETE", body: JSON.stringify({ slug: "omega" }) }))).status).toBe(404);
     // Still on the machine: nothing forgotten, the people with access kept.
     mkdirSync(join(root, "sites", "omega"));
     expect((await handler.owner(new Request("http://steward/tokens/project", { method: "DELETE", body: JSON.stringify({ slug: "omega" }) }))).status).toBe(409);
-    expect(forgotten).toHaveLength(2);
+    expect(forgotten).toHaveLength(1);
   });
 });

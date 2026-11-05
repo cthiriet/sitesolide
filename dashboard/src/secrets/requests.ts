@@ -88,18 +88,16 @@ export async function readJsonBody(req: Request, fields: readonly string[], max:
  * One socket's routes, a handler by path and method, behind a bound on the
  * requests in flight that every table served by the same `createServe`
  * shares, and one catch: an unexpected exception answers a generic 500, its
- * name alone in the log. `rename` maps a path to the one it is served
- * under.
+ * name alone in the log.
  */
-export function createServe(options: { maxInFlight: number; log: string; rename?: (path: string) => string }): (table: Routes) => Handler {
+export function createServe(options: { maxInFlight: number; log: string }): (table: Routes) => Handler {
   let inFlight = 0;
   return (table) => async (req) => {
     // 503 and not 500: nothing is broken, the request can be made again in a moment.
     if (inFlight >= options.maxInFlight) return refusal(503, "failure", "the server is busy, try again in a moment");
     inFlight++;
     try {
-      const pathname = new URL(req.url).pathname;
-      const path = options.rename === undefined ? pathname : options.rename(pathname);
+      const path = new URL(req.url).pathname;
       const route = Object.hasOwn(table, path) ? table[path] : undefined;
       if (route === undefined) return refusal(404, "not-found", "no such route");
       const handler = Object.hasOwn(route, req.method) ? route[req.method] : undefined;

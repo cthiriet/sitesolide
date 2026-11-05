@@ -358,8 +358,7 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
       if (reached.status !== 200) {
         limiter.refused(email, now);
         const code = reached.body.error;
-        // `not-a-member`: a steward from before the word changed, read for one release.
-        const reason = code === "can-open-only" ? "can-open-only" : code === "no-role" || code === "not-a-member" ? "no-role" : code === "invalid-assertion" ? "invalid" : "failed";
+        const reason = code === "can-open-only" ? "can-open-only" : code === "no-role" ? "no-role" : code === "invalid-assertion" ? "invalid" : "failed";
         return refused(reason, spent);
       }
       const session = reached.body.session;

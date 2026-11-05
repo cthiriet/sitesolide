@@ -285,8 +285,6 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "system-unit": "pick another slug in sitesolide.json: this one names a service of the machine",
   "caddy-busy": LOCK_BUSY,
   "access-changed": "the project's general access changed from the dashboard while the deployment ran: deploy again",
-  // The same, as an installer from before the rename names it.
-  "door-changed": "the project's general access changed from the dashboard while the deployment ran: deploy again",
   "port-taken": `delete \`port\` from sitesolide.json and let the machine choose one, or pick a free one of ${servicePortsProse()}`,
   "second-block-closed": `the owner of the machine has to open the second block of service ports first, as the message says; until then, set \`port\` in sitesolide.json to a free port of ${FIRST_BLOCK_PROSE}`,
   "domain-taken": "a domain name belongs to one project: take it out of this sitesolide.json, or ask the owner to take it out of the project that declares it",

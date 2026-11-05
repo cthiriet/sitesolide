@@ -1208,13 +1208,11 @@ reading, giving Can open, removing, is what the owner's session allows.
 
 The routes of before the registry, `/members`, `/members/member`,
 `/members/project/member`, `/members/sharing`, `/members/guests` and
-`/control/sharing`, are gone and answer `no such route`. The session routes
-were under `/members/`, the tokens' under `/team/`: both still answer there
-for one release, so that a dashboard or a CLI deployed before this steward
-keeps working while `sitesolide upgrade` brings everything up to date. The
-files on the machine keep their names, `member-sessions.json` and
-`team.json` in the steward's state folder, and `members.json`, read-only
-since the registry: they are the machine's state, not words of the page.
+`/control/sharing`, are gone and answer `no such route`, and so do the
+names the session routes and the tokens' had before `/people/` and
+`/tokens/`, under `/members/` and `/team/`. The files on the machine keep
+their names, `member-sessions.json` and `team.json` in the steward's state
+folder: they are the machine's state, not words of the page.
 
 On the dashboard's side, the page reaches these routes at the owner's
 addresses: `/api/tokens` and `/api/tokens/revoke` for tokens, and

@@ -2624,15 +2624,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     "/backups/audit": { GET: backups.audit },
   };
 
-  // Both sockets' routes, behind the same bound on requests in flight. A
-  // person's routes also answer under the names they had before `/people/`:
-  // a dashboard deployed before this steward still calls them. Kept one
-  // release.
-  const serve = createServe({
-    maxInFlight,
-    log: "steward",
-    rename: (path) => (path.startsWith("/members/") ? `/people/${path.slice("/members/".length)}` : path),
-  });
+  // Both sockets' routes, behind the same bound on requests in flight.
+  const serve = createServe({ maxInFlight, log: "steward" });
 
   const handle = serve(routes);
   return Object.assign(handle, {

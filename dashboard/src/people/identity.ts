@@ -47,8 +47,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 /** The steward's identity, read and judged again: a shape it would not send is no identity. */
 export function readMemberIdentity(value: unknown): MemberIdentity | null {
-  // `member`: a steward from before the word changed, read for one release.
-  if (!isObject(value) || (value.kind !== "person" && value.kind !== "member") || typeof value.email !== "string" || !isObject(value.roles)) return null;
+  if (!isObject(value) || value.kind !== "person" || typeof value.email !== "string" || !isObject(value.roles)) return null;
   const roles: Record<string, "viewer" | "developer" | "admin"> = {};
   for (const [slug, role] of Object.entries(value.roles)) {
     if (role !== "viewer" && role !== "developer" && role !== "admin") return null;

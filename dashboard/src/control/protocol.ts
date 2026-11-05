@@ -405,9 +405,7 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 //   GET    /tokens/claim?slug=<slug>          -> ClaimView: does a token hold or claim a name, and is a deployment of it under way
 //   DELETE /tokens/claim          { slug }    -> ClaimReleased: the owner takes such a name back, its store moved aside (`sitesolide deploy --adopt`)
 //
-// The paths under `/team/` answer too, for one release: a dashboard or a CLI
-// from before the rename still calls them. Any error returns
-// `ControlFailure`. An older steward answers 404 `no such route` to all of
+// Any error returns `ControlFailure`. An older steward answers 404 `no such route` to all of
 // them: the dashboard turns that into `not-available`.
 
 export type TeamResponse = { tokens: TokenView[] };

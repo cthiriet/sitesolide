@@ -1,8 +1,7 @@
 /**
  * The steward's control routes: the token registry, and the start of the
  * installer. Mounted beside the secrets routes on the same socket, by
- * dashboard/steward.ts, under `/tokens/` and `/control/` (and `/team/`, the
- * names before, one release).
+ * dashboard/steward.ts, under `/tokens/` and `/control/`.
  *
  * **The steward judges every token itself.** The dashboard relays the bearer
  * it received, untouched; the steward finds it by its hash, refuses it expired
@@ -1849,19 +1848,12 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
           "/control/store/generate": { POST: storeGenerate },
           "/control/store/file": { PUT: storeSetFile, DELETE: storeRemoveFile },
         }),
-    // The names before `/tokens/`, which a dashboard deployed before this
-    // steward still calls: kept one release.
-    "/team/tokens": { GET: listTokens, POST: newToken },
-    "/team/revoke": { POST: revoke },
     ...(members === undefined
       ? {}
       : {
           "/tokens/person/list": { POST: memberList },
           "/tokens/person/create": { POST: memberCreate },
           "/tokens/person/revoke": { POST: memberRevoke },
-          "/team/member/list": { POST: memberList },
-          "/team/member/tokens": { POST: memberCreate },
-          "/team/member/revoke": { POST: memberRevoke },
         }),
   };
 
@@ -1870,10 +1862,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   return Object.assign(serve(routes), {
     revokeMember,
     tokensOf,
-    // `/team/project`: what a CLI from before the rename calls, kept one release.
     owner: serve({
       "/tokens/project": { DELETE: forgetProject },
-      "/team/project": { DELETE: forgetProject },
       "/tokens/claim": { GET: claimRoute, DELETE: takeBackRoute },
     }),
     ownerWroteStore,
@@ -1885,6 +1875,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
 
 /** Does this path belong to the control routes? The steward's entry point routes on it. */
 export function isControlPath(path: string): boolean {
-  return path.startsWith("/tokens/") || path.startsWith("/team/") || path.startsWith("/control/");
+  return path.startsWith("/tokens/") || path.startsWith("/control/");
 }
 

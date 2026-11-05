@@ -156,7 +156,7 @@ async function ownerToken(b: Bench, slugs: string[]): Promise<{ token: TokenView
 
 /** Ada's own token, minted under her unlock. */
 async function adaToken(b: Bench, slugs: string[]): Promise<{ token: TokenView; secret: string }> {
-  const response = await b.call("POST", "/team/member/tokens", { session: "ada-session", token: "ada-unlock", label: "laptop", expiresAt: null, scope: { ...SCOPE, slugs } });
+  const response = await b.call("POST", "/tokens/person/create", { session: "ada-session", token: "ada-unlock", label: "laptop", expiresAt: null, scope: { ...SCOPE, slugs } });
   expect(response.status).toBe(201);
   return (await response.json()) as { token: TokenView; secret: string };
 }
@@ -168,7 +168,7 @@ async function answer(response: Response): Promise<{ status: number } & Record<s
 describe("the steward: a project created by a person's token is a change of access", () => {
   const deploy = (b: Bench, secret: string, slug: string, deployment: string) => b.call("POST", "/control/deploy", { bearer: secret, deployment, slug, manifest: JSON.stringify({ slug }) });
   const create = async (b: Bench) => {
-    const response = await b.call("POST", "/team/member/tokens", { session: "ada-session", token: "ada-unlock", label: "maker", expiresAt: null, scope: { ...SCOPE, slugs: ["kanban"], create: true } });
+    const response = await b.call("POST", "/tokens/person/create", { session: "ada-session", token: "ada-unlock", label: "maker", expiresAt: null, scope: { ...SCOPE, slugs: ["kanban"], create: true } });
     expect(response.status).toBe(201);
     return ((await response.json()) as { secret: string }).secret;
   };
