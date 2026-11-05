@@ -127,6 +127,8 @@ describe.skipIf(!SITES_PRESENT)("what a deployment would install", () => {
     // cannot turn into a unit and a block would only fail on the machine.
     const manifest = manifestOf(slug);
     expect(generateUnit(manifest)).toContain(`ExecStart=${manifest.start}`);
-    expect(generateFragment(manifest)).toContain(`${slug}.{$SITESOLIDE_ZONE}`);
+    // The block is named after the manifest's slug, which a folder may not
+    // carry: the landing's folder deploys as `home`, see SLUG_OF.
+    expect(generateFragment(manifest)).toContain(`${manifest.slug}.{$SITESOLIDE_ZONE}`);
   });
 });
