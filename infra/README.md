@@ -37,7 +37,7 @@ is given (`bin/cli/tls.ts`):
 
 | DNS | `tls-zone.caddy` | Certificates |
 |---|---|---|
-| a provider (`--dns cloudflare`, ...) | `dns <module> {env.<CREDENTIAL>}` | one for `*.<zone>` and one for the zone, through a DNS-01 challenge; the credentials in `/etc/caddy/cloudflare.env`, which systemd hands Caddy |
+| Cloudflare (`--dns cloudflare`, the default) | `dns cloudflare {env.CLOUDFLARE_API_TOKEN}`; on a machine set up with a provider since removed, that provider's `dns <module>` line | one for `*.<zone>` and one for the zone, through a DNS-01 challenge; the token in `/etc/caddy/cloudflare.env`, which systemd hands Caddy |
 | manual (`--dns manual`) | `on_demand` | one per name, at its first handshake, through HTTP-01 or TLS-ALPN-01, once the ask endpoint agrees |
 
 The file never holds a credential: a directive names one as `{env.NAME}`, which

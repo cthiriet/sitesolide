@@ -287,8 +287,8 @@ its value.
   trace answers all the same when another account proxies it, so
   `domain --activate` cannot tell that case from the right one: the visitor
   gets Cloudflare's error 1014. A site stays at `https://<slug>.<zone>` then.
-- **`--dns manual`, or a zone at another provider**, for the machine's own
-  zone: refused, for the same reason.
+- **`--dns manual`**, for the machine's own zone: refused, for the same
+  reason.
 - **The wizard** offers no tunnel yet: `sitesolide setup --tunnel` does it.
 
 Visitors' requests go through Cloudflare, which decrypts them at its edge.

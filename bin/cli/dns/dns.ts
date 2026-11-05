@@ -1,40 +1,37 @@
 /**
- * The zone's DNS, whoever holds it: the records setup points at the machine,
- * and what Caddy needs to obtain the zone's wildcard certificate.
+ * The zone's DNS: the records setup points at the machine, and what Caddy
+ * needs to obtain the zone's wildcard certificate.
  *
  * A zone is served one of two ways, chosen at setup with `--dns`:
  *
- *   a provider of DNS_PROVIDERS   setup creates the records through its API,
- *                                 and Caddy obtains the wildcard through a
- *                                 DNS-01 challenge with the provider's Caddy
- *                                 module; Cloudflare is the first of them, and
- *                                 the default
- *   manual                        the person creates the records by hand at
- *                                 whatever registrar, and Caddy obtains one
- *                                 certificate per name through HTTP-01 or
- *                                 TLS-ALPN-01, on demand, for the names of the
- *                                 sites deployed and those alone (bin/cli/tls.ts)
+ *   cloudflare   setup creates the records through Cloudflare's API, and
+ *                Caddy obtains the wildcard through a DNS-01 challenge with
+ *                Cloudflare's Caddy module; the default
+ *   manual       the person creates the records by hand at whatever
+ *                registrar, and Caddy obtains one certificate per name
+ *                through HTTP-01 or TLS-ALPN-01, on demand, for the names of
+ *                the sites deployed and those alone (bin/cli/tls.ts)
+ *
+ * What follows is what setup and the wizard ask of the zone's DNS, with
+ * Cloudflare's API behind it (./cloudflare.ts): the record engine, the
+ * credentials and the Caddy module are written against this interface, and
+ * the tests run them against Cloudflare's local mock.
  *
  * THE DNS CREDENTIALS GO ON THE MACHINE. Caddy renews the wildcard every two
  * months and needs them for it: setup lays them in /etc/caddy/cloudflare.env,
- * root:caddy 0640, whatever the provider (the name is the first provider's,
- * and the file is in service on machines that predate the others). They must
- * reach the zone and nothing else. That is why a provider here never reads
- * the variables its cloud's own tools read, and never asks a CLI for
- * credentials: a broad token in the workstation's environment, one that orders
- * machines, must never be laid on a machine by accident. Every provider but
- * Cloudflare, whose CLOUDFLARE_API_TOKEN setup has always read, takes its
- * credentials from variables of sitesolide's own, `SITESOLIDE_DNS_<...>`.
+ * root:caddy 0640. They must reach the zone and nothing else: a token in the
+ * workstation's environment that reaches the whole account must never be
+ * laid on a machine by accident.
  *
- * A provider fails with a DnsError whose kind says what to do: `token`, the
- * credentials are refused; `zone`, none it can read holds the name; `refused`,
- * the API said no to a request; `unreachable`, no answer, or not the API's;
- * `conflict`, records that point elsewhere. A credential is never in a URL, a
- * message or an error: providers scrub what comes back from outside.
+ * A failure is a DnsError whose kind says what to do: `token`, the
+ * credentials are refused; `zone`, none they can read holds the name;
+ * `refused`, the API said no to a request; `unreachable`, no answer, or not
+ * the API's; `conflict`, records that point elsewhere. A credential is never
+ * in a URL, a message or an error.
  */
 import { resolveNs } from "node:dns/promises";
 import { describePlan, desiredRecords, planRecords, planTunnelRecords, recordLine, zoneCandidates, type DnsRecord, type RecordAction } from "../cloudflare";
-import type { Clock, CredentialField, Credentials, Fetch } from "../../../clouds/src/provider";
+import type { CredentialField, Credentials, Fetch } from "../../../clouds/src/provider";
 
 export type { DnsRecord, RecordAction };
 export { describePlan, desiredRecords, planRecords, recordLine, zoneCandidates };
@@ -52,17 +49,16 @@ export class DnsError extends Error {
   }
 }
 
-/** A zone as the provider holds it: its id there, and its name, the one asked or a parent. */
+/** A zone as the API holds it: its id there, and its name, the one asked or a parent. */
 export type ZoneRef = { id: string; name: string };
 
-/** One record a plan creates; `proxied` and a CNAME are a tunnel's, at Cloudflare alone. */
+/** One record a plan creates; `proxied` and a CNAME are a tunnel's. */
 export type NewRecord = { name: string; type: "A" | "AAAA" | "CNAME"; content: string; proxied?: boolean };
 
 /**
- * What setup asks of a provider's DNS API. Names are absolute, without a
+ * What setup asks of the zone's DNS API. Names are absolute, without a
  * trailing dot, lowercase: `example.com`, `*.example.com`. A record's `id` is
- * whatever lets the provider find it again; `proxied` is false where the
- * provider has no proxy.
+ * whatever lets the API find it again.
  */
 export interface ZoneApi {
   /** Refused credentials fail here with kind `token`, before anything else is asked. */
@@ -72,21 +68,19 @@ export interface ZoneApi {
   /** Every record of exactly that name, of every type. */
   listRecords(zone: ZoneRef, name: string): Promise<DnsRecord[]>;
   createRecord(zone: ZoneRef, record: NewRecord): Promise<void>;
-  /** `proxied`, a tunnel's CNAME at Cloudflare alone; every other provider has no proxy and ignores it. */
+  /** `proxied`, a tunnel's CNAME, which Cloudflare's proxy answers for. */
   updateRecord(zone: ZoneRef, record: DnsRecord, content: string, proxied?: boolean): Promise<void>;
   deleteRecord(zone: ZoneRef, record: DnsRecord): Promise<void>;
 }
 
+/** What the API is opened with: the environment its address variable is read from, for a local mock. */
 export type DnsContext = {
   credentials: Credentials;
   environment: Record<string, string | undefined>;
   fetcher: Fetch;
-  clock: Clock;
-  /** A secret obtained along the way, an exchanged token: scrubbed from every line from then on. */
-  secret: (value: string) => void;
 };
 
-/** What Caddy needs on the machine to answer the provider's DNS-01 challenge. */
+/** What Caddy needs on the machine to answer the DNS-01 challenge. */
 export type CaddyDns = {
   /** The module's package, which `caddy add-package` adds to the build: `github.com/caddy-dns/cloudflare`. */
   package: string;
@@ -103,14 +97,12 @@ export type CaddyDns = {
 };
 
 export type DnsEntry = {
-  /** What `--dns` takes: `cloudflare`, `route53`. */
+  /** What `--dns` takes: `cloudflare`. */
   name: string;
-  /** As a person writes it: `Cloudflare`, `Amazon Route 53`. */
+  /** As a person writes it: `Cloudflare`. */
   title: string;
   /** What it needs, scoped to the zone; read from the environment, standard input, or typed at the wizard. */
   credentials: readonly CredentialField[];
-  /** The forms credentials come in, as for a cloud provider (clouds/src/provider.ts). */
-  alternatives?: readonly (readonly string[])[];
   /** Where those credentials are made, with the least permission that works, one line each. */
   credentialHelp: string[];
   /** The page of docs/dns/ that says it all. */
@@ -121,19 +113,17 @@ export type DnsEntry = {
    */
   nameServers: RegExp;
   caddy: CaddyDns;
-  /** The variable that points the provider at another API address, for a local fake: `SITESOLIDE_CLOUDFLARE_API`. */
-  apiVariable: string;
   open: (context: DnsContext) => ZoneApi;
 };
 
-// --- what every provider shares --------------------------------------------------------------------
+// --- the records -----------------------------------------------------------------------------------
 
 /**
- * The records of the zone and its wildcard pointed at the machine, whoever
- * holds the zone: the whole plan drawn before the first write (planRecords in
- * ../cloudflare), nothing written while a record points elsewhere unless
- * `replace`, the owner's decision, says so. Deletions first, since a CNAME
- * has to go before an address record can take its name.
+ * The records of the zone and its wildcard pointed at the machine: the whole
+ * plan drawn before the first write (planRecords in ../cloudflare), nothing
+ * written while a record points elsewhere unless `replace`, the owner's
+ * decision, says so. Deletions first, since a CNAME has to go before an
+ * address record can take its name.
  */
 export async function ensureZoneRecords(
   api: ZoneApi,
@@ -192,20 +182,20 @@ export async function zoneRecords(api: ZoneApi, zone: string): Promise<{ zone: Z
 
 /**
  * Who serves a zone's DNS, read from its NS records, the zone's or its
- * nearest parent's: the provider whose name servers they are, or null with
- * the names, for a registrar sitesolide has no module for. Never throws: a
- * zone that does not resolve says so with no name server.
+ * nearest parent's: `entry` when they are its name servers, or null with the
+ * names, for a zone served elsewhere. Never throws: a zone that does not
+ * resolve says so with no name server.
  */
 export async function detectDns(
   zone: string,
-  providers: readonly DnsEntry[],
+  entry: DnsEntry,
   lookup: (name: string) => Promise<string[]> = (name) => resolveNs(name),
 ): Promise<{ entry: DnsEntry | null; nameServers: string[] }> {
   for (const name of zoneCandidates(zone)) {
     const servers = await lookup(name).catch(() => [] as string[]);
     if (servers.length === 0) continue;
     const lowered = servers.map((server) => server.toLowerCase().replace(/\.$/, ""));
-    return { entry: providers.find((entry) => lowered.some((server) => entry.nameServers.test(server))) ?? null, nameServers: lowered };
+    return { entry: lowered.some((server) => entry.nameServers.test(server)) ? entry : null, nameServers: lowered };
   }
   return { entry: null, nameServers: [] };
 }

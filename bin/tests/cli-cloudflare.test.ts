@@ -2,13 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { canonicalAddress, cloudflareBase, DEFAULT_CLOUDFLARE_API, desiredRecords, manualRecords, planRecords, scrub, zoneCandidates, type DnsRecord } from "../cli/cloudflare";
 import { CLOUDFLARE } from "../cli/dns/cloudflare";
 import { DnsError, ensureZoneRecords } from "../cli/dns/dns";
-import { realClock } from "../../clouds/src/provider";
 import { startCloudflareMock, type CloudflareMock } from "./cloudflare-mock";
 
 /**
  * The DNS records setup makes, against a mock of Cloudflare's API on the
- * loopback, through the Cloudflare entry and the plan every provider shares,
- * as setup runs them. Nothing here reaches api.cloudflare.com: the module is
+ * loopback, through the Cloudflare entry and the record plan of
+ * bin/cli/dns/dns.ts, as setup runs them. Nothing here reaches api.cloudflare.com: the module is
  * pointed at the mock by SITESOLIDE_CLOUDFLARE_API, as for the CLI.
  *
  * What must hold above all: nobody's record is overwritten without
@@ -52,7 +51,7 @@ function tokenOnlyInHeaders(m: CloudflareMock, also: string[] = []): void {
 
 /** Setup's dns step on the mock: the entry opened with these credentials, then the shared plan. */
 function ensureRecords(api: { base: string; token: string }, zone: string, addresses: { ipv4: string; ipv6: string | null }, replace: boolean) {
-  const opened = CLOUDFLARE.open({ credentials: { CLOUDFLARE_API_TOKEN: api.token }, environment: { SITESOLIDE_CLOUDFLARE_API: api.base }, fetcher: fetch, clock: realClock, secret: () => {} });
+  const opened = CLOUDFLARE.open({ credentials: { CLOUDFLARE_API_TOKEN: api.token }, environment: { SITESOLIDE_CLOUDFLARE_API: api.base }, fetcher: fetch });
   return ensureZoneRecords(opened, zone, addresses, replace);
 }
 

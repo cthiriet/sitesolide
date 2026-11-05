@@ -657,7 +657,7 @@ describe("the DNS credentials, Cloudflare's token by default", () => {
     const r = await setup(b);
     expect(r.code).toBe(1);
     expect(r.print.errors[0]!.message).toBe("setup stopped at dns: no Cloudflare credentials");
-    expect(hintFor(r.print.errors[0]!.message)).toContain("never pass them as an argument");
+    expect(hintFor(r.print.errors[0]!.message)).toContain("never pass it as an argument");
     expect(mock.requests).toEqual([]);
   });
 
@@ -684,49 +684,122 @@ describe("the DNS credentials, Cloudflare's token by default", () => {
   });
 });
 
-describe("switching DNS provider on an installed machine", () => {
-  async function switched(failTlsZone: boolean) {
-    const { b, home: folder } = world();
+describe("switching the zone's DNS on an installed machine", () => {
+  /**
+   * A machine set up through Cloudflare, its configuration then given
+   * `configured`, the machine reporting the labels of `stale` missing, and
+   * setup run again with `given`.
+   */
+  async function switched(given: SetupOptions, stale: string[], configured: Record<string, string> = {}, failTlsZone = false) {
+    const { b, home: folder, mock: m } = world();
     expect((await setup(b)).code).toBe(0);
-    const route53 = ((await import("./fake-dns-route53")) as { createFake: () => import("./fake-dns").FakeDns }).createFake();
-    try {
-      // What the machine reports once asked for another provider: its module
-      // is not there, its values are not in the file, the policy names Cloudflare.
-      for (const label of ["dns-module", "env-same", "tls-zone-same", "env-own-only"]) b.machine.labels.delete(label);
-      if (failTlsZone) b.machine.failing.add("setup:tls-zone:run");
-      const before = b.machine.runs().length;
-      const credentials = Object.fromEntries(Object.entries(route53.environment).filter(([name]) => name.startsWith("SITESOLIDE_DNS_")));
-      const print = printed();
-      const code = await runSetup(options("--dns", "route53"), b.deps(print, { dnsCredentials: async () => credentials, dnsApi: { environment: route53.environment } }));
-      return { b, code, print, folder, credentials, runs: () => b.machine.runs().slice(before) };
-    } finally {
-      route53.stop();
-    }
+    const configFile = join(folder, ".config", "sitesolide", "config.json");
+    writeFileSync(configFile, JSON.stringify({ ...JSON.parse(readFileSync(configFile, "utf8")), ...configured }));
+    for (const label of stale) b.machine.labels.delete(label);
+    if (failTlsZone) b.machine.failing.add("setup:tls-zone:run");
+    const calls = b.machine.calls.length;
+    const requests = m.requests.length;
+    const r = await setup(b, given);
+    return {
+      ...r,
+      b,
+      configFile,
+      runs: () => b.machine.calls.slice(calls).filter((call) => call.tag.endsWith(":run")).map((call) => call.tag),
+      calls: () => b.machine.calls.slice(calls),
+      requests: () => m.requests.slice(requests),
+    };
   }
 
-  test("the new variables join the old ones, Caddy restarts once with the new policy, and only then do the old ones go", async () => {
-    const { b, code, print, folder, runs: after } = await switched(false);
-    expect(print.errors).toEqual([]);
-    expect(code).toBe(0);
-    const runs = after();
-    const written = b.machine.calls.filter((call) => call.tag === "setup:dns-credentials:run").at(-1)!;
-    // The previous provider's lines are kept: everything but the new names.
-    expect(written.input).toContain("grep -Ev '^[[:space:]]*(SITESOLIDE_DNS_ROUTE53_ACCESS_KEY_ID|SITESOLIDE_DNS_ROUTE53_SECRET_ACCESS_KEY)='");
-    expect(b.machine.calls.filter((call) => call.tag === "setup:tls-zone:run").at(-1)!.input).toContain("dns route53");
-    const order = ["setup:dns-credentials:run", "setup:tls-zone:run", "setup:dns-leftovers:run"].map((tag) => runs.lastIndexOf(tag));
-    expect(order).toEqual([...order].sort((x, y) => x - y));
+  /** What a machine set up with a provider since removed reports to a run for Cloudflare: neither its module, nor its token, nor its policy, and the old provider's lines. */
+  const REMOVED_PROVIDER = ["dns-module", "env-same", "tls-zone-same", "env-own-only"];
+
+  test("Cloudflare to manual: the on-demand policy first, Caddy restarted with it, and only then the token taken out", async () => {
+    const r = await switched(options("--dns", "manual"), ["tls-zone-same", "env-own-only"]);
+    expect(r.print.errors).toEqual([]);
+    expect(r.code).toBe(0);
+    const runs = r.runs();
+    expect(r.b.machine.calls.filter((call) => call.tag === "setup:tls-zone:run").at(-1)!.input).toContain("on_demand");
+    const order = ["setup:tls-zone:run", "setup:dns-leftovers:run"].map((tag) => runs.lastIndexOf(tag));
     expect(order.every((index) => index >= 0)).toBe(true);
-    // No restart of its own before the policy changes: the tls-zone step's is the one.
-    expect(runs.filter((tag) => tag === "setup:caddy-restart:run")).toEqual([]);
-    expect(JSON.parse(readFileSync(join(folder, ".config", "sitesolide", "config.json"), "utf8")).dns).toBe("route53");
+    expect(order).toEqual([...order].sort((x, y) => x - y));
+    // The token stays in the file, for the policy in service, until that policy is gone.
+    expect(runs).not.toContain("setup:dns-credentials:run");
+    expect(r.b.machine.calls.filter((call) => call.tag === "setup:dns-leftovers:run").at(-1)!.input).toContain("# --dns manual");
+    expect(r.requests()).toEqual([]);
+    expect(JSON.parse(readFileSync(r.configFile, "utf8")).dns).toBe("manual");
   });
 
-  test("a tls-zone step that fails leaves the previous provider's credentials in place for the policy still in service", async () => {
-    const { code, print, runs } = await switched(true);
-    expect(code).toBe(1);
-    expect(print.errors[0]!.message).toStartWith("setup stopped at tls-zone");
-    expect(runs()).toContain("setup:dns-credentials:run");
-    expect(runs()).not.toContain("setup:dns-leftovers:run");
+  test("a tls-zone step that fails leaves the token in place for the policy still in service", async () => {
+    const r = await switched(options("--dns", "manual"), ["tls-zone-same", "env-own-only"], {}, true);
+    expect(r.code).toBe(1);
+    expect(r.print.errors[0]!.message).toStartWith("setup stopped at tls-zone");
+    expect(r.runs()).not.toContain("setup:dns-leftovers:run");
+  });
+
+  test("a configuration naming a provider since removed: refused before anything reaches the machine, the way out said", async () => {
+    const r = await switched(options(), REMOVED_PROVIDER, { dns: "route53" });
+    expect(r.code).toBe(1);
+    const error = r.print.errors[0]!;
+    expect(error.message).toBe("setup: dns in the configuration is not valid: route53");
+    const details = error.details.join("\n");
+    expect(details).toContain("the other DNS providers were removed: a machine set up with one goes on serving as it is");
+    expect(details).toContain("setup --dns cloudflare, once the zone's DNS is at Cloudflare, or --dns manual; see docs/upgrading.md");
+    expect(hintFor(error.message)).toContain("docs/upgrading.md");
+    expect(r.calls()).toEqual([]);
+    expect(r.requests()).toEqual([]);
+    expect(JSON.parse(readFileSync(r.configFile, "utf8")).dns).toBe("route53");
+  });
+
+  test("that machine moved with --dns cloudflare: the token joins the old lines, Caddy restarts once with Cloudflare's policy, and only then do the old lines go", async () => {
+    const r = await switched(options("--dns", "cloudflare"), REMOVED_PROVIDER, { dns: "route53" });
+    expect(r.print.errors).toEqual([]);
+    expect(r.code).toBe(0);
+    const runs = r.runs();
+    expect(r.b.machine.calls.find((call) => call.tag === "setup:caddy:run")!.input).toContain("caddy add-package github.com/caddy-dns/cloudflare");
+    // Every credential line but Cloudflare's is kept: the old provider's, for the policy still in service.
+    expect(r.b.machine.calls.filter((call) => call.tag === "setup:dns-credentials:run").at(-1)!.input).toContain("grep -Ev '^[[:space:]]*(CLOUDFLARE_API_TOKEN)='");
+    expect(r.b.machine.calls.filter((call) => call.tag === "setup:tls-zone:run").at(-1)!.input).toContain("dns cloudflare {env.CLOUDFLARE_API_TOKEN}");
+    const order = ["setup:dns-credentials:run", "setup:tls-zone:run", "setup:dns-leftovers:run"].map((tag) => runs.lastIndexOf(tag));
+    expect(order.every((index) => index >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((x, y) => x - y));
+    // No restart of its own before the policy changes: the tls-zone step's is the one.
+    expect(runs.filter((tag) => tag === "setup:caddy-restart:run")).toEqual([]);
+    expect(JSON.parse(readFileSync(r.configFile, "utf8")).dns).toBeUndefined();
+  });
+
+  test("init refuses that name too, the way out said, and writes nothing", () => {
+    const folder = home();
+    const environment: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) if (value !== undefined && !key.startsWith("SITESOLIDE_")) environment[key] = value;
+    const run = Bun.spawnSync(["bun", join(import.meta.dir, "..", "sitesolide.ts"), "init", "--server", `deploy@${HOST}`, "--zone", ZONE, "--email", EMAIL, "--dns", "route53"], {
+      env: { ...environment, HOME: folder },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(run.exitCode).toBe(1);
+    expect(run.stderr.toString()).toContain("!! dns is not valid: route53");
+    expect(run.stderr.toString()).toContain("the other DNS providers were removed");
+    expect(hintFor("dns is not valid: route53")).toContain("--dns cloudflare or --dns manual");
+    expect(existsSync(join(folder, ".config", "sitesolide", "config.json"))).toBe(false);
+  });
+
+  test("the leftovers step takes a removed provider's variables out of the file, Cloudflare's token kept", () => {
+    const folder = mkdtempSync(join(tmpdir(), "leftovers-"));
+    HOMES.push(folder);
+    const file = join(folder, "cloudflare.env");
+    writeFileSync(file, `SITESOLIDE_DNS_ROUTE53_ACCESS_KEY_ID=AKIAEXAMPLE\nSITESOLIDE_DNS_ROUTE53_SECRET_ACCESS_KEY='a/secret+value'\nCLOUDFLARE_API_TOKEN=${TOKEN}\n`);
+    const stubs = join(folder, "stubs");
+    mkdirSync(stubs);
+    writeFileSync(join(stubs, "install"), '#!/bin/sh\nwhile [ "$#" -gt 2 ]; do case "$1" in -p) shift ;; -m|-o|-g) shift 2 ;; *) shift ;; esac; done\ncat "$1" > "$2"\n');
+    chmodSync(join(stubs, "install"), 0o755);
+    const script = dnsLeftoversRun(caddyEnvironmentText(CLOUDFLARE, { CLOUDFLARE_API_TOKEN: TOKEN }))
+      .replace(/^export PATH=.*$/m, `export PATH=${stubs}:/usr/bin:/bin`)
+      .replaceAll("/etc/caddy/cloudflare.env", file);
+    const run = Bun.spawnSync(["sh", "-s"], { stdin: new TextEncoder().encode(script), stdout: "pipe", stderr: "pipe" });
+    expect(run.stderr.toString()).toBe("");
+    expect(run.exitCode).toBe(0);
+    expect(readFileSync(file, "utf8")).toBe(`CLOUDFLARE_API_TOKEN=${TOKEN}\n`);
   });
 });
 
@@ -779,15 +852,21 @@ describe("--dns", () => {
     expect(b.machine.calls.find((call) => call.tag === "setup:tls-zone:run")!.input).toContain("dns cloudflare {env.CLOUDFLARE_API_TOKEN}");
   });
 
-  test("an unknown provider, Cloudflare's stdin flag with another, and manual with an API's options are refused before anything", () => {
+  test("a DNS other than Cloudflare or manual, a provider since removed among them, and manual with an API's options are refused before anything", () => {
     const refusal = (...extra: string[]) => {
       const parsed = parseSetupArguments([`root@${HOST}`, "--zone", ZONE, "--email", EMAIL, ...extra]);
       return "message" in parsed ? `${parsed.message} ${parsed.details.join(" ")}` : "accepted";
     };
     expect(refusal("--dns", "bind9")).toContain("--dns is not valid: bind9");
-    expect(refusal("--dns", "azure-dns", "--cloudflare-token-stdin")).toContain("--dns-credentials-stdin");
+    expect(refusal("--dns", "route53")).toContain("--dns is not valid: route53 cloudflare, the default, or manual");
+    expect(refusal("--dns", "route53")).toContain("the other DNS providers were removed");
+    expect(refusal("--dns", `cf_${TOKEN}`)).not.toContain(TOKEN);
+    // The flag that read another provider's credentials went with them.
+    expect(refusal("--dns-credentials-stdin")).toContain("unknown option: --dns-credentials-stdin");
     expect(refusal("--dns", "manual", "--dns-replace")).toContain("--dns manual uses no DNS API");
+    expect(refusal("--dns", "manual", "--cloudflare-token-stdin")).toContain("--dns manual uses no DNS API");
     expect(refusal("--dns", "manual")).toBe("accepted");
+    expect(refusal("--dns", "cloudflare", "--cloudflare-token-stdin")).toBe("accepted");
   });
 });
 
@@ -1009,6 +1088,7 @@ describe("the command line", () => {
     const samples = [
       REFUSALS.usage("x"),
       REFUSALS.invalid("--zone", "X", "y"),
+      REFUSALS.dns("--dns", "route53"),
       REFUSALS.otherServer("p", "a@b", "c@d"),
       REFUSALS.otherZone("p", "a.invalid", "b.invalid"),
       REFUSALS.otherAccount("p", "a@b", "c@b"),
@@ -1021,7 +1101,7 @@ describe("the command line", () => {
       REFUSALS.disk(HOST, "1.0 GB"),
       REFUSALS.servesOtherZone(HOST, "x.invalid"),
       REFUSALS.privateAddress("10.0.0.5"),
-      REFUSALS.tunnelDns("route53"),
+      REFUSALS.tunnelDns("manual"),
       REFUSALS.tunnelUnreadable("~/.cloudflared/x.json"),
       REFUSALS.tunnelCredentials("~/.cloudflared/x.json", "it is not JSON"),
     ];

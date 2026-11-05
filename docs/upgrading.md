@@ -163,6 +163,59 @@ nothing reads any more, and its `connector.*` rows, pruned after 90 days.
 and the routes back, and that release's `bin/deploy-egress.sh` lays the
 folder again, empty, if it was removed.
 
+## Every DNS provider but Cloudflare removed
+
+**What the release brings.** `setup --dns` takes `cloudflare`, the default,
+or `manual`, and nothing else. The ten other providers it took from 0.7 on
+were only ever tried against local fakes of their APIs, never on a real zone,
+while every installation in service uses Cloudflare: their code goes, with
+their pages in `docs/dns/`, the `SITESOLIDE_DNS_<...>` variables they read,
+and `--dns-credentials-stdin`, which read their credentials. Cloudflare's
+token comes from `CLOUDFLARE_API_TOKEN` or `--cloudflare-token-stdin`, as it
+always has. The wizard offers two ways: Cloudflare's API, first when the
+zone's name servers are Cloudflare's, and records made by hand, first
+otherwise, a zone at a cloud's own DNS included. Every cloud of
+`sitesolide machine` stays.
+
+**What `sitesolide upgrade` brings**: nothing of its own. The change is the
+CLI's alone: no component of the machine changes with it, and Caddy is not
+reloaded for it.
+
+**What stays by hand.** A machine set up with one of those providers names it
+in its configuration, `"dns"` in `config.json`, and goes on serving: Caddy
+keeps the module it was built with, `/etc/caddy/cloudflare.env` that
+provider's variables, and `/etc/caddy/tls-zone.caddy` its DNS challenge,
+which neither `upgrade` nor `deploy` touches, so the wildcard keeps renewing.
+`sitesolide setup` and `sitesolide init`, which read the name again, refuse
+it, saying the way out. Move the machine to one of the two from the
+workstation that set it up:
+
+- to Cloudflare, once the zone's DNS is there, its name servers at the
+  registrar being Cloudflare's, with a token made as
+  [dns/cloudflare.md](dns/cloudflare.md) says:
+
+  ```bash
+  read -rs CLOUDFLARE_API_TOKEN && export CLOUDFLARE_API_TOKEN
+  sitesolide setup <user@host> --zone <zone> --email <address> --dns cloudflare
+  ```
+
+- or to records made by hand, wherever the zone is, each name then getting
+  its own certificate, see [setup.md](setup.md#dns):
+
+  ```bash
+  sitesolide setup <user@host> --zone <zone> --email <address> --dns manual
+  ```
+
+Either run adds what the new way needs, Cloudflare's module and token or
+nothing, lays the new policy, restarts Caddy with it, and only then takes the
+old provider's variables out of `/etc/caddy/cloudflare.env`; the
+configuration records the choice. Revoke the old provider's credentials at
+its console afterwards: nothing reads them any more. Caddy keeps the old
+module in its build, unused.
+
+**Going back.** The previous binary takes the provider again, its pages in
+`docs/dns/` with it.
+
 ## Audience removed
 
 **What the release brings.** The dashboard no longer has an *Audience*

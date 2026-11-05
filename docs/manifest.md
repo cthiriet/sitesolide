@@ -142,7 +142,7 @@ kin, every `LC_*` and `XDG_*`); then the project's
 [`env`](#env), its placeholders replaced; then the names of
 [`secrets.build`](#secrets), taken from whoever deploys. Never a variable
 whose name starts with `SITESOLIDE_`: a token exported as `SITESOLIDE_TOKEN`
-or a DNS provider's credentials never reach the folder's code. `NODE_ENV`
+never reaches the folder's code. `NODE_ENV`
 is not inherited either: the manifest sets it, and a workstation's
 `development` must not reach a production build. Nor is `SSH_AUTH_SOCK`: the
 SSH agent it names holds the keys that log into your server, and the build is

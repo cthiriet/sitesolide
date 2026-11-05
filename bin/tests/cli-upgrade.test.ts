@@ -355,6 +355,15 @@ describe("a machine whose every component is current", () => {
     // Every check went through sudo -n as the account the configuration names.
     expect(w.machine.calls.every((call) => call.account === "deploy" && call.command.startsWith("sudo -n sh -s upgrade:"))).toBe(true);
   });
+
+  test("set up with a DNS provider since removed: upgraded as any other, its DNS left as it is", async () => {
+    const w = world({ config: { server: SERVER, zone: ZONE, email: EMAIL, dns: "route53" } });
+    const r = await upgrade(w);
+    expect(r.print.errors).toEqual([]);
+    expect(r.code).toBe(0);
+    expect(r.statuses).toEqual(ORDER.map((id) => `${id}:done`));
+    expect(runs(w)).toEqual([]);
+  });
 });
 
 describe("components out of date", () => {

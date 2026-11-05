@@ -93,26 +93,25 @@ describe("tlsZoneContent", () => {
     expect([isOnDemand(CLOUDFLARE_CONTENT), onDemandPolicy(CLOUDFLARE_CONTENT)]).toEqual([false, false]);
   });
 
-  test("a provider's block of its own is indented one tab per level, whatever it came with", () => {
+  test("a module's block of its own is indented one tab per level, whatever it came with", () => {
     const content = tlsZoneContent({
       kind: "dns",
-      title: "Azure DNS",
-      directive: ["dns azure {", "\ttenant_id {env.AZURE_TENANT_ID}", "    client_secret {env.AZURE_CLIENT_SECRET}", "resource_group_name {env.AZURE_RESOURCE_GROUP}", "}", "propagation_timeout 5m"],
+      title: "Cloudflare",
+      directive: ["dns cloudflare {", "\tapi_token {env.CLOUDFLARE_API_TOKEN}", "    zone_token {env.CLOUDFLARE_ZONE_TOKEN}", "}", "propagation_timeout 5m"],
     });
     expect(block(content)).toBe(
       [
         "tls {",
-        "\tdns azure {",
-        "\t\ttenant_id {env.AZURE_TENANT_ID}",
-        "\t\tclient_secret {env.AZURE_CLIENT_SECRET}",
-        "\t\tresource_group_name {env.AZURE_RESOURCE_GROUP}",
+        "\tdns cloudflare {",
+        "\t\tapi_token {env.CLOUDFLARE_API_TOKEN}",
+        "\t\tzone_token {env.CLOUDFLARE_ZONE_TOKEN}",
         "\t}",
         "\tpropagation_timeout 5m",
         "}",
         "",
       ].join("\n"),
     );
-    expect(content).toContain("# Azure DNS: one certificate");
+    expect(content).toContain("# Cloudflare: one certificate");
   });
 
   const refused: Array<[string, readonly string[], string]> = [
@@ -127,12 +126,12 @@ describe("tlsZoneContent", () => {
     ["an import", ["dns cloudflare {env.TOKEN}", "import /etc/caddy/other.caddy"], "imports a file"],
     ["on_demand", ["dns cloudflare {env.TOKEN}", "on_demand"], "on_demand"],
     ["a brace that closes the tls block", ["dns cloudflare {env.TOKEN}", "}", "respond 200"], "closes the tls block"],
-    ["a block left open", ["dns azure {", "tenant_id {env.T}"], "leaves a block open"],
+    ["a block left open", ["dns cloudflare {", "api_token {env.T}"], "leaves a block open"],
     ["a brace in the middle of a line", ["dns cloudflare { api_token {env.T} }"], "neither opens nor closes"],
     ["a lowercase variable, not a placeholder this module reads", ["dns cloudflare {env.token}"], "neither opens nor closes"],
     ["a token written in", ["dns cloudflare 0123456789abcdefABCDEF0123456789abcdefAB"], "credential written in"],
-    ["an access key written in", ["dns route53 {", "access_key_id AKIAIOSFODNN7EXAMPLE", "}"], "credential written in"],
-    ["a long secret without a digit", ["dns route53 {", "secret_access_key wJalrXUtnFEMIKbPxRfiCYEXAMPLEKEYwJalrXUtnFEMI", "}"], "credential written in"],
+    ["a short key with a digit written in a block", ["dns cloudflare {", "api_token AKIAIOSFODNN7EXAMPLE", "}"], "credential written in"],
+    ["a long secret without a digit written in a block", ["dns cloudflare {", "api_token wJalrXUtnFEMIKbPxRfiCYEXAMPLEKEYwJalrXUtnFEMI", "}"], "credential written in"],
     ["an empty line", ["dns cloudflare {env.TOKEN}", "  "], "empty"],
     ["no directive at all", [], "empty directive"],
     ["a first line that is not dns <module>", ["resolvers 1.1.1.1", "dns cloudflare {env.TOKEN}"], "starts with dns <module>"],
@@ -622,7 +621,7 @@ describe("a policy file that is there but holds no policy", () => {
     });
   }
 
-  test("every policy tlsZoneContent writes is recognised, as what it is", () => {
+  test("every policy tlsZoneContent writes is recognised, as what it is, and a provider's since removed, which a machine set up with one still carries", () => {
     expect(recognisedPolicy(CLOUDFLARE_CONTENT)).toBe("dns");
     expect(recognisedPolicy(ON_DEMAND)).toBe("on-demand");
     const azure = tlsZoneContent({ kind: "dns", title: "Azure DNS", directive: ["dns azure {", "tenant_id {env.AZURE_TENANT_ID}", "}"] });

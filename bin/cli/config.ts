@@ -68,11 +68,11 @@ export type Config = {
    */
   sites: string | null;
   /**
-   * Who serves the zone's DNS, as setup was told with `--dns`: a provider of
-   * bin/cli/dns/registry.ts, or `manual`. Absent means Cloudflare, which
-   * every installation used before the others existed; setup reads it again
-   * when run without `--dns`, so that a run never switches a machine to
-   * another way of obtaining its certificates unasked.
+   * Who serves the zone's DNS, as setup was told with `--dns`: `manual`, or
+   * on a machine set up before, a provider since removed, which setup
+   * refuses (bin/cli/dns/registry.ts). Absent means Cloudflare; setup reads
+   * it again when run without `--dns`, so that a run never switches a
+   * machine to another way of obtaining its certificates unasked.
    */
   dns?: string;
   /**

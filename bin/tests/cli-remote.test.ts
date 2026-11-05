@@ -256,7 +256,6 @@ describe("deploy through the API", () => {
       HOME: home,
       SITESOLIDE_API: api,
       SITESOLIDE_TOKEN: TOKEN,
-      SITESOLIDE_DNS_ROUTE53_SECRET_ACCESS_KEY: "a DNS provider's secret",
       SITESOLIDE_ANYTHING_ELSE: "sitesolide's own",
       ENV_PROBE: probe,
       BUILD_PROBE: "kept",
@@ -264,7 +263,7 @@ describe("deploy through the API", () => {
     expect(result.code).toBe(0);
     const lines = readFileSync(probe, "utf8").split("\n");
     expect(lines.filter((line) => line.startsWith("SITESOLIDE_"))).toEqual([]);
-    expect(lines.some((line) => line.includes(TOKEN) || line.includes("a DNS provider's secret"))).toBe(false);
+    expect(lines.some((line) => line.includes(TOKEN) || line.includes("sitesolide's own"))).toBe(false);
     for (const line of [`HOME=${home}`, `PATH=${vm.env.PATH}`]) expect(lines).toContain(line);
     expect(lines).toContain(`ENV_PROBE=${probe}`);
     // BUILD_PROBE is no name every build inherits, nor one the manifest declares.
@@ -710,7 +709,7 @@ describe("deploy through the API: the secrets", () => {
       HOME: home,
       SITESOLIDE_API: api,
       SITESOLIDE_TOKEN: TOKEN,
-      SITESOLIDE_DNS_ROUTE53_SECRET_ACCESS_KEY: "a DNS provider's secret",
+      SITESOLIDE_ANYTHING_ELSE: "sitesolide's own",
       BUILD_PROBE: "an undeclared variable",
       CMS_TOKEN: "the-cms-token",
       AWS_SECRET_ACCESS_KEY: "planted-cloud-key",

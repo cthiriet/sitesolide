@@ -7,14 +7,14 @@
  *               this workstation already holds credentials for it
  *   region      what the provider says it has, read live
  *   size        what it sells there, with the price where it gives one
- *   domain      the zone, who serves its DNS, read from its name servers, its
- *               credentials or records made by hand, the records already there
+ *   domain      the zone, whether Cloudflare serves its DNS, read from its name
+ *               servers, its token or records made by hand, the records already there
  *   the plan    everything above, with the price, confirmed once
  *   machine     `sitesolide machine create`
  *   install     `sitesolide setup`
  *
  * NOTHING IS ORDERED BEFORE EVERYTHING IS CHECKED. The cloud's credentials
- * are tried with a read, the DNS provider's against the zone, the records
+ * are tried with a read, Cloudflare's token against the zone, the records
  * in the zone against what setup will write, the configuration in place
  * against what is asked, and the plan, its price included, is confirmed:
  * only then is the machine ordered, and the bill starts. A refusal setup
@@ -29,7 +29,7 @@
  * already done.
  *
  * CREDENTIALS STAY IN MEMORY. A cloud's token typed here goes to that cloud
- * alone, and the DNS credentials to the DNS provider, then to the machine for
+ * alone, and Cloudflare's token to Cloudflare, then to the machine for
  * Caddy, as setup always lays them: never into a file of the workstation,
  * never into the environment the scripts inherit, and every line shown is
  * scrubbed of them as machine.ts scrubs. The variable that holds a provider's
@@ -49,8 +49,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { join } from "node:path";
 import { canonicalAddress } from "./cloudflare";
+import { CLOUDFLARE } from "./dns/cloudflare";
 import { DnsError, detectDns, recordLine, zoneRecords, type DnsEntry } from "./dns/dns";
-import { DNS_PROVIDERS, MANUAL } from "./dns/registry";
+import { MANUAL } from "./dns/registry";
 import { adoptLegacyKeys, CONFIG_DIR_VARIABLE, expandHome, privateFolder } from "./config";
 import {
   agentKeyName,
@@ -130,11 +131,9 @@ export type WizardDependencies = {
   providers?: readonly ProviderEntry[];
   /** What `machine create` runs with besides its output and credentials: the fetcher, the clock, the probes. */
   machine?: Partial<MachineDependencies>;
-  /** Where a DNS provider's API is reached: the environment its address variable is read from, and the fetch. */
+  /** Where Cloudflare's API is reached: the environment its address variable is read from, and the fetch. */
   dnsApi: { environment: Record<string, string | undefined>; fetcher?: Fetch };
-  /** The DNS providers offered; every one of bin/cli/dns/registry.ts unless a test says otherwise. */
-  dnsProviders?: readonly DnsEntry[];
-  /** A name's NS records, for telling who serves the zone; node's resolver unless a test says otherwise. */
+  /** A name's NS records, for telling whether Cloudflare serves the zone; node's resolver unless a test says otherwise. */
   nameServers?: (name: string) => Promise<string[]>;
   /** Runs setup: setupFromWorkstation, or a fake. */
   setup: (options: SetupOptions, extras: SetupExtras) => Promise<number>;
@@ -432,26 +431,27 @@ async function gitEmail(workstation: Workstation): Promise<string | undefined> {
 }
 
 /**
- * Who serves the zone's DNS, asked once the zone is known: the provider its
- * name servers say, first, every other provider sitesolide has a module for,
- * and records made by hand, which any registrar allows.
+ * Who serves the zone's DNS, asked once the zone is known: Cloudflare's API,
+ * first when the zone's name servers are Cloudflare's, or records made by
+ * hand, which any registrar allows, first for a zone served elsewhere, at a
+ * cloud's own DNS or a registrar's.
  */
 async function chooseDns(deps: WizardDependencies, zone: string): Promise<DnsEntry | null> {
   const ui = deps.prompter;
-  const providers = deps.dnsProviders ?? DNS_PROVIDERS;
   const detected = await ui.wait(
     `Looking up who serves ${zone}'s DNS`,
-    () => detectDns(zone, providers, deps.nameServers),
-    (found) => (found.entry !== null ? `${zone}'s DNS is at ${found.entry.title}` : found.nameServers.length === 0 ? `${zone} has no name server yet` : `${zone}'s DNS is at ${found.nameServers[0]}, which sitesolide has no module for`),
+    () => detectDns(zone, CLOUDFLARE, deps.nameServers),
+    (found) => (found.entry !== null ? `${zone}'s DNS is at ${found.entry.title}` : found.nameServers.length === 0 ? `${zone} has no name server yet` : `${zone}'s DNS is at ${found.nameServers[0]}, not Cloudflare`),
   );
+  const cloudflare: Choice = {
+    value: CLOUDFLARE.name,
+    label: "Through Cloudflare's API",
+    hint: `${detected.entry === null ? "once the zone is at Cloudflare: " : ""}records made for you, one wildcard certificate`,
+  };
   const manual: Choice = { value: MANUAL, label: "I create two records by hand", hint: "any registrar; each project's name then shows in public certificate logs" };
-  const options: Choice[] = [
-    ...(detected.entry === null ? [] : [{ value: detected.entry.name, label: `Through ${detected.entry.title}'s API`, hint: "records made for you, one wildcard certificate" }]),
-    ...providers.filter((entry) => entry !== detected.entry).map((entry) => ({ value: entry.name, label: entry.title, hint: "its API: records made for you, one wildcard certificate" })),
-    manual,
-  ];
-  const chosen = await ui.select(`How should ${zone}'s records and certificates be made?`, options, detected.entry?.name ?? MANUAL);
-  return providers.find((entry) => entry.name === chosen) ?? null;
+  const options = detected.entry === null ? [manual, cloudflare] : [cloudflare, manual];
+  const chosen = await ui.select(`How should ${zone}'s records and certificates be made?`, options, detected.entry === null ? MANUAL : CLOUDFLARE.name);
+  return chosen === CLOUDFLARE.name ? CLOUDFLARE : null;
 }
 
 /** The machine's addresses when they are known: a machine already there, or one picked up; null for one not ordered yet. */
@@ -512,13 +512,7 @@ async function chooseSite(deps: WizardDependencies, secrets: string[], machine: 
     const credentials = typed ?? fromEnvironment;
     secrets.push(...secretValues(dns, credentials));
     try {
-      const api = dns.open({
-        credentials,
-        environment: deps.dnsApi.environment,
-        fetcher: deps.dnsApi.fetcher ?? fetch,
-        clock: { now: () => Date.now(), sleep: (milliseconds) => Bun.sleep(milliseconds) },
-        secret: (value) => secrets.push(value),
-      });
+      const api = dns.open({ credentials, environment: deps.dnsApi.environment, fetcher: deps.dnsApi.fetcher ?? fetch });
       const found = await ui.wait(`Looking for ${zone} at ${dns.title}`, () => zoneRecords(api, zone), (result) => `zone ${result.zone.name} found, ${result.records.length === 0 ? `no record yet for ${zone} and *.${zone}` : `${result.records.length} record(s) for ${zone} and *.${zone}`}`);
       // Only what setup's DNS step would change: a CNAME, a proxied record,
       // an address that is not one of the machine's, every one when the
@@ -759,7 +753,8 @@ export async function runWizard(deps: WizardDependencies): Promise<number> {
       configDir,
       json: false,
     };
-    const dnsOption = site.dns === null ? ` --dns ${MANUAL}` : site.dns.name === "cloudflare" ? "" : ` --dns ${site.dns.name}`;
+    // Cloudflare is setup's default: only manual is said.
+    const dnsOption = site.dns === null ? ` --dns ${MANUAL}` : "";
     const setupCommand = `sitesolide setup ${login}@${host} --zone ${site.zone} --email ${site.email} --user deploy${dnsOption}${site.replace ? " --dns-replace" : ""}${configDir === null ? "" : ` --config-dir ${configDir}`}`;
     ui.step(`Installing sitesolide on ${login}@${host}: about ten minutes, every step checked`);
     const code = await deps.setup(options, { ...(site.credentials === null ? {} : { dnsCredentials: site.credentials }), output: ui.setupOutput() });

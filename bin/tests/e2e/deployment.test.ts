@@ -69,8 +69,8 @@ describe("built documentation", () => {
   });
 
   test("the build gets no SITESOLIDE_ variable, a token exported by hand included, and of the rest only the allow list, the manifest's env and its build secrets", async () => {
-    // The build is the folder's own code: a token or a DNS provider's
-    // credentials in the workstation's environment would be its to read.
+    // The build is the folder's own code: a token or another SITESOLIDE_
+    // variable in the workstation's environment would be its to read.
     const token = `sst_${"T".repeat(43)}`;
     const parent = realpathSync(mkdtempSync(join(tmpdir(), "build-env-")));
     const vm = createFakeVm();
@@ -85,7 +85,7 @@ describe("built documentation", () => {
         vm,
         env: {
           SITESOLIDE_TOKEN: token,
-          SITESOLIDE_DNS_ROUTE53_SECRET_ACCESS_KEY: "a DNS provider's secret",
+          SITESOLIDE_ANYTHING_ELSE: "sitesolide's own",
           ENV_PROBE: probe,
           BUILD_PROBE: "kept",
           SSH_AUTH_SOCK: "/tmp/ssh-agent/agent.1234",
@@ -96,7 +96,7 @@ describe("built documentation", () => {
       const lines = readFileSync(probe, "utf8").split("\n");
       // SITESOLIDE_SERVER and SITESOLIDE_ZONE, which the CLI itself reads, withheld with the rest.
       expect(lines.filter((line) => line.startsWith("SITESOLIDE_"))).toEqual([]);
-      expect(lines.some((line) => line.includes(token) || line.includes("a DNS provider's secret"))).toBe(false);
+      expect(lines.some((line) => line.includes(token) || line.includes("sitesolide's own"))).toBe(false);
       for (const line of [`PATH=${vm.env.PATH}`, `ENV_PROBE=${probe}`, "SITE_URL=https://build-env.test-zone.invalid"]) expect(lines).toContain(line);
       // Nor the SSH agent, whose keys log into the machine.
       expect(lines.filter((line) => line.startsWith("BUILD_PROBE=") || line.startsWith("SSH_AUTH_SOCK="))).toEqual([]);

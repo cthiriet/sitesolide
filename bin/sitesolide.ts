@@ -263,7 +263,7 @@ import { askAddress, VERIFY_RETRY_MS, WARM_UP_MS } from "./cli/verify";
 import { realClock } from "../clouds/src/provider";
 import { declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
 import { machine, sshLogin } from "./cli/machine";
-import { DNS_PROVIDERS, dnsEntry, MANUAL } from "./cli/dns/registry";
+import { DNS_CHOICES, dnsEntry, shownDns } from "./cli/dns/registry";
 import { eventOutput, humanOutput, login, promptWithoutEcho, remoteMode, REMOTE_USAGE, runRemote, type BuildContext } from "./cli/remote";
 import { buildEnv, KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
 import { ownerGeneralCommand, PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshClaim, sshGeneral, sshPeople, sshTakeBack } from "./cli/access";
@@ -506,13 +506,7 @@ function script(name: string): string {
  */
 function projectEnvironment(): Record<string, string | undefined> | undefined {
   const extra = fromKit(projectEnv);
-  // A DNS provider's credentials, meant for a machine's Caddy alone, never
-  // reach a project's build: SITESOLIDE_DNS_<...> are sitesolide's own names.
-  const dns = Object.keys(process.env).filter((name) => name.startsWith("SITESOLIDE_DNS_"));
-  if (Object.keys(extra).length === 0 && dns.length === 0) return undefined;
-  const environment: Record<string, string | undefined> = { ...process.env, ...extra };
-  for (const name of dns) delete environment[name];
-  return environment;
+  return Object.keys(extra).length === 0 ? undefined : { ...process.env, ...extra };
 }
 
 /** The final event of a run that succeeded, under --json. */
@@ -4013,7 +4007,7 @@ async function initialise(arguments_: string[]): Promise<void> {
   }
   // Setup reads it again when run without --dns: only a name it knows.
   if (config.dns !== undefined && dnsEntry(config.dns) === undefined) {
-    die(`dns is not valid: ${/^[a-z0-9-]{1,40}$/.test(config.dns) ? config.dns : "(not shown)"}`, [`one of ${[...DNS_PROVIDERS.map((entry) => entry.name), MANUAL].join(", ")}; see docs/setup.md`]);
+    die(`dns is not valid: ${shownDns(config.dns)}`, [...DNS_CHOICES]);
   }
 
   const path = configPath();
@@ -4036,12 +4030,11 @@ function usage(zone: string | null): string {
     "     --zone <dns.zone> --email <you@example.com>",
     "     --contact <you@example.com>   shown on the page that asks for a preview code",
     "     --user <name>                the account that deploys, deploy by default as root",
-    "     --dns <provider|manual>      who serves the zone's DNS: cloudflare by default, see docs/dns/",
+    "     --dns cloudflare|manual      who serves the zone's DNS: cloudflare by default, manual for records made by hand",
     "     --acme staging               a test installation: Let's Encrypt's staging, untrusted certificates",
     "     --tunnel <file|id>           served through a Cloudflare Tunnel, no public address needed: docs/tunnel.md",
     "     --skip-dns                   create the DNS records by hand: setup lists them and waits",
     "     --dns-replace                replace records that point elsewhere, on your decision alone",
-    "     --dns-credentials-stdin      read the DNS provider's credentials from standard input",
     "     --cloudflare-token-stdin     read the Cloudflare token from standard input",
     "     --minimal                    leave out backups, the installer and the egress proxy",
     "     --any-os                     go on with a system other than Debian 13, at your own risk",

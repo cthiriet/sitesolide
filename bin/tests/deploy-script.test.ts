@@ -306,7 +306,7 @@ describe("the archive, beside the CLI's", () => {
         env: {
           SITESOLIDE_TOKEN: TOKEN,
           SITESOLIDE_API: "https://dashboard.test-zone.invalid",
-          SITESOLIDE_DNS_ROUTE53_SECRET_ACCESS_KEY: "a DNS provider's secret",
+          SITESOLIDE_ANYTHING_ELSE: "sitesolide's own",
           "SITESOLIDE_ODD-NAME": "set through env, never through export",
           "ODD-NAME": "an odd name of the shell's",
           BUILD_PROBE: "an undeclared variable",
@@ -323,7 +323,7 @@ describe("the archive, beside the CLI's", () => {
       const lines = read(new Uint8Array(readFileSync(out))).files["public/env.txt"]!.content.split("\n");
       // SITESOLIDE_DEPLOY_BASH too, which the script sets when sh started it.
       expect(lines.filter((line) => line.startsWith("SITESOLIDE_"))).toEqual([]);
-      expect(lines.some((line) => line.includes(TOKEN) || line.includes("a DNS provider's secret") || line.includes("a cloud's key"))).toBe(false);
+      expect(lines.some((line) => line.includes(TOKEN) || line.includes("sitesolide's own") || line.includes("a cloud's key"))).toBe(false);
       // No deployment answered in an archive: the zone is the one SITESOLIDE_API names, the contact none.
       for (const line of [`HOME=${WORK}`, `PATH=${toolboxes.get(READERS[0]!)}`, "LC_ALL=C", "CMS_TOKEN=the cms token", "PUBLIC_URL=https://built.test-zone.invalid", "CONTACT="]) expect(lines).toContain(line);
       expect(lines.filter((line) => /^(BUILD_PROBE|AWS_SECRET_ACCESS_KEY|NODE_ENV|JSON|ODD-NAME|SSH_AUTH_SOCK)=/.test(line))).toEqual([]);

@@ -330,20 +330,28 @@ describe("the domain", () => {
 });
 
 describe("who serves the zone's DNS", () => {
-  test("the provider the name servers say is offered first, and setup is told it", async () => {
+  test("a zone whose name servers are Cloudflare's: Cloudflare offered first, then records by hand, and setup told it", async () => {
     const run = scripted(HAPPY);
     const calls: Calls = [];
     expect(await runWizard(dependencies(run.prompter, { HCLOUD_TOKEN: FAKE_TOKEN, CLOUDFLARE_API_TOKEN: CLOUDFLARE_TOKEN }, calls, run.planConfirmed))).toBe(0);
     expect(run.shown).toContain(`${ZONE}'s DNS is at Cloudflare`);
+    const question = run.shown.findIndex((line) => line.startsWith("How should"));
+    expect(run.shown.slice(question + 1, question + 3).map((line) => line.split(" ")[0])).toEqual(["cloudflare", "manual"]);
+    expect(run.shown[question + 3]).toStartWith("CLOUDFLARE_API_TOKEN from this workstation's environment");
     expect(calls[0]!.options).toMatchObject({ dns: "cloudflare", skipDns: false });
   });
 
-  test("a registrar sitesolide has no module for: records by hand, nothing asked of any DNS API, setup told manual", async () => {
+  test("a zone served elsewhere than Cloudflare, a cloud's own DNS or a registrar's: records by hand first and by default, nothing asked of any DNS API, setup told manual", async () => {
     const run = scripted(HAPPY);
     const calls: Calls = [];
     const code = await runWizard(dependencies(run.prompter, { HCLOUD_TOKEN: FAKE_TOKEN }, calls, run.planConfirmed, { nameServers: async () => ["ns1.registrar.test-zone.invalid"] }));
     expect(code).toBe(0);
-    expect(run.shown.join("\n")).toContain("which sitesolide has no module for");
+    expect(run.shown).toContain(`${ZONE}'s DNS is at ns1.registrar.test-zone.invalid, not Cloudflare`);
+    // The two ways, and no other: records by hand, then Cloudflare once the zone moves there.
+    const question = run.shown.findIndex((line) => line.startsWith("How should"));
+    expect(run.shown.slice(question + 1, question + 3).map((line) => line.split(" ")[0])).toEqual(["manual", "cloudflare"]);
+    expect(run.shown[question + 2]).toContain("once the zone is at Cloudflare");
+    expect(run.shown[question + 3]).toBe("Records made by hand");
     expect(run.shown.join("\n")).toContain("names in public logs");
     expect(cloudflare.requests).toEqual([]);
     expect(calls[0]!.options).toMatchObject({ dns: "manual", skipDns: true, dnsReplace: false });

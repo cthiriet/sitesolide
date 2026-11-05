@@ -3,11 +3,11 @@
  * install of docs/install.md in one command, on a fresh Debian 13 machine.
  *
  *   configuration      ~/.config/sitesolide/config.json, as `init` writes it
- *   dns                the zone and its wildcard at the machine, through the DNS
- *                      provider's API (bin/cli/dns/), or by hand under --dns manual
+ *   dns                the zone and its wildcard at the machine, through
+ *                      Cloudflare's API (bin/cli/dns/), or by hand under --dns manual
  *   packages ... fail2ban   the hardening, see bin/cli/harden.ts
- *   caddy, bun         from their own repositories, Caddy with the provider's DNS module
- *   dns-credentials    /etc/caddy/cloudflare.env, root:caddy 0640, the provider's credentials
+ *   caddy, bun         from their own repositories, Caddy with Cloudflare's DNS module
+ *   dns-credentials    /etc/caddy/cloudflare.env, root:caddy 0640, Cloudflare's token
  *   tls-zone           /etc/caddy/tls-zone.caddy, the zone's tls block (bin/cli/tls.ts)
  *   tunnel             under --tunnel, the Cloudflare Tunnel's connector (bin/cli/tunnel.ts)
  *   resolution         this workstation resolves the zone to the machine
@@ -38,15 +38,14 @@
  * `caddy stop` nor `caddy start`, which address the admin API of whatever
  * instance runs: see the Production section of CLAUDE.md.
  *
- * THE DNS CREDENTIALS come from the provider's variables, CLOUDFLARE_API_TOKEN
- * for Cloudflare and SITESOLIDE_DNS_<...> for the others, from standard input
- * with --dns-credentials-stdin (--cloudflare-token-stdin for Cloudflare), from
- * the wizard, or from a prompt that does not echo. They are asked for only
- * when a step needs them, and they are never printed, never an argument of
- * any command, never in a URL nor an error: they reach the API in a header or
- * a signature, and the machine inside a script on ssh's standard input, where
- * Caddy keeps them to renew the wildcard. The scripts setup launches do not
- * inherit them. `--dns manual` needs none.
+ * THE DNS CREDENTIALS, Cloudflare's token, come from CLOUDFLARE_API_TOKEN,
+ * from standard input with --cloudflare-token-stdin, from the wizard, or from
+ * a prompt that does not echo. They are asked for only when a step needs
+ * them, and they are never printed, never an argument of any command, never
+ * in a URL nor an error: they reach the API in a header, and the machine
+ * inside a script on ssh's standard input, where Caddy keeps them to renew
+ * the wildcard. The scripts setup launches do not inherit them. `--dns
+ * manual` needs none.
  *
  * THE PASSWORDS. The dashboard's is drawn by bin/dashboard-password.sh, which
  * shows it once on standard error, and only when the machine has none. The
@@ -66,7 +65,7 @@ import { join, resolve } from "node:path";
 import { generatePassword } from "../../dashboard/src/password";
 import { canonicalAddress, describePlan, manualRecords, tunnelManualRecords } from "./cloudflare";
 import { DnsError, ensureTunnelRecords, ensureZoneRecords, type DnsEntry, type ZoneApi } from "./dns/dns";
-import { DNS_PROVIDERS, dnsEntry, dnsVariables, MANUAL } from "./dns/registry";
+import { DNS_CHOICES, dnsEntry, dnsVariables, MANUAL, shownDns } from "./dns/registry";
 import { fieldsToAsk, fromEnvironment, isFailure, missingFields, parseStdinCredentials, scrubSecrets, secretValues } from "./machine";
 import { ProviderError, type Credentials, type Fetch } from "../../clouds/src/provider";
 import { CADDY_RESTART, caddyRestartScript, policyPending, tlsZoneCheck, tlsZoneContent, tlsZoneRun, TLS_ZONE_FILE, TLS_ZONE_RESTARTED } from "./tls";
@@ -129,9 +128,9 @@ export type SetupOptions = {
   dryRun: boolean;
   tokenStdin: boolean;
   /**
-   * Who serves the zone's DNS: a provider of bin/cli/dns/registry.ts, whose
-   * API makes the records and whose Caddy module obtains the wildcard, or
-   * `manual`: records made by hand, a certificate per name. Null when
+   * Who serves the zone's DNS: `cloudflare`, whose API makes the records and
+   * whose Caddy module obtains the wildcard, or `manual`: records made by
+   * hand, a certificate per name (bin/cli/dns/registry.ts). Null when
    * `--dns` was not given: the configuration's, else `cloudflare`.
    */
   dns: string | null;
@@ -153,7 +152,7 @@ export type SetupOptions = {
 };
 
 const VALUED = ["--zone", "--email", "--contact", "--user", "--config-dir", "--dns", "--acme", "--tunnel"] as const;
-const FLAGS = ["--skip-dns", "--dns-replace", "--minimal", "--any-os", "--dry-run", "--cloudflare-token-stdin", "--dns-credentials-stdin", "--json"] as const;
+const FLAGS = ["--skip-dns", "--dns-replace", "--minimal", "--any-os", "--dry-run", "--cloudflare-token-stdin", "--json"] as const;
 
 export const ACCOUNT = /^[a-z_][a-z0-9_-]{0,31}$/;
 export const HOST = /^[A-Za-z0-9][A-Za-z0-9.:-]*$/;
@@ -168,6 +167,8 @@ export const USAGE = "usage: sitesolide setup <user@host> --zone <dns.zone> --em
 export const REFUSALS = {
   usage: (detail: string): Refusal => ({ message: USAGE, details: [detail, "see docs/setup.md"] }),
   invalid: (option: string, value: string, expected: string): Refusal => ({ message: `setup: ${option} is not valid: ${value}`, details: [expected] }),
+  /** A DNS `--dns` does not take, typed or read from the configuration: a provider since removed, most likely. */
+  dns: (where: string, name: string): Refusal => ({ message: `setup: ${where} is not valid: ${shownDns(name)}`, details: [...DNS_CHOICES] }),
   otherServer: (path: string, configured: string, wanted: string): Refusal => ({
     message: `the configuration names another server: ${configured}`,
     details: [
@@ -305,11 +306,9 @@ export function parseSetupArguments(arguments_: readonly string[]): SetupOptions
   if (!ACCOUNT.test(user) || user === "root") return REFUSALS.invalid("--user", user, "an account other than root: lowercase letters, digits, dashes");
   const json = flags.has("--json");
   const dns = values["--dns"] ?? null;
-  const known = [...DNS_PROVIDERS.map((entry) => entry.name), MANUAL];
-  if (dns !== null && dnsEntry(dns) === undefined) return REFUSALS.invalid("--dns", /^[a-z0-9-]{1,40}$/.test(dns) ? dns : "(not shown)", `one of ${known.join(", ")}; see docs/dns/`);
-  if (flags.has("--cloudflare-token-stdin") && dns !== null && dns !== "cloudflare" && dns !== MANUAL) return REFUSALS.usage(`--cloudflare-token-stdin is Cloudflare's: with --dns ${dns}, pipe the credentials to --dns-credentials-stdin`);
-  if (dns === MANUAL && (flags.has("--dns-credentials-stdin") || flags.has("--cloudflare-token-stdin") || flags.has("--dns-replace"))) {
-    return REFUSALS.usage("--dns manual uses no DNS API: the records are made by hand, and nothing reads credentials nor replaces records");
+  if (dns !== null && dnsEntry(dns) === undefined) return REFUSALS.dns("--dns", dns);
+  if (dns === MANUAL && (flags.has("--cloudflare-token-stdin") || flags.has("--dns-replace"))) {
+    return REFUSALS.usage("--dns manual uses no DNS API: the records are made by hand, and nothing reads a token nor replaces records");
   }
   const tunnel = values["--tunnel"] ?? null;
   if (tunnel !== null && dns !== null && dns !== "cloudflare") return REFUSALS.tunnelDns(dns);
@@ -329,7 +328,7 @@ export function parseSetupArguments(arguments_: readonly string[]): SetupOptions
     minimal: flags.has("--minimal"),
     anyOs: flags.has("--any-os"),
     dryRun: flags.has("--dry-run"),
-    tokenStdin: flags.has("--cloudflare-token-stdin") || flags.has("--dns-credentials-stdin"),
+    tokenStdin: flags.has("--cloudflare-token-stdin"),
     skipDns: flags.has("--skip-dns"),
     dns,
     acme,
@@ -655,10 +654,10 @@ export type SetupDependencies = {
   /** What the workstation resolves a name to, through its own resolver. */
   resolve(name: string): Promise<Observed>;
   sameMachine: SameMachine;
-  /** Where the DNS provider's API is reached: the environment its address variable is read from, and the fetch. */
+  /** Where Cloudflare's API is reached: the environment its address variable is read from, and the fetch. */
   dnsApi: { environment: Record<string, string | undefined>; fetcher?: Fetch };
   /**
-   * The DNS provider's credentials, scoped to the zone: from the wizard, the
+   * The DNS credentials, scoped to the zone: from the wizard, the
    * environment or standard input, and from a prompt only when `ask`. Null
    * when they are not at hand.
    */
@@ -699,16 +698,16 @@ export type SetupContext = HardenContext & {
   childEnvironment: Record<string, string>;
 };
 
-/** The DNS provider's credentials, asked for when a step needs them, once. */
+/** The DNS credentials, asked for when a step needs them, once. */
 async function requireDnsCredentials(context: SetupContext, entry: DnsEntry): Promise<Credentials> {
   if (context.dnsCredentials !== undefined && context.dnsCredentials !== null) return context.dnsCredentials;
   const credentials = await context.deps.dnsCredentials(entry, true);
   const missing = missingFields(entry, credentials ?? {});
   if (credentials === null || missing.length > 0) {
     throw new StepFailure(`no ${entry.title} credentials`, [
-      `set ${(missing.length > 0 ? missing : fieldsToAsk(entry)).map((field) => field.variable).join(", ")} in the environment, or pipe them to ${entry.name === "cloudflare" ? "--cloudflare-token-stdin" : "--dns-credentials-stdin"}`,
+      `set ${(missing.length > 0 ? missing : fieldsToAsk(entry)).map((field) => field.variable).join(", ")} in the environment, or pipe it to --cloudflare-token-stdin`,
       ...entry.credentialHelp,
-      `see ${entry.docs}; with a DNS no module serves, --dns manual and docs/setup.md`,
+      `see ${entry.docs}; with a zone whose DNS is not at Cloudflare, --dns manual and docs/setup.md`,
     ]);
   }
   const wrong = entry.credentials.find((field) => credentials[field.variable] !== undefined && credentials[field.variable] !== "" && !field.shape.test(credentials[field.variable]!));
@@ -890,16 +889,15 @@ curl -fsSL https://bun.com/install | BUN_INSTALL=/usr/local bash
 }
 
 /**
- * Caddy's environment file, the DNS provider's credentials for the
- * wildcard's renewals. Its name is the first provider's: machines in service
- * load it by that name, through the drop-in, the gatekeeper's validation and
- * the scripts that run `caddy validate`; it holds whichever provider's
- * variables now, or none under `--dns manual`.
+ * Caddy's environment file, Cloudflare's token for the wildcard's renewals,
+ * or none under `--dns manual`. Machines in service load it by that name,
+ * through the drop-in, the gatekeeper's validation and the scripts that run
+ * `caddy validate`.
  */
 export const CADDY_ENV_FILE = "/etc/caddy/cloudflare.env";
 
 /**
- * The file's whole text. One `NAME=value` line per variable the provider's
+ * The file's whole text. One `NAME=value` line per variable the DNS
  * module reads; under `--dns manual`, a comment alone, since systemd and the
  * scripts load the file whatever the mode.
  *
@@ -980,7 +978,13 @@ export function dnsCredentialsCheck(variables: { name: string; fingerprint: stri
   ]);
 }
 
-/** What names a DNS credential in Caddy's environment file, whichever provider's: grep's words. */
+/**
+ * What names a DNS credential in Caddy's environment file: grep's words.
+ * Cloudflare's token, and the SITESOLIDE_DNS_<...> variables of the
+ * providers since removed, which a machine set up with one still holds: a
+ * run that moves it to Cloudflare or to manual takes them out, as the
+ * previous provider's, once the new policy is in service.
+ */
 const CREDENTIAL_LINE = "^[[:space:]]*(CLOUDFLARE_API_TOKEN|SITESOLIDE_DNS_[A-Z0-9_]+)=";
 
 /** The names a text of caddyEnvironmentText defines. */
@@ -1539,24 +1543,11 @@ function placeholderCredentials(dns: DnsEntry | null): Credentials | null {
   return Object.fromEntries(dns.credentials.map((field) => [field.variable, "placeholder"]));
 }
 
-/**
- * The DNS provider's API for these credentials, opened when asked, and what
- * scrubs a failure's words of them: the credentials, and a token the
- * provider obtains for them, whichever provider wrote it.
- */
+/** The zone's DNS API for these credentials, opened when asked, and what scrubs a failure's words of them. */
 function dnsSession(context: SetupContext, entry: DnsEntry, credentials: Credentials): { open: () => ZoneApi; scrub: (text: string) => string } {
   const secrets = secretValues(entry, credentials);
   return {
-    open: () =>
-      entry.open({
-        credentials,
-        environment: context.deps.dnsApi.environment,
-        fetcher: context.deps.dnsApi.fetcher ?? fetch,
-        clock: { now: () => context.deps.now(), sleep: (ms) => context.deps.sleep(ms) },
-        secret: (value) => {
-          if (value !== "") secrets.push(value);
-        },
-      }),
+    open: () => entry.open({ credentials, environment: context.deps.dnsApi.environment, fetcher: context.deps.dnsApi.fetcher ?? fetch }),
     scrub: (text) => scrubSecrets(text, secrets),
   };
 }
@@ -1575,7 +1566,7 @@ async function proveDnsCredentials(context: SetupContext, entry: DnsEntry, crede
   }
 }
 
-/** What /etc/caddy/tls-zone.caddy holds for this machine: the provider's DNS challenge, or certificates on demand. */
+/** What /etc/caddy/tls-zone.caddy holds for this machine: Cloudflare's DNS challenge, or certificates on demand. */
 function zoneTls(context: SetupContext): string {
   return tlsZoneContent(
     context.dns === null ? { kind: "on-demand" } : { kind: "dns", title: context.dns.title, directive: context.dns.caddy.directive },
@@ -1608,7 +1599,7 @@ async function tunnelRecordsCheck(context: SetupContext): Promise<Check> {
   }
 }
 
-/** The records, through the DNS provider's API, at the start: they propagate while the machine installs. */
+/** The records, through Cloudflare's API, at the start: they propagate while the machine installs. */
 function dnsStep(): Step<SetupContext> {
   return {
     id: "dns",
@@ -1675,9 +1666,9 @@ function webPortsStep(): Step<SetupContext> {
  */
 export function withoutToken(environment: Record<string, string | undefined>, json: boolean): Record<string, string> {
   const child: Record<string, string> = {};
-  // Every DNS provider's credentials, Cloudflare's token among them: a
-  // script setup launches never needs them, and reaches them through nothing.
-  const kept = new Set(["CLOUDFLARE_API_TOKEN", ...dnsVariables()]);
+  // The DNS credentials, Cloudflare's token: a script setup launches never
+  // needs them, and reaches them through nothing.
+  const kept = new Set(dnsVariables());
   for (const [key, value] of Object.entries(environment)) {
     if (value !== undefined && !kept.has(key)) child[key] = value;
   }
@@ -1740,9 +1731,11 @@ export async function runSetup(given: SetupOptions, deps: SetupDependencies): Pr
   const configPath = join(folder, "config.json");
   const file = adoptLegacyKeys(readJson(configPath) as never).config;
   // The DNS: what --dns says, else what the configuration recorded, else
-  // Cloudflare. Manual means records by hand: listed, then waited for.
+  // Cloudflare. Manual means records by hand: listed, then waited for. A
+  // configuration naming a provider since removed is refused, the way out
+  // said, rather than switched to Cloudflare unasked.
   const dnsName = given.dns ?? (typeof file.dns === "string" && file.dns !== "" ? file.dns : "cloudflare");
-  if (dnsEntry(dnsName) === undefined) return refuse(REFUSALS.invalid("dns in the configuration", dnsName, `one of ${[...DNS_PROVIDERS.map((entry) => entry.name), MANUAL].join(", ")}`));
+  if (dnsEntry(dnsName) === undefined) return refuse(REFUSALS.dns("dns in the configuration", dnsName));
   // The certificate authority likewise: --acme, else the configuration's, else production.
   const acmeName = given.acme ?? (file.acme === ACME_STAGING ? ACME_STAGING : "production");
   // The tunnel likewise: --tunnel, else the one the configuration recorded.

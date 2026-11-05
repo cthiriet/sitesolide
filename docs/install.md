@@ -16,7 +16,7 @@ cd your-project && sitesolide deploy
 ```
 
 `sitesolide setup`, alone at a terminal, asks which cloud, which region and
-which size, checks your domain at its DNS provider, shows the plan with its price,
+which size, checks your domain at Cloudflare, shows the plan with its price,
 then orders the machine and installs it: see [the wizard](setup.md#the-wizard).
 The same, without questions, for a script or an agent:
 
@@ -32,19 +32,17 @@ sitesolide setup root@203.0.113.10 --zone example.com --email you@example.com
 
 - **A domain, at any registrar.** Every project gets a subdomain of it, and the
   bare domain is the domain of whichever project declares it, see
-  [the manifest's `domain`](manifest.md#domain). Where its DNS is served by Cloudflare,
-  Route 53, Azure, DigitalOcean, Hetzner, Scaleway, Vultr, Akamai, OVHcloud,
-  Gandi or Porkbun, setup creates the records and Caddy obtains one wildcard
-  certificate, with credentials scoped to the zone; anywhere else, you create
-  two records by hand and each project gets its own certificate. See
+  [the manifest's `domain`](manifest.md#domain). Where Cloudflare serves its
+  DNS, setup creates the records and Caddy obtains one wildcard certificate,
+  with a token scoped to the zone; anywhere else, you create two records by
+  hand and each project gets its own certificate. See
   [setup.md](setup.md#dns).
-- **The DNS credentials**, for a provider: Cloudflare's is a token created at
+- **Cloudflare's token**, for a zone there: created at
   [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens)
   with **Create Custom Token**, restricted to that zone, with `Zone / Zone /
-  Read` and `Zone / DNS / Edit`; each other provider's page in [dns/](dns/)
-  says how to make its own. Setup uses them from your workstation to create the
-  records, and lays them on the machine, where Caddy uses them for the
-  wildcard certificate.
+  Read` and `Zone / DNS / Edit`, see [dns/cloudflare.md](dns/cloudflare.md).
+  Setup uses it from your workstation to create the records, and lays it on
+  the machine, where Caddy uses it for the wildcard certificate.
 - **An SSH key** on your workstation, `~/.ssh/id_ed25519` or another.
 - **A machine**: either an account at one of the clouds of
   [machine.md](machine.md), Hetzner, DigitalOcean, AWS, Google Cloud, Azure,
@@ -178,25 +176,22 @@ dashboard or with `sitesolide share <email> --role developer` in its folder:
 they sign in to the dashboard and mint their own tokens, never stronger than
 their roles.
 
-## Another DNS provider
+## A zone elsewhere than Cloudflare
 
-`--dns` names it: setup creates the records through its API, adds its module
-to Caddy and lays its credentials for the wildcard's renewals. Every provider
-sitesolide speaks, and what its credentials need, is in [dns/](dns/); the
-wizard reads the zone's name servers and offers the one that serves it.
+Setup speaks to one DNS provider, Cloudflare. A zone at any other, a cloud's
+own DNS or a registrar's, moves its DNS to Cloudflare first, or takes
+`--dns manual`, which needs no API:
 
 ```bash
-sitesolide setup root@203.0.113.10 --zone example.com --email you@example.com --dns route53
+sitesolide setup root@203.0.113.10 --zone example.com --email you@example.com --dns manual
 ```
 
-## Any registrar, no API
-
-`--dns manual`: setup lists the two records to create, `<zone>` and
-`*.<zone>`, and waits for them; each project then gets its own certificate at
-its first visit, through HTTP-01 or TLS-ALPN-01, for the names of the sites
-deployed and those alone. It costs a second or two on a project's first visit,
-an issuance per name, and each project's name in public Certificate
-Transparency logs. See [setup.md](setup.md#dns).
+Setup then lists the two records to create, `<zone>` and `*.<zone>`, and
+waits for them; each project gets its own certificate at its first visit,
+through HTTP-01 or TLS-ALPN-01, for the names of the sites deployed and those
+alone. It costs a second or two on a project's first visit, an issuance per
+name, and each project's name in public Certificate Transparency logs. See
+[setup.md](setup.md#dns).
 
 ## Installing by hand
 

@@ -14,9 +14,10 @@ containers, no per-seat pricing.
 
 ## Quick start
 
-You need a domain, at any registrar, and an account at Hetzner, DigitalOcean,
-AWS, Google Cloud, Azure, Vultr, Akamai (Linode) or Scaleway, or any Debian 13
-machine you reach over SSH.
+You need a domain, its DNS at Cloudflare or at any registrar where you create
+two records by hand, and an account at Hetzner, DigitalOcean, AWS, Google
+Cloud, Azure, Vultr, Akamai (Linode) or Scaleway, or any Debian 13 machine you
+reach over SSH.
 
 ```bash
 curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/install.sh | sh
@@ -31,10 +32,10 @@ cd your-project && sitesolide deploy
 ```
 
 One executable, no Bun and no clone. `sitesolide setup` asks which cloud,
-region and size, checks your domain at its DNS provider, shows the plan with its
-price, then orders the machine, hardens it, creates the DNS records where your
-DNS provider has an API sitesolide speaks (or lists the two to create by hand),
-and installs everything; it can be run again at any time. Without questions, for a
+region and size, checks your domain at Cloudflare, shows the plan with its
+price, then orders the machine, hardens it, creates the DNS records through
+Cloudflare's API (or lists the two to create by hand elsewhere), and installs
+everything; it can be run again at any time. Without questions, for a
 script or an agent, the same is two commands:
 
 ```bash

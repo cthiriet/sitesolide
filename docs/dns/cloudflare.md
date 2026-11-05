@@ -3,8 +3,9 @@
 `sitesolide setup` points the zone at the machine through
 [Cloudflare's API](https://developers.cloudflare.com/api/), and gives Caddy the
 module that obtains the zone's wildcard certificate through a DNS-01
-challenge, then renews it. It is the default: `--dns cloudflare` says nothing
-more than setup without the option. What every DNS provider shares is in
+challenge, then renews it. It is the one DNS provider setup speaks to, and the
+default: `--dns cloudflare` says nothing more than setup without the option.
+A zone served anywhere else takes `--dns manual`, see
 [setup.md](../setup.md#dns).
 
 ```console
@@ -36,8 +37,7 @@ it.
    password manager, not in a file.
 
 It is read from `CLOUDFLARE_API_TOKEN`, from standard input with
-`--cloudflare-token-stdin` (or `--dns-credentials-stdin`), or typed at a prompt
-that does not echo. A token Cloudflare cannot verify as a user token, an
+`--cloudflare-token-stdin`, or typed at a prompt that does not echo. A token Cloudflare cannot verify as a user token, an
 account-owned one, is used all the same when it reads the zone.
 
 ## What setup makes

@@ -1,8 +1,7 @@
 /**
- * Cloudflare, the first DNS provider and the default, through the module that
- * has always spoken to its API (bin/cli/cloudflare.ts): this file only puts
- * it behind the interface of bin/cli/dns/dns.ts, so that setup and the wizard
- * treat it as any other.
+ * Cloudflare, the DNS provider setup speaks to, through the module that has
+ * always spoken to its API (bin/cli/cloudflare.ts): this file only puts it
+ * behind the interface of bin/cli/dns/dns.ts, which setup and the wizard use.
  *
  * The token is CLOUDFLARE_API_TOKEN, the variable setup has always read, made
  * with Zone / Zone / Read and Zone / DNS / Edit on the zone alone. A token
@@ -19,7 +18,6 @@ import {
   listRecords,
   updateRecord,
   verifyToken,
-  CLOUDFLARE_API_VARIABLE,
   type Api,
 } from "../cloudflare";
 import { DnsError, type DnsEntry, type ZoneApi } from "./dns";
@@ -29,7 +27,7 @@ export const TOKEN_VARIABLE = "CLOUDFLARE_API_TOKEN";
 /** What a Cloudflare API token is made of, as setup has always checked it. */
 const TOKEN_SHAPE = /^[A-Za-z0-9_-]{20,200}$/;
 
-/** The same failure, in the words every provider uses. */
+/** The same failure, in the words of bin/cli/dns/dns.ts. */
 async function translated<T>(work: () => Promise<T>): Promise<T> {
   try {
     return await work();
@@ -87,6 +85,5 @@ export const CLOUDFLARE: DnsEntry = {
     directive: [`dns cloudflare {env.${TOKEN_VARIABLE}}`],
     environment: (credentials) => ({ [TOKEN_VARIABLE]: credentials[TOKEN_VARIABLE] ?? "" }),
   },
-  apiVariable: CLOUDFLARE_API_VARIABLE,
   open: (context) => cloudflare({ base: cloudflareBase(context.environment), token: context.credentials[TOKEN_VARIABLE] ?? "", fetcher: context.fetcher }),
 };

@@ -242,8 +242,6 @@ describe("what --tunnel refuses before anything leaves the workstation", () => {
   });
 
   test("a zone whose DNS is not Cloudflare's", () => {
-    const parsed = parseSetupArguments([`root@${HOME_ADDRESS}`, "--zone", ZONE, "--email", EMAIL, "--tunnel", ID, "--dns", "route53"]);
-    expect(parsed).toEqual(REFUSALS.tunnelDns("route53"));
     expect(parseSetupArguments([`root@${HOME_ADDRESS}`, "--zone", ZONE, "--email", EMAIL, "--tunnel", ID, "--dns", "manual"])).toEqual(REFUSALS.tunnelDns("manual"));
   });
 

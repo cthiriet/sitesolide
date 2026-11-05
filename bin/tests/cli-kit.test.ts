@@ -278,7 +278,6 @@ describe("the environment of a project's build: an allow list", () => {
     GITHUB_TOKEN: "ghp_planted",
     SITESOLIDE_TOKEN: `sst_${"T".repeat(43)}`,
     SITESOLIDE_API: "https://dashboard.test-zone.invalid",
-    SITESOLIDE_DNS_ROUTE53_SECRET_ACCESS_KEY: "a DNS provider's secret",
     SITESOLIDE_SERVER: "root@machine.test-zone.invalid",
     SITESOLIDE_ZONE: "test-zone.invalid",
     SITESOLIDE_CONFIG_DIR: "/home/someone/.config/sitesolide",
