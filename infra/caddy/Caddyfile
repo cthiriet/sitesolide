@@ -61,8 +61,7 @@
 #                    the on-demand block at the end of the file, and so does
 #                    the zone itself, the bare domain, served there or by the
 #                    block of the app that declares it. Cloudflare's
-#                    is the policy this snippet carried inline up to 0.6, and
-#                    bin/deploy-caddy.sh lays it on a machine from before.
+#                    is the policy this snippet carried inline up to 0.6.
 #   manual DNS       `on_demand`. No DNS API at all: the records are made by
 #                    hand, and each name gets its own certificate at its first
 #                    handshake, through HTTP-01 or TLS-ALPN-01, once the ask

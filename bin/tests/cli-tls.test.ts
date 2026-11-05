@@ -80,8 +80,8 @@ describe("tlsZoneContent", () => {
     expect(CLOUDFLARE_CONTENT).toContain("Laid by sitesolide setup");
   });
 
-  test("setup's Cloudflare and the policy bin/deploy-caddy.sh lays are the same bytes", () => {
-    // An upgraded machine then passes setup's check as it stands: setup run
+  test("setup's Cloudflare is that policy to the byte", () => {
+    // A machine laid with either passes setup's check as it stands: setup run
     // again finds the file it would lay, and changes nothing.
     expect(tlsZoneContent({ kind: "dns", title: CLOUDFLARE.title, directive: CLOUDFLARE.caddy.directive })).toBe(CLOUDFLARE_CONTENT);
   });
@@ -584,16 +584,11 @@ describe("TLS_ZONE_STATE_COMMAND", () => {
     return shCommand(m, TLS_ZONE_STATE_COMMAND.replaceAll("sudo ", "")).output.trim();
   }
 
-  test("tells the four states apart, and only reads", () => {
+  test("tells the states apart, and only reads", () => {
     expect(state(ON_DEMAND, null)).toBe(TLS_ZONE_STATES.onDemand);
     expect(state(CLOUDFLARE_CONTENT, "CLOUDFLARE_API_TOKEN=x\n")).toBe(TLS_ZONE_STATES.dns);
-    expect(state(null, "CLOUDFLARE_API_TOKEN=a-token\n")).toBe(TLS_ZONE_STATES.cloudflare);
-    // Leading blanks and quotes, which systemd reads, are a token all the same.
-    expect(state(null, "  CLOUDFLARE_API_TOKEN=a-token\n")).toBe(TLS_ZONE_STATES.cloudflare);
-    expect(state(null, '\tCLOUDFLARE_API_TOKEN="a-token"\n')).toBe(TLS_ZONE_STATES.cloudflare);
-    expect(state(null, 'CLOUDFLARE_API_TOKEN=""\n')).toBe(TLS_ZONE_STATES.none);
-    // An empty token is no Cloudflare machine, nor is an empty file or none.
-    expect(state(null, "CLOUDFLARE_API_TOKEN=\n")).toBe(TLS_ZONE_STATES.none);
+    // No file is no policy, whatever token the machine holds: setup lays it.
+    expect(state(null, "CLOUDFLARE_API_TOKEN=a-token\n")).toBe(TLS_ZONE_STATES.none);
     expect(state(null, "")).toBe(TLS_ZONE_STATES.none);
     expect(state(null, null)).toBe(TLS_ZONE_STATES.none);
     for (const write of WRITES) expect(TLS_ZONE_STATE_COMMAND).not.toContain(write);
@@ -633,11 +628,11 @@ describe("a policy file that is there but holds no policy", () => {
 });
 
 describe("what the scripts evaluate", () => {
-  test("gives back every value to the byte, Cloudflare's policy included", () => {
+  test("gives back every value to the byte", () => {
     const dir = folder("tls-shell-");
     writeFileSync(join(dir, "assignments"), shellAssignments());
-    const run = Bun.spawnSync(["bash", "-c", `eval "$(cat ${join(dir, "assignments")})"; printf '%s' "$TLS_ZONE_CLOUDFLARE"; printf '\\0%s' "$TLS_ZONE_STATE_COMMAND" "$ZONE_NAMES_COMMAND" "$TLS_ZONE_FILE"`], { stdout: "pipe" });
-    expect(run.stdout.toString().split("\0")).toEqual([CLOUDFLARE_CONTENT, TLS_ZONE_STATE_COMMAND, ZONE_NAMES_COMMAND, TLS_ZONE_FILE]);
+    const run = Bun.spawnSync(["bash", "-c", `eval "$(cat ${join(dir, "assignments")})"; printf '%s' "$TLS_ZONE_STATE_COMMAND"; printf '\\0%s' "$ZONE_NAMES_COMMAND" "$TLS_ZONE_FILE"`], { stdout: "pipe" });
+    expect(run.stdout.toString().split("\0")).toEqual([TLS_ZONE_STATE_COMMAND, ZONE_NAMES_COMMAND, TLS_ZONE_FILE]);
   });
 
   test("bin/deploy-caddy.sh and bin/generate-domains.sh read them from the module, and the module runs", () => {

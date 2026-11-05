@@ -50,11 +50,8 @@ for every site, and that is the point: a zone without its policy would fall
 back to Caddy's defaults, an HTTP challenge for a wildcard it can never
 obtain, without anything saying so. `bin/deploy-caddy.sh` therefore reads the
 file's state before anything leaves: present, it is the machine's and never
-compared; missing on a machine that holds a Cloudflare token, that machine is
-one from before the file, whose Caddyfile carried Cloudflare's policy itself,
-and the script lays exactly that policy, inside its transaction, before the
-Caddyfile that imports it, and takes it away again if it restores; missing
-anywhere else, it stops before any write. So does a file that is there and
+compared; missing, it stops before any write, setup alone laying it. So does
+a file that is there and
 holds no policy it recognises (a `tls {` block closed, with a `dns <module>`
 or an `on_demand` line): an empty or cut-short file validates, and would put
 the zone under Caddy's default issuers, where the wildcard cannot renew.

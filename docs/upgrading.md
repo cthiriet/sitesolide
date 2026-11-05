@@ -157,6 +157,13 @@ through it, and it no longer ran but to find nothing to do.
   /etc/systemd/system/sitesolide-gatekeeper@.service && sudo stat -c "%U:%G %a"
   /etc/caddy/locks/verrous.caddy'`, which answers `root:caddy 640`, or
   nothing on a machine that never locked a preview.
+- **`bin/deploy-caddy.sh` no longer lays Cloudflare's policy** on a machine
+  without `/etc/caddy/tls-zone.caddy` that holds a Cloudflare token, as it did
+  for a machine upgraded from 0.6, whose Caddyfile carried that policy itself:
+  such a machine now stops before any write, as any machine without the file
+  did, and `sitesolide setup` lays it. Nor does setup refuse a new policy over
+  a Caddyfile from before the file any more. The Caddyfile's comments say so,
+  and it is laid again.
 - **The workstation's configuration is read under its English keys alone.**
   `serveur`, `courriel` and `coffre`, renamed before 0.1, were still read
   and said to be outdated; `projets`, `projects` and `destinations` were
@@ -170,8 +177,8 @@ through it, and it no longer ran but to find nothing to do.
   as for any registry that does not read.
 
 **What `sitesolide upgrade` brings**: the backups, their code and their run's
-unit, after the refusal above; the steward, the dashboard and the portal.
-Caddy is not reloaded.
+unit, after the refusal above; the steward, the dashboard and the portal; the
+Caddyfile, whose comments changed, laid again and Caddy reloaded once.
 
 **When the backups' install refuses**, the upgrade stops there, the components
 after it untouched. An archive left is one the backups in service could not

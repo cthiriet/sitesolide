@@ -19,13 +19,9 @@
 # /etc/caddy/domaines.map, produced by bin/generate-domains.sh. Overwriting
 # them from the workstation would reopen locked previews.
 #
-# WHAT IS LAID ONLY WHEN MISSING: /etc/caddy/tls-zone.caddy, the zone's TLS
-# policy, which the Caddyfile imports by name and `sitesolide setup` lays from
-# the DNS it was given (bin/cli/tls.ts). A machine from before that file, 0.6
-# or earlier, had Cloudflare's policy written in the Caddyfile itself, and
-# holds a Cloudflare token: that policy is laid for it, the same bytes setup
-# would lay, inside the transaction below, and taken away again by its
-# restore. A machine with no file and no such token stops before any write.
+# WHAT IS NEVER LAID HERE: /etc/caddy/tls-zone.caddy, the zone's TLS policy,
+# which the Caddyfile imports by name and `sitesolide setup` lays from the DNS
+# it was given (bin/cli/tls.ts). A machine without it stops before any write.
 # With manual DNS, /etc/caddy/zone-names, the zone's sites the ask endpoint
 # allows, is written again from /srv/sites before each deposit.
 #
@@ -62,8 +58,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 sitesolide_require_config
 
 # The zone's TLS policy, from bin/cli/tls.ts, the module setup lays it with:
-# the file, Cloudflare's policy to the byte, the reading of the machine's state
-# and the command that lists the zone's sites. Evaluated as bin/config.sh
+# the file, the reading of the machine's state and the command that lists the
+# zone's sites. Evaluated as bin/config.sh
 # evaluates the settings; a module that printed nothing stops here.
 eval "$(bun "$REPO_ROOT/bin/cli/tls.ts")"
 [ -n "${TLS_ZONE_STATE_COMMAND:-}" ] || { echo "bin/cli/tls.ts printed nothing: the zone's TLS policy is unknown" >&2; exit 1; }
@@ -183,25 +179,17 @@ for block in ${BLOCKS[@]+"${BLOCKS[@]}"}; do compare "$block" "/etc/caddy/sites/
 
 # The zone's TLS policy, which the Caddyfile imports by name: a missing file
 # fails the whole configuration, for every site. Present, it is the machine's
-# and never compared, setup alone lays it. Missing on a machine that holds a
-# Cloudflare token, it is one from before the file, whose Caddyfile carried
-# Cloudflare's policy: that one is laid. Missing anywhere else, nothing says
-# which policy the zone needs, and guessing one would aim a DNS challenge at
-# credentials the machine does not have. Present but holding no policy, empty
-# or cut short, it would validate and leave the zone to Caddy's default
-# issuers: that stops too. An answer that is none of these, a connection that
-# failed, stops here as well, before the slightest write.
+# and never compared, setup alone lays it. Missing, nothing says which policy
+# the zone needs, and guessing one would aim a DNS challenge at credentials
+# the machine may not have. Present but holding no policy, empty or cut
+# short, it would validate and leave the zone to Caddy's default issuers:
+# that stops too. An answer that is none of these, a connection that failed,
+# stops here as well, before the slightest write.
 TLS_ZONE_STATE="$(ssh "$SITESOLIDE_SERVER" "$TLS_ZONE_STATE_COMMAND" || true)"
-TLS_ZONE_TO_LAY=""
 ZONE_ON_DEMAND=""
 case "$TLS_ZONE_STATE" in
   "$TLS_ZONE_ON_DEMAND") ZONE_ON_DEMAND="yes" ;;
   "$TLS_ZONE_DNS") ;;
-  "$TLS_ZONE_LAY_CLOUDFLARE")
-    echo "   TO LAY     $TLS_ZONE_FILE, Cloudflare's policy, which the Caddyfile in service carries itself"
-    TLS_ZONE_TO_LAY="yes"
-    DIFFERENCES="yes"
-    ;;
   "$TLS_ZONE_UNRECOGNISED")
     cat >&2 <<EOF
 !! STOP: $TLS_ZONE_FILE holds no TLS policy this release recognises: empty,
@@ -213,10 +201,10 @@ EOF
     ;;
   "$TLS_ZONE_NONE")
     cat >&2 <<EOF
-!! STOP: $TLS_ZONE_FILE is missing, and nothing on the machine says which
-   TLS policy the zone needs: no Cloudflare token in /etc/caddy/cloudflare.env.
-   The Caddyfile imports that file by name, and validates nowhere without it.
-   sitesolide setup lays it from the DNS it is given. Nothing was changed.
+!! STOP: $TLS_ZONE_FILE is missing: nothing on the machine says which TLS
+   policy the zone needs. The Caddyfile imports that file by name, and
+   validates nowhere without it. sitesolide setup lays it from the DNS it is
+   given. Nothing was changed.
 EOF
     exit 1
     ;;
@@ -422,20 +410,6 @@ if [ -n "$ZONE_ON_DEMAND" ]; then
   ssh "$SITESOLIDE_SERVER" "$ZONE_NAMES_COMMAND" | sed 's/^/   /'
 fi
 
-# The zone's TLS policy, on a machine from before the file: laid before the
-# Caddyfile that imports it, and only if still missing. Written beside it and
-# renamed over it: a disk that fills up leaves a partial .new, never a partial
-# policy, which Caddy would validate and serve the zone with under its default
-# issuers. The remote shell says whether it laid it, and the restore takes
-# away only what this run laid.
-TLS_ZONE_LAID=""
-if [ -n "$TLS_ZONE_TO_LAY" ]; then
-  echo "-> the zone's TLS policy, Cloudflare's: $TLS_ZONE_FILE"
-  TLS_ZONE_STAGED="$(dirname "$TLS_ZONE_FILE")/.$(basename "$TLS_ZONE_FILE").new"
-  laid="$(printf '%s' "$TLS_ZONE_CLOUDFLARE" | ssh "$SITESOLIDE_SERVER" "if test -f $TLS_ZONE_FILE; then echo kept; else sudo install -m 644 -o root -g root /dev/stdin $TLS_ZONE_STAGED && sudo mv -f $TLS_ZONE_STAGED $TLS_ZONE_FILE && echo laid; fi")"
-  if [ "$laid" = laid ]; then TLS_ZONE_LAID="yes"; fi
-fi
-
 echo "-> deposit"
 WORK="$(ssh "$SITESOLIDE_SERVER" 'mktemp -d /tmp/caddy.XXXXXXXX')"
 rsync -a "$CADDYFILE" "$SITESOLIDE_SERVER:$WORK/Caddyfile"
@@ -492,10 +466,6 @@ restore() {
     if [ -n \"\$(ls -A $BACKUP/sites 2>/dev/null)\" ]; then
       sudo rsync -a --delete $BACKUP/sites/ /etc/caddy/sites/
     fi
-
-    # The zone's TLS policy this run laid goes with the Caddyfile that imports
-    # it, unless the one put back imports it too.
-    ${TLS_ZONE_LAID:+sudo grep -Eq '^[[:space:]]*import $TLS_ZONE_FILE' $BACKUP/Caddyfile || sudo rm -f $TLS_ZONE_FILE}
 
     sudo systemctl reload caddy
   "; then

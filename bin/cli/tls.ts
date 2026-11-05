@@ -24,12 +24,10 @@
  * on a zone with a DNS provider, so it may run anywhere.
  *
  * `sitesolide setup` lays the file with tlsZoneCheck and tlsZoneRun, before
- * bin/deploy-caddy.sh first runs: that script lays Cloudflare's policy where
- * the file is missing and the machine holds a Cloudflare token, which is what
- * a machine upgraded from 0.6 is, and refuses otherwise. It reads what it
- * needs from here, run as a script: the lines below are evaluated by it, the
- * way bin/config.sh evaluates bin/cli/settings.ts, so that the policy it lays
- * is this module's to the byte.
+ * bin/deploy-caddy.sh first runs: that script refuses a machine without it.
+ * It reads what it needs from here, run as a script: the lines below are
+ * evaluated by it, the way bin/config.sh evaluates bin/cli/settings.ts, so
+ * that what it recognises is this module's.
  */
 import {
   FIRST_CERTIFICATE_MS,
@@ -61,7 +59,7 @@ export const DNS_CREDENTIALS_FILE = "/etc/caddy/cloudflare.env";
 
 export type TlsZoneMode = { kind: "dns"; title: string; directive: readonly string[] } | { kind: "on-demand" };
 
-/** The policy the Caddyfile held inline up to 0.6, which bin/deploy-caddy.sh lays on a machine from before. */
+/** Cloudflare's policy: the DNS challenge, with the machine's token. */
 export const CLOUDFLARE_POLICY = {
   kind: "dns",
   title: "Cloudflare",
@@ -88,11 +86,9 @@ export const isOnDemand = onDemandPolicy;
 const HEADER = [
   "# The served zone's TLS policy, imported by name by the (tls-zone) snippet of",
   "# /etc/caddy/Caddyfile: the zone's own blocks and every app's preview block",
-  "# take it. Laid by sitesolide setup from the DNS chosen there (bin/cli/tls.ts);",
-  "# bin/deploy-caddy.sh lays Cloudflare's on a machine from before this file,",
-  "# whose Caddyfile carried that policy itself. Not to be edited by hand: the",
-  "# shared service reads it too, to know whether the zone's names are",
-  "# certified on demand.",
+  "# take it. Laid by sitesolide setup from the DNS chosen there (bin/cli/tls.ts).",
+  "# Not to be edited by hand: the shared service reads it too, to know whether",
+  "# the zone's names are certified on demand.",
   "#",
 ];
 
@@ -217,9 +213,7 @@ export const TLS_ZONE_STATES = {
    * nothing is written on such a machine until setup lays it again.
    */
   unrecognised: "tls-zone: unrecognised",
-  /** No file, and a Cloudflare token: a machine from before the file, whose policy was Cloudflare's. */
-  cloudflare: "tls-zone: cloudflare",
-  /** No file, and nothing that says which policy the zone had: setup lays it. */
+  /** No file: setup lays it. */
   none: "tls-zone: none",
 } as const;
 
@@ -241,25 +235,13 @@ export function recognisedPolicy(content: string): "on-demand" | "dns" | null {
   return lines.some((line) => /^dns\s+[a-z0-9_]+(\s|$)/.test(line)) ? "dns" : null;
 }
 
-/**
- * A token line systemd reads: leading blanks allowed, a value that is not
- * empty, bare, double- or single-quoted. The quote is matched as any one
- * character that cannot start a token, since the pattern itself travels
- * between single quotes.
- */
-const CLOUDFLARE_TOKEN_GREP = `^[[:space:]]*CLOUDFLARE_API_TOKEN=[^[:alnum:]_-]?[A-Za-z0-9_-]`;
-
-/**
- * Reads, and only reads, which of TLS_ZONE_STATES the machine is in. The
- * token file is only searched for its variable, never printed.
- */
+/** Reads, and only reads, which of TLS_ZONE_STATES the machine is in. */
 export const TLS_ZONE_STATE_COMMAND = [
   `if sudo test -f ${TLS_ZONE_FILE}; then`,
   `if ! sudo grep -Eq '${TLS_OPEN_GREP}' ${TLS_ZONE_FILE} || ! sudo grep -Eq '${BLOCK_CLOSE_GREP}' ${TLS_ZONE_FILE}; then echo '${TLS_ZONE_STATES.unrecognised}';`,
   `elif sudo grep -Eq '${ON_DEMAND_GREP}' ${TLS_ZONE_FILE}; then echo '${TLS_ZONE_STATES.onDemand}';`,
   `elif sudo grep -Eq '${DNS_LINE_GREP}' ${TLS_ZONE_FILE}; then echo '${TLS_ZONE_STATES.dns}';`,
   `else echo '${TLS_ZONE_STATES.unrecognised}'; fi;`,
-  `elif sudo grep -Eq '${CLOUDFLARE_TOKEN_GREP}' ${DNS_CREDENTIALS_FILE} 2>/dev/null; then echo '${TLS_ZONE_STATES.cloudflare}';`,
   `else echo '${TLS_ZONE_STATES.none}'; fi`,
 ].join(" ");
 
@@ -267,12 +249,10 @@ export const TLS_ZONE_STATE_COMMAND = [
 export function shellAssignments(): string {
   const values: Record<string, string> = {
     TLS_ZONE_FILE,
-    TLS_ZONE_CLOUDFLARE: tlsZoneContent(CLOUDFLARE_POLICY),
     TLS_ZONE_STATE_COMMAND,
     TLS_ZONE_ON_DEMAND: TLS_ZONE_STATES.onDemand,
     TLS_ZONE_DNS: TLS_ZONE_STATES.dns,
     TLS_ZONE_UNRECOGNISED: TLS_ZONE_STATES.unrecognised,
-    TLS_ZONE_LAY_CLOUDFLARE: TLS_ZONE_STATES.cloudflare,
     TLS_ZONE_NONE: TLS_ZONE_STATES.none,
     ZONE_NAMES_COMMAND,
     FIRST_CERTIFICATE_S: String(FIRST_CERTIFICATE_MS / 1000),
@@ -445,22 +425,10 @@ export function tlsZoneRun(content: string, pid: number = process.pid): string {
   echo "tls-zone: $(basename "$wildcard") set aside: a certificate on demand never renews a wildcard"
 done`
     : "";
-  // A Caddyfile in service from before this file carries Cloudflare's policy
-  // itself and imports nothing: any other policy written here would change
-  // nothing Caddy runs, while the credentials step has already changed what
-  // it would read at its next start. Such a machine is upgraded first.
-  const inline =
-    content === tlsZoneContent(CLOUDFLARE_POLICY)
-      ? ""
-      : `if grep -q SITESOLIDE_ZONE /etc/caddy/Caddyfile 2>/dev/null && ! ${IMPORTS_POLICY}; then
-  echo "tls-zone: the Caddyfile in service carries Cloudflare's policy itself, from a release before this file: run sitesolide upgrade first, then setup again" >&2
-  exit 1
-fi`;
   return runScript(
     "setup:tls-zone:run",
     `
 [ -d /etc/caddy ] || { echo "tls-zone: /etc/caddy is missing, Caddy is not installed" >&2; exit 1; }
-${inline}
 ${restartPrelude(pid)}
 previous=""
 existed=""

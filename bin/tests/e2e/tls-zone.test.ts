@@ -13,11 +13,9 @@ import { createFakeVm, type FakeVm } from "./fake-vm";
  * which the Caddyfile imports by name: really run in front of a simulated VM
  * whose fake ssh answers the reading of that policy from what the test lays.
  *
- * A machine from before the file, holding a Cloudflare token, gets
- * Cloudflare's policy laid inside the transaction, after the backup and
- * before the Caddyfile that imports it, and taken away by the restore. A
- * machine with neither stops before any write. With manual DNS, the zone's
- * sites are listed for the ask endpoint before anything is deposited. No test
+ * A machine without the file stops before any write, whatever token it
+ * holds: setup alone lays it. With manual DNS, the zone's sites are listed
+ * for the ask endpoint before anything is deposited. No test
  * touches a machine: the fake ssh only accepts the tests' host, and the
  * accepted writes are never executed.
  */
@@ -52,12 +50,6 @@ async function deployCaddy(arguments_: string[] = [], name = "deploy-caddy.sh"):
   return { code: await proc.exited, output, error };
 }
 
-/** Where the policy is written before it is renamed over the file. */
-const STAGED = TLS_ZONE_FILE.replace(/[^/]+$/, ".$&.new");
-
-/** The remote shell's answer when it lays the policy, as the script asks it to say. */
-const LAID = `/dev/stdin ${STAGED} && sudo mv -f ${STAGED} ${TLS_ZONE_FILE} && echo laid`;
-
 /**
  * A machine in service whose Caddyfile differs from the repository's, every
  * write accepted. No landing, so that the verification queries nothing: its
@@ -76,55 +68,8 @@ function lineWith(logs: string[], ...parts: string[]): number {
   return logs.findIndex((line) => parts.every((part) => line.includes(part)));
 }
 
-describe("bin/deploy-caddy.sh lays the zone's TLS policy a machine from before it lacks", () => {
-  test("Cloudflare's, inside the transaction: after the backup, before the Caddyfile that imports it", async () => {
-    machineInService(TLS_ZONE_STATES.cloudflare, true);
-    vm.answer(LAID, "laid\n");
-    const r = await deployCaddy();
-    // The only refusal: the landing's folder, so that no address is queried.
-    expect(r.error).not.toContain("!!");
-    expect(r.code).toBe(0);
-    expect(r.output).toContain(`TO LAY     ${TLS_ZONE_FILE}, Cloudflare's policy`);
-    expect(r.output).toContain("-> in service");
-    const logs = vm.logs();
-    const read = logs.indexOf("TLS_ZONE");
-    const backup = lineWith(logs, "ACCEPTED sudo mkdir -p /var/backups/caddy/");
-    const laid = lineWith(logs, "ACCEPTED", `sudo install -m 644 -o root -g root ${LAID}`);
-    const deposit = lineWith(logs, "sudo install -m 644 -o root -g root", "/Caddyfile /etc/caddy/Caddyfile");
-    const validation = lineWith(logs, "caddy validate");
-    expect(read).toBeGreaterThan(-1);
-    expect(backup).toBeGreaterThan(read);
-    expect(laid).toBeGreaterThan(backup);
-    expect(deposit).toBeGreaterThan(laid);
-    expect(validation).toBeGreaterThan(deposit);
-    // Only if still missing when the write comes: a policy laid in between is kept.
-    expect(logs[laid]).toContain(`if test -f ${TLS_ZONE_FILE}; then echo kept; else`);
-    // A provider's zone lists no sites for the ask endpoint.
-    expect(logs).not.toContain(`ACCEPTED ${ZONE_NAMES_COMMAND}`);
-  });
-
-  test("a refused validation takes the policy it laid away with the Caddyfile", async () => {
-    machineInService(TLS_ZONE_STATES.cloudflare, false);
-    vm.answer(LAID, "laid\n");
-    const r = await deployCaddy();
-    expect(r.code).toBe(1);
-    expect(r.error).toContain("configuration refused by caddy validate");
-    const logs = vm.logs();
-    const restore = lineWith(logs, `|| sudo rm -f ${TLS_ZONE_FILE}`);
-    expect(restore).toBeGreaterThan(lineWith(logs, "caddy validate"));
-    // Unless the Caddyfile put back imports it too: then it stays.
-    expect(logs[restore]).toContain(`sudo grep -Eq '^[[:space:]]*import ${TLS_ZONE_FILE}'`);
-  });
-
-  test("a policy laid in between is the machine's: the restore leaves it", async () => {
-    machineInService(TLS_ZONE_STATES.cloudflare, false);
-    vm.answer(LAID, "kept\n");
-    const r = await deployCaddy();
-    expect(r.code).toBe(1);
-    expect(lineWith(vm.logs(), `sudo rm -f ${TLS_ZONE_FILE}`)).toBe(-1);
-  });
-
-  test("with no policy and no Cloudflare token, stops before any write", async () => {
+describe("bin/deploy-caddy.sh and a machine without a policy it can use", () => {
+  test("with no policy, stops before any write, and lays none", async () => {
     machineInService(TLS_ZONE_STATES.none, true);
     const r = await deployCaddy();
     expect(r.code).toBe(1);
@@ -151,18 +96,6 @@ describe("bin/deploy-caddy.sh lays the zone's TLS policy a machine from before i
     expect(r.error).toContain(`the state of ${TLS_ZONE_FILE} could not be read`);
     expect(vm.logs().filter((line) => line.startsWith("ACCEPTED"))).toEqual([]);
   });
-
-  test("in a dry run, says it would lay the policy and writes nothing", async () => {
-    vm = createFakeVm();
-    vm.setTlsZoneState(TLS_ZONE_STATES.cloudflare);
-    vm.writeFile("/etc/caddy/Caddyfile", readFileSync(join(REPO, "infra", "caddy", "Caddyfile"), "utf8"));
-    const r = await deployCaddy(["--dry-run"]);
-    expect(r.code).toBe(0);
-    expect(r.output).toContain("unchanged  /etc/caddy/Caddyfile");
-    expect(r.output).toContain(`TO LAY     ${TLS_ZONE_FILE}`);
-    expect(r.output).toContain("dry run, nothing was touched");
-    expect(vm.logs().filter((line) => line.startsWith("ACCEPTED") || line.startsWith("REFUSED"))).toEqual([]);
-  });
 });
 
 describe("bin/deploy-caddy.sh and a policy already in place", () => {
@@ -185,8 +118,8 @@ describe("bin/deploy-caddy.sh and a policy already in place", () => {
     const listed = logs.indexOf(`ACCEPTED ${ZONE_NAMES_COMMAND}`);
     expect(listed).toBeGreaterThan(lineWith(logs, "ACCEPTED sudo mkdir -p /var/backups/caddy/"));
     expect(listed).toBeLessThan(lineWith(logs, "/Caddyfile /etc/caddy/Caddyfile"));
-    // Nothing to lay: the machine has its policy.
-    expect(lineWith(logs, `/dev/stdin ${STAGED}`)).toBe(-1);
+    // Nothing laid: the machine has its policy.
+    expect(lineWith(logs, "ACCEPTED", TLS_ZONE_FILE.replace(/[^/]+$/, ".$&.new"))).toBe(-1);
   });
 
   test("manual DNS: the site whose block arrives is probed last, and waits for nothing once another failed", async () => {

@@ -1270,7 +1270,8 @@ export function installSteps(tunnel = false): Step<SetupContext>[] {
         // both; otherwise, a rotation, or one whose restart failed earlier,
         // it is restarted here.
         // Only a Caddy that runs the policy file is restarted by that step: a
-        // Caddyfile from before it, or a Caddy at rest, is not.
+        // Caddyfile that does not import it, the package's on a first install,
+        // or a Caddy at rest, is not.
         const policy = await rootCheck(context.machine, context.operator, "setup:tls-zone:check", tlsZoneCheck(zoneTls(context), true));
         const switching =
           policy.state === "missing" && policy.missing.some((label) => label === "tls-zone-file" || label === "tls-zone-same") && !policy.missing.includes("tls-zone-live");
