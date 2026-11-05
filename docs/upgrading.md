@@ -52,7 +52,7 @@ component (active, enabled, its files present), plus:
 | Caddy's drop-in | `override.conf` differs from the release's | setup's own step: the drop-in installed, `daemon-reload`, `systemctl restart caddy` |
 | backups | `backup.js` or one of its three units differs, or restic, the repository or its key is missing | `bin/deploy-backup.sh install`; the timer stays as it is |
 | egress proxy | `egress.js` or its unit differs | `bin/deploy-egress.sh` |
-| steward | `steward.js`, its unit or the portal relay's two units differ, or it started before the egress proxy's unit was last laid, or before the backups' folder existed | `bin/deploy-steward.sh` |
+| steward | `steward.js`, its unit or the portal relay's two units differ, or it started before the backups' folder existed | `bin/deploy-steward.sh` |
 | shared service | the release in service differs from `api/`, file by file, or its unit does | `bin/deploy-api.sh`, before the dashboard, whose deployment is the first to deposit the Caddyfile, whose certificates its ask endpoint allows |
 | dashboard | `sitesolide deploy --dry-run --compare` finds a difference: a file to send or delete, its manifest, a missing unit, its Caddy block; every new release, whose version its page names | `sitesolide deploy` in `dashboard/` |
 | collector | one of its two units differs | `bin/deploy-collector.sh` |
@@ -72,11 +72,10 @@ redeploys what they build, once.
 
 The order is the one this page has always given: the backup install before the
 steward, whose unit opens the backups' folder only if it exists when the
-steward starts; the egress proxy before the steward too, which starts again
-after it so that it may write the connectors' folder; the root components that
-only listen before the dashboard, which they accept old and new; the collector,
-the gatekeeper and the installer after the dashboard; the Caddyfile, the shared
-service, the portal and the monitor last.
+steward starts; the root components that only listen before the dashboard,
+which they accept old and new; the collector, the gatekeeper and the installer
+after the dashboard; the Caddyfile, the shared service, the portal and the
+monitor last.
 
 ### What it never does
 
@@ -205,6 +204,125 @@ by nothing of this release: `bun backup.ts decrypt <file> <output>` in
 **Going back.** `sitesolide upgrade` with the previous binary. What this
 release reads, the previous one reads too, and its backups find nothing left
 to import.
+
+## Connectors removed
+
+**What the release brings.** The egress proxy no longer lends credentials. The
+dashboard loses its *Connectors* page, the steward its routes and its writes
+into `/etc/sitesolide-egress`, and the manifest its `connectors` key, which
+`sitesolide deploy`, `sitesolide refresh` and a token's deployment now refuse
+with what to write instead: the credential among the project's secrets, the
+host it calls under `egress`. The allow list stays as it is, on
+127.0.0.1:3128, and 3129 now carries nothing but the dashboard's two
+read-only routes, `GET /status` and `GET /audit`; both ports stay refused to
+every project by its unit. The steward's unit no longer opens
+`/etc/sitesolide-egress`, `bin/deploy-egress.sh` no longer creates it, and the
+steward no longer has to start again after the proxy. Activity tells a proxy
+that is not installed from one that is down by its unit file,
+`/etc/systemd/system/sitesolide-egress.service`, and a bookmark to
+`/connectors/` opens Activity, where the proxy's refusals are read.
+
+**What `sitesolide upgrade` brings**: the egress proxy, the steward, whose unit
+changes, the dashboard, and the components that embed the manifest's rules,
+the backups, the gatekeeper, the installer and the monitor. Caddy is
+not reloaded. No project's unit changes, the `egress` lines included, nor the
+loopback rule: there is nothing to `refresh`.
+
+**What stays by hand.** A project whose deployed manifest still declares
+`connectors` keeps the unit it has, `SITESOLIDE_CONNECTORS` included, and
+calls to that address are refused from now on; its next deployment, and
+`sitesolide refresh`, refuse it until the key is gone. The files the steward
+wrote stay on the machine, `connectors.json`, which holds the credentials
+themselves, and `grants.json`:
+
+```bash
+ssh <server> "sudo ls -l /etc/sitesolide-egress"
+ssh <server> "sudo rm -r /etc/sitesolide-egress"
+```
+
+Revoke each credential at its provider, then remove the folder once the
+upgrade has run: neither the proxy nor the steward of this release reads it.
+The proxy's database keeps the `seen` table it compared the files with, which
+nothing reads any more, and its `connector.*` rows, pruned after 90 days.
+
+**Going back.** `sitesolide upgrade` with the previous binary brings the page
+and the routes back, and that release's `bin/deploy-egress.sh` lays the
+folder again, empty, if it was removed.
+
+## The MCP server removed
+
+**What the release brings.** `sitesolide mcp` goes, with the tools it served:
+nothing used it, and an agent that runs commands drives the CLI itself with
+`--json`, the same commands with the same refusals and a `hint` on every
+error. `sitesolide mcp` is now a command the CLI does not know. `--json`, the
+hints, `llms.txt` and the skill stay, the skill naming the commands where it
+named the tools.
+
+**What `sitesolide upgrade` brings**: nothing of its own. The server ran on
+the workstation alone.
+
+**What stays by hand.** A client that registered the server fails to start it
+from now on: take it out. In Claude Code,
+`claude mcp remove --scope user sitesolide`, or the `sitesolide` entry of a
+repository's `.mcp.json`; in Codex, the `[mcp_servers.sitesolide]` table of
+`~/.codex/config.toml`; in Cursor, the `sitesolide` entry of
+`~/.cursor/mcp.json` or of a project's `.cursor/mcp.json`. A skill linked
+from a clone of this repository follows with its next pull.
+
+**Going back.** The previous binary serves it again, registered as before.
+
+## Every DNS provider but Cloudflare removed
+
+**What the release brings.** `setup --dns` takes `cloudflare`, the default,
+or `manual`, and nothing else. The ten other providers it took from 0.7 on
+were only ever tried against local fakes of their APIs, never on a real zone,
+while every installation in service uses Cloudflare: their code goes, with
+their pages in `docs/dns/`, the `SITESOLIDE_DNS_<...>` variables they read,
+and `--dns-credentials-stdin`, which read their credentials. Cloudflare's
+token comes from `CLOUDFLARE_API_TOKEN` or `--cloudflare-token-stdin`, as it
+always has. The wizard offers two ways: Cloudflare's API, first when the
+zone's name servers are Cloudflare's, and records made by hand, first
+otherwise, a zone at a cloud's own DNS included. Every cloud of
+`sitesolide machine` stays.
+
+**What `sitesolide upgrade` brings**: nothing of its own. The change is the
+CLI's alone: no component of the machine changes with it, and Caddy is not
+reloaded for it.
+
+**What stays by hand.** A machine set up with one of those providers names it
+in its configuration, `"dns"` in `config.json`, and goes on serving: Caddy
+keeps the module it was built with, `/etc/caddy/cloudflare.env` that
+provider's variables, and `/etc/caddy/tls-zone.caddy` its DNS challenge,
+which neither `upgrade` nor `deploy` touches, so the wildcard keeps renewing.
+`sitesolide setup` and `sitesolide init`, which read the name again, refuse
+it, saying the way out. Move the machine to one of the two from the
+workstation that set it up:
+
+- to Cloudflare, once the zone's DNS is there, its name servers at the
+  registrar being Cloudflare's, with a token made as
+  [dns/cloudflare.md](dns/cloudflare.md) says:
+
+  ```bash
+  read -rs CLOUDFLARE_API_TOKEN && export CLOUDFLARE_API_TOKEN
+  sitesolide setup <user@host> --zone <zone> --email <address> --dns cloudflare
+  ```
+
+- or to records made by hand, wherever the zone is, each name then getting
+  its own certificate, see [setup.md](setup.md#dns):
+
+  ```bash
+  sitesolide setup <user@host> --zone <zone> --email <address> --dns manual
+  ```
+
+Either run adds what the new way needs, Cloudflare's module and token or
+nothing, lays the new policy, restarts Caddy with it, and only then takes the
+old provider's variables out of `/etc/caddy/cloudflare.env`; the
+configuration records the choice. Revoke the old provider's credentials at
+its console afterwards: nothing reads them any more. Caddy keeps the old
+module in its build, unused.
+
+**Going back.** The previous binary takes the provider again, its pages in
+`docs/dns/` with it.
 
 ## Audience removed
 
