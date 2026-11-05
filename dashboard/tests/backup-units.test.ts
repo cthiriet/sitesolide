@@ -61,9 +61,9 @@ describe("sitesolide-backup.service", () => {
     expect(values(text, "InaccessiblePaths")).toEqual(["-/etc/sitesolide -/var/lib/sitesolide-steward"]);
   });
 
-  test("writes only its repository, the archives it imports and removes, and its own folders, with one capability, to read", () => {
+  test("writes only its repository and its own folders, with one capability, to read", () => {
     expect(values(text, "ProtectSystem")).toEqual(["strict"]);
-    expect(values(text, "ReadWritePaths")).toEqual(["/var/backups/sitesolide-restic /var/backups/sitesolide"]);
+    expect(values(text, "ReadWritePaths")).toEqual(["/var/backups/sitesolide-restic"]);
     // restic's cache and temporary packs, on disk, root's alone.
     expect(values(text, "CacheDirectory")).toEqual(["sitesolide-restic"]);
     expect(values(text, "CacheDirectoryMode")).toEqual(["0700"]);

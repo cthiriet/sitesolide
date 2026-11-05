@@ -80,7 +80,7 @@ PASSPHRASE="$(head -c 32 /dev/urandom | base64 -w0)"
 BUCKET_REPO="s3:http://127.0.0.1:7070/proofs/sitesolide-restic"
 step() { echo; echo "== $*"; }
 fail() { echo "FAIL: $*"; exit 1; }
-export SITES_DIR=/srv/sites BACKUP_FOLDER="$WORK/backups" BACKUP_STATE_FOLDER="$WORK/state" BACKUP_RUN_FOLDER="$WORK/run" \
+export SITES_DIR=/srv/sites BACKUP_STATE_FOLDER="$WORK/state" BACKUP_RUN_FOLDER="$WORK/run" \
   BACKUP_STAGING_FOLDER="$WORK/staging" BACKUP_REPOSITORY="$WORK/repository" BACKUP_REPOSITORY_KEY="$WORK/key" \
   BACKUP_RESTIC=/usr/bin/restic BACKUP_RESTIC_CACHE="$WORK/cache" ACCOUNTS_FILE=/etc/passwd BACKUP_ISOLATION=none \
   BACKUP_DISK_RESERVE=0 SITESOLIDE_ZONE=test-zone.invalid \

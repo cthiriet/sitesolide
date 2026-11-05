@@ -12,10 +12,8 @@ import {
   listingLines,
   readCompactTime,
   readListAnswer,
-  legacySnapshotName,
   readSnapshotName,
   snapshotName,
-  twinName,
   type Listing,
 } from "../cli/backups";
 import { reachesOwnPorts, projectPortPairs } from "../cli/loopback";
@@ -37,17 +35,8 @@ describe("a snapshot's name", () => {
   test("reads back what it wrote, kind and time", () => {
     for (const kind of ["scheduled", "pre-restore"] as const) {
       const name = snapshotName("shop-api", AT, kind);
-      expect(readSnapshotName("shop-api", name)).toEqual({ name, folder: "shop-api", takenAt: AT, kind, legacy: false });
+      expect(readSnapshotName("shop-api", name)).toEqual({ name, folder: "shop-api", takenAt: AT, kind });
     }
-  });
-
-  test("an archive of the format before restic is read too, said so, and its imported copy named alike", () => {
-    const legacy = legacySnapshotName("cms", AT, "pre-restore");
-    expect(legacy).toBe("cms-20261004T130000Z-pre-restore.tar.gz");
-    expect(readSnapshotName("cms", legacy)).toEqual({ name: legacy, folder: "cms", takenAt: AT, kind: "pre-restore", legacy: true });
-    expect(twinName("cms", legacy)).toBe(snapshotName("cms", AT, "pre-restore"));
-    expect(twinName("cms", snapshotName("cms", AT, "scheduled"))).toBe(snapshotName("cms", AT, "scheduled"));
-    expect(twinName("cms", "notes.txt")).toBeNull();
   });
 
   test("the landing's folder, with its dots, is a folder like another", () => {
@@ -68,6 +57,9 @@ describe("a snapshot's name", () => {
     for (const name of [
       "cms-20261004T130000Z",
       "cms-20261004T130000Z.tgz",
+      // An archive of the format before restic is no snapshot any more.
+      "cms-20261004T130000Z.tar.gz",
+      "cms-20261004T130000Z-pre-restore.tar.gz",
       "cms-20261004T130000Z.tar.gz.tmp",
       ".cms-20261004T130000Z.tar.gz.0123456789abcdef.tmp",
       "cms-20261004T1300Z.tar.gz",

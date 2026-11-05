@@ -4,9 +4,9 @@
  * that moves it, so that the tests run the real code on a throwaway tree, the
  * way the steward and the gatekeeper are run on the workstation:
  *
- *   E=$(mktemp -d) && mkdir -p $E/sites/cms/data $E/backups $E/state $E/run $E/staging $E/cache
+ *   E=$(mktemp -d) && mkdir -p $E/sites/cms/data $E/state $E/run $E/staging $E/cache
  *   head -c 48 /dev/urandom | base64 > $E/key && restic -r $E/repository -p $E/key init
- *   SITES_DIR=$E/sites BACKUP_FOLDER=$E/backups BACKUP_STATE_FOLDER=$E/state \
+ *   SITES_DIR=$E/sites BACKUP_STATE_FOLDER=$E/state \
  *     BACKUP_RUN_FOLDER=$E/run BACKUP_STAGING_FOLDER=$E/staging BACKUP_ISOLATION=none \
  *     BACKUP_REPOSITORY=$E/repository BACKUP_REPOSITORY_KEY=$E/key BACKUP_RESTIC_CACHE=$E/cache \
  *     BACKUP_RESTIC=$(command -v restic) SITESOLIDE_ZONE=test-zone.invalid bun backup.ts run
@@ -17,7 +17,7 @@
  * of its repository move for the tests alone: with BACKUP_ISOLATION=none, and
  * never under systemd (pathsFrom).
  */
-import { BACKUP_FOLDER, RESTIC_KEY, RESTIC_REPOSITORY } from "../../borrowed/backups";
+import { RESTIC_KEY, RESTIC_REPOSITORY } from "../../borrowed/backups";
 import { MACHINE_SOURCES, MACHINE_VIEW, type MachineSource } from "./machine";
 import { offsiteFrom, type OffsiteSetting } from "./offsite";
 import { policyFrom, type RetentionPolicy } from "./retention";
@@ -26,11 +26,6 @@ export type Isolation = "systemd" | "none";
 
 export type BackupConfig = {
   sitesDir: string;
-  /**
-   * The archives written before restic, one folder per project, root's
-   * alone: read by the import, removed after it (legacy.ts), never written.
-   */
-  backupFolder: string;
   /** The restic repository holding every project's snapshots, root's alone. */
   repository: string;
   /** The file holding its password, root's, 0600, drawn at install. */
@@ -40,8 +35,6 @@ export type BackupConfig = {
   choom: string;
   /** restic's cache and temporary files: on disk, root's, 0700, the units' CacheDirectory. */
   resticCache: string;
-  /** gzip, which reads an archive of the format before restic for its import. */
-  gzip: string;
   /** The component's database, the status file the monitor reads, the restore requests. */
   stateFolder: string;
   /** The lock shared by a run and a restore, and the restores' results. */
@@ -170,13 +163,11 @@ export function configFrom(env: Environment, entry: { bun: string; script: strin
   const own = pathsFrom(env);
   return {
     sitesDir: own.SITES_DIR ?? "/srv/sites",
-    backupFolder: own.BACKUP_FOLDER ?? BACKUP_FOLDER,
     repository: own.BACKUP_REPOSITORY ?? RESTIC_REPOSITORY,
     repositoryKey: own.BACKUP_REPOSITORY_KEY ?? RESTIC_KEY,
     restic: own.BACKUP_RESTIC ?? "/usr/bin/restic",
     choom: own.BACKUP_CHOOM ?? "/usr/bin/choom",
     resticCache: own.BACKUP_RESTIC_CACHE ?? "/var/cache/sitesolide-restic",
-    gzip: own.BACKUP_GZIP ?? "/usr/bin/gzip",
     stateFolder: own.BACKUP_STATE_FOLDER ?? STATE_FOLDER,
     runFolder: own.BACKUP_RUN_FOLDER ?? "/run/sitesolide-backup",
     stagingFolder: own.BACKUP_STAGING_FOLDER ?? "/var/cache/sitesolide-backup",

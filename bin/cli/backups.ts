@@ -21,12 +21,6 @@ export const RESTIC_REPOSITORY = "/var/backups/sitesolide-restic";
 /** Its password, drawn at install and never shown: root's, 0600, beside it. */
 export const RESTIC_KEY = "/var/backups/sitesolide-restic.key";
 
-/**
- * Where the archives written before restic live, one folder per project: they
- * are imported into the repository by the first runs of this version, then
- * removed seven days after their copy was verified.
- */
-export const BACKUP_FOLDER = "/var/backups/sitesolide";
 
 /** The component, built into one file by bin/deploy-backup.sh. */
 export const BACKUP_SCRIPT = "/usr/local/lib/sitesolide/backup.js";
@@ -67,6 +61,120 @@ export function readBackupComponent(output: string): BackupComponent {
   return state === "current" || state === "outdated" || state === "absent" ? state : "unreadable";
 }
 
+// --- the archives written before restic --------------------------------------
+
+/**
+ * Up to 0.16, the backup component imported the archives written before
+ * restic (0.4.0), `.tar.gz` files under this folder and `.enc` objects in the
+ * bucket, into its repositories, and removed each seven days after its copy
+ * was verified, the time to go back to the release before. This release
+ * imports nothing: `bin/deploy-backup.sh install` refuses a machine where an
+ * archive remains or a copy is younger than those seven days, before it
+ * changes anything there, so that nothing the import still had to carry is
+ * left behind unread. The refusal goes with the next release that no longer
+ * needs it.
+ */
+export const PRE_RESTIC_FOLDER = "/var/backups/sitesolide";
+
+/** The component's own database, where the release that imported recorded each archive's verified copy. */
+export const BACKUP_DATABASE = "/var/lib/sitesolide-backup/backup.db";
+
+/** How long an imported archive was kept, its copy verified, before it was removed. */
+export const IMPORT_ROLLBACK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** The last line of the reading: an answer without it, cut short or refused by sudo, is no answer. */
+export const PRE_RESTIC_MARKER = "PRE-RESTIC-READ";
+
+/** The archives named in a refusal; the count says the rest. */
+const NAMED_ARCHIVES = 5;
+
+export type PreResticPaths = { folder: string; database: string; bun: string; sudo: string };
+
+const MACHINE_PATHS: PreResticPaths = { folder: PRE_RESTIC_FOLDER, database: BACKUP_DATABASE, bun: "/usr/local/bin/bun", sudo: "sudo" };
+
+/**
+ * What the machine is read for before the component is installed, as root,
+ * changing nothing: the archives left under the folder, at any depth, and
+ * the newest import the database recorded, with the machine's own clock.
+ * One Bun program, which the prerequisites already require: the machine
+ * need not carry sqlite3, and a sudo refused prints nothing at all, never
+ * an empty folder. The database is opened as its readers open it, read-write
+ * but `query_only`, a WAL database whose `-wal` is gone being unreadable in
+ * SQLite's read-only mode. `paths` are the tests'.
+ */
+export function preResticCommand(paths: PreResticPaths = MACHINE_PATHS): string {
+  for (const value of [paths.folder, paths.database, paths.bun]) {
+    if (!/^\/[A-Za-z0-9._/-]+$/.test(value)) throw new Error(`unexpected path: ${value}`);
+  }
+  if (paths.sudo !== "" && paths.sudo !== "sudo") throw new Error("unexpected sudo");
+  const program = [
+    `const { readdirSync, existsSync } = require("node:fs");`,
+    `const { join } = require("node:path");`,
+    `const { Database } = require("bun:sqlite");`,
+    `const found = [];`,
+    `const walk = (dir) => { let entries; try { entries = readdirSync(dir, { withFileTypes: true }); } catch (error) { if (error.code === "ENOENT") return; throw error; }`,
+    ` for (const entry of entries) { const path = join(dir, entry.name); if (entry.isDirectory()) walk(path); else if (entry.name.endsWith(".tar.gz")) found.push(path); } };`,
+    `walk(${JSON.stringify(paths.folder)});`,
+    `console.log("archives " + String(found.length));`,
+    `for (const path of found.sort().slice(0, ${NAMED_ARCHIVES})) console.log("archive " + path);`,
+    `let newest = "none";`,
+    `if (existsSync(${JSON.stringify(paths.database)})) { const db = new Database(${JSON.stringify(paths.database)}, { readwrite: true, create: false });`,
+    ` db.run("PRAGMA busy_timeout = 10000"); db.run("PRAGMA query_only = ON");`,
+    ` if (db.query("PRAGMA table_info(imported)").all().length > 0) { const row = db.query("SELECT MAX(at) AS at FROM imported").get(); if (row !== null && row.at !== null) newest = String(row.at); }`,
+    ` db.close(); }`,
+    `console.log("imported " + newest + " " + String(Date.now()));`,
+    `console.log(${JSON.stringify(PRE_RESTIC_MARKER)});`,
+  ].join("");
+  if (program.includes("'")) throw new Error("the program must hold no single quote");
+  return `${paths.sudo === "" ? "" : "sudo "}${paths.bun} -e '${program}'`;
+}
+
+export type PreResticState = { archives: number; named: string[]; importedAt: number | null; now: number };
+
+/** The answer read back, or null for anything else than what the command prints. */
+export function readPreResticState(output: string): PreResticState | null {
+  const lines = output.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+  if (lines.at(-1) !== PRE_RESTIC_MARKER) return null;
+  const count = /^archives (\d+)$/.exec(lines[0] ?? "");
+  const imported = /^imported (none|\d+) (\d+)$/.exec(lines.at(-2) ?? "");
+  if (count === null || imported === null) return null;
+  const named = lines.slice(1, -2);
+  if (!named.every((line) => line.startsWith("archive /"))) return null;
+  return { archives: Number(count[1]), named: named.map((line) => line.slice("archive ".length)), importedAt: imported[1] === "none" ? null : Number(imported[1]), now: Number(imported[2]) };
+}
+
+/**
+ * Why the install must not go on, a line each, or null when nothing the
+ * import had to carry is left: no archive on the server, and no copy
+ * verified less than seven days ago, by the machine's clock. An answer that
+ * does not read refuses too: an install that cannot see is not one that may
+ * leave archives behind.
+ */
+export function preResticRefusal(output: string): string[] | null {
+  const state = readPreResticState(output);
+  if (state === null) {
+    return [
+      "the machine did not say whether archives of the format before restic remain: nothing was installed",
+      "check that the deployment account may run sudo and that /usr/local/bin/bun runs, then run this again",
+    ];
+  }
+  const lines: string[] = [];
+  if (state.archives > 0) {
+    lines.push(
+      `${state.archives} archive(s) of the format before restic remain under ${PRE_RESTIC_FOLDER}, which this release no longer imports:`,
+      ...state.named.map((path) => `   ${path}`),
+      ...(state.archives > state.named.length ? [`   and ${state.archives - state.named.length} more`] : []),
+      "the backups of a release up to 0.16 import them at their hourly runs, their journal saying why one does not; or move them off the machine by hand",
+    );
+  }
+  if (state.importedAt !== null && state.now - state.importedAt < IMPORT_ROLLBACK_MS) {
+    lines.push(
+      `an archive's copy was verified on ${utcMinute(state.importedAt)}, less than seven days ago: the backups in service remove it, and its bucket's object, on ${utcMinute(state.importedAt + IMPORT_ROLLBACK_MS)}; install this release after that`,
+    );
+  }
+  return lines.length === 0 ? null : [...lines, "nothing was installed"];
+}
+
 /**
  * `scheduled`: taken by the timer. `pre-restore`: the data as it was just
  * before a restore replaced it, which is what makes a restore undoable.
@@ -81,15 +189,10 @@ export type Snapshot = {
   /** When it was taken, in milliseconds, to the second. */
   takenAt: number;
   kind: SnapshotKind;
-  /** An archive of the format before restic: a `.tar.gz` file waiting for its import. */
-  legacy: boolean;
 };
 
 /** The suffix of a snapshot: what `restic dump` gives back of it, a plain tar. */
 export const SNAPSHOT_SUFFIX = ".tar";
-
-/** The suffix of an archive written before restic: a tar compressed with gzip. */
-export const LEGACY_SUFFIX = ".tar.gz";
 
 const PRE_RESTORE_SUFFIX = "-pre-restore";
 
@@ -136,52 +239,29 @@ export function readCompactTime(text: string): number | null {
   return compactTime(ms) === text ? ms : null;
 }
 
-function nameOf(folder: string, takenAt: number, kind: SnapshotKind, suffix: string): string {
-  if (!isBackupFolder(folder)) throw new Error("not a project folder");
-  return `${folder}-${compactTime(takenAt)}${kind === "pre-restore" ? PRE_RESTORE_SUFFIX : ""}${suffix}`;
-}
-
 /** The name of a snapshot. Throws on a folder outside the rule: it would become a path. */
 export function snapshotName(folder: string, takenAt: number, kind: SnapshotKind): string {
-  return nameOf(folder, takenAt, kind, SNAPSHOT_SUFFIX);
-}
-
-/** The file name an archive of the format before restic had. */
-export function legacySnapshotName(folder: string, takenAt: number, kind: SnapshotKind): string {
-  return nameOf(folder, takenAt, kind, LEGACY_SUFFIX);
+  if (!isBackupFolder(folder)) throw new Error("not a project folder");
+  return `${folder}-${compactTime(takenAt)}${kind === "pre-restore" ? PRE_RESTORE_SUFFIX : ""}${SNAPSHOT_SUFFIX}`;
 }
 
 /**
- * A name read back, or null if it is not a snapshot of this folder: a
- * snapshot's, or an archive's of the format before restic, which says so.
+ * A name read back, or null if it is not a snapshot of this folder.
  *
  * The folder is given rather than guessed: `shop-api-20261004T130000Z.tar`
  * would otherwise be readable as a snapshot of `shop` and of `shop-api`. A
  * name that does not parse is never a snapshot, and retention never deletes it.
  */
 export function readSnapshotName(folder: string, name: string): Snapshot | null {
-  if (!isBackupFolder(folder) || !name.startsWith(`${folder}-`)) return null;
-  const legacy = name.endsWith(LEGACY_SUFFIX);
-  const suffix = legacy ? LEGACY_SUFFIX : SNAPSHOT_SUFFIX;
-  if (!name.endsWith(suffix)) return null;
-  let middle = name.slice(folder.length + 1, -suffix.length);
+  if (!isBackupFolder(folder) || !name.startsWith(`${folder}-`) || !name.endsWith(SNAPSHOT_SUFFIX)) return null;
+  let middle = name.slice(folder.length + 1, -SNAPSHOT_SUFFIX.length);
   let kind: SnapshotKind = "scheduled";
   if (middle.endsWith(PRE_RESTORE_SUFFIX)) {
     kind = "pre-restore";
     middle = middle.slice(0, -PRE_RESTORE_SUFFIX.length);
   }
   const takenAt = readCompactTime(middle);
-  return takenAt === null ? null : { name, folder, takenAt, kind, legacy };
-}
-
-/**
- * The snapshot's name for an archive of the format before restic, the one
- * its import gives it: the same folder, time and kind. A snapshot's name is
- * its own twin; anything else, null.
- */
-export function twinName(folder: string, name: string): string | null {
-  const read = readSnapshotName(folder, name);
-  return read === null ? null : snapshotName(folder, read.takenAt, read.kind);
+  return takenAt === null ? null : { name, folder, takenAt, kind };
 }
 
 // --- sitesolide backups ------------------------------------------------------

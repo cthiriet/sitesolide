@@ -27,7 +27,7 @@ import { isDataFolder } from "../../borrowed/manifest";
 import { pathsFrom } from "./config";
 import { CopyError, MAX_ENTRIES, copyBudget, copyData, measureCopy, measureData, type LiveFolder } from "./copy";
 import { extractData } from "./extract";
-import { bucketRepository, objectKey, offsiteFrom, openLegacyBucket, redact } from "./offsite";
+import { bucketRepository, offsiteFrom, redact } from "./offsite";
 import { listSnapshots, resticCommand, resticEnvironment, resticFailure, resticJournal, snapshotPath, type ResticSettings } from "./restic";
 import type { Sink } from "./tar";
 
@@ -183,19 +183,14 @@ const DOWNLOAD_RESTIC_MS = 24 * 60 * 60 * 1000;
  * and dumped straight onto this process's standard output, the restore's
  * pipe. No cache: nothing is kept under a dynamic user.
  *
- * `download <folder> <archive> legacy`: an object of the format before
- * restic, decrypted and decompressed, refused if it was sealed for another
- * name; for its import (legacy.ts).
- *
  * The settings come from the environment, which PID 1 fills from the unit's
  * file; restic is handed the bucket's in its own environment alone.
  */
 export async function downloadMain(args: string[], env: ChildEnvironment): Promise<number> {
-  const [folder, name, mode] = args;
-  const legacy = mode === "legacy";
+  const [folder, name] = args;
   const read = isBackupFolder(folder) && name !== undefined ? readSnapshotName(folder, name) : null;
-  if (read === null || read.legacy !== legacy || args.length > 3 || (mode !== undefined && !legacy)) {
-    emit({ event: "error", message: "usage: backup.js download <folder> <snapshot> | download <folder> <archive> legacy" });
+  if (read === null || args.length !== 2) {
+    emit({ event: "error", message: "usage: backup.js download <folder> <snapshot>" });
     return 2;
   }
   const setting = offsiteFrom(env);
@@ -203,8 +198,6 @@ export async function downloadMain(args: string[], env: ChildEnvironment): Promi
     emit({ event: "error", message: setting === null ? "no bucket is configured" : setting.error });
     return 1;
   }
-  if (legacy) return downloadLegacy(folder!, name!, setting);
-
   // Under systemd, the machine's restic: PID 1 hands this unit the file the
   // dashboard's Secrets page writes, whose BACKUP_RESTIC would override the
   // one root set, and this child holds the network and the bucket's keys.
@@ -236,36 +229,6 @@ export async function downloadMain(args: string[], env: ChildEnvironment): Promi
   }
   emit({ event: "summary", id: found.id });
   return 0;
-}
-
-/** An object of the format before restic, decrypted, then decompressed onto standard output. */
-async function downloadLegacy(folder: string, name: string, setting: Exclude<ReturnType<typeof offsiteFrom>, null | { error: string }>): Promise<number> {
-  const sink = stdoutSink();
-  const decompressor = new DecompressionStream("gzip");
-  const writer = decompressor.writable.getWriter();
-  const pump = (async () => {
-    const reader = (decompressor.readable as ReadableStream<Uint8Array>).getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) return;
-      await sink.write(value);
-    }
-  })();
-  try {
-    const read = await openLegacyBucket(setting).download(objectKey(setting, folder, name), async (bytes) => {
-      await writer.ready;
-      await writer.write(bytes as Uint8Array<ArrayBuffer>);
-    });
-    await writer.close();
-    await pump;
-    await sink.close();
-    emit({ event: "summary", bytes: read.bytes, version: read.version, sealed: read.sealedFor !== null });
-    return 0;
-  } catch (error) {
-    void writer.abort(error).catch(() => undefined);
-    emit({ event: "error", message: redact((error as Error).message, setting) });
-    return 1;
-  }
 }
 
 export async function extractMain(args: string[], env: ChildEnvironment): Promise<number> {

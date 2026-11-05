@@ -71,12 +71,11 @@ RuntimeDirectoryPreserve=yes
 NoNewPrivileges=true
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH
 
-# The whole system read-only except the repository, and the archives of the
-# format before restic, which the run imports and then removes. Both are
-# created 0700 root by bin/deploy-backup.sh: missing, the unit would fail
-# with 226/NAMESPACE. The repository's key beside them is read, never written.
+# The whole system read-only except the repository, created 0700 root by
+# bin/deploy-backup.sh: missing, the unit would fail with 226/NAMESPACE. The
+# repository's key beside it is read, never written.
 ProtectSystem=strict
-ReadWritePaths=/var/backups/sitesolide-restic /var/backups/sitesolide
+ReadWritePaths=/var/backups/sitesolide-restic
 # restic's cache and temporary packs, on disk: a private /tmp on a tmpfs
 # would be charged to this unit's memory.
 CacheDirectory=sitesolide-restic

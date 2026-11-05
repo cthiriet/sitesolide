@@ -1,5 +1,4 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +7,7 @@ import { configFrom, isolationRefusal, pathsFrom, type BackupConfig } from "../s
 import { openDatabase, readAudit, readDoomed, readSetting, readSnapshots } from "../src/backup/database";
 import { takeLock } from "../src/backup/lock";
 import { listing } from "../src/backup/main";
-import { redact, type LegacyBucket } from "../src/backup/offsite";
+import { redact } from "../src/backup/offsite";
 import { MAINTENANCE_NOW, nextPart } from "../src/backup/maintenance";
 import { forgotten, RESERVED_FOLDER_ERROR, runBackups } from "../src/backup/run";
 import type { Stored } from "../src/backup/restic";
@@ -23,8 +22,6 @@ const HOUR = 3_600_000;
 /** Sunday 4 October 2026, 13:00 UTC. */
 const T = Date.UTC(2026, 9, 4, 13, 0, 0);
 const silent = () => undefined;
-/** The bucket's objects of the format before restic: none, here. */
-const noLegacy = (): LegacyBucket => ({ list: async () => [], download: () => Promise.reject(new Error("not used")), remove: () => Promise.reject(new Error("not used")) });
 
 const roots: string[] = [];
 afterAll(() => {
@@ -304,7 +301,7 @@ describe.concurrent.skipIf(NO_RESTIC)("what stops a run, or a project", () => {
 describe.concurrent.skipIf(NO_RESTIC)("the offsite copy, to the bucket's repository", () => {
   test("copies each new snapshot, by id, indexes it, and the bucket's copy reads back to the same tar", async () => {
     const { root, config, bucket } = bucketMachine();
-    const status = await runBackups({ config, now: () => T, log: silent, openLegacyBucket: noLegacy });
+    const status = await runBackups({ config, now: () => T, log: silent });
     expect(status.ok).toBe(true);
     expect(names(config, "ledger", bucket)).toEqual([snapshotName("ledger", T, "scheduled")]);
     expect(names(config, "test-zone.invalid", bucket)).toEqual([snapshotName("test-zone.invalid", T, "scheduled")]);
@@ -325,7 +322,7 @@ describe.concurrent.skipIf(NO_RESTIC)("the offsite copy, to the bucket's reposit
 
   test("a bucket configured since: its repository is initialised with the server's chunker parameters", async () => {
     const { root, config, bucket } = bucketMachine({}, "none");
-    const status = await runBackups({ config, now: () => T, log: silent, openLegacyBucket: noLegacy });
+    const status = await runBackups({ config, now: () => T, log: silent });
     expect(status.ok).toBe(true);
     const polynomial = (repository: string) => JSON.parse(restic(config, ["cat", "config"], repository).stdout.toString()).chunker_polynomial;
     expect(polynomial(bucket)).toBe(polynomial(config.repository));
@@ -342,7 +339,7 @@ describe.concurrent.skipIf(NO_RESTIC)("the offsite copy, to the bucket's reposit
     seed(config, "ledger", T - 2 * HOUR);
     seed(config, "ledger", T - 90 * 60_000, "scheduled", bucket);
     seed(config, "ledger", T - 90 * 24 * HOUR, "scheduled", bucket);
-    const status = await runBackups({ config, now: () => T, log: silent, openLegacyBucket: noLegacy });
+    const status = await runBackups({ config, now: () => T, log: silent });
     expect(status.ok).toBe(true);
     // 13:00 copied; 11:00 not, the bucket keeping 11:30 for that hour; the old one forgotten.
     expect(names(config, "ledger", bucket)).toEqual([snapshotName("ledger", T, "scheduled"), snapshotName("ledger", T - 90 * 60_000, "scheduled")]);
@@ -350,7 +347,7 @@ describe.concurrent.skipIf(NO_RESTIC)("the offsite copy, to the bucket's reposit
     expect(readAudit(db, null, 1)[0]!.detail).toMatchObject({ offsite: { copied: 2, forgotten: 1 } });
     db.close();
     // An hour later, nothing copied again that the bucket would forget.
-    expect((await runBackups({ config, now: () => T + HOUR, log: silent, openLegacyBucket: noLegacy })).ok).toBe(true);
+    expect((await runBackups({ config, now: () => T + HOUR, log: silent })).ok).toBe(true);
     const again = state(root);
     expect(readAudit(again, null, 1)[0]!.detail).toMatchObject({ offsite: { copied: 2 } });
     again.close();
@@ -360,7 +357,7 @@ describe.concurrent.skipIf(NO_RESTIC)("the offsite copy, to the bucket's reposit
   test("a bucket whose repository does not open costs the offsite copy, never the local snapshots, and says why in a fixed sentence", async () => {
     const { root, config } = bucketMachine({ BACKUP_ENCRYPTION_PASSPHRASE: "a passphrase changed in the dashboard since" });
     const journal: string[] = [];
-    const status = await runBackups({ config, now: () => T, log: (line) => journal.push(line), openLegacyBucket: noLegacy });
+    const status = await runBackups({ config, now: () => T, log: (line) => journal.push(line) });
     expect(status.ok).toBe(false);
     expect(status.projects.ledger).toEqual({
       ok: false,
@@ -378,7 +375,7 @@ describe.concurrent.skipIf(NO_RESTIC)("the offsite copy, to the bucket's reposit
   test("a bucket that does not answer in time is abandoned, and the status still written", async () => {
     const { root, config } = bucketMachine({}, "none");
     const started = Date.now();
-    const status = await runBackups({ config, now: () => T, log: silent, openLegacyBucket: noLegacy, offsiteStopMs: 1 });
+    const status = await runBackups({ config, now: () => T, log: silent, offsiteStopMs: 1 });
     expect(Date.now() - started).toBeLessThan(60_000);
     expect(status.projects.ledger).toMatchObject({ ok: false, snapshot: "ledger-20261004T130000Z.tar", error: expect.stringContaining("restic did not finish in time") });
     expect(readStatus(readFileSync(join(root, "state", "last-run.json"), "utf8"))?.ok).toBe(false);
@@ -422,7 +419,7 @@ function packs(config: BackupConfig): string[] {
 describe.concurrent.skipIf(NO_RESTIC)("what a run leaves behind never stops the next", () => {
   test("a stale exclusive lock in the bucket's repository is removed, and the copy goes on", async () => {
     const { config, bucket } = bucketMachine();
-    expect((await runBackups({ config, now: () => T, log: silent, openLegacyBucket: noLegacy })).ok).toBe(true);
+    expect((await runBackups({ config, now: () => T, log: silent })).ok).toBe(true);
     // An exclusive call on the bucket killed outright, a check here: the OOM killer, a reboot, a SIGKILL past the grace.
     const check = Bun.spawn([config.restic, "-r", bucket, "--password-file", config.repositoryKey, "check"], {
       stdin: "ignore",
@@ -438,7 +435,7 @@ describe.concurrent.skipIf(NO_RESTIC)("what a run leaves behind never stops the 
     await check.exited;
     expect(locks()).toHaveLength(1);
     for (const hour of [1, 2]) {
-      const status = await runBackups({ config, now: () => T + hour * HOUR, log: silent, openLegacyBucket: noLegacy });
+      const status = await runBackups({ config, now: () => T + hour * HOUR, log: silent });
       expect(status.ok).toBe(true);
       expect(names(config, "ledger", bucket)).toContain(snapshotName("ledger", T + hour * HOUR, "scheduled"));
     }
@@ -538,15 +535,15 @@ describe.concurrent.skipIf(NO_RESTIC)("what a run leaves behind never stops the 
 
   test("a day the bucket does not answer keeps its last check, for the monitor to judge its age", async () => {
     const { root, config } = bucketMachine();
-    expect((await runBackups({ config, now: () => T, log: silent, openLegacyBucket: noLegacy })).ok).toBe(true);
+    expect((await runBackups({ config, now: () => T, log: silent })).ok).toBe(true);
     writeFileSync(join(config.stateFolder, MAINTENANCE_NOW), "", { mode: 0o600 });
-    const checked = await runBackups({ config, now: () => T + HOUR, log: silent, openLegacyBucket: noLegacy });
+    const checked = await runBackups({ config, now: () => T + HOUR, log: silent });
     expect(checked.checks?.offsite).toEqual({ at: new Date(T + HOUR).toISOString(), ok: true, error: null });
     // The day after, the bucket refusing every read: its check stays what it was.
     const bucket = (config.offsite as { repository: string }).repository;
     Bun.spawnSync(["chmod", "000", bucket]);
     try {
-      const unreachable = await runBackups({ config, now: () => T + 26 * HOUR, log: silent, openLegacyBucket: noLegacy });
+      const unreachable = await runBackups({ config, now: () => T + 26 * HOUR, log: silent });
       expect(unreachable.projects.ledger?.error).toContain("no offsite copy");
       expect(unreachable.checks?.local?.at).toBe(new Date(T + 26 * HOUR).toISOString());
       expect(unreachable.checks?.offsite).toEqual(checked.checks?.offsite);
@@ -555,17 +552,6 @@ describe.concurrent.skipIf(NO_RESTIC)("what a run leaves behind never stops the 
       Bun.spawnSync(["chmod", "700", bucket]);
     }
     expect(readStatus(readFileSync(join(root, "state", "last-run.json"), "utf8"))?.checks?.offsite).toEqual(checked.checks?.offsite);
-  });
-});
-
-describe.skipIf(NO_RESTIC)("between the install and the first run", () => {
-  test("the CLI's listing of a database the version before wrote is empty, never an error", () => {
-    const made = tree();
-    roots.push(made.root);
-    const old = new Database(join(made.config.stateFolder, "backup.db"), { create: true });
-    old.run("CREATE TABLE audit (id INTEGER PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, target TEXT, detail TEXT)");
-    old.close();
-    expect(listing({ BACKUP_STATE_FOLDER: made.config.stateFolder, BACKUP_ISOLATION: "none" }, "ledger").snapshots).toEqual([]);
   });
 });
 
@@ -589,7 +575,7 @@ describe.skipIf(NO_RESTIC)("the machine's own state", () => {
     roots.push(holder);
     const { root, config, bucket } = bucketMachine({ BACKUP_MACHINE_DIR: machineState(holder) });
     const lines: string[] = [];
-    const status = await runBackups({ config, now: () => T, log: (line) => lines.push(line), openLegacyBucket: noLegacy });
+    const status = await runBackups({ config, now: () => T, log: (line) => lines.push(line) });
     expect(status.ok).toBe(true);
     expect(Object.keys(status.projects)[0]).toBe(MACHINE_FOLDER);
     expect(status.projects[MACHINE_FOLDER]).toEqual({ ok: true, snapshot: snapshotName(MACHINE_FOLDER, T, "scheduled"), error: null });

@@ -12,7 +12,6 @@
  *   backup.js hook <dir> <ms> <cmd>   as a project, a service's backup command
  *   backup.js discard <dir>           as a project, what the backup commands left, removed
  *   backup.js list <folder>           what `sitesolide backups` prints, read-only
- *   backup.js decrypt <in> <out>      an object of the format before restic back to a tar.gz, anywhere
  *   backup.js features                what this build does that an older one did not
  *
  * `dashboard/backup.ts` does nothing but call `main`: the body lives here, so
@@ -21,14 +20,12 @@
  * The exit code of `restore` does not carry the verdict, like the gatekeeper's:
  * the result file does, and a refused restore is not a failed unit.
  */
-import { lstatSync, readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isBackupFolder, SERVICE_COMMANDS_FEATURE, type Listing, type ListedSnapshot } from "../../borrowed/backups";
 import { BIND_LINES_FEATURE } from "../../borrowed/unit";
-import { readSecret } from "../prompt";
 import { copyMain, discardMain, downloadMain, extractMain, hookMain, measureMain } from "./child";
 import { configFrom, pathsFrom, STATE_FOLDER, type Environment } from "./config";
-import { decryptStream } from "./crypto";
 import { DATABASE_NAME, openForReading, readSnapshots } from "./database";
 import { readRestoreLaunch } from "./request";
 import { afterRestore, restore, type Command } from "./restore";
@@ -62,14 +59,7 @@ export function listing(env: Environment, folder: string): Listing {
   const config = configFrom(env, { bun: process.execPath, script: Bun.main });
   const byName = new Map<string, ListedSnapshot>();
   const db = openForReading(join(config.stateFolder, DATABASE_NAME));
-  // A database the version before wrote, between this version's install and its first run, has no index yet.
-  const read = (store: "local" | "offsite") => {
-    try {
-      return db === null ? [] : readSnapshots(db, store, folder);
-    } catch {
-      return [];
-    }
-  };
+  const read = (store: "local" | "offsite") => (db === null ? [] : readSnapshots(db, store, folder));
   try {
     for (const row of read("local")) {
       byName.set(row.name, { name: row.name, takenAt: row.takenAt, kind: row.kind, bytes: row.bytes, added: row.added, local: true, offsite: false });
@@ -91,51 +81,6 @@ export function listing(env: Environment, folder: string): Listing {
   return { folder, snapshots: [...byName.values()].sort((a, b) => b.takenAt - a.takenAt), lastRun };
 }
 
-/**
- * An object of the format before restic decrypted into a `.tar.gz`, on any
- * machine with Bun and this repository: the passphrase from
- * `BACKUP_ENCRYPTION_PASSPHRASE`, or typed without echo. Never as an
- * argument, which would land in the shell's history. The snapshots of the
- * bucket's restic repository need restic alone (README).
- */
-async function decryptMain(args: string[], env: Environment): Promise<number> {
-  const [input, output] = args;
-  if (input === undefined || output === undefined || args.length !== 2) {
-    console.error("usage: backup.js decrypt <encrypted file> <output .tar.gz>");
-    return 2;
-  }
-  try {
-    lstatSync(output);
-    console.error(`${output} already exists, nothing was written`);
-    return 2;
-  } catch {
-    // the expected case
-  }
-  const passphrase = env.BACKUP_ENCRYPTION_PASSPHRASE ?? (await readSecret("passphrase (no echo): "));
-  const writer = Bun.file(output).writer();
-  try {
-    const read = await decryptStream(Bun.file(input).stream() as ReadableStream<Uint8Array>, passphrase, async (chunk) => {
-      writer.write(chunk);
-      await writer.flush();
-    });
-    await writer.end();
-    console.log(`${output}: ${read.bytes} bytes, read it with: tar -xzf ${output}`);
-    // The key it was sealed for says which project and which snapshot it is,
-    // whatever name the file was given since: check it before restoring it.
-    console.log(
-      read.sealedFor === null
-        ? "sealed before format 2: the copy does not name the object it was stored as, check its sitesolide-backup.json"
-        : `sealed as ${read.sealedFor}`,
-    );
-    return 0;
-  } catch (error) {
-    await writer.end();
-    rmSync(output, { force: true });
-    console.error(`decrypt: ${(error as Error).message}`);
-    return 1;
-  }
-}
-
 export async function main(argv: string[], env: Environment): Promise<number> {
   const [mode, ...args] = argv;
   const log = (line: string) => console.log(line);
@@ -152,8 +97,6 @@ export async function main(argv: string[], env: Environment): Promise<number> {
       return hookMain(args, env);
     case "discard":
       return discardMain(args, env);
-    case "decrypt":
-      return decryptMain(args, env);
     case "features":
       // What `sitesolide deploy` looks for in this build (bin/cli/backups.ts),
       // and what a machine is searched for before it opens the second block
@@ -213,7 +156,7 @@ export async function main(argv: string[], env: Environment): Promise<number> {
       return 0;
     }
     default:
-      console.error("usage: backup.js run | restore <unit> | after-restore <unit> | list <folder> | decrypt <in> <out> | features | copy | extract | measure | download | hook | discard");
+      console.error("usage: backup.js run | restore <unit> | after-restore <unit> | list <folder> | features | copy | extract | measure | download | hook | discard");
       return 2;
   }
 }

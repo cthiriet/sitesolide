@@ -101,7 +101,6 @@ knows how to recognise; any other needs its backup command just the same.
 | The snapshots, every project's | `/var/backups/sitesolide-restic`, a restic repository | root, 0700 |
 | Its password, drawn at install | `/var/backups/sitesolide-restic.key` | root, 0600 |
 | restic's cache and temporary packs | `/var/cache/sitesolide-restic` | root, 0700, the units' `CacheDirectory` |
-| The archives of the format before restic, until removed | `/var/backups/sitesolide/<folder>/<folder>-<UTC time>[-pre-restore].tar.gz` | root, 0600, in 0700 folders |
 | The status of the last run | `/var/lib/sitesolide-backup/last-run.json` | root, 0644, for the monitor |
 | The audit, the index of the snapshots, the settings | `/var/lib/sitesolide-backup/backup.db` | root, 0600 |
 | A restore request, while it waits | `/var/lib/sitesolide-backup/requests/<folder>.json` | root, 0600 |
@@ -208,8 +207,8 @@ journal (`journalctl -u sitesolide-backup`).
 
 The file is written whatever happens to a project: whatever one project's
 snapshot throws is that project's failure, and the run goes on to the next.
-A database of the component that does not open costs the audit, the index and
-the import, not the snapshots nor the file; a setting at fault in
+A database of the component that does not open costs the audit and the
+index, not the snapshots nor the file; a setting at fault in
 `/etc/sitesolide/dashboard-backup.env` writes `ok: false` with no project, in
 the component's own folder and never one the file names, and the reason to
 the journal; so does a repository that does not open, its
@@ -244,7 +243,6 @@ backup.js run                        root, CAP_DAC_READ_SEARCH only, no write ou
    |     systemd-run --pipe --uid=site-<slug> ... backup.js discard       whatever happened, 15 s at most
    |        as the project, no network: removes what the commands left, and
    |        what an earlier run left; what it does not finish, the next does
-   |-- imports the archives of the format before restic, then removes them seven days on
    |-- restic forget <id>...         what retention decided
    |-- restic copy <id>... to the bucket's repository, its credentials in that call's environment alone
    |-- once a day, or at once on `bin/deploy-backup.sh check`: restic prune, restic check --read-data-subset
@@ -514,8 +512,9 @@ mkdir cms-data && tar -xf cms.tar -C cms-data --strip-components=1 data
 
 The repository's address is `s3:<BACKUP_S3_ENDPOINT>/<BACKUP_S3_BUCKET>/<BACKUP_S3_PREFIX>-restic`,
 `sitesolide-restic` with the default prefix. An object of the format before
-restic still in the bucket (`<prefix>/<folder>/<archive>.tar.gz.enc`) is read
-by this version's `bun backup.ts decrypt <file> <output>`, as before.
+restic left in the bucket (`<prefix>/<folder>/<archive>.tar.gz.enc`) is read
+by nothing of this release: `bun backup.ts decrypt <file> <output>` of a
+checkout of 0.16 reads it, with the passphrase.
 
 ### The machine's own state
 
@@ -561,8 +560,7 @@ dies with the server. Configured, every run copies to the bucket's repository
 each project's new snapshot first, then the older ones it lacks, and applies
 the same policy there.
 
-**A restic repository of its own**, `<prefix>-restic` in the bucket, beside
-the objects of the format before restic and never among them. It is filled by
+**A restic repository of its own**, `<prefix>-restic` in the bucket. It is filled by
 `restic copy` from the server's repository, **snapshot by snapshot**: the ones
 the server's retention keeps, that the bucket lacks, and that the bucket's
 retention would keep too. Never "copy everything": restic copies again a
@@ -737,7 +735,6 @@ What one project can cost the others, at most, and what a snapshot can be.
 | restic past its time | SIGTERM, which removes its lock and saves nothing, SIGKILL ten seconds later | restic.ts |
 | Copies to the bucket | none started after 40 minutes, every call to the bucket stopped at 45; the status is written before the unit's 50 | run.ts |
 | The daily prune and check | started only in the first 30 minutes of a run, stopped at 45 with the rest; the prune repacks a quarter of the room above the reserve at most | maintenance.ts |
-| The import of the archives of the format before restic | none started after 30 minutes, none running past 40; one archive 20 minutes at most; none started without its size above the reserve, the disk measured every second while restic writes | legacy.ts |
 | A restore | 90 minutes in all; a measure 10, the snapshot streamed into the extraction 20 from the server, 20 and 20 from the bucket, a snapshot 20, the swap and the watch 10 | restore.ts, the unit |
 | Memory | a run and a restore 512M, Bun and one restic beside it (restic measured at 57 to 174 MiB on two CPUs with Debian's 0.18.0, `GOMAXPROCS=2`, `GOMEMLIMIT=128MiB`, killed first if that is not enough, `OOMPolicy=continue`); a child 512M, a backup command its service's; a data folder too big for its copy's 512M costs that project its snapshot | the units, restic.ts, runner.ts |
 
@@ -779,9 +776,12 @@ machine except reading.
    if it is missing, and refuses one older than 0.18.0 (Debian 13 ships
    0.18.0); builds `backup.js`, installs it with the three units, draws the
    repository's key once, initialises the repository when restic says there
-   is none, creates `/var/backups/sitesolide` (0700) and
-   `/var/lib/sitesolide-backup`, reloads systemd. It starts nothing and takes
-   no snapshot. Check: it ends with *installed and verified, nothing started*,
+   is none, creates `/var/lib/sitesolide-backup`, reloads systemd. It starts
+   nothing and takes no snapshot. Before anything, it refuses a machine where
+   an archive of the format before restic remains under
+   `/var/backups/sitesolide`, or one's copy was verified less than seven days
+   ago: the releases up to 0.16 imported them into the repository and removed
+   each seven days on, and this one imports nothing. Check: it ends with *installed and verified, nothing started*,
    and `systemd-analyze verify` said nothing.
 2. **`bin/deploy-steward.sh`.** The steward gains the backup routes, and its
    unit makes `/var/lib/sitesolide-backup` writable for it, which only applies
@@ -799,7 +799,7 @@ machine except reading.
    and only if every project was saved, the hourly timer. A project that failed
    is named with its reason; fix it, run `enable` again.
 6. **`bin/deploy-backup.sh state`**, the next day: the timer, the last run, the
-   repository's size, the archives of the format before restic left. For a
+   repository's size. For a
    first check of the repositories without waiting a day,
    [`bin/deploy-backup.sh check`](#verification).
 7. **A first restore on a site that does not matter**, from the dashboard, then
@@ -864,46 +864,6 @@ command without it, as it refuses one of several services. Then deploy the
 project; its next hourly run takes its first snapshot from the command, and
 `bin/deploy-backup.sh state` or the site's *Backups* section says how it went.
 
-### From the archives of the format before restic
-
-A machine that ran the version before has `.tar.gz` archives under
-`/var/backups/sitesolide` and, with a bucket, `.enc` objects in it. The new
-version writes neither. **Its first runs import them** into the repository
-([legacy.ts](legacy.ts)), the newest first, no import started past 30 minutes
-into a run nor running past 40, none started without its size above the
-disk's reserve, the rest left to the next one:
-
-- an archive on the server is read back by the tar reader, its description
-  held to its name, stored by restic at its own time and kind, then proved
-  byte for byte: the SHA-256 of `restic dump` must be the SHA-256 of the
-  archive decompressed. A copy that differs is forgotten and the archive
-  stays, said so in the journal and the audit;
-- an object only the bucket holds, the server having been rebuilt, is fetched
-  by a download child, decrypted and decompressed, stored the same way, read
-  back and held to its name;
-- **seven days after its copy was verified**, the copy still in the
-  repository, the archive is deleted from the server, and the object from the
-  bucket once the bucket's repository holds its copy; in the very run that
-  retention forgets the copy, which the version before would have pruned
-  too, recorded as it forgets. Never on an absence: a copy merely missing, a
-  repository lost and made again for one, deletes nothing, and the archive is
-  imported again into the new repository, its seven days counted anew. Until
-  then, going back to the version before finds its files.
-
-A request from a steward that predates restic names a `.tar.gz`: the restore
-takes its imported copy, or says it has not been imported yet. The next
-version removes the import, and its install refuses while an archive remains
-or a copy is younger than seven days: upgrade through this one. An archive
-that never imports (damaged, or not what its name says) is the author's to
-delete by hand, once read.
-
-**The order, for a machine on the version before:** `sitesolide upgrade`
-(the backup install, which installs restic and initialises the repository,
-then the steward, the dashboard, and the monitor last); then a run by hand,
-`ssh you@your-machine 'sudo systemctl start sitesolide-backup.service'`, which
-imports and writes the index the new steward reads. Until that run, the page
-lists no snapshot, the archives still on the disk.
-
 ### Rolling back
 
 ```bash
@@ -919,14 +879,6 @@ Then the previous steward and dashboard, from the commit before, with
 `bin/deploy-steward.sh` and `sitesolide deploy`. The repository, its key and
 restic's cache stay until you delete them; so does
 `/etc/sitesolide/dashboard-backup.env`.
-
-**Back to the version before restic**: its `bin/deploy-backup.sh install`,
-its steward and dashboard. Within seven days of the import, its archives are
-still on the disk and its objects in the bucket, and it never sees
-`sitesolide-restic`. The snapshots taken since exist only in restic: restore
-them by hand (above). Past seven days, it starts with an empty history, and
-everything before is restored by hand with restic. Coming forward again
-imports what it wrote meanwhile.
 
 ## What only the machine can prove
 
@@ -1083,10 +1035,10 @@ reading the zone after it (tests/backup-units.test.ts). The owner's restore
 recorded as `owner` alone (tests/backup-steward.test.ts). A project created
 again under a removed one's name handed its data by a restore, kept on record
 (tests/backup-audit-reuse.test.ts); the steward's refusal of such a name to a
-token is in tests/control-creations.test.ts. The import of the archives of the
-format before restic (tests/backup-legacy.test.ts): byte for byte, kept seven
-days, a mislabelled or damaged archive left alone, an object only the bucket
-holds fetched by a download child. `postgres-backup-proof.sh` runs the recipe
+token is in tests/control-creations.test.ts. The install's refusal of a
+machine whose archives of the format before restic are not all imported and
+removed (bin/tests/cli-backup-install.test.ts): an archive left, a copy
+younger than seven days, an answer that does not read. `postgres-backup-proof.sh` runs the recipe
 of docs/manifest.md in a Debian 13 container with PostgreSQL 17 and Debian's
 restic, the real `backup.js` built as `bin/deploy-backup.sh` builds it: a
 snapshot taken while rows are written, the cluster refused without its

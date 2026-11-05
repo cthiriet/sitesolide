@@ -1,9 +1,8 @@
 /**
  * A scheduled run, launched by sitesolide-backup.timer: every project's data
  * folder snapshotted into the server's restic repository, the old snapshots
- * forgotten, the archives of the format before restic imported, the bucket's
- * repository brought up to date, once a day a prune and a check, and the
- * status written for the monitor.
+ * forgotten, the bucket's repository brought up to date, once a day a prune
+ * and a check, and the status written for the monitor.
  *
  * In this order, and each step tolerant of the others: a project that fails
  * does not stop the next one, a bucket that does not answer does not cost the
@@ -32,16 +31,14 @@
 import { lstatSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
-import { MACHINE_FOLDER, twinName } from "../../borrowed/backups";
+import { MACHINE_FOLDER } from "../../borrowed/backups";
 import type { BackupConfig } from "./config";
 import {
   clearDoomed,
   DATABASE_NAME,
-  markForgotten,
   openDatabase,
   PRUNE_WANTED,
   readDoomed,
-  readImports,
   readSetting,
   recordAudit,
   recordDoomed,
@@ -49,11 +46,10 @@ import {
   writeSetting,
   type IndexedSnapshot,
 } from "./database";
-import { importLegacy, removeLegacyArchives, removeLegacyObjects } from "./legacy";
 import { waitForLock } from "./lock";
 import { machineProject } from "./machine";
 import { checksOf, maintain, MAINTENANCE_NOW, readMaintenance } from "./maintenance";
-import { bucketRepository, offsiteTarget, openLegacyBucket, redact, type LegacyBucket, type Offsite, type RemoteObject } from "./offsite";
+import { bucketRepository, offsiteTarget, redact } from "./offsite";
 import { projectFolders, readProject, type Found, type Project } from "./projects";
 import {
   clearStaleLocks,
@@ -68,7 +64,6 @@ import {
   type Stored,
 } from "./restic";
 import { retain, type RetentionPolicy } from "./retention";
-import { within } from "./runner";
 import { TIMEOUT_ERROR, takeSnapshot, type SnapshotOutcome } from "./snapshot";
 import { shortError, writeStatus, type ProjectStatus, type RunStatus } from "./status";
 
@@ -76,8 +71,6 @@ export type RunDependencies = {
   config: BackupConfig;
   now: () => number;
   log: (line: string) => void;
-  /** The bucket's objects of the format before restic, opened from its settings. The tests point it at a local fake. */
-  openLegacyBucket?: (offsite: Offsite) => LegacyBucket;
   /** How long to wait for a restore in progress to finish. */
   lockWaitMs?: number;
   /** When, from the run's start, a call to the bucket still waiting is abandoned: OFFSITE_STOP_MS. */
@@ -257,15 +250,6 @@ export async function runBackups(dependencies: RunDependencies): Promise<RunStat
         if (taken.dirty) dirty = true;
         if (db !== null) for (const id of taken.orphans) recordDoomed(db, "local", id, now());
 
-        // --- The archives of the format before restic, imported, then removed seven days on
-        let legacyObjects: { bucket: LegacyBucket; objects: RemoteObject[] } | null = null;
-        if (db !== null) {
-          legacyObjects = await listLegacyObjects(dependencies, startedAt);
-          const imported = await importLegacy(dependencies, db, listing, startedAt, legacyObjects === null || config.offsite === null || "error" in config.offsite ? null : { offsite: config.offsite, objects: legacyObjects.objects });
-          if (imported.dirty) dirty = true;
-          if (imported.imported > 0 || imported.failed.length > 0) audit.imported = { imported: imported.imported, failed: imported.failed };
-        }
-
         // --- Retention, on the server
         const decided = forgotten(listing, config.retention);
         let kept = listing;
@@ -273,22 +257,13 @@ export async function runBackups(dependencies: RunDependencies): Promise<RunStat
           const result = await forgetSnapshots(config, local, decided.forget.map((snapshot) => snapshot.id), Date.now() + LOCAL_CALL_MS, log);
           if (result !== null && result.code === 0) {
             kept = decided.keep;
-            // An archive of the format before restic whose copy retention forgot may go at once.
-            if (db !== null) {
-              const gone = new Set(decided.forget.map((snapshot) => `${snapshot.folder}/${snapshot.name}`));
-              for (const row of readImports(db)) if (gone.has(`${row.folder}/${twinName(row.folder, row.name)}`)) markForgotten(db, row.folder, row.name, now());
-            }
           } else if (result !== null) log(resticJournal("backup: restic forget on the local repository", result));
         }
         audit.forgotten = kept === listing ? 0 : decided.forget.length;
-        if (db !== null) {
-          replaceSnapshots(db, "local", indexed(kept));
-          const removed = removeLegacyArchives(dependencies, db, kept);
-          if (removed > 0) audit.legacyArchivesRemoved = removed;
-        }
+        if (db !== null) replaceSnapshots(db, "local", indexed(kept));
 
         // --- The bucket
-        const offsite = await offsiteStep(dependencies, db, startedAt, fail, kept, legacyObjects);
+        const offsite = await offsiteStep(dependencies, db, startedAt, fail, kept);
         audit.offsite = offsite.audit;
 
         // --- Once a day, or at once when the operator asks: prune and check
@@ -448,25 +423,6 @@ function offsiteStop(dependencies: RunDependencies, startedAt: number): number {
   return Date.now() + (dependencies.offsiteStopMs ?? OFFSITE_STOP_MS) - (dependencies.now() - startedAt);
 }
 
-/** The bucket's objects of the format before restic, when there is a bucket; null when there is none or it does not answer. */
-async function listLegacyObjects(dependencies: RunDependencies, startedAt: number): Promise<{ bucket: LegacyBucket; objects: RemoteObject[] } | null> {
-  const { config, log } = dependencies;
-  const setting = config.offsite;
-  if (setting === null || "error" in setting) return null;
-  const bucket = (dependencies.openLegacyBucket ?? openLegacyBucket)(setting);
-  try {
-    const listed = await within(bucket.list(), offsiteStop(dependencies, startedAt) - Date.now());
-    if (listed === null) {
-      log("backup: the bucket's objects of the format before restic could not be listed in time");
-      return null;
-    }
-    return { bucket, objects: listed.value };
-  } catch (error) {
-    log(`backup: the bucket's objects of the format before restic could not be listed: ${redact((error as Error).message, setting)}`);
-    return null;
-  }
-}
-
 /** A folder's snapshots, for retention. */
 const byFolder = (stored: readonly Stored[], folder: string) => stored.filter((snapshot) => snapshot.folder === folder);
 
@@ -488,7 +444,6 @@ async function offsiteStep(
   startedAt: number,
   fail: (folder: string, error: string) => void,
   local: readonly Stored[],
-  legacy: { bucket: LegacyBucket; objects: RemoteObject[] } | null,
 ): Promise<{ audit: Record<string, unknown> | null; repository: Repository | null; log: (line: string) => void }> {
   const { config, now } = dependencies;
   const setting = config.offsite;
@@ -594,12 +549,6 @@ async function offsiteStep(
     }
   }
   if (db !== null) replaceSnapshots(db, "offsite", indexed(remote));
-
-  // The objects of the format before restic whose copy is safe in the bucket's repository.
-  if (legacy !== null && db !== null && !abandoned) {
-    const removed = await removeLegacyObjects({ ...dependencies, log }, db, legacy.bucket, legacy.objects, remote, stopAt);
-    if (removed > 0) audit.legacyRemoved = removed;
-  }
   return {
     audit: { copied, forgotten: pruned, ...audit, ...(errors.size === 0 ? {} : { failed: [...errors.keys()] }), ...(abandoned ? { abandoned: true } : {}) },
     repository: abandoned ? null : bucket,

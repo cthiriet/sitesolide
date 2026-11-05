@@ -1,9 +1,7 @@
 /**
  * The archive format of the snapshots: a POSIX tar (ustar, with pax headers for
  * long names), written and read here, as streams. The copy hands it to restic
- * uncompressed (copy.ts); the archives written before restic were the same
- * tar compressed with gzip, which `gzipSink` and `gunzip` still write and
- * read for their import (legacy.ts) and its tests.
+ * uncompressed (copy.ts).
  *
  * **Why not `Bun.Archive`.** It was the first candidate, and it was measured on
  * 4 October 2026 with Bun 1.3.11, the version this repository tests with:
@@ -47,49 +45,11 @@ const strictDecoder = new TextDecoder("utf-8", { fatal: true });
 
 // --- Streams -------------------------------------------------------------------
 
-/** Where bytes go: a file, a pipe, a compressor. `write` resolves once the bytes are taken. */
+/** Where bytes go: a file, a pipe. `write` resolves once the bytes are taken. */
 export type Sink = {
   write: (bytes: Uint8Array) => Promise<void>;
   close: () => Promise<void>;
 };
-
-/**
- * A gzip compressor in front of a sink, with backpressure: `write` waits for
- * the compressor to have room, and the compressor waits for the sink. Bounded
- * memory whatever the size of the archive. A failure of the sink fails the
- * next `write` rather than leaving it waiting forever.
- */
-export function gzipSink(target: Sink): Sink {
-  const stream = new CompressionStream("gzip");
-  const writer = stream.writable.getWriter();
-  let failure: unknown = null;
-  const pump = (async () => {
-    const reader = stream.readable.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) return;
-      await target.write(value);
-    }
-  })().catch((error: unknown) => {
-    failure = error;
-    void writer.abort(error).catch(() => undefined);
-  });
-
-  return {
-    async write(bytes) {
-      if (failure !== null) throw failure;
-      await writer.ready;
-      if (failure !== null) throw failure;
-      await writer.write(bytes as Uint8Array<ArrayBuffer>);
-    },
-    async close() {
-      if (failure === null) await writer.close().catch(() => undefined);
-      await pump;
-      if (failure !== null) throw failure;
-      await target.close();
-    },
-  };
-}
 
 /**
  * A stream read by exact counts: a header is 512 bytes, a content its size.
@@ -578,10 +538,4 @@ export async function readTar(stream: ReadableStream<Uint8Array>, limits: Limits
     await source.cancel();
     throw error;
   }
-}
-
-/** A gzip stream decompressed. A damaged or truncated one fails while being read. */
-export function gunzip(stream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
-  const decompressor = new DecompressionStream("gzip") as unknown as ReadableWritablePair<Uint8Array, Uint8Array>;
-  return stream.pipeThrough(decompressor);
 }

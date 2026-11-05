@@ -1,8 +1,8 @@
 /**
  * A secret typed without echo, or read from a pipe, for the scripts that ask
- * for one: scripts/fingerprint.ts's password, the passphrase of `backup.js
- * decrypt`. Never as an argument, which would land in the shell's history and
- * in the process list of every user of the machine.
+ * for one: scripts/fingerprint.ts's password. Never as an argument, which
+ * would land in the shell's history and in the process list of every user of
+ * the machine.
  */
 export async function readSecret(prompt: string): Promise<string> {
   process.stderr.write(prompt);

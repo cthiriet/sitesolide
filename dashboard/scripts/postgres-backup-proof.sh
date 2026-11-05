@@ -140,7 +140,7 @@ PW="$(head -c 18 /dev/urandom | base64 | tr -d '/+=')"
 as() { setpriv --reuid="$U" --regid="$U" --init-groups -- "$@"; }
 sql() { PGPASSWORD="$PW" "$PG/psql" -h 127.0.0.1 -p 3081 -U app -d app -v ON_ERROR_STOP=1 -tAq -c "$1"; }
 step() { echo; echo "== $*"; }
-COMMON="SITES_DIR=/srv/sites BACKUP_FOLDER=$WORK/backups BACKUP_STATE_FOLDER=$WORK/state BACKUP_RUN_FOLDER=$WORK/run BACKUP_STAGING_FOLDER=$WORK/staging BACKUP_REPOSITORY=$WORK/repository BACKUP_REPOSITORY_KEY=$WORK/key BACKUP_RESTIC=/usr/bin/restic BACKUP_RESTIC_CACHE=$WORK/cache ACCOUNTS_FILE=/etc/passwd BACKUP_ISOLATION=none BACKUP_DISK_RESERVE=0 SITESOLIDE_ZONE=test-zone.invalid"
+COMMON="SITES_DIR=/srv/sites BACKUP_STATE_FOLDER=$WORK/state BACKUP_RUN_FOLDER=$WORK/run BACKUP_STAGING_FOLDER=$WORK/staging BACKUP_REPOSITORY=$WORK/repository BACKUP_REPOSITORY_KEY=$WORK/key BACKUP_RESTIC=/usr/bin/restic BACKUP_RESTIC_CACHE=$WORK/cache ACCOUNTS_FILE=/etc/passwd BACKUP_ISOLATION=none BACKUP_DISK_RESERVE=0 SITESOLIDE_ZONE=test-zone.invalid"
 # restic on the repository, as the project's account here, which holds it in this container.
 restic_as() { as env RESTIC_REPOSITORY="$WORK/repository" RESTIC_PASSWORD_FILE="$WORK/key" RESTIC_CACHE_DIR="$WORK/cache" TZ=UTC /usr/bin/restic "$@"; }
 

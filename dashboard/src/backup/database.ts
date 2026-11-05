@@ -13,9 +13,6 @@
  *   listing at every run, and after a restore's snapshot; the repository
  *   stays the truth, and a restore resolves its snapshot there, refusing one
  *   the index still listed but restic no longer has.
- * - `imported`, the archives of the format before restic whose copy in the
- *   repository was verified, and when, and when retention forgot that copy:
- *   they are removed seven days later, or once forgotten (legacy.ts).
  * - `doomed`, the snapshots the run wanted forgotten and restic would not
  *   forget then (a person's live lock, for one): left out of every listing,
  *   index and copy, and forgotten at the next run's start.
@@ -52,9 +49,6 @@ export const SCHEMA = [
      detail TEXT
    )`,
   `CREATE INDEX IF NOT EXISTS audit_target ON audit (target, id)`,
-  // The bucket's objects of the format before restic, which the run listed;
-  // the snapshots table replaces it.
-  `DROP TABLE IF EXISTS offsite`,
   `CREATE TABLE IF NOT EXISTS snapshots (
      store TEXT NOT NULL,
      folder TEXT NOT NULL,
@@ -65,15 +59,6 @@ export const SCHEMA = [
      bytes INTEGER,
      added INTEGER,
      PRIMARY KEY (store, folder, name)
-   )`,
-  `CREATE TABLE IF NOT EXISTS imported (
-     folder TEXT NOT NULL,
-     name TEXT NOT NULL,
-     source TEXT NOT NULL,
-     digest TEXT,
-     at INTEGER NOT NULL,
-     forgotten INTEGER,
-     PRIMARY KEY (folder, name)
    )`,
   `CREATE TABLE IF NOT EXISTS doomed (
      store TEXT NOT NULL,
@@ -104,12 +89,7 @@ export function openDatabase(path: string, options: { reader?: boolean } = {}): 
   const base = new Database(path, reader ? { readwrite: true, create: false, strict: true } : { create: true, strict: true });
   for (const pragma of PRAGMAS) base.run(`PRAGMA ${pragma}`);
   if (reader) base.run("PRAGMA query_only = ON");
-  else {
-    for (const statement of SCHEMA) base.run(statement);
-    // The first release with restic made `imported` without the column.
-    const columns = base.query<{ name: string }, []>("PRAGMA table_info(imported)").all();
-    if (!columns.some((column) => column.name === "forgotten")) base.run("ALTER TABLE imported ADD COLUMN forgotten INTEGER");
-  }
+  else for (const statement of SCHEMA) base.run(statement);
   return base;
 }
 
@@ -204,29 +184,6 @@ export function readSnapshots(db: Database, store: Store, folder: string): Index
     .all({ store, folder })
     .map(fromRow)
     .filter((row): row is IndexedSnapshot => row !== null);
-}
-
-/**
- * An archive of the format before restic whose copy was verified: `archive`
- * on the server, `object` in the bucket. `forgotten`, when retention forgot
- * that copy, which lets the archive go at once.
- */
-export type Imported = { folder: string; name: string; source: "archive" | "object"; digest: string | null; at: number; forgotten: number | null };
-
-export function recordImport(db: Database, row: Imported): void {
-  db.query("INSERT OR REPLACE INTO imported (folder, name, source, digest, at, forgotten) VALUES ($folder, $name, $source, $digest, $at, $forgotten)").run(row);
-}
-
-export function readImports(db: Database): Imported[] {
-  return db
-    .query<Imported, []>("SELECT folder, name, source, digest, at, forgotten FROM imported ORDER BY at, folder, name")
-    .all()
-    .filter((row) => row.source === "archive" || row.source === "object");
-}
-
-/** Retention forgot the copy of this archive: it may go now. */
-export function markForgotten(db: Database, folder: string, name: string, at: number): void {
-  db.query("UPDATE imported SET forgotten = $at WHERE folder = $folder AND name = $name AND forgotten IS NULL").run({ folder, name, at });
 }
 
 /** A setting: a restore whose own snapshot failed once restic had started asks the next run to prune what it left. */

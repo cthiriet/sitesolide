@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { legacySnapshotName, snapshotName } from "../borrowed/backups";
+import { snapshotName } from "../borrowed/backups";
 import type { BackupConfig } from "../src/backup/config";
 import { openDatabase, readAudit, readSnapshots } from "../src/backup/database";
 import { takeLock } from "../src/backup/lock";
@@ -263,16 +263,6 @@ describe.concurrent.skipIf(NO_RESTIC)("a restore", () => {
     for (const value of ["AKIDRESTORE", settings.BACKUP_ENCRYPTION_PASSPHRASE!]) expect(handed).not.toContain(value);
   });
 
-  test("an archive of the format before restic, named by an older steward, is restored from its imported copy", async () => {
-    const { config, data } = await prepared();
-    const systemd = fakeSystemd(data, UNITS);
-    const time = clock(T);
-    request(config.stateFolder, "cms", legacySnapshotName("cms", T - 2 * HOUR, "scheduled"), T);
-    const result = await restore({ config, now: time.now, wait: time.wait, log: silent, systemctl: systemd.systemctl }, "cms");
-    expect(result.state).toBe("ok");
-    expect(readFileSync(join(data, "upload.txt"), "utf8")).toBe("the version of two hours ago");
-  });
-
   test("a scheduled service: its timer stopped first, on its own, and only what runs for good asked active after the start", async () => {
     const { config, sites, data, snapshot } = await prepared();
     const manifest = { slug: "cms", publicDir: "public", services: { web: { start: "bun web.ts", port: 3040 }, worker: { start: "bun worker.ts", internal: true }, sync: { start: "bun sync.ts", schedule: "hourly" } } };
@@ -349,9 +339,9 @@ describe.concurrent.skipIf(NO_RESTIC)("what a restore refuses", () => {
     expect(result.message).toBe("this snapshot is no longer on the server, and no bucket is configured");
   });
 
-  test("an archive of the format before restic not imported yet", async () => {
-    const result = await refused(({ config }) => request(config.stateFolder, "cms", legacySnapshotName("cms", T - 50 * HOUR, "scheduled"), T));
-    expect(result.message).toBe("this snapshot has not been imported into the repository yet: try again after the next backup run");
+  test("the name of an archive of the format before restic, which is no snapshot any more", async () => {
+    const result = await refused(({ config }) => request(config.stateFolder, "cms", "cms-20261004T130000Z.tar.gz", T));
+    expect(result.message).toBe("the restore request names no snapshot of this site");
   });
 
   test("the dashboard itself, which would cut the page asking", async () => {

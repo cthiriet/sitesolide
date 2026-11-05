@@ -15,15 +15,7 @@
  * local snapshots only, exactly as before. Half a configuration is an error the
  * dashboard shows, not a silent fallback: someone who set three variables out
  * of five believes they have offsite copies.
- *
- * **The objects of the format before restic** are `<prefix>/<folder>/<archive>.enc`,
- * each sealed for its key (crypto.ts). This version writes none; it reads
- * those the server no longer has into its repository and deletes them once
- * their copy has been verified seven days (legacy.ts). The S3 client below
- * serves that and nothing else, and leaves with it.
  */
-import { readSnapshotName, type Snapshot } from "../../borrowed/backups";
-import { decryptStream, MIN_PASSPHRASE, type Decrypted } from "./crypto";
 import type { Repository } from "./restic";
 
 export type Offsite = {
@@ -43,8 +35,11 @@ export type OffsiteSetting = Offsite | null | { error: string };
 
 export const DEFAULT_PREFIX = "sitesolide";
 
-/** What follows the prefix in the repository's path: beside the objects of the format before restic, never among them. */
+/** What follows the prefix in the repository's path. */
 export const REPOSITORY_SUFFIX = "-restic";
+
+/** A passphrase shorter than this is refused: offsite copies stay off rather than weakly sealed. */
+export const MIN_PASSPHRASE = 16;
 
 export const OFFSITE_VARIABLES = [
   "BACKUP_S3_ENDPOINT",
@@ -53,9 +48,6 @@ export const OFFSITE_VARIABLES = [
   "BACKUP_S3_SECRET_ACCESS_KEY",
   "BACKUP_ENCRYPTION_PASSPHRASE",
 ] as const;
-
-/** The suffix of an object of the format before restic. */
-export const OBJECT_SUFFIX = ".enc";
 
 function isLoopback(host: string): boolean {
   return host === "127.0.0.1" || host === "localhost" || host === "[::1]";
@@ -163,73 +155,4 @@ export function offsiteEnvironment(offsite: Offsite): Record<string, string> {
 /** What the dashboard may show of the bucket: where it is, never how to get in. */
 export function offsiteTarget(offsite: Offsite): string {
   return `${offsite.bucket} at ${new URL(offsite.endpoint).host}`;
-}
-
-// --- The objects of the format before restic, for their import ------------------
-
-export function objectKey(offsite: Offsite, folder: string, name: string): string {
-  return `${offsite.prefix}/${folder}/${name}${OBJECT_SUFFIX}`;
-}
-
-export type RemoteObject = { folder: string; snapshot: Snapshot; key: string; bytes: number };
-
-/**
- * A listed key read back: an archive of the format before restic, of a known
- * folder, or null. An object that is not one is never deleted.
- */
-export function readObjectKey(offsite: Offsite, key: string, bytes: number): RemoteObject | null {
-  const start = `${offsite.prefix}/`;
-  if (!key.startsWith(start) || !key.endsWith(OBJECT_SUFFIX)) return null;
-  const rest = key.slice(start.length, -OBJECT_SUFFIX.length);
-  const slash = rest.indexOf("/");
-  if (slash === -1) return null;
-  const folder = rest.slice(0, slash);
-  const snapshot = readSnapshotName(folder, rest.slice(slash + 1));
-  return snapshot === null || !snapshot.legacy ? null : { folder, snapshot, key, bytes };
-}
-
-/** The objects of the format before restic, as their import uses them: three verbs, nothing else. */
-export type LegacyBucket = {
-  /** Every object under the prefix, all pages read. Throws rather than return a partial list. */
-  list: () => Promise<RemoteObject[]>;
-  /** Refuses an object sealed for another key than `key`. */
-  download: (key: string, write: (bytes: Uint8Array) => Promise<void>) => Promise<Decrypted>;
-  remove: (key: string) => Promise<void>;
-};
-
-export function openLegacyBucket(offsite: Offsite): LegacyBucket {
-  const client = new Bun.S3Client({
-    endpoint: offsite.endpoint,
-    bucket: offsite.bucket,
-    accessKeyId: offsite.accessKeyId,
-    secretAccessKey: offsite.secretAccessKey,
-    ...(offsite.region === null ? {} : { region: offsite.region }),
-  });
-
-  return {
-    async list() {
-      const found: RemoteObject[] = [];
-      let startAfter: string | undefined;
-      // A thousand keys per page; ten thousand pages is no backup bucket any more.
-      for (let page = 0; page < 10_000; page++) {
-        const response = await client.list({ prefix: `${offsite.prefix}/`, maxKeys: 1000, ...(startAfter === undefined ? {} : { startAfter }) });
-        const contents = response.contents ?? [];
-        for (const item of contents) {
-          const read = readObjectKey(offsite, item.key, item.size ?? 0);
-          if (read !== null) found.push(read);
-        }
-        if (response.isTruncated !== true || contents.length === 0) return found;
-        startAfter = contents[contents.length - 1]!.key;
-      }
-      throw new Error("the bucket listing never ended");
-    },
-
-    async download(key, write) {
-      return decryptStream(client.file(key).stream() as ReadableStream<Uint8Array>, offsite.passphrase, write, { expectedKey: key });
-    },
-
-    async remove(key) {
-      await client.delete(key);
-    },
-  };
 }

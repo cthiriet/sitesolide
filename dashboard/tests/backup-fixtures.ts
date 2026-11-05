@@ -339,7 +339,6 @@ function configAt(root: string, extra: Record<string, string>): BackupConfig {
   return configFrom(
     {
       SITES_DIR: sites,
-      BACKUP_FOLDER: join(root, "backups"),
       BACKUP_STATE_FOLDER: join(root, "state"),
       BACKUP_RUN_FOLDER: join(root, "run"),
       BACKUP_STAGING_FOLDER: join(root, "staging"),

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { extractData } from "../src/backup/extract";
-import { ArchiveError, BLOCK, TarWriter, cleanEntryPath, gunzip, gzipSink, paxRecord, readTar, type ReadEntry, type Sink } from "../src/backup/tar";
+import { ArchiveError, BLOCK, TarWriter, cleanEntryPath, paxRecord, readTar, type ReadEntry, type Sink } from "../src/backup/tar";
 
 const FOLDER = mkdtempSync(join(tmpdir(), "backup-tar-"));
 afterAll(() => rmSync(FOLDER, { recursive: true, force: true }));
@@ -148,26 +148,7 @@ describe("writing and reading back", () => {
   });
 });
 
-describe("readable by tar itself, and compressed for the archives of the format before restic", () => {
-  test("gzip on the way out, and back: the archives the import reads", async () => {
-    const sink = memorySink();
-    const tar = new TarWriter(gzipSink(sink));
-    await tar.directory("data", FOLDER_META);
-    await tar.file("data/big.bin", META, 3 * 1024 * 1024, new Uint8Array(3 * 1024 * 1024).fill(7));
-    await tar.end();
-    const compressed = sink.bytes();
-    expect([compressed[0], compressed[1]]).toEqual([0x1f, 0x8b]);
-    expect(compressed.byteLength).toBeLessThan(100_000);
-    const found: ReadEntry[] = [];
-    await readTar(gunzip(streamOf(compressed)), LIMITS, async (entry) => {
-      found.push(entry);
-    });
-    expect(found.map((entry) => [entry.path, entry.size])).toEqual([
-      ["data", 0],
-      ["data/big.bin", 3 * 1024 * 1024],
-    ]);
-  });
-
+describe("readable by tar itself", () => {
   test("tar -xf reads what this writer writes, as restic stores it", async () => {
     const sink = memorySink();
     const tar = new TarWriter(sink);
@@ -185,14 +166,14 @@ describe("readable by tar itself, and compressed for the archives of the format 
     expect(readFileSync(join(out, "data", `${"x".repeat(150)}.txt`), "utf8")).toBe("two");
   });
 
-  test("this reader reads what tar -czf writes", async () => {
+  test("this reader reads what tar -cf writes", async () => {
     const source = join(FOLDER, "made-by-tar");
     mkdirSync(join(source, "data", "sub"), { recursive: true });
     writeFileSync(join(source, "data", "sub", "file.txt"), "from tar");
-    const path = join(FOLDER, "theirs.tar.gz");
-    const creation = Bun.spawnSync(["tar", "-czf", path, "-C", source, "data"], { env: { ...process.env, COPYFILE_DISABLE: "1" } });
+    const path = join(FOLDER, "theirs.tar");
+    const creation = Bun.spawnSync(["tar", "-cf", path, "-C", source, "data"], { env: { ...process.env, COPYFILE_DISABLE: "1" } });
     expect(creation.exitCode).toBe(0);
-    const found = await entriesOf(await new Response(gunzip(Bun.file(path).stream() as ReadableStream<Uint8Array>)).bytes());
+    const found = await entriesOf(new Uint8Array(readFileSync(path)));
     expect(found.find((entry) => entry.path === "data/sub/file.txt")?.content).toBe("from tar");
   });
 });
@@ -243,16 +224,6 @@ describe("the reader refuses what could leave the destination", () => {
     const many = archive(...fileEntry("data/a", "x"), ...fileEntry("data/b", "y"), ...fileEntry("data/c", "z"));
     await expect(entriesOf(many, { maxEntries: 2, maxBytes: 1000 })).rejects.toThrow("more than 2 entries");
     await expect(entriesOf(many, { maxEntries: 10, maxBytes: 2 })).rejects.toThrow("more data than there is room for");
-  });
-
-  test("a damaged gzip fails while being read", async () => {
-    const sink = memorySink();
-    const tar = new TarWriter(gzipSink(sink));
-    await tar.file("data/a", META, 100_000, crypto.getRandomValues(new Uint8Array(65536)));
-    await tar.end();
-    const bytes = sink.bytes();
-    const cut = bytes.slice(0, bytes.byteLength - 20);
-    await expect(readTar(gunzip(streamOf(cut)), LIMITS, async () => {})).rejects.toThrow();
   });
 
   test("the path rule, entry by entry", () => {

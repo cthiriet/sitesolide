@@ -18,11 +18,15 @@
 # template, draws the repository's key once (/var/backups/sitesolide-restic.key,
 # 0600, never shown), initialises the repository
 # (/var/backups/sitesolide-restic, 0700) when restic says there is none,
-# creates /var/backups/sitesolide and /var/lib/sitesolide-backup, and reloads
-# systemd. It enables nothing and starts nothing: until `enable`, the machine
-# takes no snapshot, and a restore from the dashboard has nothing to restore.
-# On a machine that has archives of the format before restic, the next run
-# imports them into the repository (dashboard/src/backup/legacy.ts).
+# creates /var/lib/sitesolide-backup, and reloads systemd. It enables nothing
+# and starts nothing: until `enable`, the machine takes no snapshot, and a
+# restore from the dashboard has nothing to restore.
+#
+# Before it changes anything, `install` refuses a machine where an archive of
+# the format before restic remains under /var/backups/sitesolide, or where
+# one's copy was verified less than seven days ago: the releases up to 0.16
+# imported them, and this one no longer does (bin/cli/backups.ts,
+# preResticRefusal).
 #
 # Run `install` BEFORE bin/deploy-steward.sh: the steward's unit makes
 # /var/lib/sitesolide-backup writable for it, which only takes effect if the
@@ -84,8 +88,6 @@ if [ "$MODE" = state ]; then
     echo
     $RESTIC --no-lock stats --mode raw-data </dev/null 2>/dev/null | grep -E 'Snapshots processed|Total Size' || echo 'no repository yet'
     sudo du -sh $REPOSITORY 2>/dev/null || true
-    echo
-    sudo find /var/backups/sitesolide -name '*.tar.gz' 2>/dev/null | wc -l | sed 's/\$/ archive(s) of the format before restic, imported by the runs, removed 7 days after/'
     echo
     df -h /var/backups | tail -1
   "
@@ -172,14 +174,27 @@ echo "-> preliminary check"
 # Absolute paths of the units, and systemd-run with --pipe (systemd 235 and
 # above): without it, a copy could not hand its archive back. /usr/bin/find
 # tells the run whether a data folder is empty without listing it; choom
-# makes restic the first process killed if a unit runs out of memory; gzip
-# reads the archives of the format before restic for their import.
-if ! ssh -n "$SITESOLIDE_SERVER" "test -x /usr/local/bin/bun && test -x /usr/bin/systemctl && test -x /usr/bin/systemd-run && test -x /usr/bin/find && test -x /usr/bin/choom && test -x /usr/bin/gzip && test -d /srv/sites && test -f /etc/caddy/sitesolide.env && systemd-run --help | grep -q -- '--pipe'"; then
+# makes restic the first process killed if a unit runs out of memory.
+if ! ssh -n "$SITESOLIDE_SERVER" "test -x /usr/local/bin/bun && test -x /usr/bin/systemctl && test -x /usr/bin/systemd-run && test -x /usr/bin/find && test -x /usr/bin/choom && test -d /srv/sites && test -f /etc/caddy/sitesolide.env && systemd-run --help | grep -q -- '--pipe'"; then
   fail "a prerequisite is missing on the machine" \
-    "expected: /usr/local/bin/bun, /usr/bin/systemctl, /usr/bin/systemd-run with --pipe, /usr/bin/find, /usr/bin/choom, /usr/bin/gzip, /srv/sites, /etc/caddy/sitesolide.env"
+    "expected: /usr/local/bin/bun, /usr/bin/systemctl, /usr/bin/systemd-run with --pipe, /usr/bin/find, /usr/bin/choom, /srv/sites, /etc/caddy/sitesolide.env"
 fi
 in_progress="$(busy)"
 [ -z "$in_progress" ] || fail "a backup run or a restore is in progress, try again in a few minutes" "$in_progress"
+
+echo "-> archives of the format before restic"
+# Read as root, changing nothing, before restic or anything else is laid: the
+# command and its judgement are bin/cli/backups.ts's, tested there.
+PRE_RESTIC_COMMAND="$(cd "$REPO_ROOT" && bun -e 'import { preResticCommand } from "./bin/cli/backups"; console.log(preResticCommand())')"
+PRE_RESTIC_ANSWER="$(ssh -n "$SITESOLIDE_SERVER" "$PRE_RESTIC_COMMAND" || true)"
+PRE_RESTIC_REFUSAL="$(cd "$REPO_ROOT" && ANSWER="$PRE_RESTIC_ANSWER" bun -e 'import { preResticRefusal } from "./bin/cli/backups"; const why = preResticRefusal(process.env.ANSWER ?? ""); if (why !== null) console.log(why.join("\n"))')"
+if [ -n "$PRE_RESTIC_REFUSAL" ]; then
+  first="$(printf '%s\n' "$PRE_RESTIC_REFUSAL" | head -n 1)"
+  rest=()
+  while IFS= read -r line; do rest+=("$line"); done < <(printf '%s\n' "$PRE_RESTIC_REFUSAL" | tail -n +2)
+  fail "$first" ${rest[@]+"${rest[@]}"}
+fi
+echo "   none left, none imported in the last seven days"
 
 echo "-> restic"
 # Debian's package, from the archive the machine already trusts: this install
@@ -232,7 +247,6 @@ ssh -n "$SITESOLIDE_SERVER" "
   for unit in ${UNITS[*]}; do
     sudo install -m 0644 -o root -g root \"$REMOTE/\$unit\" \"$UNITS_FOLDER/\$unit\"
   done
-  sudo install -d -m 0700 -o root -g root /var/backups/sitesolide
   sudo install -d -m 0755 -o root -g root /var/lib/sitesolide-backup
   rm -rf $REMOTE
   sudo systemctl daemon-reload
@@ -246,8 +260,6 @@ paths="$TARGET_JS"
 for unit in "${UNITS[@]}"; do paths="$paths '$UNITS_FOLDER/$unit'"; done
 permissions="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' $paths" | sort -u)"
 [ "$permissions" = "644 root:root" ] || fail "unexpected permissions on the code or the units: $permissions"
-permissions="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' /var/backups/sitesolide")"
-[ "$permissions" = "700 root:root" ] || fail "/var/backups/sitesolide is $permissions, expected 700 root:root"
 permissions="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' $REPOSITORY")"
 [ "$permissions" = "700 root:root" ] || fail "$REPOSITORY is $permissions, expected 700 root:root"
 permissions="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' $KEY")"
@@ -265,4 +277,3 @@ else
   echo "   installed and verified, nothing started, no snapshot taken"
   echo "   next: bin/deploy-steward.sh, then bin/deploy-backup.sh enable"
 fi
-echo "   the next run imports the archives of the format before restic, if there are any"

@@ -40,7 +40,7 @@
  */
 import { chownSync, chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { readSnapshotName, twinName } from "../../borrowed/backups";
+import { readSnapshotName } from "../../borrowed/backups";
 import { isAnchored, scheduledServices } from "../../borrowed/manifest";
 import { isTimerUnit, unitArgument, unitNames } from "../../borrowed/unit";
 import { readShow, showArguments, verdict, type ServiceReading } from "../secrets/restart";
@@ -268,13 +268,10 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
       throw new Refused(`the server's repository could not be read, nothing was changed: ${resticFailure(listed.failure, local)}`);
     }
     const asked = readSnapshotName(folder, request.snapshot)!;
-    // An archive of the format before restic, named by a steward that predates it: its imported copy.
-    const wanted = twinName(folder, request.snapshot)!;
     // A snapshot an earlier run wanted forgotten and restic would not forget is no snapshot.
     const doomed = new Set(withDoomed(config));
-    const stored = listed.snapshots.find((snapshot) => snapshot.folder === folder && snapshot.name === wanted && !doomed.has(snapshot.id)) ?? null;
+    const stored = listed.snapshots.find((snapshot) => snapshot.folder === folder && snapshot.name === asked.name && !doomed.has(snapshot.id)) ?? null;
     const setting = config.offsite;
-    if (stored === null && asked.legacy) throw new Refused("this snapshot has not been imported into the repository yet: try again after the next backup run");
     if (stored === null && (setting === null || "error" in setting)) throw new Refused("this snapshot is no longer on the server, and no bucket is configured");
     const existing = new Set(listed.snapshots.filter((snapshot) => snapshot.folder === folder).map((snapshot) => snapshot.name));
 
@@ -300,7 +297,7 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
     if (project.owner !== null) chownSync(incoming, project.owner.uid, project.owner.gid);
     const takenAt = asked.takenAt;
     try {
-      await extract(dependencies, project, { incoming, room, takenAt, name: wanted, stored });
+      await extract(dependencies, project, { incoming, room, takenAt, name: asked.name, stored });
     } catch (error) {
       rmSync(incoming, { recursive: true, force: true });
       throw error;
