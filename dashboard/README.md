@@ -2149,10 +2149,9 @@ session, a token through the control routes, the projection written before
 every answer, someone whose last role above Can open goes signed out with
 their tokens, the registry root's alone and the projection the portal's
 group's, a token filling half of the log at most, the rows its removals may
-still write counted (tests/access-steward.test.ts); the migration, every store carried
-over, what it sets aside, conflicts toward the higher role, made once, a
-portal database that does not read or sits behind a link, and the old stores
-left for a rollback (tests/access-migrate.test.ts); the dashboard's access
+still write counted (tests/access-steward.test.ts); a machine without a
+registry beginning it empty, never in a request's way, and one made in 0.4.0
+read with what its making set aside (tests/access-begin.test.ts); the dashboard's access
 routes against a simulated steward, the origin, the unlock carried, `locked`
 turned into the page's 423, general access never the code
 (tests/access-routes.test.ts).
