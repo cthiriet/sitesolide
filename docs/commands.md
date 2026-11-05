@@ -152,8 +152,8 @@ refused.
 
 `sitesolide remove` deletes the project's store and its previous versions,
 after its units are stopped. Its name is free again for a token that may create
-projects, once the machine keeps neither the removed project's backup
-snapshots nor its connector grants: until then a token creating it is refused
+projects, once the machine keeps none of the removed project's backup
+snapshots: until then a token creating it is refused
 `reserved`, and you deploy it over SSH, or clear what was left
 ([dashboard/src/backup/README.md](../dashboard/src/backup/README.md#a-name-a-removed-project-left-behind)).
 

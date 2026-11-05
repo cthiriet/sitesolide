@@ -298,7 +298,7 @@ beforeAll(async () => {
   writeFileSync(join(units, INSTALLER_TEMPLATE), "[Service]\n");
   control = createControlSteward(
     {
-      ...createControlSystem({ stateFolder: state, sitesDir: sites, unitsFolder: units, installerFolder: folder("installer"), systemctl: "/bin/false", journalctl: "/bin/false", backups: null, connectors: null }),
+      ...createControlSystem({ stateFolder: state, sitesDir: sites, unitsFolder: units, installerFolder: folder("installer"), systemctl: "/bin/false", journalctl: "/bin/false", backups: null }),
       systemctl: async (arguments_) => {
         if (arguments_[0] === "start") installs.push(arguments_.at(-1)!);
         return arguments_[0] === "is-active" ? { code: 3, output: "inactive\n" } : { code: 0, output: "" };
@@ -373,7 +373,7 @@ describe("a person, end to end", () => {
 
   test("cannot open the owner's pages, whatever the route", async () => {
     const { browser } = await signInAs(ALICE);
-    for (const path of ["/api/people", "/api/connectors", "/api/portal/audit"]) {
+    for (const path of ["/api/people", "/api/portal/audit"]) {
       const response = await browser.api(path);
       expect([path, response.status]).toEqual([path, 403]);
       expect(await response.json()).toMatchObject({ error: "owner-only" });

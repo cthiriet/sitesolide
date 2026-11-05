@@ -18,7 +18,7 @@ describe("what a person sees of the page", () => {
     expect(sectionsFor(ALICE, "blog").map((entry) => entry.section)).toEqual(["overview", "services", "secrets", "access"])
     expect(sectionsFor(ALICE, "cms").map((entry) => entry.section)).toEqual(["overview", "services", "secrets", "access", "backups"])
     expect(machinePagesFor(OWNER)).toEqual(MACHINE_PAGES)
-    expect(machinePagesFor(OWNER).map((entry) => entry.title)).toEqual(["Sites", "Activity", "People", "Tokens", "Connectors", "Server"])
+    expect(machinePagesFor(OWNER).map((entry) => entry.title)).toEqual(["Sites", "Activity", "People", "Tokens", "Server"])
     expect(sectionsFor(null, "blog")).toEqual(SECTIONS)
     expect(SECTIONS.map((entry) => entry.title)).toEqual(["Overview", "Services", "Secrets", "Access", "Backups"])
   })
@@ -34,7 +34,7 @@ describe("what a person sees of the page", () => {
   })
 
   test("a page that is not theirs, reached by its address, says so", () => {
-    for (const path of ["/people/", "/connectors/", "/members/", "/server/"]) expect(mayOpen(pageFromUrl(path), ALICE)).toBe(false)
+    for (const path of ["/people/", "/members/", "/server/"]) expect(mayOpen(pageFromUrl(path), ALICE)).toBe(false)
     expect(mayOpen(pageFromUrl("/tokens/"), ALICE)).toBe(true)
     expect(mayOpen(pageFromUrl("/tokens/"), VIC)).toBe(false)
     expect(mayOpen(pageFromUrl("/site/secrets/", "?s=shop"), ALICE)).toBe(false)

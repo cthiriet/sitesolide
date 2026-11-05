@@ -63,12 +63,8 @@ const BORROWINGS = [
   "bin/cli/unit.ts",
   "bin/cli/comparison.ts",
   // Imported by the manifest's validation and by the unit generator: what a
-  // project may reach, and the connectors it asks for. The steward reads the
-  // latter from the manifests to show which project asks for which.
+  // project may reach outside the machine, and through which ports.
   "bin/cli/egress.ts",
-  // The connectors' files and their rules: the steward writes them, the egress
-  // proxy reads them, and both run this one copy of what is allowed there.
-  "bin/cli/connectors.ts",
   // What the installer decides exactly like `sitesolide deploy`: the ports
   // other projects already declare, the units a manifest no longer names, the
   // loopback's project set, and the door the machine carries. A second

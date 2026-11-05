@@ -12,6 +12,8 @@ import {
   setPortal,
   setLock,
   isValidSlug,
+  KNOWN_KEYS,
+  REMOVED_KEYS,
   validate,
   buildEnvOf,
   FILE_NAME_SHAPE,
@@ -33,7 +35,7 @@ import {
   type Manifest,
 } from "../cli/manifest";
 import { RESERVED_ENV as VARIABLES_RESERVED_ENV } from "../cli/variables";
-import { CONNECTORS_PORT, EGRESS_PROXY_PORT } from "../cli/egress";
+import { EGRESS_PROXY_PORT, EGRESS_STATUS_PORT } from "../cli/egress";
 import { CADDY_ADMIN_PORT } from "../cli/loopback";
 import { TUNNEL_METRICS } from "../cli/tunnel";
 import { domainForms, isValidDomain as isValidDomainApi, isValidSlug as isValidSlugApi } from "../../api/src/table";
@@ -738,6 +740,16 @@ describe("portal", () => {
     const errors = validate({ ...APP, portall: true } as unknown as Manifest);
     expect(errors).toContainEqual(expect.stringContaining("portall"));
   });
+
+  test("a key a release removed is refused with what to write instead, not taken for a typo", () => {
+    const errors = validate({ ...APP, egress: ["api.example.com"], connectors: ["slack"] } as unknown as Manifest);
+    expect(errors).toEqual([
+      "connectors: removed, the egress proxy no longer adds a credential to a project's calls: delete the key, declare the credential among the project's secrets, and list the host it calls under egress",
+    ]);
+    // Whatever it holds: nothing reads it any more.
+    expect(validate({ ...APP, connectors: [] } as unknown as Manifest)).toEqual([expect.stringMatching(/^connectors: removed/)]);
+    expect(Object.keys(REMOVED_KEYS).filter((key) => KNOWN_KEYS.includes(key))).toEqual([]);
+  });
 });
 
 /**
@@ -1052,7 +1064,7 @@ describe("the services' blocks", () => {
   test("the ports with rules of their own stay outside: Caddy's admin API, the egress proxy, the tunnel's metrics", () => {
     // Inside a block, the API would be reachable by whoever the block lets
     // through, and the proxy unreachable by the projects that need it.
-    for (const port of [CADDY_ADMIN_PORT, EGRESS_PROXY_PORT, CONNECTORS_PORT]) expect(isServicePort(port)).toBe(false);
+    for (const port of [CADDY_ADMIN_PORT, EGRESS_PROXY_PORT, EGRESS_STATUS_PORT]) expect(isServicePort(port)).toBe(false);
     // The monitor reads the connector's metrics as its own account, which a
     // block would refuse it; cloudflared takes 20241 to 20245 by default.
     const metrics = Number(TUNNEL_METRICS.split(":")[1]);

@@ -6,7 +6,8 @@ the project on the machine, where the domain table and the lock generator read
 it back.
 
 An unknown key is refused, never ignored. A typo on `portal` or `lock` would
-deploy an open site its author believes is closed.
+deploy an open site its author believes is closed. A key a release removed
+is refused too, with what to write instead.
 
 ## The smallest ones
 
@@ -350,7 +351,7 @@ What an entry declares makes it one of three kinds:
   Never a scheduled service, which keeps nothing live between its runs.
 
 `start`, `port` and `routes` are then refused at the top level. `install`,
-`secrets`, `network`, `egress`, `connectors`, `exclude` and the directories
+`secrets`, `network`, `egress`, `exclude` and the directories
 stay the project's, shared by every service. A worker or a scheduled service
 is declared under `services` even alone: the single `start` is always a
 server.
@@ -652,34 +653,6 @@ declares it, before pushing anything, while the egress proxy is not installed
 on the machine. A change to the list applies at the service's next connection.
 `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, in both spellings, then belong to
 the deployment, and `env` may not set them.
-
-### `connectors`
-
-Credentials the machine lends the service without handing them over.
-
-```json
-"connectors": ["slack"]
-```
-
-An administrator defines `slack` on the dashboard's Connectors page, its base
-address and the header that carries the credential, and grants it to the
-project. The service calls
-
-```
-$SITESOLIDE_CONNECTORS/slack/chat.postMessage
-```
-
-in plain HTTP on the loopback, `http://127.0.0.1:3129/connectors/slack/...`,
-and the egress proxy forwards it over HTTPS with the header set. The
-credential appears in neither the repository, nor the unit, nor the service's
-environment.
-
-**Both are needed**: this key, which says the app asks, and the grant, which
-says the administrator agrees. Either alone is refused. Names are lowercase
-letters, digits and dashes, starting with a letter, and never `constructor`,
-which every JavaScript object already carries. Works with either
-`network`; refused on a static site. `SITESOLIDE_CONNECTORS` belongs to the
-deployment.
 
 ### `secrets`
 

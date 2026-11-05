@@ -1,7 +1,6 @@
 /**
- * What an app may reach outside the machine, and the credentials the platform
- * lends it without handing them over: the manifest's `egress` and `connectors`
- * keys, and what they change in the unit and in the deployment.
+ * What an app may reach outside the machine: the manifest's `egress` key, and
+ * what it changes in the unit and in the deployment.
  *
  * `network` was binary until now: `localhost`, which cuts everything but the
  * loopback, or `outbound`, which opens everything. An app written by an agent
@@ -10,12 +9,6 @@
  * service still cannot leave on its own, and its HTTP clients are pointed at
  * the egress proxy on the loopback, which lets through the hosts of this list
  * and nothing else. See egress/README.md for the proxy and its threat model.
- *
- * `connectors` names credentials an administrator defined on the machine,
- * `slack` or `github`: the app calls the proxy in plain HTTP on the loopback,
- * and the proxy forwards over HTTPS with the credential added. The manifest
- * only asks; a grant made from the dashboard, on the machine, is what allows,
- * so that a manifest can never grant itself a company's credential.
  *
  * Imported by bin/cli/manifest.ts and bin/cli/unit.ts, borrowed with them by
  * the dashboard, and embedded in the egress proxy's bundle: one rule for what
@@ -42,31 +35,27 @@ export const EGRESS_ADDRESS = "127.0.0.1";
 export const EGRESS_PROXY_PORT = 3128;
 
 /**
- * The connectors, plain HTTP on the loopback, and the read-only routes the
- * dashboard calls. A second port rather than the first one: on 3128 the proxy
- * pipes bytes it never reads, on 3129 it reads every request and every answer
- * to rewrite them, and two ports keep a tunnel from ever being read as a
- * connector call. Both are raw listeners counted against one admission,
- * egress/src/admission.ts: Bun.serve, which the connectors first ran on, held
- * whatever one project opened or left unread.
+ * The read-only routes the dashboard calls, GET /status and GET /audit,
+ * answered to its account alone. A second port rather than origin-form
+ * requests on the first: on 3128 the proxy pipes bytes it never reads, and two
+ * ports keep a tunnel from ever being read as anything else. Both are raw
+ * listeners counted against one admission, egress/src/admission.ts:
+ * Bun.serve held whatever one project opened. Every generated unit refuses
+ * both ports to its service (DENIED_BINDS in bin/cli/unit.ts).
  */
-export const CONNECTORS_PORT = 3129;
+export const EGRESS_STATUS_PORT = 3129;
 
 /** What a manifest may list. A longer list is no longer a decision anyone reads. */
 export const MAX_EGRESS_ENTRIES = 64;
-export const MAX_CONNECTORS = 32;
 
 /** The unit `deploy` looks for before deploying a project that needs it. */
 export const EGRESS_UNIT = "sitesolide-egress";
 
-/** The base of the connectors' addresses, as the unit hands it to the service. */
-export const CONNECTORS_URL = `http://${EGRESS_ADDRESS}:${CONNECTORS_PORT}/connectors`;
-
 /**
- * The variables the unit sets for a project that declares `egress` or
- * `connectors`, which its own `env` may therefore not set. Both spellings of
- * the proxy variables are written, since clients disagree: curl reads only the
- * lowercase `http_proxy`, Go and Python read either.
+ * The variables the unit sets for a project that declares `egress`, which its
+ * own `env` may therefore not set. Both spellings of the proxy variables are
+ * written, since clients disagree: curl reads only the lowercase
+ * `http_proxy`, Go and Python read either.
  *
  * Both spellings are reserved for the same reason: systemd keeps the last
  * value of a variable set twice, and a lowercase `https_proxy` in `env` would
@@ -81,7 +70,6 @@ export const PROXY_VARIABLES = [
   "http_proxy",
   "NO_PROXY",
   "no_proxy",
-  "SITESOLIDE_CONNECTORS",
 ];
 
 /**
@@ -172,35 +160,9 @@ export function matchesEgress(patterns: readonly HostPattern[], host: string, po
   });
 }
 
-/**
- * A name every JavaScript object already answers to: `constructor`,
- * `toString`, `__proto__`. The connectors live in an object keyed by name, and
- * `connectors["constructor"]` is never undefined: a connector so named would
- * read as present before it exists, and a change without a value would then
- * write a record with none, a file the proxy refuses whole.
- */
-export function isInheritedName(name: string): boolean {
-  return Object.hasOwn(Object.prototype, name);
-}
-
-/**
- * A connector's name: what the manifest lists, what the dashboard grants, and a
- * segment of `/connectors/<name>/`. Same shape as a service's name, and never
- * a name every object inherits. Only `constructor` has the shape today; the
- * others are refused by name as well, should the shape widen one day.
- */
-export function isValidConnectorName(name: unknown): name is string {
-  return typeof name === "string" && name.length <= 32 && /^[a-z]([a-z0-9-]*[a-z0-9])?$/.test(name) && !isInheritedName(name);
-}
-
 /** Does the project list hosts to reach through the proxy? */
 export function declaresEgress(manifest: Manifest): boolean {
   return Array.isArray(manifest.egress) && manifest.egress.length > 0;
-}
-
-/** Does the project ask for connectors? */
-export function declaresConnectors(manifest: Manifest): boolean {
-  return Array.isArray(manifest.connectors) && manifest.connectors.length > 0;
 }
 
 /** The patterns of a valid manifest, the invalid entries left out. */
@@ -209,100 +171,68 @@ export function egressPatterns(manifest: Manifest): HostPattern[] {
   return manifest.egress.map(parseEgressEntry).filter((pattern): pattern is HostPattern => pattern !== null);
 }
 
-/** The connectors a valid manifest asks for, the invalid names left out. */
-export function requestedConnectors(manifest: Manifest): string[] {
-  if (!Array.isArray(manifest.connectors)) return [];
-  return manifest.connectors.filter(isValidConnectorName);
-}
-
 /**
- * The refusals of `egress` and `connectors`, for validate(). `isApplication`
- * is passed rather than recomputed: this module imports nothing from the
- * manifest's, which imports it.
+ * The refusals of `egress`, for validate(). `isApplication` is passed rather
+ * than recomputed: this module imports nothing from the manifest's, which
+ * imports it.
  */
 export function egressErrors(manifest: Manifest, isApplication: boolean): string[] {
   const errors: string[] = [];
+  if (manifest.egress === undefined) return errors;
 
-  if (manifest.egress !== undefined) {
-    const entries = manifest.egress as unknown;
-    if (!Array.isArray(entries) || entries.length === 0) {
-      errors.push('egress: a non-empty list of hosts, such as ["api.example.com", "*.slack.com"]');
-    } else {
-      if (entries.length > MAX_EGRESS_ENTRIES) errors.push(`egress: ${MAX_EGRESS_ENTRIES} hosts at most`);
-      const seen = new Set<string>();
-      for (const entry of entries) {
-        const pattern = parseEgressEntry(entry);
-        if (pattern === null) {
-          errors.push(
-            `egress: "${String(entry)}" must be a host name such as api.example.com or *.example.com, optionally with :port, never an address`,
-          );
-          continue;
-        }
-        const written = formatPattern(pattern);
-        if (seen.has(written)) errors.push(`egress: ${written} is listed twice`);
-        seen.add(written);
+  const entries = manifest.egress as unknown;
+  if (!Array.isArray(entries) || entries.length === 0) {
+    errors.push('egress: a non-empty list of hosts, such as ["api.example.com", "*.slack.com"]');
+  } else {
+    if (entries.length > MAX_EGRESS_ENTRIES) errors.push(`egress: ${MAX_EGRESS_ENTRIES} hosts at most`);
+    const seen = new Set<string>();
+    for (const entry of entries) {
+      const pattern = parseEgressEntry(entry);
+      if (pattern === null) {
+        errors.push(
+          `egress: "${String(entry)}" must be a host name such as api.example.com or *.example.com, optionally with :port, never an address`,
+        );
+        continue;
       }
-    }
-    // Both together would read as a restriction while the unit opens
-    // everything: `outbound` lifts IPAddressDeny, and the proxy is then one
-    // way out among all the others.
-    if (manifest.network === "outbound") {
-      errors.push("egress: network outbound already reaches every host; keep egress and drop network, or the reverse");
-    }
-    if (!isApplication) errors.push("egress: without `start`, nothing runs to reach anything");
-  }
-
-  if (manifest.connectors !== undefined) {
-    const names = manifest.connectors as unknown;
-    if (!Array.isArray(names) || names.length === 0) {
-      errors.push('connectors: a non-empty list of connector names, such as ["slack"]');
-    } else {
-      if (names.length > MAX_CONNECTORS) errors.push(`connectors: ${MAX_CONNECTORS} at most`);
-      const seen = new Set<string>();
-      for (const name of names) {
-        if (typeof name === "string" && isInheritedName(name)) {
-          errors.push(`connectors: ${name} is reserved, every JavaScript object already carries that name`);
-        } else if (!isValidConnectorName(name)) {
-          errors.push(`connectors: "${String(name)}" should start with a letter, then lowercase letters, digits and dashes, 32 characters at most`);
-        } else if (seen.has(name)) {
-          errors.push(`connectors: ${name} is listed twice`);
-        } else {
-          seen.add(name);
-        }
-      }
-    }
-    if (!isApplication) errors.push("connectors: without `start`, nothing runs to call them");
-  }
-
-  if (manifest.egress !== undefined || manifest.connectors !== undefined) {
-    const declared = [
-      ...Object.keys(manifest.env ?? {}),
-      ...Object.values(manifest.services ?? {}).flatMap((service) =>
-        typeof service === "object" && service !== null ? Object.keys(service.env ?? {}) : [],
-      ),
-    ];
-    for (const name of new Set(declared)) {
-      if (PROXY_VARIABLES.includes(name)) {
-        errors.push(`env: ${name} is set by the deployment for egress and connectors, and cannot be redefined`);
-      }
+      const written = formatPattern(pattern);
+      if (seen.has(written)) errors.push(`egress: ${written} is listed twice`);
+      seen.add(written);
     }
   }
+  // Both together would read as a restriction while the unit opens
+  // everything: `outbound` lifts IPAddressDeny, and the proxy is then one
+  // way out among all the others.
+  if (manifest.network === "outbound") {
+    errors.push("egress: network outbound already reaches every host; keep egress and drop network, or the reverse");
+  }
+  if (!isApplication) errors.push("egress: without `start`, nothing runs to reach anything");
 
+  const declared = [
+    ...Object.keys(manifest.env ?? {}),
+    ...Object.values(manifest.services ?? {}).flatMap((service) =>
+      typeof service === "object" && service !== null ? Object.keys(service.env ?? {}) : [],
+    ),
+  ];
+  for (const name of new Set(declared)) {
+    if (PROXY_VARIABLES.includes(name)) {
+      errors.push(`env: ${name} is set by the deployment for egress, and cannot be redefined`);
+    }
+  }
   return errors;
 }
 
 /**
- * The lines the unit gains for a project that declares `egress` or
- * `connectors`, comments included. None for any other project: its unit stays
- * byte for byte what it was, and the units in service are not reported as
- * diverging on the next deployment.
+ * The lines the unit gains for a project that declares `egress`, comments
+ * included. None for any other project: its unit stays byte for byte what it
+ * was, and the units in service are not reported as diverging on the next
+ * deployment.
  */
 export function egressUnitLines(manifest: Manifest): string[] {
   const lines: string[] = [];
   if (declaresEgress(manifest)) {
     const proxy = `http://${EGRESS_ADDRESS}:${EGRESS_PROXY_PORT}`;
     // localhost and the loopback addresses go direct: the services of one
-    // project call each other there, and the connectors are there too.
+    // project call each other there.
     const direct = `localhost,${EGRESS_ADDRESS},::1`;
     lines.push(
       "",
@@ -317,15 +247,6 @@ export function egressUnitLines(manifest: Manifest): string[] {
       `Environment=http_proxy=${proxy}`,
       `Environment=NO_PROXY=${direct}`,
       `Environment=no_proxy=${direct}`,
-    );
-  }
-  if (declaresConnectors(manifest)) {
-    lines.push(
-      "",
-      "# connectors: credentials lent by the machine, never handed over. The",
-      "# service calls <this address>/<name>/<path>, the proxy adds the",
-      "# credential, if the dashboard granted it to this project.",
-      `Environment=SITESOLIDE_CONNECTORS=${CONNECTORS_URL}`,
     );
   }
   return lines;

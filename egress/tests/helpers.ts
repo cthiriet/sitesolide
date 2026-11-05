@@ -10,7 +10,7 @@
  * lands on a closed local port, never on the address itself.
  */
 import type { Socket } from "bun";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "../src/config";
 import type { Caller } from "../src/proc-net";
@@ -49,81 +49,6 @@ export function certificate(names: string[]): { cert: string; key: string } {
   } finally {
     rmSync(folder, { recursive: true, force: true });
   }
-}
-
-/**
- * An authority of the test's own and the certificates it signs, one per list
- * of names. What a test of the name check needs: a chain the client trusts
- * whole, so that a refusal can only be about the name. Made and removed like
- * the self-signed ones above.
- */
-export function authority(leaves: string[][]): { ca: string; leaves: { cert: string; key: string }[] } {
-  const folder = mkdtempSync(join(DATA_DIR, "ca-"));
-  const run = (args: string[]) => {
-    const result = Bun.spawnSync([OPENSSL!, ...args], { cwd: folder });
-    if (result.exitCode !== 0) throw new Error(`openssl: ${result.stderr.toString()}`);
-  };
-  try {
-    // The authority's extensions from a configuration of its own, never -addext:
-    // OpenSSL 1.1, first on the PATH of GitHub's macOS runner, applies its
-    // default v3_ca section as well, the certificate carries basicConstraints
-    // twice, and Bun refuses every leaf it signed. LibreSSL and OpenSSL 3 agree.
-    writeFileSync(join(folder, "authority.cnf"), "[req]\ndistinguished_name = dn\n[dn]\n[authority]\nbasicConstraints = critical,CA:TRUE\nkeyUsage = critical,keyCertSign,cRLSign\nsubjectKeyIdentifier = hash\n");
-    run([
-      "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "1",
-      "-subj", "/CN=sitesolide test authority",
-      "-config", "authority.cnf", "-extensions", "authority",
-    ]);
-    const issued = leaves.map((names, index) => {
-      run(["req", "-newkey", "rsa:2048", "-nodes", "-keyout", `${index}.key`, "-out", `${index}.csr`, "-subj", `/CN=${names[0]}`]);
-      writeFileSync(
-        join(folder, `${index}.ext`),
-        `subjectAltName=${names.map((name) => `DNS:${name}`).join(",")}\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n`,
-      );
-      run([
-        "x509", "-req", "-in", `${index}.csr`, "-CA", "ca.pem", "-CAkey", "ca.key", "-set_serial", String(1000 + index),
-        "-out", `${index}.pem`, "-days", "1", "-extfile", `${index}.ext`,
-      ]);
-      return { cert: readFileSync(join(folder, `${index}.pem`), "utf8"), key: readFileSync(join(folder, `${index}.key`), "utf8") };
-    });
-    return { ca: readFileSync(join(folder, "ca.pem"), "utf8"), leaves: issued };
-  } finally {
-    rmSync(folder, { recursive: true, force: true });
-  }
-}
-
-/**
- * A TLS server that answers any request with a small 200 and keeps every
- * decrypted byte it was sent: what proves a credential never reached it, not
- * even as a request the server would have refused.
- */
-export function recordingTlsServer(tls: { cert: string; key: string }) {
-  const received: string[] = [];
-  let handshakes = 0;
-  let connections = 0;
-  const listener = Bun.listen({
-    hostname: "127.0.0.1",
-    port: 0,
-    tls,
-    socket: {
-      // A connection the proxy opened, whatever became of its handshake: a
-      // client that refuses the certificate's name may abort the handshake
-      // before the server counts it as done (Bun 1.4 on Linux does, 1.3 on
-      // macOS completes it and the proxy refuses after).
-      open() {
-        connections++;
-      },
-      handshake() {
-        handshakes++;
-      },
-      data(socket, chunk) {
-        received.push(new TextDecoder().decode(chunk));
-        socket.write("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
-        socket.end();
-      },
-    },
-  });
-  return { port: listener.port, received, handshakes: () => handshakes, connections: () => connections, stop: () => listener.stop(true) };
 }
 
 /** A resolver that knows only the names a test gives it. */
@@ -227,13 +152,10 @@ export async function lateReader(port: number) {
 /** An audit that only remembers what it was told. */
 export function recordingAudit() {
   const denied: { target: string | null; destination: string | null; reason: string; account?: string | null }[] = [];
-  const used: { slug: string; connector: string; status: number | null }[] = [];
   return {
     denied,
-    used,
     audit: {
       denied: (entry: (typeof denied)[number]) => void denied.push(entry),
-      used: (slug: string, connector: string, status: number | null) => void used.push({ slug, connector, status }),
       recent: () => [],
     },
   };

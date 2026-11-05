@@ -52,7 +52,7 @@ export function site(partial: Partial<Site> = {}): Site {
     bytes: 22 * 1024 * 1024,
     deployed: null,
     publicDir: null,
-    network: { outbound: false, egress: [], connectors: [] },
+    network: { outbound: false, egress: [] },
     links: [],
     secrets: [],
     ...partial,

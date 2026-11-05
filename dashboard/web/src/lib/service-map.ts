@@ -27,11 +27,10 @@ export type NodeKind =
   | "scheduled"
   | "database"
   | "egress"
-  | "connectors"
   | "internet"
 
 export type MapNode = {
-  /** `visitors`, `files`, `outside`, `egress`, `connectors`, `internet`, or a service's unit. */
+  /** `visitors`, `files`, `outside`, `egress`, `internet`, or a service's unit. */
   id: string
   kind: NodeKind
   /** The service it stands for, for a service's node. */
@@ -84,11 +83,10 @@ const KIND_RANK: Record<NodeKind, number> = {
   worker: 5,
   scheduled: 6,
   egress: 7,
-  connectors: 8,
-  internet: 9,
+  internet: 8,
 }
 
-const OUTBOUND = new Set(["egress", "connectors", "internet"])
+const OUTBOUND = new Set(["egress", "internet"])
 
 function edgeState(link: Pick<SiteLink, "open" | "seen">, otherwise: EdgeState): EdgeState {
   if (link.open > 0) return "open"
@@ -155,9 +153,8 @@ export function buildMap(site: Pick<Site, "headless" | "publicDir" | "services" 
   }
 
   // What leaves the machine: each way the manifest allows, or a service was seen taking.
-  const outbound: { id: "egress" | "connectors" | "internet"; allowed: boolean }[] = [
+  const outbound: { id: "egress" | "internet"; allowed: boolean }[] = [
     { id: "egress", allowed: site.network.egress.length > 0 },
-    { id: "connectors", allowed: site.network.connectors.length > 0 },
     { id: "internet", allowed: site.network.outbound },
   ]
   for (const { id, allowed } of outbound) {

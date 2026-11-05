@@ -209,8 +209,6 @@ export function fakeKit(machine: FakeMachine): FakeKit {
       machine.install(EFFECTS[name] ?? []);
       return { code: 0, output: "!! /etc/sitesolide/portal.env is missing: the service starts without its variables" };
     }
-    if (name === "deploy-egress.sh") machine.labels.delete("steward-after-egress");
-    if (name === "deploy-steward.sh" && machine.labels.has("egress-active")) machine.labels.add("steward-after-egress");
     machine.install(EFFECTS[name] ?? []);
     return { code: 0, output: "" };
   };

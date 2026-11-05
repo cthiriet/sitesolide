@@ -15,8 +15,6 @@ import { INSTALLER_TEMPLATE, type InstallerResult } from "../src/control/protoco
 import { createBackupReader } from "../src/backup/reader";
 import { addSnapshot, DATABASE_NAME, openDatabase, type Store } from "../src/backup/database";
 import { snapshotName } from "../borrowed/backups";
-import { createConnectorStore } from "../src/connectors/store";
-import { EMPTY_CONNECTORS, putConnector, setGrant, type GrantsFile } from "../borrowed/connectors";
 
 /**
  * What a person's token creates, settled on the real stores wired as
@@ -65,8 +63,6 @@ async function wire(registry: Registry, sites: string[]) {
   for (const folder of ["state", "units", "installer", "portal-key", "secrets", "sites", "backup-state", "backup-run", ...sites.map((slug) => `sites/${slug}`)]) {
     mkdirSync(join(root, folder), { recursive: true });
   }
-  // The egress proxy's folder, as bin/deploy-egress.sh lays it: writable by root alone.
-  mkdirSync(join(root, "egress"), { mode: 0o750 });
   writeFileSync(join(root, "units", INSTALLER_TEMPLATE), "[Service]\n");
   writeFileSync(join(root, "secrets", "portal.env"), "OIDC_ISSUER=https://id.example\nOIDC_CLIENT_ID=x\nOIDC_CLIENT_SECRET=y\nOIDC_ALLOWED_DOMAINS=acme.test\n");
   writeFileSync(join(root, "state", "access.json"), encodeRegistry(registry), { mode: 0o600 });
@@ -126,7 +122,6 @@ async function wire(registry: Registry, sites: string[]) {
   });
   // What a removed project may leave under its name, read as dashboard/steward.ts reads it.
   const backups = createBackupReader({ sitesDir: join(root, "sites"), stateFolder: join(root, "backup-state"), runFolder: join(root, "backup-run"), unitsFolder: join(root, "units") });
-  const connectors = createConnectorStore({ folder: join(root, "egress"), owners: null });
   const real = createControlSystem({
     stateFolder: join(root, "state"),
     sitesDir: join(root, "sites"),
@@ -135,7 +130,6 @@ async function wire(registry: Registry, sites: string[]) {
     systemctl: "/bin/false",
     journalctl: "/bin/false",
     backups,
-    connectors,
   });
   control = createControlSteward(
     {
@@ -224,24 +218,13 @@ async function wire(registry: Registry, sites: string[]) {
       db.close();
     }
   };
-  /** The connector `chat` granted to `slug` from the Connectors page, its value made for the test. */
-  const grantChat = (slug: string) => {
-    const stamp = new Date(clock.now).toISOString();
-    const reading = connectors.read();
-    const grants: GrantsFile = reading.kind === "managed" ? reading.grants : { version: 1, updatedAt: null, updatedBy: null, grants: [] };
-    const put = putConnector(EMPTY_CONNECTORS, { name: "chat", baseUrl: "https://chat.test-zone.invalid/api", header: "Authorization", value: "Bearer leftover-test-value-0123456789" }, stamp, "owner");
-    if ("error" in put) throw new Error(put.error);
-    const granted = setGrant(grants, put.file, slug, "chat", true, stamp, "owner");
-    if ("error" in granted) throw new Error(granted.error);
-    connectors.write(put.file, granted.file);
-  };
   /** Nothing of a deployment started: no request for the installer, no creation noted, no name recorded. */
   const nothingStarted = (slug: string) => {
     expect(existsSync(join(root, "state", "installs", `${slug}.json`))).toBe(false);
     expect(creations()).toEqual([]);
     expect(team().owners[slug]).toBeUndefined();
   };
-  return { root, clock, holdActive, active, journal, store, access, members, control: handler, post, mint, deploy, preflight, request, result, forget, ownerGrant, entries, team, creations, snapshot, grantChat, nothingStarted };
+  return { root, clock, holdActive, active, journal, store, access, members, control: handler, post, mint, deploy, preflight, request, result, forget, ownerGrant, entries, team, creations, snapshot, nothingStarted };
 }
 
 const creates = (bench: Wired) => bench.journal.filter((event) => event.operation === "project.create" && event.result === "ok");
@@ -670,14 +653,13 @@ describe("undone creations give their names back", () => {
 
 describe("a name a removed project left things under is never a token's creation", () => {
   /**
-   * The owner's shop, backed up or lent a connector, then `sitesolide remove
-   * shop`: its folder gone, its name released for any token to create again.
-   * What stays under the name is what that new project would be handed, its
-   * creator made its Admin: the snapshots its Backups section lists and its
-   * restore accepts, its predecessor's data then in its own folder; the
-   * grant the egress proxy reads by slug, the company's credential lent to
-   * its code. Dave holds the create right, and mints his token after the
-   * removal, as anyone with that right may.
+   * The owner's shop, backed up, then `sitesolide remove shop`: its folder
+   * gone, its name released for any token to create again. What stays under
+   * the name is what that new project would be handed, its creator made its
+   * Admin: the snapshots its Backups section lists and its restore accepts,
+   * its predecessor's data then in its own folder. Dave holds the create
+   * right, and mints his token after the removal, as anyone with that right
+   * may.
    */
   async function removed(leave: (bench: Wired) => void) {
     const bench = await wire(registryWith([], [DAVE]), ["shop"]);
@@ -688,9 +670,9 @@ describe("a name a removed project left things under is never a token's creation
     return { bench, dave };
   }
 
-  const LEFT_BOTH =
-    "the machine still keeps 2 backup snapshots and 1 connector grant of a project once named shop, which a project created under that name would be handed: no token creates it. " +
-    "Pick another slug, or ask the owner of the machine, who may deploy shop themselves over SSH, or withdraw the grant on the dashboard's Connectors page and forget the snapshots first";
+  const LEFT =
+    "the machine still keeps 2 backup snapshots of a project once named shop, which a project created under that name would be handed: no token creates it. " +
+    "Pick another slug, or ask the owner of the machine, who may deploy shop themselves over SSH, or forget the snapshots first";
 
   for (const store of ["local", "offsite"] as const) {
     test(`its snapshots in ${store === "local" ? "the server's repository" : "the bucket alone"}: Dave's creation of shop refused, before the archive and at the deployment, nothing started`, async () => {
@@ -705,37 +687,34 @@ describe("a name a removed project left things under is never a token's creation
     });
   }
 
-  test("a connector still granted to it: Dave's creation refused, and the owner's own token's too, nothing started", async () => {
-    const { bench, dave } = await removed((b) => b.grantChat("shop"));
+  test("whoever holds the token: Dave's creation refused, and the owner's own token's too, nothing started", async () => {
+    const { bench, dave } = await removed((b) => b.snapshot("shop"));
     const deployed = await refusal(await bench.deploy(dave.secret, "a2a2a2a2a2a2a2a2a2a2a2a2", "shop"));
     expect(deployed.status).toBe(403);
-    expect(deployed.message).toContain("1 connector grant of a project once named shop");
-    // Whoever holds it: the grant would be lent to any token's project.
+    expect(deployed.message).toContain("1 backup snapshot of a project once named shop");
+    // The snapshots would be restored into any token's project.
     const ci = await bench.mint("owner", true, ["shop"]);
     expect((await bench.deploy(ci.secret, "a3a3a3a3a3a3a3a3a3a3a3a3", "shop")).status).toBe(403);
     bench.nothingStarted("shop");
   });
 
-  test("the refusal names what is left and what the owner may do, never the connector, its value nor the data", async () => {
+  test("the refusal names what is left and what the owner may do, never a snapshot nor the data", async () => {
     const { bench, dave } = await removed((b) => {
       b.snapshot("shop");
       b.clock.now += HOUR;
       b.snapshot("shop");
       b.snapshot("shop", "offsite");
-      b.grantChat("shop");
     });
     const deployed = await bench.deploy(dave.secret, "a4a4a4a4a4a4a4a4a4a4a4a4", "shop");
     const text = await deployed.text();
-    expect({ status: deployed.status, body: JSON.parse(text) }).toEqual({ status: 403, body: { error: "reserved", message: LEFT_BOTH } });
-    expect(text).not.toContain("chat");
-    expect(text).not.toContain("leftover-test-value");
+    expect({ status: deployed.status, body: JSON.parse(text) }).toEqual({ status: 403, body: { error: "reserved", message: LEFT } });
+    expect(text).not.toContain("5a5a5a5a");
   });
 
-  test("a project still on the machine is deployed again, whatever its snapshots and grants", async () => {
+  test("a project still on the machine is deployed again, whatever its snapshots", async () => {
     const bench = await wire(registryWith([["shop", DAVE, "developer"]], [DAVE]), ["shop"]);
     bench.snapshot("shop");
     bench.snapshot("shop", "offsite");
-    bench.grantChat("shop");
     const dave = await bench.mint(DAVE, true, ["shop"]);
     expect(await (await bench.preflight(dave.secret, "shop")).json()).toMatchObject({ creating: false });
     const D = "b1b1b1b1b1b1b1b1b1b1b1b1";
@@ -743,11 +722,10 @@ describe("a name a removed project left things under is never a token's creation
     expect(bench.request("shop")).toMatchObject({ deployment: D, creating: false });
   });
 
-  test("a name nothing was left under is created as before, another project's snapshots and grants beside it", async () => {
+  test("a name nothing was left under is created as before, another project's snapshots beside it", async () => {
     const bench = await wire(registryWith([["blog", ERIN, "admin"]], [DAVE]), ["blog"]);
     bench.snapshot("blog");
     bench.snapshot("blog", "offsite");
-    bench.grantChat("blog");
     const dave = await bench.mint(DAVE, true);
     expect(await (await bench.preflight(dave.secret, "shop")).json()).toMatchObject({ creating: true });
     const D = "b2b2b2b2b2b2b2b2b2b2b2b2";
@@ -756,7 +734,7 @@ describe("a name a removed project left things under is never a token's creation
     expect(bench.team().owners).toEqual({ shop: dave.token.id });
   });
 
-  test("an index or grants that do not read are never taken for nothing left: a creation refused, a project on the machine deployed", async () => {
+  test("an index that does not read is never taken for nothing left: a creation refused, a project on the machine deployed", async () => {
     const bench = await wire(registryWith([["blog", DAVE, "developer"]], [DAVE]), ["blog"]);
     const dave = await bench.mint(DAVE, true, ["blog"]);
     const database = join(bench.root, "backup-state", DATABASE_NAME);
@@ -766,11 +744,6 @@ describe("a name a removed project left things under is never a token's creation
     expect(unread.message).toContain("shop");
     bench.nothingStarted("shop");
     expect((await bench.deploy(dave.secret, "c2c2c2c2c2c2c2c2c2c2c2c2", "blog")).status).toBe(202);
-
-    rmSync(database);
-    writeFileSync(join(bench.root, "egress", "grants.json"), "{", { mode: 0o640 });
-    expect((await bench.deploy(dave.secret, "c3c3c3c3c3c3c3c3c3c3c3c3", "shop")).status).toBe(500);
-    bench.nothingStarted("shop");
   });
 });
 

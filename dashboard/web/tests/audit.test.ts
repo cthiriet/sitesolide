@@ -160,13 +160,23 @@ describe("a row in words", () => {
     expect(auditWords(row({ actor: "owner", action: "guest.revoke", detail: { guest: "AAAAAAAAAAAAAAA0", label: "Alice", expiresAt: null } })).summary).toBe("Removed the password access of Alice")
   })
 
-  test("the egress proxy, in the words of the Connectors page", () => {
+  test("the egress proxy: what it refused, how often, and from whom", () => {
     expect(auditWords(row({ source: "egress", actor: "system", action: "egress.denied", target: "shop", detail: { destination: "pastebin.invalid:443", reason: "not in the list", count: 3 } }))).toEqual({
       summary: "Refused pastebin.invalid:443",
       note: "not in the list, 3 times",
       tone: "attention",
     })
-    expect(auditWords(row({ source: "egress", action: "connector.grant", actor: "owner", target: "shop", detail: { connector: "chat", granted: true } })).summary).toBe("Granted chat")
+    expect(auditWords(row({ source: "egress", actor: "system", action: "egress.denied", target: null, detail: { destination: "api.example.com:443", reason: "not a project", count: 1, account: "root" } }))).toEqual({
+      summary: "Refused api.example.com:443",
+      note: "not a project, from the account root",
+      tone: "attention",
+    })
+    expect(auditWords(row({ source: "egress", actor: "system", action: "egress.denied", target: "shop", detail: { reason: "too many connections" } })).summary).toBe("Refused a connection")
+    expect(auditWords(row({ source: "egress", actor: "system", action: "egress.denied", target: null, detail: { reason: "rate limited", pairs: 10, count: 40 } }))).toEqual({
+      summary: "More refusals than the audit keeps",
+      note: "40 refusals to 10 destinations not detailed",
+      tone: "attention",
+    })
   })
 
   test("the backups: runs and restores", () => {

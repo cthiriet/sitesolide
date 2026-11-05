@@ -359,7 +359,7 @@ export function ActivityPage() {
           <>
             <p>
               Who did what on this server, from every component's own audit: deployments and tokens, sign-ins and who gets in, egress
-              refusals and connectors, backups and restores, secrets and access changes. Values never appear here.
+              refusals, backups and restores, secrets and access changes. Values never appear here.
             </p>
             <p className="text-muted-foreground">
               Newest first, fifty at a time. The same event repeated in a row folds into one line with its count; a row opens every field it

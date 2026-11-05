@@ -6,7 +6,7 @@
  * answer away.
  *
  * Every function here works around a behaviour of Bun measured on 1.3.11 and
- * held to by the tests of proxy.ts and connectors.ts: change one only with
+ * held to by the tests of proxy.ts and status.ts: change one only with
  * those tests running.
  */
 import type { Socket } from "bun";
@@ -79,7 +79,7 @@ export function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
   return joined;
 }
 
-/** A connection as both ports pipe it: a tunnel on the CONNECT port, a call on the connectors'. */
+/** A connection as both ports pipe it: a tunnel on the CONNECT port, an answer on the status port. */
 export type Piped = Member & {
   phase: "head" | "deciding" | "open" | "closed";
   client: Side;

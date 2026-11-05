@@ -76,20 +76,6 @@ export type {
 export type { GenerateFormat } from "../../../borrowed/store"
 
 /**
- * The shapes of the Connectors page, from the same contract as the steward and
- * the service, `import type` alone like the secrets': a connector's value is
- * never part of them.
- */
-export type {
-  ConnectorView,
-  ConnectorsView,
-  DashboardConnectorsResponse,
-  ConnectorsActivityResponse,
-  EgressAuditRow,
-  EgressStatus,
-} from "../../../src/connectors/protocol"
-
-/**
  * The control API's shapes, for the Tokens page: the tokens as the steward shows
  * them, and what they may do. `import type` as above: the rules of who may
  * deploy what stay with the steward and the installer.

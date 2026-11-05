@@ -1,24 +1,17 @@
 # egress
 
-What an app may reach outside the machine, and the credentials it may use
-without ever holding them.
+What an app may reach outside the machine.
 
 An app's network used to be all or nothing: `"network": "localhost"`, which
 cuts everything but the loopback, DNS included, or `"network": "outbound"`,
 which opens the whole Internet. An app an agent wrote to post a message to a
 company chat needed the second, and with it the means to send anything
-anywhere. This component sits between the two:
+anywhere. This component sits between the two: **`egress`** in a project's
+`sitesolide.json` lists the hosts it may reach. Its unit still blocks every
+address but the loopback; its HTTP clients are pointed at this proxy, which
+lets those hosts through and refuses the rest.
 
-- **`egress`** in a project's `sitesolide.json` lists the hosts it may reach.
-  Its unit still blocks every address but the loopback; its HTTP clients are
-  pointed at this proxy, which lets those hosts through and refuses the rest.
-- **`connectors`** names credentials an administrator defined on the machine,
-  `slack`, `github`. The app calls the proxy in plain HTTP on the loopback, and
-  the proxy forwards over HTTPS with the credential added. The app's code, its
-  repository and its environment never contain it. The manifest only asks: a
-  grant made from the dashboard is what allows.
-
-Both are opt-in, see [Deployment](#deployment). The keys are described in
+It is opt-in, see [Deployment](#deployment). The key is described in
 [docs/manifest.md](../docs/manifest.md#egress).
 
 ## How a connection goes
@@ -35,29 +28,13 @@ egress proxy                  sitesolide-egress, server.ts
    `-- connects to an address it judged, answers 200, then pipes the bytes
 ```
 
-A connector takes the second port:
-
-```
-service of shop
-   |  http://127.0.0.1:3129/connectors/slack/chat.postMessage
-   v
-egress proxy
-   |-- /proc/net/tcp                       who is calling        -> shop
-   |-- /etc/sitesolide-egress/connectors.json   does slack exist?
-   |-- /srv/sites/shop/sitesolide.json     does shop ask for slack?
-   |-- /etc/sitesolide-egress/grants.json  did the dashboard grant slack to shop?
-   |-- resolves slack.com, judges every address
-   `-- https://<judged address>/api/chat.postMessage, SNI and certificate for slack.com,
-       Authorization set from the file, the app's own credential headers removed
-```
-
 **Two ports**, 3128 and 3129, outside the blocks the loopback rule closes,
 3000 to 3099 and 21000 to 29999 (see
 [concepts](../docs/concepts.md#the-loopback-rule)): inside one, the projects
-could not reach the proxy at all. On 3128 the proxy pipes bytes it
-never reads ([src/proxy.ts](src/proxy.ts)); on 3129 it reads every request and
-every answer to rewrite them ([src/connectors.ts](src/connectors.ts)), and two
-ports keep a tunnel from ever being read as a connector call. Both are raw
+could not reach the proxy at all. On 3128 the proxy pipes bytes it never reads
+([src/proxy.ts](src/proxy.ts)); on 3129 it answers the dashboard's two
+read-only routes and nothing else ([src/status.ts](src/status.ts)), and two
+ports keep a tunnel from ever being read as anything else. Both are raw
 `Bun.listen` listeners counted against one admission
 ([src/admission.ts](src/admission.ts)): one count of connections per project
 and for the whole proxy, one budget for the bytes waiting for a slow end,
@@ -67,10 +44,9 @@ is the process's.
 **Nobody else listens on them.** Outside the range, the loopback rule no
 longer keeps a project off them, and it judges who connects, never who
 listens: a project waiting on 3128 while the proxy restarted would have
-received every other project's outgoing calls, and a connector's credential
-with them. Every generated unit refuses them to its service
-(`SocketBindDeny=3128-3129`, bin/cli/unit.ts), from each project's first
-deployment with that generator.
+received every other project's outgoing calls. Every generated unit refuses
+them to its service (`SocketBindDeny=3128-3129`, bin/cli/unit.ts), from each
+project's first deployment with that generator.
 
 **Plain HTTP** in absolute form, what `HTTP_PROXY` produces, goes through the
 same checks; the head is rewritten for the origin with `Connection: close`,
@@ -117,76 +93,18 @@ closed, so the gap shows at the first call.
 | Node's built-in `fetch` | **no**, by default: pass a proxy agent, or check whether your Node version honours `NODE_USE_ENV_PROXY=1` |
 
 `NO_PROXY` covers `localhost`, `127.0.0.1` and `::1`: a project's services call
-each other there, and the connectors are there too.
-
-## Connectors
-
-An administrator defines a connector on the dashboard's **Connectors** page:
-a name, a base address (`https://slack.com/api`), a header name
-(`Authorization`) and the header's whole value (`Bearer xoxb-...`). The value is
-write-only: it can be replaced, never read back, like a private key in the
-Secrets section. A project gets a connector when **both** its manifest lists it
-under `connectors` and the page grants it to that project:
-
-- the manifest alone is written by whoever wrote the app, an agent perhaps,
-  and must not be able to grant itself a company's credential;
-- the grant alone would lend the credential to code that never asked for it,
-  and to the next project deployed under that slug: no token creates a
-  project under a slug a grant still names (`reserved`, see
-  [dashboard/README.md](../dashboard/README.md#what-a-tokens-project-may-not-do)).
-
-The app calls `$SITESOLIDE_CONNECTORS/<name>/<path>`, which the unit sets to
-`http://127.0.0.1:3129/connectors`. The proxy keeps every request under the
-connector's base path, removes the credential headers the app sent
-(`Authorization`, `Cookie`, `X-Api-Key` and the connector's own header among
-them) and the headers that would describe the machine, sets the connector's
-header, and streams the answer back.
-
-**One call per connection, read as it streams.** The proxy speaks HTTP/1.1
-itself on both sides, [src/http1.ts](src/http1.ts), rather than through
-`Bun.serve` and `fetch`, which held whatever they were given (see
-[Threat model](#threat-model)). The answer says `Connection: close`, and so
-does the request sent upstream: every call opens a TLS connection of its own,
-a handshake the pooled connections of `fetch` used to save. A request whose
-body could be read two ways, a `Content-Length` beside a `Transfer-Encoding`,
-a chunk size ended by a bare line feed, is refused; a chunked body goes up in
-chunks of the proxy's own, one per read of the data it read, and nothing
-after the body is passed on, so that no second request reaches the upstream
-behind the first, outside the connector's path. An answer goes back as the
-upstream framed it, compressed if it was: the app's client decodes it, and the
-proxy never holds an answer many times larger than what the upstream sent.
-`Expect: 100-continue` is answered by the proxy once the upstream is
-connected, interim answers such as `103` are dropped, and HTTP/1.0 is refused
-with a 505. `TRACE`, whose answer echoes the request and the credential the
-proxy added to it, is refused with a 405, as are `TRACK` and `CONNECT`; a
-`GET` or a `HEAD` goes up without a body, whatever the app sent, as `fetch`
-sent it. A header value passes byte for byte, bytes past ASCII included, both
-ways.
-
-The two files live in `/etc/sitesolide-egress/`, `root:sitesolide-egress 0640`
-in a `0750 root:sitesolide-egress` folder: the proxy reads them and can neither
-rewrite them nor change their mode, and no other account opens them. The
-steward writes them, unlocked like a secret, see
-[dashboard/README.md](../dashboard/README.md#connectors). Their format and every
-rule on them live in [bin/cli/connectors.ts](../bin/cli/connectors.ts), which
-both the steward and the proxy embed.
-
-**A connector's host is judged like any egress**: it must resolve to public
-addresses. A company system on a private network cannot be a connector yet:
-allowing it would take one switch that opens whatever private address an
-administrator types, and that switch deserves its own design.
+each other there.
 
 ## When a change applies
 
-At the next connection. Each request costs one `stat` per file it needs, the
-caller's manifest and the two connectors files, and a file is parsed again
-only when it changed: an allowlist deployed a second ago, or a grant withdrawn
-from the dashboard, applies to the very next call. No timer, and no root
-process copying anything for the proxy: the manifests are `0644` in `0755`
-folders, deposited by `deploy`, readable by the proxy and not writable by the
+At the next connection. Each request costs one `stat` of the caller's
+manifest, which is parsed again only when it changed: an allowlist deployed a
+second ago applies to the very next call. No timer, and no root process
+copying anything for the proxy: the manifests are `0644` in `0755` folders,
+deposited by `deploy`, readable by the proxy and not writable by the
 project's own service.
 
-At runtime the proxy reads the two keys alone, not the whole manifest judged
+At runtime the proxy reads `egress` alone, not the whole manifest judged
 again: a rule added to another key later must not cut a project off until the
 proxy is rebuilt. An entry that does not read is skipped, which narrows and
 never widens.
@@ -195,24 +113,15 @@ never widens.
 
 The component's own table, `audit`, in `/var/lib/sitesolide-egress/egress.db`,
 in the shape every component shares (`at`, `actor`, `action`, `target`,
-`detail`). It never holds a credential's value.
+`detail`). It never holds a header's value.
 
 | Action | Actor | Target | When |
 |---|---|---|---|
 | `egress.denied` | `system` | the project, or null when the caller is not one | counted per project and destination, one row a minute per pair with its count, at most 50 pairs a minute, the rest folded into one row |
-| `connector.use` | `system` | the project | counted per project and connector, one row a minute with the count, the failures and the statuses by class |
-| `connector.update` | the author the file names, `owner` from the dashboard | the connector | created, updated (which fields, whether the value was replaced), removed |
-| `connector.grant` | the same | the project | `{ connector, granted }` |
 
-The last two are recorded when the proxy sees the files change, against the
-last state it recorded (the `seen` table), so a change made by hand on the
-machine shows too, as `system` when the file names nobody. While a file does
-not read, nothing is lent from it and nothing is recorded, so that a broken
-file never reads as every connector removed. Rows are kept 90 days.
-
-The dashboard reads the table through the connectors port, `GET /audit` and
-`GET /status`, which answer the `site-dashboard` account alone, identified like
-any caller.
+Rows are kept 90 days. The dashboard reads the table through the status
+port, `GET /audit` and `GET /status`, which answer the `site-dashboard`
+account alone, identified like any caller.
 
 ## Threat model
 
@@ -241,42 +150,18 @@ any caller.
   setting it on an interface (AWS, GCP) leaves it out of that list, and a
   connection to it then leaves the machine and comes back through the
   provider's firewall like anyone else's.
-- A connector's credential handed to whoever answers for its host in DNS.
-  The proxy connects to the address it judged and checks the certificate
-  against the connector's host name before it writes a byte of the request:
-  a valid certificate for any other name is refused, and the credential never
-  leaves. Bun 1.3 checks the chain and reports it when the handshake ends,
-  and checks no name at all, measured: the proxy checks the name there, with
-  `node:tls`'s `checkServerIdentity` on the certificate presented, and writes
-  the request only once both hold. The tests prove it, with an authority of
-  their own signing a certificate for another name.
 - A project passing itself off as another: the uid comes from the kernel.
 - A project answering in the proxy's place: its unit refuses it 3128 and 3129,
   so it cannot wait there for the proxy to restart.
-- A connector's request body past its bound, whether it announces its length
-  or comes in chunks, which carry none: it is counted as it streams, and the
-  call refused 413 past 10 MiB.
-- An answer read for nobody: a call whose app hangs up closes its upstream
-  connection, which would otherwise be read to its end, an endless stream of
-  events among them, into the memory every project's egress shares.
 - One project taking the proxy down for every other, by either port. Its
   connections are counted from the moment the kernel names it, before any
   head, both ports together, and refused past 128; the proxy's past 1024.
-  Every byte waiting for a slow end, in a tunnel, in a connector's answer to
-  an app that reads slowly, in a connector's body to an upstream that does,
-  counts against the project's budget and the proxy's: past one, the
-  connections it covers stop reading and a new connector call is refused 503,
-  until half has drained. A connector call keeps its place among its
-  project's 32 until the last byte of its answer, not only until its headers.
-  All three were measured open while the connectors ran on `Bun.serve` and
-  `fetch`: 3000 idle connections from one caller held, after which another
-  project's CONNECT went unanswered once descriptors ran short; one answer of
-  300 MiB read slowly that added 1.6 GiB to the proxy; 32 bodies of 10 MiB to
-  a slow upstream, past the unit's 256 MiB.
-- A second request smuggled behind a connector call, outside the connector's
-  path: see [Connectors](#connectors).
-- A manifest granting itself a credential; a credential sitting in a
-  repository, an environment file or the app's memory.
+  Every byte waiting for a slow end, in a tunnel or in an answer of the status
+  port, counts against the project's budget and the proxy's: past one, the
+  connections it covers stop reading until half has drained. Measured open
+  while the second port ran on `Bun.serve`: 3000 idle connections from one
+  caller held, after which another project's CONNECT went unanswered once
+  descriptors ran short.
 
 **What it does not stop.**
 
@@ -291,29 +176,19 @@ any caller.
 - **A wildcard over a domain where anyone gets a subdomain**: `*.github.io`,
   `*.herokuapp.com`, a bucket host. That entry is an open door. Validation
   refuses `*.com` but cannot know every public suffix: `*.co.uk` passes.
-- **What the credential allows.** A project granted `github` can do anything
-  that token can; scope it at the provider. An upstream that echoes request
-  headers, a debugging endpoint or a verbose error page, hands the credential
-  back to the app: the proxy cannot tell an echo from data.
 - **A few projects slowing every other.** Past 32 MiB waiting in the whole
-  proxy, no tunnel and no connector call is read, and no new call accepted,
-  until half has drained: several projects each holding their 8 MiB of unread
-  bytes slow down everyone's. Eight projects holding their 128 connections
-  fill the proxy's 1024, and eight holding their 32 connector calls fill its
-  256. That is the trade made against the proxy being killed for memory or
-  for descriptors, which would cut them all.
-- **The proxy itself.** It holds every connector's credential and reaches
-  every listed host. It runs as its own account, with no capability, a
-  read-only system, the secrets and Caddy hidden; a compromise yields those
-  credentials and that reach, nothing of `/etc/sitesolide`.
+  proxy, no tunnel is read until half has drained: several projects each
+  holding their 8 MiB of unread bytes slow down everyone's. Eight projects
+  holding their 128 connections fill the proxy's 1024. That is the trade made
+  against the proxy being killed for memory or for descriptors, which would
+  cut them all.
+- **The proxy itself.** It reaches every listed host. It runs as its own
+  account, with no capability, a read-only system, the secrets and Caddy
+  hidden; a compromise yields that reach, nothing of `/etc/sitesolide`.
 - **Whoever deploys.** `deploy` writes the manifest, so the deployment account
-  decides each project's list; grants need the dashboard's password.
+  decides each project's list.
 - **`network: outbound`**, which this does not restrict at all, and which the
   manifest refuses next to `egress`.
-- **A removed project's grants**, which follow the slug: the page flags a grant
-  whose project is gone. No token creates a project under that slug while the
-  grant stands; the owner's own deployment over SSH may, and it is then lent
-  the credential. Withdraw it before the slug is reused.
 - **Root**, on the machine.
 
 ## Limits
@@ -322,25 +197,20 @@ any caller.
 |---|---|
 | Open connections, all projects, both ports together | 1024, then 503 |
 | Open connections per project, both ports together, counted once the kernel names the caller, before its head | 128, then 503 |
-| Request head, on either port; a connector's answer head | 16 KiB, 10 s to arrive; an answer head past it is a 502 |
-| Idle tunnel or connector call | closed after 10 min with no byte delivered either way; a byte sent to a side already gone does not count |
-| Connection (for a connector, its TLS handshake included), resolution | 10 s, 5 s; an attempt given up on, past its delay or with its call, is closed at once |
-| Bytes waiting for one side of a tunnel or a call | 64 KiB, then the other side is no longer read |
-| Bytes waiting in all of one project's connections, both ports | 8 MiB, then none of them is read, and no new connector call accepted (503), until half has drained |
-| Bytes waiting in the whole proxy, both ports | 32 MiB, then no connection is read, and no new connector call accepted (503), until half has drained |
-| Bytes sent before a tunnel opens, or before a connector call is judged | 2 MiB per connection, then 400 |
+| Request head, on either port | 16 KiB, 10 s to arrive |
+| Idle tunnel, or an answer of the status port never read | closed after 10 min with no byte delivered either way; a byte sent to a side already gone does not count |
+| Connection, resolution | 10 s, 5 s; an address that answers past its delay is closed at once |
+| Bytes waiting for one side of a tunnel | 64 KiB, then the other side is no longer read |
+| Bytes waiting in all of one project's connections, both ports | 8 MiB, then none of them is read until half has drained |
+| Bytes waiting in the whole proxy, both ports | 32 MiB, then no connection is read until half has drained |
+| Bytes sent before a tunnel opens | 2 MiB per connection, then 400 |
 | A refused connection, once answered | read and dropped until the client closes, 1 s and 64 KiB at most, then cut; 1024 at a time per port, then closed at once |
-| Connector request body | 10 MiB, announced or counted as it streams, a body in chunks included: then 413, `body too large` in the audit; it goes up under the byte budgets above, never held whole |
-| Connector calls under way, from their judgement to their answer's last byte | 32 per project, 256 for the proxy, then 503 |
-| Connector answer head | 30 s from the first connection attempt, then 504; the body then streams as long as it needs, and stops when the app hangs up, the upstream connection closed |
 | Refused pairs held between two audit writes | 10 000, the rest only counted |
 
 **Memory.** The unit gives the proxy 256 MiB, and the byte limits above keep
-what it holds for slow readers to about 100 MiB in the worst case, for every
+what it holds for slow readers under 100 MiB in the worst case, for every
 project and both ports together: the arithmetic is next to the constants, in
-[src/proxy.ts](src/proxy.ts). A connector call also holds a TLS connection,
-whose buffers no byte budget counts: 28 KiB each with the system's
-authorities, measured on Bun 1.3.11, 7 MiB for the 256 calls the proxy allows. The mark of one direction alone could not: a
+[src/proxy.ts](src/proxy.ts). The mark of one direction alone could not: a
 pause lands only once Bun has drained the kernel's receive buffer, up to
 6.5 MiB a direction, which is why each project's bytes and the proxy's are
 counted as well. A paused socket must also stay paused: Bun 1.3 starts
@@ -362,9 +232,9 @@ closed too; see `linger()` in [src/proxy.ts](src/proxy.ts).
 ## Deployment
 
 Opt-in. Nothing on the machine changes until these steps, and no project's
-unit changes until that project declares `egress` or `connectors` and is
-deployed again. `deploy` refuses such a project, before pushing anything, on a
-machine where the proxy does not run.
+unit changes until that project declares `egress` and is deployed again.
+`deploy` refuses such a project, before pushing anything, on a machine where
+the proxy does not run.
 
 The commands are the author's to run, in this order.
 
@@ -382,8 +252,7 @@ The commands are the author's to run, in this order.
    bin/deploy-egress.sh
    ```
 
-   It builds `egress.js`, creates the `sitesolide-egress` account and
-   `/etc/sitesolide-egress` (`0750 root:sitesolide-egress`) if missing,
+   It builds `egress.js`, creates the `sitesolide-egress` account if missing,
    installs the file and the unit, enables and starts it. It then checks: the
    installed file is the one built, the service listens on 127.0.0.1:3128 and
    :3129, `site-dashboard` gets 200 on `/status` (the proof that the proxy
@@ -403,36 +272,22 @@ The commands are the author's to run, in this order.
    is refused with a 503 that says so until they are: the unit's
    `RestrictAddressFamilies` and `SystemCallFilter` are where to look.
 
-3. **Update the steward**, which writes the connectors files:
-
-   ```bash
-   bin/deploy-steward.sh
-   ```
-
-   Its unit gains `ReadWritePaths=-/etc/sitesolide-egress`. Then deploy the
-   dashboard, for the Connectors page: `cd dashboard && sitesolide deploy`.
-   Either order works: a dashboard ahead of its steward says the steward does
-   not know connectors yet; a steward ahead of its dashboard serves routes
-   nobody calls.
-
-4. **Move a project**: add `egress` (and drop `"network": "outbound"` if it
-   had it) or `connectors` to its manifest, `sitesolide deploy`. Check its
+3. **Move a project**: add `egress` to its manifest (and drop
+   `"network": "outbound"` if it had it), `sitesolide deploy`. Check its
    journal for refusals, which name the host:
 
    ```bash
    ssh <server> "sudo journalctl -u <slug> -n 50"
    ```
 
-   and the Connectors page's activity for `egress.denied`.
+   and the dashboard's Activity for `egress.denied`.
 
 **Check after a change of the proxy's code**: `bin/deploy-egress.sh` again,
 which rebuilds, replaces and verifies. `sitesolide deploy` never updates it.
 
 | What changes | The command |
 |---|---|
-| `egress/`, `infra/egress/`, `bin/cli/egress.ts`, `bin/cli/connectors.ts` | `bin/deploy-egress.sh` |
-| `bin/cli/connectors.ts`, `dashboard/src/connectors/` (steward side) | `bin/deploy-steward.sh` |
-| the Connectors page and its relay | `cd dashboard && sitesolide deploy` |
+| `egress/`, `infra/egress/`, `bin/cli/egress.ts` | `bin/deploy-egress.sh` |
 
 **Rollback.** Move the projects back first, `"network": "outbound"` or no key,
 and deploy them: a project whose unit points at a stopped proxy reaches
@@ -444,16 +299,15 @@ ssh <server> "sudo systemctl disable --now sitesolide-egress \
   && sudo systemctl daemon-reload"
 ```
 
-`/etc/sitesolide-egress` and `/var/lib/sitesolide-egress` stay, credentials and
-audit included, for a reinstall; remove them by hand once you are sure, the
-first holding credentials to revoke at their providers.
+`/var/lib/sitesolide-egress` stays, the audit included, for a reinstall;
+remove it by hand once you are sure.
 
 ## Local development
 
 ```bash
 bun install
-DATA_DIR=/tmp/egress SITES_DIR=/tmp/egress/sites CONFIG_DIR=/tmp/egress/config \
-  PROXY_PORT=4128 CONNECTORS_PORT=4129 bun server.ts
+DATA_DIR=/tmp/egress SITES_DIR=/tmp/egress/sites \
+  PROXY_PORT=4128 STATUS_PORT=4129 bun server.ts
 ```
 
 On a workstation without `/proc/net` every caller is unknown, and refused:
@@ -468,32 +322,17 @@ bun run check   # tests, then type checking
 What is covered: host matching (wildcards, case, final dots, international
 names, ports), the classification of every special address range, IPv4-mapped,
 NAT64 and 6to4 included, the `/proc/net` parser and the identification on
-fixtures, the connectors files and their rules, the policy's re-reading, the
-audit's counting, capping and diffing, and, on real sockets with a TLS server
-of the test's own: an allowed CONNECT end to end, a refused host, a refused
-private resolution, a refused resolution to the machine's own address, read
-from interfaces the test injects, plain HTTP forwarding, large transfers in
-both directions, a slow reader stopping the proxy from reading the other side,
-both ends flooding included, a project's budget and the proxy's, the bytes
-sent before a tunnel opens capped, a refusal read by a client still sending
-its request, and the linger that follows cut by time and by bytes, a tunnel
-closed whichever end goes first,
-the per-project limit counted before any head, a connector forwarded with its
-header set and the app's removed, an ungranted or unrequested connector
-refused, a connector's host presenting a valid certificate for another name
-refused before the request is written, and one from an authority not trusted,
-an attempt whose handshake never ends closed when it is given up on, `TRACE`
-refused, a `GET`'s body never forwarded, header bytes past ASCII passed as
-they came, a chunked body past the bound refused 413 rather than held, an
-upstream let go when its caller hangs up, and the dashboard's read-only
-routes. On the connectors' port, with a raw upstream of
-the test's own: its connections counted per project and for the proxy, against
-the CONNECT port's admission too, an answer read slowly or not at all no longer
-read from the upstream, a project's budget and the proxy's refusing the next
-call, bodies to an upstream that reads nothing held to the budget, a call's
-place kept until its answer's last byte, the calls under way capped for the
-proxy, a request smuggled behind a body or a body that reads two ways refused,
-a body of one-byte chunks held to about what the budgets count,
-`Expect: 100-continue`, `HEAD`, interim answers, and an upstream that answers
-wrong. Each of those bounds was first shown failing on the `Bun.serve`
-connectors, then holding on these.
+fixtures, the policy's re-reading, the audit's counting and capping, and, on
+real sockets with a TLS server of the test's own: an allowed CONNECT end to
+end, a refused host, a refused private resolution, a refused resolution to the
+machine's own address, read from interfaces the test injects, plain HTTP
+forwarding, large transfers in both directions, a slow reader stopping the
+proxy from reading the other side, both ends flooding included, a project's
+budget and the proxy's, the bytes sent before a tunnel opens capped, a refusal
+read by a client still sending its request, and the linger that follows cut by
+time and by bytes, a tunnel closed whichever end goes first, the per-project
+limit counted before any head, and the status port: its two routes answered to
+the dashboard's account alone, an answer larger than one write delivered
+whole, a head that does not read or never ends refused, and its connections
+counted per project and for the proxy, against the CONNECT port's admission
+too.

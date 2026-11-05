@@ -133,7 +133,6 @@ const PLAYGROUND = {
   slug: "playground",
   env: { INFERENCE_URL: "http://127.0.0.1:3049", PUBLIC_URL: "https://{slug}.{zone}" },
   egress: ["api.anthropic.com"],
-  connectors: ["slack"],
   publicDir: "public",
   services: {
     platform: { start: "/usr/local/bin/bun run web.ts", port: 3047, env: { API_URL: "http://localhost:3048/v1" } },
@@ -171,7 +170,7 @@ describe("a site's map", () => {
   test("what the manifest declares, a reading older than links aside", () => {
     const site = snapshotWith(undefined);
     expect(site.publicDir).toBe("public");
-    expect(site.network).toEqual({ outbound: false, egress: ["api.anthropic.com"], connectors: ["slack"] });
+    expect(site.network).toEqual({ outbound: false, egress: ["api.anthropic.com"] });
     expect(site.services.map((service) => service.backup)).toEqual([null, null, null, "pg"]);
     expect(site.links).toEqual([
       // The service's own env, and the project's, which every service receives.
@@ -189,6 +188,7 @@ describe("a site's map", () => {
       { from: "caddy.service", port: 3048, open: 0, seen: NOW - 3_600_000 },
       { from: "playground.api.service", port: 3050, open: 5, seen: NOW },
       { from: "playground.api.service", port: 3128, open: 1, seen: NOW },
+      // The proxy's status port is the dashboard's to read: no way out.
       { from: "playground.service", port: 3129, open: 0, seen: NOW - 60_000 },
       // Another project's, and a process of no service reaching this site.
       { from: "blog.service", port: 3128, open: 2, seen: NOW },
@@ -202,7 +202,6 @@ describe("a site's map", () => {
       { from: "caddy", to: "playground.api", open: 0, seen: NOW - 3_600_000, declared: [], shared: false },
       { from: "playground.api", to: "playground.db", open: 5, seen: NOW, declared: [], shared: false },
       { from: "playground.api", to: "egress", open: 1, seen: NOW, declared: [], shared: false },
-      { from: "playground", to: "connectors", open: 0, seen: NOW - 60_000, declared: [], shared: false },
       { from: "outside", to: "playground.inference", open: 1, seen: NOW, declared: [], shared: false },
     ]);
   });

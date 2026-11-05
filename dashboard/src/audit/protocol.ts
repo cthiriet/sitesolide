@@ -28,7 +28,7 @@
  *
  * - `dashboard`: the control API's tokens and deployments, in dashboard.db;
  * - `portal`: sign-ins, sign-outs and sharing changes, in the portal's database;
- * - `egress`: refusals, connector uses and connector changes, in the proxy's;
+ * - `egress`: the connections it refused, in the proxy's;
  * - `backups`: the scheduled runs and the restores, in backup.db;
  * - `steward`: the secrets' operations and the portal doors, in its journal.
  */
@@ -47,7 +47,7 @@ export type AuditRow = {
   actor: string;
   /** Dotted: `portal.signin`, `deploy.success`, `secrets.set`. */
   action: string;
-  /** A slug, a host or a connector's name, as the component recorded it. */
+  /** A slug or a host, as the component recorded it. */
   target: string | null;
   /** The site the target names, when the snapshot knows it: the slug itself, or the site serving a host. */
   site: string | null;

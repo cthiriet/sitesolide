@@ -1,5 +1,5 @@
 import { useMemo } from "react"
-import { ChevronLeft, DatabaseBackup, Gauge, History, KeySquare, Layers, LogOut, PanelLeft, Plug, ShieldCheck, SlidersHorizontal, SquareAsterisk, UsersRound, Workflow, type LucideIcon } from "lucide-react"
+import { ChevronLeft, DatabaseBackup, Gauge, History, KeySquare, Layers, LogOut, PanelLeft, ShieldCheck, SlidersHorizontal, SquareAsterisk, UsersRound, Workflow, type LucideIcon } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -36,7 +36,6 @@ const MACHINE_ICONS: Record<MachinePage, LucideIcon> = {
   activity: History,
   people: UsersRound,
   tokens: KeySquare,
-  connectors: Plug,
   server: SlidersHorizontal,
 }
 

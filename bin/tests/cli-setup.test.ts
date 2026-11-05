@@ -155,7 +155,6 @@ describe("a blank machine", () => {
       "kit deploy-backup.sh enable",
       "kit deploy-installer.sh",
       "kit deploy-egress.sh",
-      "kit deploy-steward.sh",
     ]);
 
     // Served directly, the loopback rule is checked as it always was.

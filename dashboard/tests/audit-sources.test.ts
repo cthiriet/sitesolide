@@ -8,7 +8,7 @@ import type { ReaderResult } from "../src/audit/aggregate";
 import type { AuditResponse } from "../src/audit/protocol";
 import { AUDIT_ENTRIES } from "../src/backup/routes";
 import { localBackupSteward } from "../src/backup/client";
-import { localConnectorsSteward, localEgress } from "../src/connectors/client";
+import { localEgressAudit } from "../src/egress-audit";
 import { createControlStore } from "../src/control/store";
 import { openDatabase } from "../src/database";
 import type { SessionReader } from "../src/routes";
@@ -44,10 +44,9 @@ function dependencies(partial: Partial<AuditDependencies> = {}): AuditDependenci
   return {
     store: store(),
     portal: { audit: () => json({ events: [] }) },
-    egress: { audit: () => json({ rows: [] }) },
+    egress: { audit: () => json({ rows: [] }), installed: () => true },
     steward: { readLog: () => json({ entries: [] }) },
     backups: { readBackupAudit: () => json({ entries: [] }), readBackups: () => json({ backups: { installed: true } }) },
-    connectors: { read: () => json({ installed: true, connectors: [], grants: [] }) },
     portalDeployed: async () => true,
     ...partial,
   };
@@ -144,22 +143,34 @@ describe("the egress proxy", () => {
       audit: (limit: number, before?: number | null) => (
         asked.push([limit, before]), json({ rows: [{ id: 3, at: iso(T), actor: "system", action: "egress.denied", target: "shop", detail: '{"destination":"pastebin.invalid:443","count":2}' }] })
       ),
+      installed: () => true,
     };
     const result = await createReaders(dependencies({ egress })).egress.read([4, 0], 100);
     expect(asked).toEqual([[100, 4]]);
     expect(result.kind === "rows" && result.rows[0]!.row.detail).toEqual({ destination: "pastebin.invalid:443", count: 2 });
   });
 
-  test("down, or not installed, as the steward says", async () => {
-    expect(failure(await createReaders(dependencies({ egress: { audit: refuse } })).egress.read(null, 10))).toEqual({ state: "unavailable", message: "Can't reach the egress proxy." });
-    const absent = dependencies({ egress: { audit: refuse }, connectors: { read: () => json({ installed: false, connectors: [], grants: [] }) } });
+  test("down, or not installed, as its unit file says", async () => {
+    expect(failure(await createReaders(dependencies({ egress: { audit: refuse, installed: () => true } })).egress.read(null, 10))).toEqual({ state: "unavailable", message: "Can't reach the egress proxy." });
+    const absent = dependencies({ egress: { audit: refuse, installed: () => false } });
     expect(failure(await createReaders(absent).egress.read(null, 10))).toEqual({ state: "not-installed", message: "The egress proxy isn't installed on this server." });
-    const stewardDown = dependencies({ egress: { audit: refuse }, connectors: { read: refuse } });
-    expect(failure(await createReaders(stewardDown).egress.read(null, 10))?.state).toBe("unavailable");
+    // What cannot be told is never taken for never installed.
+    for (const installed of [() => null, () => { throw new Error("EACCES"); }]) {
+      expect(failure(await createReaders(dependencies({ egress: { audit: refuse, installed } })).egress.read(null, 10))?.state).toBe("unavailable");
+    }
+  });
+
+  test("its unit file read where systemd keeps it, missing or not", () => {
+    const present = join(root, "sitesolide-egress.service");
+    writeFileSync(present, "[Unit]\n");
+    expect(localEgressAudit("http://127.0.0.1:9", present).installed()).toBe(true);
+    expect(localEgressAudit("http://127.0.0.1:9", join(root, "absent.service")).installed()).toBe(false);
+    // A folder where the file should be is no unit.
+    expect(localEgressAudit("http://127.0.0.1:9", root).installed()).toBe(false);
   });
 
   test("its refusal is quoted", async () => {
-    const reader = createReaders(dependencies({ egress: { audit: () => json({ error: "refused", message: "only the dashboard reads this" }, 403) } })).egress;
+    const reader = createReaders(dependencies({ egress: { audit: () => json({ error: "refused", message: "only the dashboard reads this" }, 403), installed: () => true } })).egress;
     expect(failure(await reader.read(null, 10))).toEqual({ state: "unavailable", message: "The egress proxy refused the dashboard: only the dashboard reads this." });
   });
 });
@@ -341,7 +352,6 @@ describe("GET /api/audit, against a portal, an egress proxy and a steward that r
     routes: {
       "/log": { GET: () => Response.json({ entries: [{ a: T - 30_000, operation: "set", result: "ok", slug: "cms", file: "cms.env", variable: "SMTP_PASSWORD", detail: null }] }) },
       "/backups/audit": { GET: () => Response.json({ error: "not-found", message: "no such route" }, { status: 404 }) },
-      "/connectors": { GET: () => Response.json({ installed: false, connectors: [], grants: [] }) },
     },
     fetch: () => Response.json({ error: "not-found", message: "no such route" }, { status: 404 }),
   });
@@ -359,11 +369,10 @@ describe("GET /api/audit, against a portal, an egress proxy and a steward that r
     readers: createReaders({
       store: control,
       portal: localPortalAudit(`http://127.0.0.1:${portal.port}`),
-      // Nothing listens there: the proxy is not installed, as the steward says.
-      egress: localEgress("http://127.0.0.1:9", 1_000),
+      // Nothing listens there, and no unit: the proxy is not installed.
+      egress: localEgressAudit("http://127.0.0.1:9", join(root, "no-such.service"), 1_000),
       steward: localSteward(socket),
       backups: localBackupSteward(socket),
-      connectors: localConnectorsSteward(socket),
       portalDeployed: async () => true,
     }),
     stateFile,

@@ -122,7 +122,7 @@ more.
 | The installer | root, one-shot | deploy one project for a token, the archive read by the project's own account |
 | The collector | root, on a timer | read the machine, drop a snapshot where the dashboard can read it |
 | The monitor | `sitesolide-monitor`, on a timer | read what any account reads, ask Caddy for every site over HTTPS, alert |
-| The egress proxy | `sitesolide-egress` | let each project reach the hosts its manifest lists, lend it the connectors granted to it |
+| The egress proxy | `sitesolide-egress` | let each project reach the hosts its manifest lists, and answer the dashboard its audit |
 | The backup run | root, on a timer | list the projects, store the archives their own accounts hand it, prune, upload |
 | A backup copy or extraction | `site-<slug>`, one-shot | read or write that project's data, nothing else, no network |
 | A service's backup command | `site-<slug>`, one-shot | in its service's walls, with its project's variables and files and the loopback alone, leave a consistent copy of the folder its server keeps live |
@@ -327,13 +327,6 @@ through. The proxy runs as its own account and decides on three readings:
 - **where the host really points**: every address it resolves to is checked,
   and one inside the machine, a private network or the cloud's metadata
   service refuses it.
-
-**Connectors** go one step further: credentials an administrator defines in
-the dashboard, `slack`, `github`, and grants to a project. The app calls the
-proxy in plain HTTP on the loopback, and the proxy forwards over HTTPS with the
-credential added. A project gets one only when its manifest asks for it and
-the dashboard granted it: the manifest is written by whoever wrote the app, and
-must not be able to grant itself a company's credential.
 
 What it does not stop matters as much: a project can still send whatever it
 likes to a host on its own list. The list is the boundary. See
@@ -581,7 +574,7 @@ rotates by line count: a refusal stays in the journal.
 | `token.create`, `token.revoke` | dashboard | `owner` | none | a token created or revoked from the owner's *Tokens* page, its label, email and scope |
 | `token.create`, `token.revoke` | steward | a person's email, or who took their last role; `system` at the upgrade, and for the sweep | none | a person's own token created or revoked, its id and scope; one refused above their roles, with the steward's reason; the tokens of someone who no longer signs in, revoked under the owner or the Admin who took their last role above Can open; the live tokens of anyone the registry gives no rights, revoked by the sweep every 30 seconds; a token from before made a person's, once, at the upgrade |
 | `project.create` | steward | a person's email | slug | a project a person's own token created, which made them its Admin; the token in the detail |
-| `project.remove` | steward | `owner` | slug | a project `sitesolide remove` took off the machine: the name its token owned, free again for another token once the machine keeps none of its snapshots nor its connector grants; that token in the detail |
+| `project.remove` | steward | `owner` | slug | a project `sitesolide remove` took off the machine: the name its token owned, free again for another token once the machine keeps none of its snapshots; that token in the detail |
 | `deploy.start` | dashboard | `token:<id>` | slug | a token's deployment handed to the installer; the person's email in the `member` field, for a person's own token |
 | `deploy.success`, `deploy.failure` | dashboard | `token:<id>` | slug | how it ended, the error's code for a failure; the `member` field for a person's own token |
 | `access.add`, `access.change`, `access.remove` | steward | `owner`, an Admin's email, or `token:<id>` | slug, the person's email in the detail; the email alone for someone taken off every project | someone given access, their role changed, or their access taken away, as "who: Role", with the expiry of password access; a change refused, with the steward's reason, a minute holding twenty refusals at most, a token's bounded instead by its own 60 an hour |
@@ -597,9 +590,6 @@ rotates by line count: a refusal stays in the journal.
 | `guest.create`, `guest.revoke` | portal | `owner` or an email | host | written before the access registry only: a password access given or removed, its label and expiry, never the password |
 | `sharing.update`, `guest.create`, `guest.revoke` | steward | an email | slug | written before the access registry only: a change refused before it reached the portal |
 | `egress.denied` | egress | `system` | slug, or none | connections refused, by destination and reason, counted by the minute |
-| `connector.use` | egress | `system` | slug | a connector's calls, counted by the minute, and how many failed |
-| `connector.update` | egress | `owner` | connector | a connector created, changed or removed; a replaced value is said, never shown |
-| `connector.grant` | egress | `owner` | slug | a connector granted to a site, or withdrawn |
 | `backup.run` | backups | `system` | none | an hourly run: snapshots taken and pruned, the offsite copy, the sites that failed |
 | `backup.restore` | backups | `owner` or an Admin's email | slug | a restore, its snapshot and how it ended |
 | `backup.restore` | steward | a person's email | slug | a restore refused by role before it reached the backups |
@@ -638,8 +628,8 @@ In order, and the order is the point:
    service of that name that deploy did not write? Does another project already
    declare one of its ports? For a port of the second block, has the machine
    opened it? For a project with several services, does the
-   loopback rule have room for its own ports? For a project with `egress` or
-   `connectors`, does the egress proxy run? For a project with scheduled
+   loopback rule have room for its own ports? For a project with `egress`,
+   does the egress proxy run? For a project with scheduled
    services, does systemd read each schedule as a time?
 3. Build locally.
 4. Create the system account and the directories.

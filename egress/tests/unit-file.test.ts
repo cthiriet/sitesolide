@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { EGRESS_ACCOUNT, EGRESS_CONFIG_DIR } from "../../bin/cli/connectors";
+import { EGRESS_UNIT } from "../../bin/cli/egress";
 import { forbiddenReason } from "../src/addresses";
 
 /**
@@ -13,14 +13,17 @@ const UNIT = readFileSync(join(import.meta.dir, "..", "..", "infra", "egress", "
 const DIRECTIVES = UNIT.split("\n").filter((line) => line !== "" && !line.startsWith("#"));
 const CONFIG = readFileSync(join(import.meta.dir, "..", "src", "config.ts"), "utf8");
 
+/** The proxy's account bears its unit's name. */
+const ACCOUNT = EGRESS_UNIT;
+
 function values(name: string): string[] {
   return DIRECTIVES.filter((line) => line.startsWith(`${name}=`)).map((line) => line.slice(name.length + 1));
 }
 
 describe("the egress proxy's unit", () => {
   test("runs as its own account, with no capability", () => {
-    expect(values("User")).toEqual([EGRESS_ACCOUNT]);
-    expect(values("Group")).toEqual([EGRESS_ACCOUNT]);
+    expect(values("User")).toEqual([ACCOUNT]);
+    expect(values("Group")).toEqual([ACCOUNT]);
     expect(values("CapabilityBoundingSet")).toEqual([""]);
     expect(values("NoNewPrivileges")).toEqual(["true"]);
   });
@@ -60,8 +63,6 @@ describe("the egress proxy's unit", () => {
   test("sees neither the secrets nor Caddy", () => {
     const hidden = values("InaccessiblePaths").join(" ");
     for (const path of ["/etc/sitesolide", "/etc/caddy", "/var/lib/sitesolide-steward"]) expect(hidden).toContain(`-${path}`);
-    // The connectors' folder is not hidden: it is what the proxy reads.
-    expect(hidden).not.toContain(EGRESS_CONFIG_DIR);
     expect(values("ProtectSystem")).toEqual(["strict"]);
   });
 

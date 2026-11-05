@@ -1,18 +1,17 @@
 # The egress proxy: lets each project reach the hosts its sitesolide.json lists
-# under `egress`, refuses the rest, and lends it the connectors the dashboard
-# granted it. See egress/README.md.
+# under `egress`, and refuses the rest. See egress/README.md.
 #
-# It runs as its own account, sitesolide-egress, never root: it holds the
-# connectors' credentials and talks to the outside on behalf of every project
-# that asks, and a compromise must yield that and no more. All its judgement
-# lives in egress/src/, tested without a machine.
+# It runs as its own account, sitesolide-egress, never root: it talks to the
+# outside on behalf of every project that asks, and a compromise must yield
+# that and no more. All its judgement lives in egress/src/, tested without a
+# machine.
 #
 # Placed by bin/deploy-egress.sh, never by `sitesolide deploy`: a component
 # every restricted project's traffic goes through changes only by a deliberate
 # action.
 
 [Unit]
-Description=Egress proxy: each project's listed hosts, and the connectors lent to it
+Description=Egress proxy: each project's listed hosts
 # It reads the deployed manifests: no point starting before they are mounted.
 RequiresMountsFor=/srv/sites
 After=network-online.target
@@ -27,9 +26,7 @@ Restart=always
 RestartSec=2
 
 # /var/lib/sitesolide-egress: the audit database, egress.db, its own alone.
-# StateDirectory makes it writable despite ProtectSystem=strict. The connectors
-# live in /etc/sitesolide-egress, 0750 root:sitesolide-egress, written by the
-# steward as root:sitesolide-egress 0640: read here, never written.
+# StateDirectory makes it writable despite ProtectSystem=strict.
 UMask=0077
 StateDirectory=sitesolide-egress
 StateDirectoryMode=0700
@@ -46,7 +43,6 @@ AmbientCapabilities=
 
 # The whole system read-only. What it reads, and why it may:
 #   /srv/sites/<slug>/sitesolide.json   0644 in 0755 folders, the deployed manifests
-#   /etc/sitesolide-egress/             its group's, the connectors and grants
 #   /etc/passwd                         the account of a uid
 #   /proc/net/tcp, /proc/net/tcp6       the uid of the caller's socket
 # The projects' data folders are 0750 to their own accounts and stay closed.

@@ -1,18 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
-  CONNECTORS_PORT,
   EGRESS_PROXY_PORT,
+  EGRESS_STATUS_PORT,
   egressErrors,
   egressPatterns,
   egressStateCommand,
   egressUnitLines,
   formatPattern,
-  isValidConnectorName,
   matchesEgress,
   normalizeHost,
   parseEgressEntry,
   readEgressState,
-  requestedConnectors,
   type HostPattern,
 } from "../cli/egress";
 import { CADDY_ADMIN_PORT } from "../cli/loopback";
@@ -113,29 +111,11 @@ describe("matching a destination", () => {
   });
 });
 
-describe("connector names", () => {
-  test("a short lowercase name, like a service's", () => {
-    for (const name of ["slack", "github", "postgres-readonly", "a1"]) expect(isValidConnectorName(name)).toBe(true);
-    for (const name of ["Slack", "1slack", "-slack", "slack-", "sl/ack", "sl.ack", "", "a".repeat(33), 3]) {
-      expect(isValidConnectorName(name)).toBe(false);
-    }
-  });
-
-  test("never a name every object inherits, which a lookup by name would find before it exists", () => {
-    for (const name of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"]) {
-      expect({ name, valid: isValidConnectorName(name) }).toEqual({ name, valid: false });
-    }
-    expect(validate({ ...APP, connectors: ["constructor"] })).toContainEqual("connectors: constructor is reserved, every JavaScript object already carries that name");
-    expect(requestedConnectors({ ...APP, connectors: ["constructor", "slack"] })).toEqual(["slack"]);
-  });
-});
-
 describe("the manifest's keys", () => {
-  test("an app may list hosts and ask for connectors", () => {
-    const manifest = { ...APP, egress: ["api.example.com", "*.slack.com"], connectors: ["slack"] };
+  test("an app may list hosts", () => {
+    const manifest = { ...APP, egress: ["api.example.com", "*.slack.com"] };
     expect(validate(manifest)).toEqual([]);
     expect(egressPatterns(manifest).map(formatPattern)).toEqual(["api.example.com", "*.slack.com"]);
-    expect(requestedConnectors(manifest)).toEqual(["slack"]);
   });
 
   test("egress and network outbound together are refused: the second opens everything", () => {
@@ -144,14 +124,9 @@ describe("the manifest's keys", () => {
     );
   });
 
-  test("connectors go with any network: the credential stays on the machine either way", () => {
-    expect(validate({ ...APP, connectors: ["slack"], network: "outbound" })).toEqual([]);
-  });
-
   test("a static site has nothing to reach anything with", () => {
-    const errors = validate({ slug: "notes", publicDir: "dist", egress: ["api.example.com"], connectors: ["slack"] });
+    const errors = validate({ slug: "notes", publicDir: "dist", egress: ["api.example.com"] });
     expect(errors).toContainEqual(expect.stringContaining("egress: without `start`"));
-    expect(errors).toContainEqual(expect.stringContaining("connectors: without `start`"));
   });
 
   test("refuses an empty list, a bad entry, an address and a duplicate", () => {
@@ -162,8 +137,6 @@ describe("the manifest's keys", () => {
     expect(validate({ ...APP, egress: ["API.example.com", "api.example.com."] })).toContainEqual(
       expect.stringContaining("api.example.com is listed twice"),
     );
-    expect(validate({ ...APP, connectors: ["slack", "slack"] })).toContainEqual(expect.stringContaining("slack is listed twice"));
-    expect(validate({ ...APP, connectors: ["Slack"] })).toContainEqual(expect.stringContaining('connectors: "Slack"'));
   });
 
   test("a list too long to be read is refused", () => {
@@ -177,11 +150,11 @@ describe("the manifest's keys", () => {
     );
     const services: Manifest = {
       slug: "lab",
-      connectors: ["slack"],
-      services: { web: { start: "/x", port: 3050, env: { SITESOLIDE_CONNECTORS: "x" } } },
+      egress: ["api.example.com"],
+      services: { web: { start: "/x", port: 3050, env: { NO_PROXY: "x" } } },
     };
-    expect(validate(services)).toContainEqual(expect.stringContaining("env: SITESOLIDE_CONNECTORS is set by the deployment"));
-    // Without the keys, the variable is the project's own business, as before.
+    expect(validate(services)).toContainEqual(expect.stringContaining("env: NO_PROXY is set by the deployment"));
+    // Without the key, the variable is the project's own business, as before.
     expect(validate({ ...APP, env: { HTTPS_PROXY: "http://corporate:3128" } })).toEqual([]);
   });
 
@@ -199,23 +172,22 @@ describe("the manifest's keys", () => {
   test("every variable the unit writes for the keys is one a manifest may not set", () => {
     // Read from the lines themselves, so that a variable added to the unit one
     // day cannot be forgotten in the list that guards it.
-    const written = egressUnitLines({ ...APP, egress: ["api.example.com"], connectors: ["slack"] })
+    const written = egressUnitLines({ ...APP, egress: ["api.example.com"] })
       .map((line) => /^Environment=([A-Za-z_][A-Za-z0-9_]*)=/.exec(line)?.[1])
       .filter((name): name is string => name !== undefined);
-    expect(written).toHaveLength(7);
+    expect(written).toHaveLength(6);
     for (const name of written) {
-      const errors = egressErrors({ ...APP, egress: ["api.example.com"], connectors: ["slack"], env: { [name]: "x" } }, true);
-      expect({ name, errors }).toEqual({ name, errors: [`env: ${name} is set by the deployment for egress and connectors, and cannot be redefined`] });
+      const errors = egressErrors({ ...APP, egress: ["api.example.com"], env: { [name]: "x" } }, true);
+      expect({ name, errors }).toEqual({ name, errors: [`env: ${name} is set by the deployment for egress, and cannot be redefined`] });
     }
   });
 });
 
 describe("the unit", () => {
-  test("a project without the keys gets the unit it always had", () => {
+  test("a project without the key gets the unit it always had", () => {
     const unit = generateUnit(APP, { slug: "budget", zone: "test-zone.invalid", contact: "" });
     expect(unit).not.toContain("PROXY");
     expect(unit).not.toContain("proxy");
-    expect(unit).not.toContain("SITESOLIDE_CONNECTORS");
     expect(egressUnitLines(APP)).toEqual([]);
   });
 
@@ -228,13 +200,6 @@ describe("the unit", () => {
     }
     expect(unit).toContain("Environment=NO_PROXY=localhost,127.0.0.1,::1\n");
     expect(unit).toContain("Environment=no_proxy=localhost,127.0.0.1,::1\n");
-    expect(unit).not.toContain("SITESOLIDE_CONNECTORS");
-  });
-
-  test("connectors give the address of the connectors, and no proxy", () => {
-    const unit = generateUnit({ ...APP, connectors: ["slack"] });
-    expect(unit).toContain(`Environment=SITESOLIDE_CONNECTORS=http://127.0.0.1:${CONNECTORS_PORT}/connectors\n`);
-    expect(unit).not.toContain("HTTPS_PROXY");
   });
 
   test("every service of a project gets them, the project's keys being shared", () => {
@@ -251,11 +216,11 @@ describe("the unit", () => {
 describe("the ports", () => {
   test("outside the blocks the loopback rule closes, and away from Caddy's admin API", () => {
     // Inside a block, the rule would refuse the very projects that need them.
-    for (const port of [EGRESS_PROXY_PORT, CONNECTORS_PORT]) {
+    for (const port of [EGRESS_PROXY_PORT, EGRESS_STATUS_PORT]) {
       expect(isServicePort(port)).toBe(false);
       expect(port).not.toBe(CADDY_ADMIN_PORT);
     }
-    expect(EGRESS_PROXY_PORT).not.toBe(CONNECTORS_PORT);
+    expect(EGRESS_PROXY_PORT).not.toBe(EGRESS_STATUS_PORT);
   });
 });
 

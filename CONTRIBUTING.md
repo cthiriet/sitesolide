@@ -11,7 +11,7 @@
 | `dashboard/` | The dashboard, the steward that writes secrets as root, and the gatekeeper that touches Caddy. |
 | `portal/` | The sign-in in front of restricted sites: the owner's password, password access, company accounts. Who may open which site is the steward's, in `dashboard/`. |
 | `monitor/` | Every minute, Caddy, the sites over HTTPS, units, disk, certificates and backups, and the alerts when one goes down. |
-| `egress/` | The egress proxy: the hosts each project may reach, and the credentials it is lent. |
+| `egress/` | The egress proxy: the hosts each project may reach. |
 | `docs/` | Install guide, concepts, manifest reference, commands, secrets. |
 | `examples/` | Three projects to deploy as they are: a static site, a Bun app, and a worker with a scheduled run. |
 

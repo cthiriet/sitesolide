@@ -161,7 +161,7 @@ async function mount(options: { restartsPerHour?: number; refusalsPerHour?: numb
   const access = { ...createAccessSystem({ stateFolder: state, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "", portalDataFolder: join(root, "portal-data") }, false), now: () => clock.t };
   const handler = createSteward(system, { secretsFolder: secrets, checkAccounts: false, members: { system: members, access, zone: ZONE } });
 
-  const controlReal = createControlSystem({ stateFolder: state, sitesDir: sites, unitsFolder: units, installerFolder: installer, systemctl: "/bin/false", journalctl: "/bin/false", backups: null, connectors: null });
+  const controlReal = createControlSystem({ stateFolder: state, sitesDir: sites, unitsFolder: units, installerFolder: installer, systemctl: "/bin/false", journalctl: "/bin/false", backups: null });
   const controlSystem: ControlSystem = {
     ...controlReal,
     now: () => clock.t,

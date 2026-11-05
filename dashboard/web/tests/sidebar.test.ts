@@ -99,8 +99,8 @@ describe("inline script in main.astro", async () => {
 
 describe("the machine's indicators", () => {
   test("before any data, and with no discrepancy, nothing is shown", () => {
-    expect(machineIndicators(null)).toEqual({ home: null, activity: null, people: null, tokens: null, connectors: null, server: null })
-    expect(machineIndicators([])).toEqual({ home: null, activity: null, people: null, tokens: null, connectors: null, server: null })
+    expect(machineIndicators(null)).toEqual({ home: null, activity: null, people: null, tokens: null, server: null })
+    expect(machineIndicators([])).toEqual({ home: null, activity: null, people: null, tokens: null, server: null })
   })
 
   test("the discrepancies: in error if there is one, in attention otherwise; the activity reports nothing", () => {
@@ -109,7 +109,6 @@ describe("the machine's indicators", () => {
       activity: null,
       people: null,
       tokens: null,
-      connectors: null,
       server: null,
     })
     expect(machineIndicators([discrepancy("warning")]).home).toEqual({ count: 1, tone: "attention", label: "1 issue" })

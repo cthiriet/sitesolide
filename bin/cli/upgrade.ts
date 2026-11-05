@@ -7,7 +7,7 @@
  *   caddy-unit     Caddy's drop-in            setup's own run: install, daemon-reload, restart
  *   tunnel         the Cloudflare Tunnel      setup's own run: its unit, configuration and Caddy's options
  *   backups        the backup component       bin/deploy-backup.sh install, before the steward
- *   egress         the egress proxy           bin/deploy-egress.sh, the steward restarted after it
+ *   egress         the egress proxy           bin/deploy-egress.sh
  *   steward        the steward                bin/deploy-steward.sh
  *   api            the shared service         bin/deploy-api.sh, before anything deposits the Caddyfile
  *   dashboard      the dashboard              sitesolide deploy in dashboard/
@@ -20,13 +20,12 @@
  *
  * The order is docs/upgrading.md's: the backup install before the steward,
  * whose unit opens the backups' folder only if it exists when it starts; the
- * egress proxy before the steward too, which must start again after it to
- * write the connectors' folder; the root components that only listen before
- * the dashboard, which accept the old one and the new one; the gatekeeper and
- * the installer, which embed the CLI's generators, after it; the shared
- * service before the dashboard, whose deployment is the first to deposit the
- * Caddyfile: its ask endpoint must allow every name the new Caddyfile
- * certifies on demand before Caddy asks, the bare domain since 0.14.
+ * root components that only listen before the dashboard, which accept the old
+ * one and the new one; the gatekeeper and the installer, which embed the
+ * CLI's generators, after it; the shared service before the dashboard, whose
+ * deployment is the first to deposit the Caddyfile: its ask endpoint must
+ * allow every name the new Caddyfile certifies on demand before Caddy asks,
+ * the bare domain since 0.14.
  *
  * OUT OF DATE IS MEASURED, NEVER ASSUMED. Each component is a step of
  * bin/cli/steps.ts: a check that only reads, and a run, the very script or
@@ -141,8 +140,6 @@ export type UpgradeContext = {
   childEnvironment: Record<string, string>;
   /** The components the machine carries. */
   installed: ReadonlySet<string>;
-  /** The components this run found out of date, or upgraded: one that must follow them reads it. */
-  due: Set<string>;
 };
 
 // --- fingerprints ---------------------------------------------------------------------
@@ -397,7 +394,7 @@ export function upgradeComponents(): Component[] {
       id: "egress",
       title: "egress proxy",
       installed: present("installed", `${LIB}/egress.js`),
-      plan: "bin/deploy-egress.sh, the steward restarted after it",
+      plan: "bin/deploy-egress.sh",
       check: async (context) => machineState(context, "egress", [...C["egress-proxy"], ...(await scriptFingerprints(context, "deploy-egress.sh"))]),
       run: (context) => script(context, "deploy-egress.sh"),
       inspect: (context) => journal(context, "sitesolide-egress"),
@@ -407,21 +404,12 @@ export function upgradeComponents(): Component[] {
       title: "steward",
       installed: present("installed", `${LIB}/steward.js`),
       plan: "bin/deploy-steward.sh",
-      check: async (context) => {
-        const found = await machineState(context, "steward", [
+      check: async (context) =>
+        machineState(context, "steward", [
           ...C.steward,
           ...(await scriptFingerprints(context, "deploy-steward.sh")),
-          ...(context.installed.has("egress") ? C["steward-after-egress"] : []),
           ...(context.installed.has("backups") ? [STEWARD_WRITES_BACKUPS] : []),
-        ]);
-        // A dry run runs nothing: the proxy found out of date would be
-        // redeployed first, and the steward has to start again after it.
-        if (context.options.dryRun && context.due.has("egress") && found.state !== "unreadable") {
-          const missing = found.state === "missing" ? found.missing : [];
-          if (!missing.includes("steward-after-egress")) return { state: "missing", missing: [...missing, "steward-after-egress"] };
-        }
-        return found;
-      },
+        ]),
       run: (context) => script(context, "deploy-steward.sh"),
       inspect: (context) => journal(context, "sitesolide-steward"),
     },
@@ -663,7 +651,6 @@ export async function runUpgrade(options: UpgradeOptions, deps: UpgradeDependenc
     deps,
     childEnvironment: childEnvironment(deps.environment, { server: config.server, zone: config.zone, email: config.email, contact: config.contact, folder }, options.json),
     installed,
-    due: new Set(),
   };
   const plans = new Map(components.map((component) => [component.id, component.plan]));
 
@@ -672,10 +659,7 @@ export async function runUpgrade(options: UpgradeOptions, deps: UpgradeDependenc
   const outcome = await runSteps(upgradeSteps(carried), context, {
     checkOnly: options.dryRun,
     describe: (missing) => `differs: ${missing.join(", ")}`,
-    report: (report) => {
-      if (report.status === "todo" || report.status === "ok") context.due.add(report.step);
-      out.check(withPlan(report, plans.get(report.step) ?? ""));
-    },
+    report: (report) => out.check(withPlan(report, plans.get(report.step) ?? "")),
     starting: (step) => out.say(`-> ${step.title}: ${plans.get(step.id) ?? ""}`),
   });
 

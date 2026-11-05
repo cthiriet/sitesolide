@@ -46,8 +46,7 @@ export type Scope = {
   create: boolean;
   /**
    * May deploy a manifest with `"network": "outbound"`, or with `egress`, the
-   * hosts it reaches through the egress proxy. `connectors` needs no flag: the
-   * owner grants each one on the machine.
+   * hosts it reaches through the egress proxy.
    */
   outbound: boolean;
   /** May deploy a manifest that declares a `domain`. */

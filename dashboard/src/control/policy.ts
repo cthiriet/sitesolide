@@ -19,13 +19,12 @@
  *
  * **Nor what a removed project left under its name.** `sitesolide remove`
  * releases the name for any token to create again, and its creator is made
- * Admin of what it creates; but the backups' snapshots and the connectors'
- * grants are keyed by the slug alone, and stay. The project created again
- * would list its predecessor's snapshots and restore them into its own data
- * folder, and be lent the credential the owner granted to the one removed.
- * A project's store of secrets is keyed by the slug too: one the owner laid
- * ahead of a deployment, or left by a removal stopped half way, would hand
- * its values to whatever code a token deploys under that name. So no token
+ * Admin of what it creates; but the backups' snapshots are keyed by the slug
+ * alone, and stay. The project created again would list its predecessor's
+ * snapshots and restore them into its own data folder. A project's store of
+ * secrets is keyed by the slug too: one the owner laid ahead of a deployment,
+ * or left by a removal stopped half way, would hand its values to whatever
+ * code a token deploys under that name. So no token
  * creates a name under which the machine still keeps any of them
  * (`leftoversReason`), but a store its own write made there; the owner,
  * deploying over SSH, still may.
@@ -106,14 +105,14 @@ export function decideSlug(identity: Identity, slug: unknown, machine: { exists:
 /**
  * What the machine still keeps under a name its project no longer carries:
  * the snapshots of that folder the backups' index holds, in the server's
- * repository or the bucket's, each counted once, the connector grants made
- * to that slug, and `store`, true when `/etc/sitesolide/projects/<slug>/`
- * exists, the slug is not deployed, and no write of the asking token made
- * it (src/control/claims.ts): a store the token's own write made ahead of
- * its first deployment is its own, whoever the registry names for the slug.
+ * repository or the bucket's, each counted once, and `store`, true when
+ * `/etc/sitesolide/projects/<slug>/` exists, the slug is not deployed, and
+ * no write of the asking token made it (src/control/claims.ts): a store the
+ * token's own write made ahead of its first deployment is its own, whoever
+ * the registry names for the slug.
  * Counts alone: nothing of what they hold.
  */
-export type Leftovers = { snapshots: number; grants: number; store: boolean };
+export type Leftovers = { snapshots: number; store: boolean };
 
 const counted = (count: number, what: string) => `${count} ${what}${count === 1 ? "" : "s"}`;
 
@@ -123,27 +122,21 @@ const listed = (items: string[]) => (items.length <= 1 ? items.join("") : `${ite
 /**
  * Why a token may not create this slug, after decideSlug allowed the
  * creation, or null when nothing was left under it. A project created again
- * under a removed one's name inherits both, whoever creates it: its Admin
- * restores the snapshots, the restore matching nothing but the folder and the
- * time (src/backup/restore.ts), and the egress proxy lends a grant to the
- * slug that asks (egress/src/connectors.ts, `isGranted`). Neither is
- * withdrawn by the removal, and retention never forgets a folder's newest
- * snapshot. A project the machine carries is a deployment, never a creation,
- * and is not asked.
+ * under a removed one's name inherits what was left, whoever creates it: its
+ * Admin restores the snapshots, the restore matching nothing but the folder
+ * and the time (src/backup/restore.ts), and its services read the store.
+ * Neither is withdrawn by the removal, and retention never forgets a folder's
+ * newest snapshot. A project the machine carries is a deployment, never a
+ * creation, and is not asked.
  *
- * The answer names how many of each, never a connector, a value nor a
- * snapshot's name, and what the owner may do: deploy it over SSH, which
- * stays the way to bring a removed project back, or clear what was left
- * first.
+ * The answer counts what was left, never names a value nor a snapshot, and
+ * says what the owner may do: deploy it over SSH, which stays the way to
+ * bring a removed project back, or clear what was left first.
  */
 export function leftoversReason(slug: string, left: Leftovers): string | null {
   const kept: string[] = [];
   const clear: string[] = [];
   if (left.snapshots > 0) kept.push(counted(left.snapshots, "backup snapshot"));
-  if (left.grants > 0) {
-    kept.push(counted(left.grants, "connector grant"));
-    clear.push(`withdraw the grant${left.grants === 1 ? "" : "s"} on the dashboard's Connectors page`);
-  }
   if (left.store) {
     kept.push("a secrets store");
     clear.push(`remove the store with sitesolide remove --confirm ${slug}`);
@@ -174,9 +167,7 @@ export function scopeRefusals(manifest: Manifest, scope: Scope, slug: string): s
   }
   // `egress` reaches outside hosts too, through the egress proxy: narrower
   // than `outbound`, but a way out all the same, and the hosts are the
-  // manifest's own choice. It needs the same permission. `connectors` does
-  // not: a manifest only asks for one, and nothing reaches it until the
-  // owner grants it to the project from the dashboard, on the machine.
+  // manifest's own choice. It needs the same permission.
   if (manifest.egress !== undefined && !scope.outbound) {
     refusals.push("egress: your token may not reach outside hosts; remove egress, or ask the owner of the machine to allow outbound network");
   }

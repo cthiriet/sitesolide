@@ -1106,7 +1106,7 @@ describe("the ports a service may listen on", () => {
    * A compromised app that waits for the portal's port to come free, during an
    * upgrade, answered every forward_auth with the identity of its choosing and
    * received the owner's password typed on a sign-in page; on the egress
-   * proxy's ports, every project's outgoing requests and connectors' bodies;
+   * proxy's ports, every project's outgoing requests;
    * on a neighbour's port while it restarts, that site's visitors.
    */
   const LAB: Manifest = {

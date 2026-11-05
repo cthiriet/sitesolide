@@ -503,7 +503,7 @@ export function CreateTokenDialog({
                       Sites anyone opens without signing in. Off: what it deploys asks to sign in.
                     </Choice>
                     <Choice checked={effective.outbound} disabled={!options} onChange={(next) => setScope({ ...scope, outbound: next })} title="Use outbound network">
-                      For services that call an outside API. Connectors you grant work without it.
+                      For services that call an outside API, directly or through the egress proxy.
                     </Choice>
                     <Choice
                       checked={effective.domain}

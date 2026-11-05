@@ -8,8 +8,7 @@ of sites, where the platform's own projects, the dashboard and the portal,
 are listed under *Platform* and elsewhere only while they have an
 issue or a restart pending; *Activity*, the audit of the whole machine, every component's in one
 log; *Tokens*, the tokens that deploy without SSH, and what they did; *People*, everyone with
-access to a project, their roles, and who may create projects; *Connectors*,
-the credentials the egress proxy lends to projects. **A site**: *Overview*,
+access to a project, their roles, and who may create projects. **A site**: *Overview*,
 *Services*, *Secrets*, *Access* and *Backups*, everything that concerns that
 site and only it, *Access* saying who may open it and who may do what on it.
 Someone with a role on a project signs in with their company account, and
@@ -39,9 +38,6 @@ relays to a component that judges for itself what it accepts:
   that reload Caddy. The steward asks the gatekeeper, a root one-shot that
   draws the code, validates, reloads, probes every site and restores at the
   slightest discrepancy;
-- **the egress proxy's connectors and their grants**, the *Connectors* page,
-  written by the steward under the same unlock as a secret, see
-  [Connectors](#connectors);
 - **a deployment by a token**, the control API under `/api/v1/` and the
   *Tokens* page. The steward judges every token and starts the installer, a
   root one-shot that deploys one project as `sitesolide deploy` would. See
@@ -171,7 +167,7 @@ established` and keeps the client end of every connection that reaches a port
 listening on the loopback, counted by the unit of the process holding it,
 which `/proc/<pid>/cgroup` names: `caddy.service` reaching a site's port,
 `lab.api.service` reaching `lab.db`'s, a service reaching the egress proxy
-on 3128 or its connectors on 3129. Only root may ask `ss` the process of
+on 3128. Only root may ask `ss` the process of
 every socket, which is why the collector reads it. A link not open at a
 pass is remembered from the previous reading, closed, for a week: a call
 that comes and goes between two passes shows once a pass falls on it, and
@@ -349,7 +345,6 @@ steward.js         root, hardened sitesolide-steward.service
    |-- writes /var/lib/sitesolide-steward/journal.jsonl  with no values at all
    |-- writes /var/lib/sitesolide-steward/access-log.jsonl  the changes of access, kept 180 days
    |-- reads  /etc/caddy/sites/<slug>.caddy              whether the portal is in front of it
-   |-- writes /etc/sitesolide-egress/*.json              the connectors, see Connectors
    |-- reads  /var/lib/sitesolide-backup/backup.db       the index of the snapshots, the audit: never restic
    |-- writes /var/lib/sitesolide-backup/requests/       a restore request, consumed by the one-shot
    |-- keeps  /var/lib/sitesolide-steward/access.json    who may do what on each project, see Access
@@ -611,56 +606,6 @@ which already deploys the code that reads them ([Secrets by
 token](#secrets-by-token)). A value drawn by *Generate* never passes through
 it.
 
-## Connectors
-
-The machine-level **Connectors** page manages the credentials the egress
-proxy lends to projects without handing them over, see
-[egress/README.md](../egress/README.md). It lists the connectors (name, base
-address, header, never the value), who asks for which in their deployed
-manifest, who has been granted which, and the proxy's activity: refusals,
-connector use, changes.
-
-```
-page, Connectors
-   |  /api/connectors/* : session, Origin, unlocked (the secrets' unlock)
-   v
-server.ts                  relays, with no rule; refuses an answer carrying the value
-   |  /connectors, /connector, /grant on the steward's socket
-   v
-steward.js                 rules of bin/cli/connectors.ts, the exclusion lock
-   `-- writes /etc/sitesolide-egress/connectors.json, grants.json
-              root:sitesolide-egress 0640, atomic, owner and mode set first
-
-server.ts  --  GET 127.0.0.1:3129/audit, /status  -->  egress proxy
-               answered to site-dashboard alone, recognised by its uid
-```
-
-- **The value is write-only.** Typed in the page, sent once to the steward,
-  written into the file, and never returned: no route reads it back, the relay
-  refuses a response that would carry it, as for the passwords of the Secrets
-  section.
-- **Writes use the secrets' unlock** and wait in the steward's exclusion lock
-  with every other write. A removal retypes the name: every project using the
-  connector loses it at once.
-- **A grant needs a deployed site**; a grant whose site is gone can still be
-  withdrawn, and the page flags it, since it would follow the slug to the next
-  project deployed under that name. No token creates a project under a slug a
-  grant still names, `reserved` (see
-  [What a token's project may not do](#what-a-tokens-project-may-not-do));
-  the owner's own deployment over SSH may, and is then lent the credential.
-- **The audit is the proxy's**, `connector.update` and `connector.grant`
-  recorded when it sees the files change, with `owner` as the author the steward
-  writes into them. The steward's own journal does not repeat them.
-- **Degrades gracefully.** A steward deployed before these routes answers `no
-  such route`, which the page turns into *run bin/deploy-steward.sh*. Without
-  the proxy's folder the page says the proxy is not installed and writes
-  nothing. A file in another form than the steward's is listed as unmanaged and
-  never rewritten. An unreachable proxy leaves a connector's *Recent* and
-  Activity's egress source empty, and nothing else.
-
-The steward's unit gains `ReadWritePaths=-/etc/sitesolide-egress`, with the
-dash: the folder exists only once `bin/deploy-egress.sh` has run.
-
 ## Access
 
 Who may do what on a project, in one model. Per project, its **general
@@ -751,7 +696,7 @@ projects, `dashboard`, `portal`, `api` and the landing, and the
 steward refuses a person any file it lays for root, `dashboard.env` and
 `portal.env` among them, whatever a registry edited by hand would claim. A
 password hash changes with the dashboard's own password, the owner's alone;
-so do the tokens of others, the connectors and the *People* page. A site's
+so do the tokens of others and the *People* page. A site's
 preview code is read only by the owner and the site's Admins: a Viewer or a
 Developer reads that the site opens with one, the snapshot withholding it from
 them (src/people/view.ts).
@@ -1266,7 +1211,7 @@ reading, giving Can open, removing, is what the owner's session allows.
 | dashboard's | `POST /control/store/list` `{ bearer, slug }`, `PATCH /control/store` `{ bearer, slug, set, remove }`, `POST /control/store/generate`, `PUT` and `DELETE /control/store/file`, `POST /control/restart` `{ bearer, slug }` | a token's, see [Secrets by token](#secrets-by-token) |
 | dashboard's | `GET /tokens/list`, `POST /tokens/create` `{ token, label, holder, expiresAt, scope }`, `POST /tokens/revoke` | the owner's: every token, one made for themselves (`holder: owner`) or for a person of People, minted within that person's roles |
 | dashboard's | `POST /tokens/person/list`, `/tokens/person/create`, `/tokens/person/revoke` | a person's own tokens, see [A person's own tokens](#a-persons-own-tokens) |
-| owner's | `DELETE /tokens/project` `{ slug }` | a project removed: the name its token owned free again, and its people with access dropped, once the machine no longer carries it; a token creates that name again only once the machine keeps none of its snapshots nor its connector grants |
+| owner's | `DELETE /tokens/project` `{ slug }` | a project removed: the name its token owned free again, and its people with access dropped, once the machine no longer carries it; a token creates that name again only once the machine keeps none of its snapshots |
 
 The routes of before the registry, `/members`, `/members/member`,
 `/members/project/member`, `/members/sharing`, `/members/guests` and
@@ -1415,7 +1360,7 @@ steward's](#one-registry-the-stewards)). The detail is in
 
 The machine-level *Activity* page answers "who did what": who deployed, who
 signed in where, who changed who may open a site or do what on it, what the
-egress proxy refused or lent, which backups ran and who restored one, which
+egress proxy refused, which backups ran and who restored one, which
 secrets were read or changed. Every component keeps its own audit, in its own database, in the
 shape they all share: an ISO date, an actor, a dotted action, a target, and a
 JSON detail that never carries a secret. The dashboard reads them all and
@@ -1429,14 +1374,15 @@ page, Activity
 server.ts          reads, merges, bounds; writes nothing
    |-- dashboard.db                       its own: tokens, token deployments
    |-- 127.0.0.1:3026/admin/audit         the portal, the loopback rule's one exception
-   |-- 127.0.0.1:3129/audit               the egress proxy, answered to site-dashboard alone
+   |-- 127.0.0.1:3129/audit               the egress proxy's status port, answered to site-dashboard alone
    `-- the steward's socket               /backups/audit, /log
 ```
 
 - **No new road, no new privilege.** The portal's audit client,
-  [src/portal-audit.ts](src/portal-audit.ts), and the same clients as the
-  Connectors, Backups and Secrets pages, which already read these routes one
-  at a time ([src/audit/sources.ts](src/audit/sources.ts)).
+  [src/portal-audit.ts](src/portal-audit.ts), the egress proxy's,
+  [src/egress-audit.ts](src/egress-audit.ts), and the same clients as the
+  Backups and Secrets pages, which already read these routes one at a time
+  ([src/audit/sources.ts](src/audit/sources.ts)).
 - **The session is enough**, and a person's reads the rows of their projects
   and their own, never the rest (`restrict` in src/audit/merge.ts, part of the
   cursor). No row carries a secret value: each component
@@ -1449,7 +1395,7 @@ server.ts          reads, merges, bounds; writes nothing
   `ok`; `unavailable`, for no answer, a refusal or an answer that does not
   read; `outdated`, for a component older than the route it is read by, with
   what to run; `not-installed`, decided from what the dashboard already sees,
-  the egress proxy's folder as the steward reports it, the backups as the
+  the egress proxy's unit file, readable by every account, the backups as the
   steward's view of a site says, the portal when the snapshot lists no such
   site. The page shows every state once, at the top, and a banner for each
   source it could not read.
@@ -1490,7 +1436,7 @@ of the others, and forgets nothing of its own.
 |---|---|---|---|
 | `dashboard` | `audit` in `dashboard.db` | everything, never pruned: a few rows per token and per token deployment | all of it, by pages |
 | `portal` | `audit` in `portal.db` | 180 days; past 100,000 rows the oldest go, those of the last 30 days excepted; sign-ins and sign-outs repeated within a minute make one row | all of it, by pages |
-| `egress` | `audit` in `/var/lib/sitesolide-egress/` | 90 days, pruned every hour; refusals and connector calls counted by the minute | all of it, by pages |
+| `egress` | `audit` in `/var/lib/sitesolide-egress/` | 90 days, pruned every hour; refusals counted by the minute | all of it, by pages |
 | `backups` | `audit` in `/var/lib/sitesolide-backup/backup.db` | everything, never pruned: one row per hourly run, some 8,800 a year, and one per restore | all of it, by pages, from a steward that knows pages; the latest 50 from an older one |
 | `steward` | `/var/lib/sitesolide-steward/journal.jsonl`, and beside it `access-log.jsonl` | the journal, the last 500 to 1,000 operations: past 1,000 lines, the file keeps its last 500; the access log, every accepted change of access for 180 days, never pushed out younger, pruned by age every hour | both as one history, by pages, from a steward that knows pages, the access log a megabyte at a time, a page further back reading the megabyte that ends at its date; the latest 50 from an older one |
 
@@ -1790,7 +1736,7 @@ differ, both on purpose:
   deployment that fails half way stays its creator's, and nobody else's.
   **Removed with `sitesolide remove`, its name is free again**, for a token
   to create once the machine keeps none of the removed project's snapshots
-  and none of its connector grants (below): once the
+  (below): once the
   folder is gone, the command asks the steward's owner socket,
   `DELETE /tokens/project { slug }`, which forgets the token's ownership only if
   the machine no longer carries the project, and journals `project.remove`
@@ -1821,17 +1767,16 @@ earlier by the steward and the dashboard: see
   and the landing's directory, whatever the scope; a slug another token
   created; an existing slug the token was not granted.
 - **What a removed project left**: a new slug under which the backups' index
-  still holds snapshots, in either repository, or a connector is still
-  granted, `reserved`, for any token, the owner's own included. Both are
-  keyed by the slug alone and outlive `sitesolide remove`: the project created
-  again would list its predecessor's snapshots, its creator being its Admin,
-  and restore them, and be lent the credential. The refusal counts each,
-  never names a connector nor a snapshot, and says what the owner may do:
-  deploy it over SSH, which is not asked, or withdraw the grants and forget
-  the snapshots ([src/backup/README.md](src/backup/README.md#a-name-a-removed-project-left-behind)).
+  still holds snapshots, in either repository, `reserved`, for any token, the
+  owner's own included. They are keyed by the slug alone and outlive
+  `sitesolide remove`: the project created again would list its
+  predecessor's snapshots, its creator being its Admin, and restore them. The
+  refusal counts them, never names a snapshot, and says what the owner may
+  do: deploy it over SSH, which is not asked, or forget the snapshots
+  ([src/backup/README.md](src/backup/README.md#a-name-a-removed-project-left-behind)).
   Asked of the deployment itself, right before the installer starts; an
-  index or a grants file that does not read refuses the creation, `failure`,
-  never taken for nothing left (src/control/steward.ts, `judgeDeployment`).
+  index that does not read refuses the creation, `failure`, never taken for
+  nothing left (src/control/steward.ts, `judgeDeployment`).
 - **The domain's switch**: a token may declare a domain, never switch it. The
   installer writes `domain.active` as the machine had it, and only for the
   names it already covered: a new name or alias stays off until
@@ -1847,8 +1792,7 @@ earlier by the steward and the dashboard: see
   one the machine carries.
 - **Outbound network**: `network: outbound`, and `egress` with it, which
   reaches the hosts the manifest lists through the egress proxy, need the
-  token's outbound permission. `connectors` does not: nothing reaches a
-  connector until the owner grants it to the project from the dashboard.
+  token's outbound permission.
 - **Bounds**: 1G of memory per service, six services, `install` fifteen minutes
   and 1G, the archive 100 MiB compressed.
 - **Ports**: a service with no port gets the lowest free one of 3000 to 3099,
@@ -1987,7 +1931,7 @@ instead of the refusal naming their role. In order:
    `not-found`, not journaled, a guess learning nothing; then the machine must
    carry it, but for the store of a project the token may create, judged as
    a creation, its scope's `create` or the slug granted, and refused when the
-   machine still keeps snapshots, grants or a store of a project once named
+   machine still keeps snapshots or a store of a project once named
    so that is not the token's by record. The first write records the
    creation, as a deployment's does: the slug the token's, and a person's
    own token making them its Admin, so that the deployment that follows is
@@ -2077,7 +2021,7 @@ run `sitesolide upgrade`; its queue of writes full, or a restart's turn, a
 | Resource exhaustion | Upload counted while it streams (Bun's own cap does not hold for a chunked body), 100 MiB; extraction 512 MiB, 20,000 entries, 256 MiB of memory, five minutes; `install` 1G and fifteen minutes; three deployments running at a time on the machine, claimed when the archive arrives, one per project; three waiting for their archive per token, the newest replacing the oldest, and none of them counted against the machine; an archive that does not arrive in fifteen minutes expires. |
 | A token reaching another project | The slug decision on the steward, again on the installer; secrets limited to its own project's store, whose folder the slug names; `install` runs without the loopback, where the other projects listen, and the extraction without any network. |
 | A token naming its project after a platform project | The steward refuses a new slug starting with a platform project's name and a dash, `dashboard-*`, `reserved`, keeping those names free for what the platform lays later. A manifest names no file: a project's values are in its own store, under a folder the slug names. |
-| A token reusing a removed project's name | The snapshots and the connector grants are keyed by the slug, and outlive `sitesolide remove`: the steward refuses a token creating a slug the backups' index or the grants still name, `reserved`, and an index or grants that do not read refuse the creation too. The owner's deployment over SSH is not asked. See [What a token's project may not do](#what-a-tokens-project-may-not-do). |
+| A token reusing a removed project's name | The snapshots are keyed by the slug, and outlive `sitesolide remove`: the steward refuses a token creating a slug the backups' index still names, `reserved`, and an index that does not read refuses the creation too. The owner's deployment over SSH is not asked. See [What a token's project may not do](#what-a-tokens-project-may-not-do). |
 | A replayed request | The installer refuses a request older than ten minutes or for another slug, and writes nothing for it. |
 | A compromised dashboard | It sees the bearers that pass and can use them within their scope, a person's within the person's roles, and read deployment logs; it cannot mint a token without the password or a person's own unlock, nor deploy without one, nor hand root a file it could not read, nor name a token as the actor of a change of access it made itself: the steward journals the token it judged. It sees the values a token's change of secrets carries as it relays them, as it sees the code that token deploys, which runs with those values anyway: no escalation beyond the token. It reads none back: the steward answers names alone. |
 | A token giving access too widely | It gives Can open alone, on the projects it may deploy, a person's own only where the person is Admin now, to the company's people and domains alone, never password access to someone outside them, never public; it removes Can open entries alone. The steward judges it and writes, every change is in its journal under `token:<id>`, and the owner or an Admin takes it back from *Access*. |
@@ -2361,7 +2305,7 @@ ordinary `sitesolide deploy`. The steward's and the gatekeeper's do not:
 
 | What changes | The command |
 |---|---|
-| `steward.ts`, `src/secrets/`, `src/connectors/` (steward side), `bin/cli/connectors.ts`, `infra/steward/`, `portal/src/sharing.ts` | `bin/deploy-steward.sh` |
+| `steward.ts`, `src/secrets/`, `infra/steward/`, `portal/src/sharing.ts` | `bin/deploy-steward.sh` |
 | `gatekeeper.ts`, `src/gatekeeper/`, `infra/gatekeeper/`, `bin/cli/fragment.ts`, `bin/cli/portal.ts` | `bin/deploy-gatekeeper.sh` |
 | `src/control/steward.ts`, `src/control/system.ts`, `src/control/tokens.ts`, `src/control/policy.ts` | `bin/deploy-steward.sh` |
 | `src/control/secrets.ts`, which both read | `bin/deploy-steward.sh` and `sitesolide deploy` |
@@ -2473,10 +2417,10 @@ files are in place, a domain's switch kept as the machine had it, and a unit
 of the generation before the bind lines replaced, its manifest changed or
 not; the steward's control routes on real files; an expired token no longer
 live, a label with a C1 control refused (tests/control-tokens.test.ts); a
-name a removed project left snapshots or a connector grant under refused to
-every token, the refusal naming counts alone, a project on the machine
-deployed again whatever is left, an index or grants that do not read never
-taken for nothing left (tests/control-creations.test.ts); and the whole
+name a removed project left snapshots under refused to every token, the
+refusal naming counts alone, a project on the machine deployed again whatever
+is left, an index that does not read never taken for nothing left
+(tests/control-creations.test.ts); and the whole
 chain, the API on a real port, the steward on a real socket, the installer
 started by the simulated `systemctl` (tests/control-api.test.ts). Access by
 token is tested with the access routes, below. What only a machine can prove, `useradd` and `userdel`, `systemd-run`'s confinement and

@@ -769,14 +769,6 @@ async function deployFolder(context: SetupContext, folder: "dashboard" | "portal
   if (code !== 0) throw new StepFailure(`sitesolide deploy in ${folder}/ failed (exit code ${code})`, ["its own message is just above"]);
 }
 
-/** The steward started after `path` was last written: the folder it opened to it then exists for it. */
-export function stewardAfter(label: string, path: string): Condition {
-  return {
-    label,
-    test: `started=$(systemctl show -p ActiveEnterTimestamp --value sitesolide-steward) && [ -n "$started" ] && [ "$(date -d "$started" +%s)" -ge "$(stat -c %Y ${path})" ]`,
-  };
-}
-
 export const CADDY_DROP_IN = "/etc/systemd/system/caddy.service.d/override.conf";
 
 /**
@@ -820,7 +812,6 @@ export const COMPONENT_CONDITIONS = {
   backups: [enabled("backup-enabled", "sitesolide-backup.timer"), active("backup-active", "sitesolide-backup.timer")],
   installer: [present("installer-code", `${LIB}/installer.js`), present("installer-unit", `${UNITS}/sitesolide-installer@.service`)],
   "egress-proxy": [active("egress-active", "sitesolide-egress")],
-  "steward-after-egress": [stewardAfter("steward-after-egress", `${UNITS}/sitesolide-egress.service`)],
 } satisfies Record<string, Condition[]>;
 
 function caddyRun(dns: DnsEntry | null): string {
@@ -1489,14 +1480,8 @@ export function installSteps(tunnel = false): Step<SetupContext>[] {
       id: "egress",
       title: "egress proxy",
       skip: optional,
-      check: installCheck("setup:egress:check", [...COMPONENT_CONDITIONS["egress-proxy"], ...COMPONENT_CONDITIONS["steward-after-egress"]]),
-      // The steward after the proxy, so that it may write the connectors'
-      // folder the proxy's script makes.
-      run: async (context, missing) => {
-        if (missing.includes("egress-active")) await script(context, "deploy-egress.sh");
-        await script(context, "deploy-steward.sh");
-        return "running, and the steward restarted to write its connectors";
-      },
+      check: installCheck("setup:egress:check", COMPONENT_CONDITIONS["egress-proxy"]),
+      run: (context) => script(context, "deploy-egress.sh"),
       inspect: (context) => journal(context, "sitesolide-egress"),
     },
   ];

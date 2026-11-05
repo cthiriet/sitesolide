@@ -103,13 +103,10 @@ export type Limits = AdmissionLimits & {
  * refused connection that lingers holds nothing: what it still sends is
  * dropped as it is read.
  *
- * Every figure above holds for both ports together: the connectors' port is
+ * Every figure above holds for both ports together: the status port is
  * admitted and budgeted with this one (admission.ts), its connections among
- * the 1024, its heads, a request's or an answer's, one at a time per
- * connection and 16 KiB at most. A connector call holds a TLS connection
- * besides, whose buffers nothing here counts: 28 KiB each with the system's
- * authorities, measured on Bun 1.3.11, 7 MiB for the 256 calls connectors.ts
- * allows at once, which brings the worst case to 100 MiB.
+ * the 1024, its heads one at a time per connection and 16 KiB at most, and an
+ * answer waiting for a slow dashboard counted like a tunnel's bytes.
  */
 export const DEFAULT_LIMITS: Limits = {
   maxConnections: 1024,
@@ -168,7 +165,7 @@ export type Proxy = {
   buffered: () => number;
   /** Refused connections still read before they close, apart from `open`: see createLingering(). */
   lingering: () => number;
-  /** What the connectors' port counts its connections against too: see admission.ts. */
+  /** What the status port counts its connections against too: see admission.ts. */
   admission: Admission;
 };
 
@@ -203,7 +200,7 @@ export function startProxy(options: ProxyOptions): Proxy {
    */
   const account = (connection: Connection, bytes: number) => admission.account(connection, bytes);
 
-  // A tunnel's two sides, piped as a connector call's are (see sideClosed for
+  // A tunnel's two sides, piped as the status port's answers are (see sideClosed for
   // a side whose peer is gone, still read to see it close).
   const { stopReading, startReading, send, flush } = createPipe<Connection>(admission, limits.bufferBytes, close);
 
@@ -378,7 +375,7 @@ export function startProxy(options: ProxyOptions): Proxy {
       forward = forwardDestination(head.target);
       if (forward === null) {
         const message = head.target.startsWith("/")
-          ? "egress: this is the egress proxy; set HTTPS_PROXY to it, and call connectors on the connectors port"
+          ? "egress: this is the egress proxy; set HTTPS_PROXY to it"
           : `egress: a plain HTTP request must name an http:// address, got ${head.target.slice(0, 100)}`;
         return refuse(connection, 400, message);
       }

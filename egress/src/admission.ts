@@ -3,10 +3,10 @@
  * ports it came to: a place among all of them, a share for its project, and
  * the bytes waiting in it for a slow end.
  *
- * One admission for the CONNECT port and the connectors' port together,
+ * One admission for the CONNECT port and the status port together,
  * because what it bounds belongs to the process, not to a port: its file
  * descriptors and its memory, under the unit's LimitNOFILE and MemoryMax.
- * Counted per port, the connectors' port held whatever one project opened, and
+ * Counted per port, the second port held whatever one project opened, and
  * once the descriptors ran out, every other project's CONNECT went unanswered.
  * The arithmetic of DEFAULT_LIMITS in proxy.ts holds for both ports at once.
  */

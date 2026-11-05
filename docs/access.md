@@ -76,8 +76,8 @@ hold the right to create projects, their dashboard sessions close and their
 tokens are revoked at once.
 
 The machine itself stays the owner's: the platform's own projects, the
-dashboard and the portal among them, their settings, the tokens of others, the
-connectors, and the roles people hold on projects they are not Admin of.
+dashboard and the portal among them, their settings, the tokens of others,
+and the roles people hold on projects they are not Admin of.
 
 **The owner** is whoever holds the dashboard's password, the first account,
 made by `setup`, and may do everything, on every project and on the machine.
@@ -123,8 +123,8 @@ in a project the sections their role opens:
 | Developer | the same, and Secrets, whose values they write and never read back |
 | Admin | everything: Overview, Services, Secrets, whose values they write and never read back either, Access, where they give people access, and Backups |
 
-The rest of the dashboard is the owner's, hidden and refused: People,
-Connectors, and every project they hold no role on.
+The rest of the dashboard is the owner's, hidden and refused: People, and
+every project they hold no role on.
 
 **A site's Access section** reads like a "Share" dialog, in one column, with
 a link to its changes in Activity. First its general access, the three ways
@@ -353,10 +353,6 @@ the public permission does not deploy an existing public site either, so that
 a stolen one publishes nothing; a person's own token does, general access
 being its Admin's choice, which the deployment leaves as it is.
 
-`connectors` needs no permission of the token: a manifest only asks for one,
-and nothing reaches it until the owner grants it to the project from the
-dashboard.
-
 Every string of the manifest that lands in the project's Caddy block or systemd
 unit is judged for that, the same way for the owner and for a token: header
 values without `"`, `\`, `{`, `}`, `$` or a backtick, routes that are plain
@@ -520,9 +516,8 @@ yet may be set too; every service loads every file of the project's store.
   set its secrets before deploying it, so that the first start finds them.
   The first write records the project as the token's, and a person's own
   token makes them its Admin, as a deployment that creates it does. A name
-  the token may not create, or one whose store, snapshots or connector grants
-  the machine still keeps from a removed project, is refused as a deployment
-  would be.
+  the token may not create, or one whose store or snapshots the machine
+  still keeps from a removed project, is refused as a deployment would be.
 - **Listing needs *Manage secrets* too**: a token without it is refused, and
   the refusal is journaled, as "Tried to list the secrets", never as a value
   read.
@@ -743,7 +738,7 @@ curl -s -H "$AUTH" -X PUT -H 'Content-Type: application/json' \
 | `unauthenticated` | 401 | the token is missing, unknown, expired or revoked, or its person no longer signs in to the dashboard: ask the owner, or mint another if it is your own |
 | `too-many-attempts` | 429 | too many wrong tokens from your address: wait `wait` seconds; or, creating a project, your changes of access for this hour used up: try again later; or the token's hour of secrets, restarts or refusals used up, 120 changes, 30 restarts and 60 refused requests, refused changes of access included: wait `wait` seconds |
 | `out-of-scope` | 403 | the token may not do this: outside its scope, its person's role no longer allows it, or, for access, a role above Can open, someone who would need password access, a domain outside the company's, an entry above Can open to take off; for secrets, a token without *Manage secrets*, `PASSWORD_HASH`, a static site, which has no service to read a store, or, with an owner's token that does not deploy public sites, a project not Restricted on the machine or one it could not deploy as it stands; the message says whom to ask |
-| `reserved` | 403 | the slug belongs to the platform, or, for a new project, starts with the name of one of its projects and a dash (`dashboard-*`, `portal-*`), which names the platform's own files, or is the name of a removed project the machine still keeps backup snapshots, connector grants or a store of secrets of, which a project created under it would be handed: pick another, or ask the owner, who may deploy it over SSH or clear what was left |
+| `reserved` | 403 | the slug belongs to the platform, or, for a new project, starts with the name of one of its projects and a dash (`dashboard-*`, `portal-*`), which names the platform's own files, or is the name of a removed project the machine still keeps backup snapshots or a store of secrets of, which a project created under it would be handed: pick another, or ask the owner, who may deploy it over SSH or clear what was left |
 | `invalid-manifest` | 422 | fix every point of `details` |
 | `invalid` | 400 | the request itself is malformed: `who` neither an email nor a `@domain`, a domain given more than Can open, or a domain while signing in with a company account is not set up; for secrets, an unexpected field, a name that is not a variable's or one the machine keeps for itself, a value over one line, with a null byte, not valid Unicode, with a Unicode noncharacter or over 8 KiB, a name both set and removed, variables that would pass 256 KiB, a file name that is not letters, digits, `.`, `_` and `-`, or a file past its bounds; the message names a variable only when it has a variable name's shape, and never quotes a value |
 | `not-found` | 404 | no such deployment or project for this token, a project not deployed yet, or, taking someone off, someone with no access; a static site, which has no service to restart |
@@ -753,7 +748,7 @@ curl -s -H "$AUTH" -X PUT -H 'Content-Type: application/json' \
 | `too-large` | 413 | exclude dependencies and caches; a change of secrets over 512 KiB: split it |
 | `expired` | 410 | the archive arrived after 15 minutes: start again |
 | `not-available` | 503 | the machine does not carry the control API yet, or predates the access registry, secrets by token or the store of secrets: tell the owner, who runs `sitesolide upgrade`; or, creating a project or giving Can open, the access log is half full, the half a token may fill, or full: ask the owner, or someone who gives access from the dashboard |
-| `failure` | 500, 502 | something broke on the machine, an access registry that does not read among others, or, creating a project, the backups' index or the connectors' grants that do not read, which never pass for nothing left under the name: the message says where the owner should look |
+| `failure` | 500, 502 | something broke on the machine, an access registry that does not read among others, or, creating a project, the backups' index that does not read, which never passes for nothing left under the name: the message says where the owner should look |
 
 `locked` never comes back from this API: it is the dashboard's answer to a
 change that needs its unlock, a role above Can open or password access, which
@@ -854,11 +849,10 @@ reader, with each of the four JSON readers.
   Your projects stay on the machine; the owner grants them to your new token.
   Once the owner removes one with `sitesolide remove`, its name is free
   again: any token that may create projects may create one of that name,
-  once the machine keeps none of its backup snapshots and none of the
-  connector grants it had. Until then the name is `reserved` to every token:
-  a project created under it would list its predecessor's snapshots, restore
-  them, and be lent its credentials. The owner deploys it over SSH, or clears
-  what was left.
+  once the machine keeps none of its backup snapshots. Until then the name
+  is `reserved` to every token: a project created under it would list its
+  predecessor's snapshots and restore them. The owner deploys it over SSH,
+  or clears what was left.
   A person's own token answers to their role instead: a project they created
   is theirs to deploy as long as they are its Developer or Admin, with any
   token of theirs that names it.

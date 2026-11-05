@@ -12,8 +12,8 @@
  * saying when a folder changed hands, and it does not try.
  *
  * So the guard is upstream, where a name changes hands: a token creates no
- * project under a name the backups' index still holds snapshots of, nor one
- * a connector is still granted to (src/control/steward.ts, `judgeDeployment`;
+ * project under a name the backups' index still holds snapshots of
+ * (src/control/steward.ts, `judgeDeployment`;
  * src/control/policy.ts, `leftoversReason`), proved in
  * tests/control-creations.test.ts, "a name a removed project left things
  * under is never a token's creation". The owner's own deployment over SSH

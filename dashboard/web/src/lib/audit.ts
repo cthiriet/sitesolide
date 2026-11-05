@@ -9,7 +9,6 @@
  */
 import { ROLE_TEXTS } from "./access"
 import { callApi } from "./api"
-import { activityLine } from "./connectors"
 import { historyUrl, readHistory, serverAction, sinceStart, type HistoryFilter } from "./history"
 import { capitalise, dateTime, plural } from "./format"
 import { QUERY_PARAM } from "./list-state"
@@ -26,7 +25,7 @@ export type SourceEntry = { key: AuditSource; label: string; description: string
 export const SOURCES: readonly SourceEntry[] = [
   { key: "dashboard", label: "Dashboard", description: "Tokens, and the deployments they make" },
   { key: "portal", label: "Portal", description: "Sign-ins and sign-outs on restricted sites" },
-  { key: "egress", label: "Egress", description: "Refused destinations, connector calls and changes" },
+  { key: "egress", label: "Egress", description: "Refused destinations" },
   { key: "backups", label: "Backups", description: "Scheduled runs and restores" },
   { key: "steward", label: "Access", description: "Who may do what, secrets and restarts" },
 ]
@@ -575,12 +574,15 @@ export function auditWords(row: AuditRow, timeZone?: string): AuditWords {
       return { summary: label === null ? "Removed a password access" : `Removed the password access of ${label}`, note: null, tone: "neutral" }
     }
 
-    case "egress.denied":
-    case "connector.use":
-    case "connector.update":
-    case "connector.grant": {
-      const line = activityLine({ id: 0, at: row.at, actor: row.actor, action: row.action, target: row.target, detail: row.detail === null ? null : JSON.stringify(row.detail) })
-      return { summary: line.summary, note: line.detail, tone: line.tone }
+    case "egress.denied": {
+      const reason = text(detail.reason) ?? "refused"
+      if (reason === "rate limited") {
+        return { summary: "More refusals than the audit keeps", note: `${count(detail.count) ?? 0} refusals to ${count(detail.pairs) ?? 0} destinations not detailed`, tone: "attention" }
+      }
+      const destination = text(detail.destination)
+      const account = text(detail.account)
+      const note = [reason, times(count(detail.count)), account === null ? null : `from the account ${account}`].filter((part) => part !== null).join(", ")
+      return { summary: destination === null ? "Refused a connection" : `Refused ${destination}`, note, tone: "attention" }
     }
 
     case "backup.run": {

@@ -261,7 +261,7 @@ import { tunnelRecordLines } from "./cli/cloudflare";
 import { shellQuote } from "./cli/harden";
 import { askAddress, VERIFY_RETRY_MS, WARM_UP_MS } from "./cli/verify";
 import { realClock } from "../clouds/src/provider";
-import { declaresConnectors, declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
+import { declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
 import { machine, sshLogin } from "./cli/machine";
 import { DNS_PROVIDERS, dnsEntry, MANUAL } from "./cli/dns/registry";
 import { eventOutput, humanOutput, login, promptWithoutEcho, remoteMode, REMOTE_USAGE, runRemote, type BuildContext } from "./cli/remote";
@@ -1344,7 +1344,7 @@ async function deploy(
   if (scheduledServices(manifest).length > 0) await checkSchedules(manifest, config, executor);
   // A backup command reaches its service on its port, through the same set.
   if (reachesOwnPorts(manifest)) await requireProjectSet(config, executor);
-  if (declaresEgress(manifest) || declaresConnectors(manifest)) await requireEgress(config, executor);
+  if (declaresEgress(manifest)) await requireEgress(config, executor);
   if (servicesOf(manifest).some((service) => service.backup !== null)) await checkBackupComponent(config, executor);
   const behindPortal = isProtected(manifest);
   if (behindPortal) await requirePortal(config, executor);
@@ -2464,11 +2464,11 @@ async function checkBackupComponent(config: Config, executor: Executor): Promise
 }
 
 /**
- * Refuses, before anything is pushed, a project that declares `egress` or
- * `connectors` on a machine where the egress proxy does not run. Deployed
- * there, its service would start with its proxy variables pointing at nothing,
- * every outbound call would fail, and nothing would say why. A read, hence
- * done in a dry run too.
+ * Refuses, before anything is pushed, a project that declares `egress` on a
+ * machine where the egress proxy does not run. Deployed there, its service
+ * would start with its proxy variables pointing at nothing, every outbound
+ * call would fail, and nothing would say why. A read, hence done in a dry run
+ * too.
  */
 async function requireEgress(config: Config, executor: Executor): Promise<void> {
   const state = readEgressState(await executor.read(config, egressStateCommand()));
@@ -2480,17 +2480,17 @@ async function requireEgress(config: Config, executor: Executor): Promise<void> 
       return;
     case "unreadable":
       die("cannot tell whether the egress proxy runs on the server", [
-        "nothing was pushed: this project's outbound calls and connectors go through it",
+        "nothing was pushed: this project's outbound calls go through it",
       ]);
     case "inactive":
       die("the egress proxy is installed on the server but not running", [
-        "this project's outbound calls and connectors go through it; read its journal, then lay it again:",
+        "this project's outbound calls go through it; read its journal, then lay it again:",
         `  sudo journalctl -u sitesolide-egress -n 50   (on the server)`,
         `  ${install()}`,
         "then run sitesolide deploy again. Nothing was pushed.",
       ]);
     case "absent":
-      die("this project declares egress or connectors, and the egress proxy is not installed on the server", [
+      die("this project declares egress, and the egress proxy is not installed on the server", [
         "install it first, see egress/README.md:",
         `  ${install()}`,
         "then run sitesolide deploy again. Nothing was pushed.",

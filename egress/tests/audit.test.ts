@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { EMPTY_CONNECTORS, EMPTY_GRANTS, putConnector, removeConnector, setGrant, type ConnectorsFile, type GrantsFile } from "../../bin/cli/connectors";
 import { createAudit, MAX_DENIED_KEYS, MAX_TRACKED_KEYS, RETENTION_DAYS } from "../src/audit";
 
 /** A clock the test moves by hand, and a database in memory: nothing here needs a file. */
@@ -9,14 +8,6 @@ function bench(start = "2026-10-04T12:00:00.000Z") {
   const db = new Database(":memory:", { strict: true });
   const audit = createAudit(db, () => now);
   return { db, audit, advance: (ms: number) => (now = new Date(now.getTime() + ms)) };
-}
-
-const VALUE = "Bearer test-value-0123456789";
-
-function connectors(baseUrl = "https://chat.example.com", value = VALUE, at = "2026-10-04T11:00:00.000Z"): ConnectorsFile {
-  const result = putConnector(EMPTY_CONNECTORS, { name: "chat", baseUrl, header: "Authorization", value }, at, "owner");
-  if ("error" in result) throw new Error(result.error);
-  return result.file;
 }
 
 describe("refusals", () => {
@@ -67,132 +58,13 @@ describe("memory", () => {
   });
 });
 
-describe("connector uses", () => {
-  test("counted per project and connector, with their statuses, never a row per request", () => {
-    const { audit } = bench();
-    audit.used("shop", "chat", 200);
-    audit.used("shop", "chat", 201);
-    audit.used("shop", "chat", 502);
-    audit.used("shop", "chat", null);
-    audit.used("blog", "chat", 404);
-    expect(audit.flush()).toBe(2);
-    const rows = audit.recent(10);
-    const shop = rows.find((row) => row.target === "shop")!;
-    expect(shop.action).toBe("connector.use");
-    expect(JSON.parse(shop.detail!)).toMatchObject({ connector: "chat", count: 4, failures: 2, statuses: { "2xx": 2, "5xx": 1, unreachable: 1 } });
-  });
-});
-
-describe("changes to the connectors and their grants", () => {
-  test("a creation, a change, a rotation and a removal, each once, with the author the file names", () => {
-    const { audit } = bench();
-    expect(audit.observe(connectors(), EMPTY_GRANTS)).toBe(1);
-    // Seen again unchanged: nothing.
-    expect(audit.observe(connectors(), EMPTY_GRANTS)).toBe(0);
-    const moved = putConnector(connectors(), { name: "chat", baseUrl: "https://chat.example.com/v2", header: "Authorization", value: null }, "2026-10-04T13:00:00.000Z", "owner");
-    if ("error" in moved) throw new Error(moved.error);
-    expect(audit.observe(moved.file, EMPTY_GRANTS)).toBe(1);
-    const rotated = putConnector(moved.file, { name: "chat", baseUrl: "https://chat.example.com/v2", header: "Authorization", value: "Bearer rotated-0123" }, "2026-10-04T14:00:00.000Z", "owner");
-    if ("error" in rotated) throw new Error(rotated.error);
-    expect(audit.observe(rotated.file, EMPTY_GRANTS)).toBe(1);
-    const removed = removeConnector(rotated.file, EMPTY_GRANTS, "chat", "2026-10-04T15:00:00.000Z", "owner");
-    if ("error" in removed) throw new Error(removed.error);
-    expect(audit.observe(removed.connectors, removed.grants)).toBe(1);
-
-    const rows = audit.recent(10).reverse();
-    expect(rows.map((row) => [row.actor, row.action, row.target])).toEqual([
-      ["owner", "connector.update", "chat"],
-      ["owner", "connector.update", "chat"],
-      ["owner", "connector.update", "chat"],
-      ["owner", "connector.update", "chat"],
-    ]);
-    expect(rows.map((row) => JSON.parse(row.detail!).change)).toEqual(["created", "updated", "updated", "removed"]);
-    expect(JSON.parse(rows[1]!.detail!)).toMatchObject({ changed: ["baseUrl"], valueReplaced: false });
-    expect(JSON.parse(rows[2]!.detail!)).toMatchObject({ changed: [], valueReplaced: true });
-  });
-
-  test("a grant and its withdrawal, the project as target", () => {
-    const { audit } = bench();
-    const file = connectors();
-    const granted = setGrant(EMPTY_GRANTS, file, "shop", "chat", true, "2026-10-04T12:00:00.000Z", "owner") as { file: GrantsFile };
-    audit.observe(file, EMPTY_GRANTS);
-    expect(audit.observe(file, granted.file)).toBe(1);
-    const withdrawn = setGrant(granted.file, file, "shop", "chat", false, "2026-10-04T12:05:00.000Z", "owner") as { file: GrantsFile };
-    expect(audit.observe(file, withdrawn.file)).toBe(1);
-    const rows = audit.recent(2).reverse();
-    expect(rows.map((row) => [row.action, row.target, JSON.parse(row.detail!)])).toEqual([
-      ["connector.grant", "shop", { connector: "chat", granted: true }],
-      ["connector.grant", "shop", { connector: "chat", granted: false }],
-    ]);
-  });
-
-  test("a name every object inherits is created and removed like any other, should one slip past validation", () => {
-    for (const name of ["constructor", "__proto__", "toString"]) {
-      const { audit } = bench();
-      const chat = connectors();
-      audit.observe(chat, EMPTY_GRANTS);
-      // Built by hand: validation refuses these names, which is the point of
-      // checking that the diff does not lean on it.
-      const record = chat.connectors.chat!;
-      const twice: ConnectorsFile = { ...chat, connectors: Object.fromEntries([["chat", record], [name, record]]) };
-      expect(audit.observe(twice, EMPTY_GRANTS)).toBe(1);
-      expect(audit.observe(chat, EMPTY_GRANTS)).toBe(1);
-      const rows = audit.recent(2).reverse();
-      expect({ name, rows: rows.map((row) => [row.target, JSON.parse(row.detail!).change]) }).toEqual({
-        name,
-        rows: [
-          [name, "created"],
-          [name, "removed"],
-        ],
-      });
-    }
-  });
-
-  test("no row, no state kept, ever carries a credential's value", () => {
-    const { db, audit } = bench();
-    audit.observe(connectors(), EMPTY_GRANTS);
-    audit.used("shop", "chat", 200);
-    audit.flush();
-    const everything = JSON.stringify([db.query("SELECT * FROM audit").all(), db.query("SELECT * FROM seen").all()]);
-    expect(everything).not.toContain(VALUE);
-    expect(everything).not.toContain("test-value");
-  });
-
-  test("what /audit hands to the dashboard's Activity page carries no value, through every action", () => {
-    // Every action the proxy records, each with a credential's value in play:
-    // a connector created, its value replaced, its address changed, granted,
-    // used, withdrawn, removed, and refusals of a host and of a connector.
-    const { audit, advance } = bench();
-    const REPLACED = "Bearer replaced-test-value-9876543210";
-    const created = connectors();
-    audit.observe(created, EMPTY_GRANTS);
-    advance(1000);
-    const replaced = putConnector(created, { name: "chat", baseUrl: "https://chat.example.com/v2", header: "X-Api-Key", value: REPLACED }, "2026-10-04T12:00:01.000Z", "owner");
-    if ("error" in replaced) throw new Error(replaced.error);
-    const granted = setGrant(EMPTY_GRANTS, replaced.file, "shop", "chat", true, "2026-10-04T12:00:02.000Z", "owner");
-    if ("error" in granted) throw new Error(granted.error);
-    audit.observe(replaced.file, granted.file);
-    audit.used("shop", "chat", 200);
-    audit.used("shop", "chat", null);
-    audit.denied({ target: "shop", destination: "connector:mail", reason: "not granted" });
-    audit.denied({ target: "shop", destination: "pastebin.example.net:443", reason: "not in the list" });
-    audit.flush();
-    const removed = removeConnector(replaced.file, granted.file, "chat", "2026-10-04T12:00:03.000Z", "owner");
-    if ("error" in removed) throw new Error(removed.error);
-    audit.observe(removed.connectors, removed.grants);
-
-    const rows = audit.recent(500);
-    expect(new Set(rows.map((row) => row.action))).toEqual(new Set(["connector.update", "connector.grant", "connector.use", "egress.denied"]));
-    const handed = JSON.stringify(rows);
-    for (const value of [VALUE, REPLACED, "test-value", "0123456789", "9876543210"]) expect(handed).not.toContain(value);
-  });
-});
-
 describe("reading and keeping", () => {
   test("newest first, by pages", () => {
     const { audit } = bench();
-    for (let i = 0; i < 5; i++) audit.used(`s${i}`, "chat", 200);
-    audit.flush();
+    for (let i = 0; i < 5; i++) {
+      audit.denied({ target: `s${i}`, destination: "evil.example.net:443", reason: "not in the list" });
+      audit.flush();
+    }
     const first = audit.recent(2);
     expect(first).toHaveLength(2);
     const next = audit.recent(10, first[1]!.id);
@@ -202,10 +74,10 @@ describe("reading and keeping", () => {
 
   test(`rows older than ${RETENTION_DAYS} days go`, () => {
     const { audit, advance } = bench();
-    audit.used("shop", "chat", 200);
+    audit.denied({ target: "shop", destination: "evil.example.net:443", reason: "not in the list" });
     audit.flush();
     advance((RETENTION_DAYS + 1) * 24 * 60 * 60 * 1000);
-    audit.used("shop", "chat", 200);
+    audit.denied({ target: "shop", destination: "evil.example.net:443", reason: "not in the list" });
     audit.flush();
     expect(audit.prune()).toBe(1);
     expect(audit.recent(10)).toHaveLength(1);

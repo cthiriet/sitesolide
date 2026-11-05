@@ -36,8 +36,6 @@ import { prepareFolder, closeSocket, openSocket } from "./src/secrets/socket";
 import { MAX_PORTAL_MS, MAX_RESTART_MS, DEFAULT_SOCKET } from "./src/secrets/protocol";
 import { MAX_CONTENT_BODY_BYTES, createSteward } from "./src/secrets/steward";
 import { createSystem, readGroup } from "./src/secrets/system";
-import { createConnectorStore } from "./src/connectors/store";
-import { EGRESS_ACCOUNT, EGRESS_CONFIG_DIR } from "./borrowed/connectors";
 import { createControlSteward, isControlPath, MAX_SECRETS_CHANGE_BODY_BYTES } from "./src/control/steward";
 import { createControlSystem } from "./src/control/system";
 import { INSTALLER_RUN_FOLDER } from "./src/control/protocol";
@@ -68,15 +66,6 @@ const LOCKS_FRAGMENT = process.env.LOCKS_FRAGMENT ?? `${LOCKS_DIR}/${FRAGMENT_NA
 /** Where the installer leaves its results, read to relay a deployment's progress. */
 const INSTALLER_FOLDER = process.env.INSTALLER_FOLDER ?? INSTALLER_RUN_FOLDER;
 const JOURNALCTL = process.env.JOURNALCTL ?? "/usr/bin/journalctl";
-
-/**
- * The egress proxy's connectors and grants, and the group that reads them. The
- * folder is created by bin/deploy-egress.sh, which `sitesolide setup` runs;
- * missing, the Connectors page says the proxy is not installed and nothing is
- * written.
- */
-const EGRESS_FOLDER = process.env.EGRESS_FOLDER ?? EGRESS_CONFIG_DIR;
-const EGRESS_GROUP = process.env.EGRESS_GROUP ?? EGRESS_ACCOUNT;
 
 /** The only group allowed to open the socket. Empty: no chgrp, for the workstation. */
 const SOCKET_GROUP = process.env.SOCKET_GROUP ?? "site-dashboard";
@@ -154,27 +143,6 @@ const system = createSystem({
 const removed = await system.cleanTemporaries();
 if (removed > 0) console.log(`steward: ${removed} temporary file(s) left by an abrupt stop removed`);
 
-// The egress proxy's connectors, in their own folder, handed to the proxy's
-// group. The group is read on every call: the proxy may be installed after
-// this steward started, and until then the page says it is not.
-const connectors = createConnectorStore({
-  folder: EGRESS_FOLDER,
-  owners:
-    OWNERS === ""
-      ? null
-      : {
-          rootUid: 0,
-          gid: () => {
-            try {
-              return readGroup(readFileSync(GROUPS_FILE, "utf8"), EGRESS_GROUP);
-            } catch {
-              return null;
-            }
-          },
-        },
-});
-const leftovers = connectors.clean();
-if (leftovers > 0) console.log(`steward: ${leftovers} temporary connectors file(s) left by an abrupt stop removed`);
 // The backup component's state, read for the Backups section: the index of
 // the snapshots the run writes there, the steward having neither restic nor
 // the repositories' keys. The restore requests are written into the same
@@ -202,7 +170,6 @@ const handler = createSteward(system, {
   checkAccounts: OWNERS !== "",
   ownerStoreWritten: (slug) => ownerStoreWritten(slug),
   ownerStoreClaimed: (slug) => ownerStoreClaimed(slug),
-  connectors,
   backups,
   // Access: the registry of who may do what on each project, the portal's
   // projection of it, the sessions of the people who sign in, the key pair
@@ -256,9 +223,8 @@ const control = createControlSteward(
     systemctl: SYSTEMCTL,
     journalctl: JOURNALCTL,
     // What a removed project left under its name, read where the Backups
-    // section and the Connectors page read it: no token creates that name.
+    // section reads it: no token creates that name.
     backups,
-    connectors,
     // A store left under a name the machine does not carry, which no token creates.
     storeRoot: `${SECRETS_FOLDER}/projects`,
   }),

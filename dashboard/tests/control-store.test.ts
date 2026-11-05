@@ -82,8 +82,8 @@ type Bench = {
   handed: Handed[];
   /** As long as it is set, a write waits on it before asking `still`. */
   barrier: { promise: Promise<void> | null };
-  /** What `leftovers` adds, snapshots and grants of a removed project. */
-  left: { snapshots: number; grants: number; unreadable: boolean };
+  /** What `leftovers` adds, the snapshots of a removed project. */
+  left: { snapshots: number; unreadable: boolean };
   call: (method: string, path: string, body?: unknown) => Promise<Response>;
   /** The owner's socket, which only root opens: the store's routes over SSH. */
   ssh: (method: string, path: string, body?: unknown) => Promise<Response>;
@@ -240,15 +240,15 @@ async function mount(options: { store?: boolean | "real"; secretChangesPerHour?:
     },
   };
 
-  const left = { snapshots: 0, grants: 0, unreadable: false };
-  const controlReal = createControlSystem({ stateFolder: state, sitesDir: sites, unitsFolder: units, installerFolder: installer, systemctl: "/bin/false", journalctl: "/bin/false", backups: null, connectors: null, storeRoot });
+  const left = { snapshots: 0, unreadable: false };
+  const controlReal = createControlSystem({ stateFolder: state, sitesDir: sites, unitsFolder: units, installerFolder: installer, systemctl: "/bin/false", journalctl: "/bin/false", backups: null, storeRoot });
   const controlSystem: ControlSystem = {
     ...controlReal,
     now: () => clock.t,
     async leftovers(slug) {
       if (left.unreadable) throw new Error("the backups' index does not read");
       const read = await controlReal.leftovers(slug);
-      return { ...read, snapshots: left.snapshots, grants: left.grants };
+      return { ...read, snapshots: left.snapshots };
     },
     async systemctl(arguments_) {
       if (arguments_[0] === "is-active") return { code: 3, output: "inactive\n" };

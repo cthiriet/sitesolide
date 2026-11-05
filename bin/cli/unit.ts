@@ -9,7 +9,7 @@
  * Pure: returns text, touches nothing.
  */
 import { sameDirectives, usefulDirectives } from "./comparison";
-import { CONNECTORS_PORT, EGRESS_PROXY_PORT, egressUnitLines } from "./egress";
+import { EGRESS_PROXY_PORT, EGRESS_STATUS_PORT, egressUnitLines } from "./egress";
 import { CADDY_ADMIN_PORT } from "./loopback";
 import {
   commandErrors,
@@ -470,8 +470,8 @@ function renderUnit(
     ...treeVariables(manifest, service).map(([key, value]) => `Environment=${key}=${value}`),
   );
 
-  // The proxy and the connectors, only for a project that asks for them: the
-  // unit of every other project is unchanged, line for line.
+  // The proxy, only for a project that lists hosts to reach: the unit of every
+  // other project is unchanged, line for line.
   lines.push(...egressUnitLines(manifest));
 
   // The variables declared by the project. They never carry a secret, this file
@@ -612,7 +612,7 @@ function renderUnit(
 /**
  * The ports of the machine no project listens on but its own: Caddy's admin
  * API, each block Caddy sends the sites' visitors to, the platform's among
- * them, and the egress proxy with its connectors. One `SocketBindDeny=` line
+ * them, and the egress proxy's two ports. One `SocketBindDeny=` line
  * each, in the order of their ports: the second block's comes last, so that a
  * unit generated before it is this text without that one line
  * (withoutLaterBlockLines).
@@ -620,7 +620,7 @@ function renderUnit(
 export const DENIED_BINDS: readonly string[] = [
   { first: CADDY_ADMIN_PORT, last: CADDY_ADMIN_PORT },
   ...SERVICE_PORT_RANGES,
-  { first: EGRESS_PROXY_PORT, last: CONNECTORS_PORT },
+  { first: EGRESS_PROXY_PORT, last: EGRESS_STATUS_PORT },
 ]
   .toSorted((a, b) => a.first - b.first)
   .map(portRangeText);

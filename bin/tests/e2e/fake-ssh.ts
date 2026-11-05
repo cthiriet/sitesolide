@@ -480,7 +480,7 @@ if (import.meta.main) {
     process.exit(0);
   }
   // Where the egress proxy stands, read before a project that declares
-  // `egress` or `connectors` pushes anything. Running, unless the test lays
+  // `egress` pushes anything. Running, unless the test lays
   // the state it wants.
   if (command === egressStateCommand()) {
     record("EGRESS");

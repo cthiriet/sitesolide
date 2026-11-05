@@ -40,7 +40,7 @@ export const HISTORY_TYPES: readonly HistoryTypeEntry[] = [
   { key: "signins", label: "Sign-ins", prefixes: ["portal.sign", "dashboard.sign", "member.sign"] },
   { key: "tokens", label: "Tokens", prefixes: ["token."] },
   { key: "backups", label: "Backups", prefixes: ["backup."] },
-  { key: "egress", label: "Egress", prefixes: ["egress.", "connector."] },
+  { key: "egress", label: "Egress", prefixes: ["egress."] },
 ]
 
 /** Does a row's dotted action belong to this family? */

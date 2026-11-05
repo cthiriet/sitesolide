@@ -52,8 +52,8 @@ In particular:
   role above one's own, a token reaching a project it was not granted;
 - a compromised component, the dashboard, the portal, a project, reaching
   further than its section of the threat model says;
-- a project reaching a host its manifest does not list, or a connector it
-  was not granted, see [egress/README.md](egress/README.md#threat-model);
+- a project reaching a host its manifest does not list, see
+  [egress/README.md](egress/README.md#threat-model);
 - a backup copy, extraction or restore touching another project's data or
   root's;
 - `setup` or `deploy` leaving the machine weaker than the documentation says.

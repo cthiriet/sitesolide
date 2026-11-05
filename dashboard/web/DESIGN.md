@@ -51,7 +51,7 @@ shows, and what waits one gesture away.
    public names (5)"), never into the row. The count says what is folded, so
    folding costs no trust.
 6. **One action in the row at most**, and only when it is the page's job:
-   *Set* a missing secret, *Grant* a request, *Restore* on hover. Everything
+   *Set* a missing secret, *Restore* on hover. Everything
    else is in the row menu, destructive last under a separator, still
    confirmed.
 7. **Icons that mean one thing everywhere** (5, *Icons*), 16 px in a row,
@@ -284,7 +284,6 @@ Computer (>= 768 px), machine level
 | Activity     |                                                           |
 | People       |                                                           |
 | Tokens       |   machine strip, server banners, filters, list of sites   |
-| Connectors   |                                                           |
 | Server     * |                                                           |
 | Dark mode    |                                                           |
 | Sign out     |                                                           |
@@ -319,8 +318,8 @@ beside an entry sits on its tone's solid badge. The sidebar's own controls
 (theme, sign out, collapse) sit at its foot in `muted-foreground`, the release
 below them in mono.
 
-**Two levels.** On the machine's pages (Sites, Activity, People, Tokens,
-Connectors and Server), the sidebar carries them. Inside a site it becomes that site's: the *All sites*
+**Two levels.** On the machine's pages (Sites, Activity, People, Tokens
+and Server), the sidebar carries them. Inside a site it becomes that site's: the *All sites*
 return, the current site on a raised card (its initial on a tile, its name,
 then its kind when fine, "App", "Static site", and its state in its tone with
 a dot when not, "Restarting, 3 errors", quiet when fine like the Overview's
@@ -351,7 +350,7 @@ Indicators (`lib/sidebar.ts`). Machine: *Sites* the number of discrepancies (err
 if there is one, otherwise attention); *Server* a dot and no count, in
 attention while the heartbeat is not set, since nothing outside the server
 would then notice it go down, in error while it fails (`serverSignal` in
-`lib/server-setup.ts`); Activity, People, Tokens and Connectors report
+`lib/server-setup.ts`); Activity, People and Tokens report
 nothing. Site: *Overview* its discrepancies; *Secrets* what
 its store and its files ask for, a declared name or file not set in the tone
 of the warning the verdict counts it by, a platform file missing as an
@@ -432,7 +431,7 @@ A page does not write its own version of any of them.
 | `useData()` | `data.tsx` | everything the pages read: snapshot, verdict, age, secrets, who is signed in (`identity`), `sessionExpired`, `refresh` |
 | `useNavigation()` | `navigation.tsx` | `{ page, path, params, fromHistory, navigate(href, { replace? }) }` |
 | `useListState(spec)` | `filter-bar.tsx` | a list's search, facets and sort, read from the address and written back to it (`?q=`, a parameter per facet, `?sort=`), replacing the entry; the pure half in `lib/list-state.ts`, `narrowList` for the rows and the facets' counts |
-| `useSheet(param)` | `detail-sheet.tsx` | `{ id, open(id), close() }`: a sheet addressed by `?token=`, `?person=`, `?event=`, `?connector=`; open adds a history entry, so Back closes it |
+| `useSheet(param)` | `detail-sheet.tsx` | `{ id, open(id), close() }`: a sheet addressed by `?token=`, `?person=`, `?event=`; open adds a history entry, so Back closes it |
 | `historyUrl(filter)`, `readHistory(params)` | `lib/history.ts` | Activity's address, the one every History link speaks: `actor`, `action`, `target`, `source`, `type`, `since` |
 | `InternalLink` | `navigation.tsx` | every link to another dashboard page, a real `<a href>` |
 | `readAddress`, `requestedSite` | `lib/pages.ts` | the page and parameters of an address |
@@ -550,11 +549,10 @@ the dashboard:
 - **One action in the row at most**, the page's job, as a small outline or
   ghost button in its own column or on hover; everything else in the
   `RowMenu`.
-- **A project's name** on People, Tokens and Connectors, in a row as in a
-  sheet, is a link to its site (`ProjectLink`): its Overview, People's to
-  its Access, where the role is changed. A project the server does not
-  serve, a token's not deployed yet, a grant left to a removed site, stays
-  plain text.
+- **A project's name** on People and Tokens, in a row as in a sheet, is a
+  link to its site (`ProjectLink`): its Overview, People's to its Access,
+  where the role is changed. A project the server does not serve, a token's
+  not deployed yet, stays plain text.
 - `heading`, for a list cut into groups: one table per group, its heading
   a sticky mono line in place of the column heads, pushed up by the next
   (Activity's days); the heads stay for screen readers.
@@ -580,8 +578,8 @@ lines), the sections the object needs (`SheetSection`, a mono label over
 its content), then *Recent*, the object's last ten lines of Activity, and
 *All activity* (`history`); last, at its foot, the destructive action, an
 outline button in red, still confirmed: *Revoke token*, *Remove from every
-project*, *Remove connector*. Its address is the page's (`useSheet`): `?token=`, `?person=`,
-`?event=`, `?connector=`; Back closes it, a link opens it.
+project*. Its address is the page's (`useSheet`): `?token=`, `?person=`,
+`?event=`; Back closes it, a link opens it.
 
 **History.** A page's own activity is in Activity, never in a panel of the
 page: the header's *History* opens it narrowed (`historyUrl`), a sheet's
@@ -620,11 +618,11 @@ with one meaning everywhere and its words in its tooltip (`lib/legend.ts`):
 | `Pause`, 12 px | a project or a permission a person's token holds but may not use now, their role being below it | muted |
 | `Lock`, 12 px, after a label | a write that asks for the unlock first | the label's |
 | `Server`, `Cloud` | where a snapshot lives: on this server, in the offsite copy | muted |
-| `Layers`, `History`, `UsersRound`, `KeySquare`, `Plug`, `SlidersHorizontal` | the machine's pages in the sidebar, the tabs and the Sites row menu: Sites, Activity, People, Tokens, Connectors, Server | `secondary-foreground` |
+| `Layers`, `History`, `UsersRound`, `KeySquare`, `SlidersHorizontal` | the machine's pages in the sidebar, the tabs and the Sites row menu: Sites, Activity, People, Tokens, Server | `secondary-foreground` |
 | `HeartPulse`, `BellRing`, `Cloud`, `LogIn`, `UserKey`, `Asterisk` | the server's own settings, on the Server page and in the setup guide: the heartbeat, the alert webhook, the offsite copy (the same `Cloud` as a snapshot's), company sign-in, the dashboard password, the portal password | muted |
 | `Gauge`, `Workflow`, `SquareAsterisk`, `ShieldCheck`, `DatabaseBackup` | a site's sections, there and in the Sites row menu: Overview, Services, Secrets, Access, Backups | `secondary-foreground` |
 | `AppWindow`, `Cog`, `CalendarClock`, `Database` | a service on the Services canvas and in its table: a server, a worker, a scheduled service, one that keeps a database live by its backup command | muted, on a tile |
-| `MousePointer2`, `Files`, `Waypoints`, `Plug`, `CircleDashed` | the canvas's other cards: visitors through Caddy, a site's static files, the egress proxy or any host, the connectors, another process | muted, on a tile |
+| `MousePointer2`, `Files`, `Waypoints`, `CircleDashed` | the canvas's other cards: visitors through Caddy, a site's static files, the egress proxy or any host, another process | muted, on a tile |
 
 Navigation borrows no row's icon: Sites is not a `Globe`, which says
 *Public*, nor Secrets a `KeyRound`, which says a code; a note under every
@@ -731,13 +729,11 @@ or a value never passes. Under the sign-in of an expired session, the page is
 
 | Object | Word | Do not write |
 |---|---|---|
-| Machine pages | Sites (the home page), Activity, People, Tokens, Connectors, Server | Dashboard, Home, Overview, Members, Team, Settings, Machine |
+| Machine pages | Sites (the home page), Activity, People, Tokens, Server | Dashboard, Home, Overview, Members, Team, Settings, Machine |
 | The server's own settings | Alerts, Sign-in, Backups (the Server page's panels); Heartbeat, Alert webhook, Dashboard password, Portal password, Company sign-in, Offsite copy; Not set, Set, Set, changed 12 days ago, Incomplete, 3 of 5 needed settings are set, Delivered, Failed, last ping did not go through, 3 undelivered, Off, On, Misconfigured, Unmanaged, See why, Restart pending, skipped; Set up, Change, Change the URL, See progress, Change password, Reveal for 30 s, Hide value, Hides in 24s, Hide now, Restart portal, Restart dashboard, Skip, Unskip, Remove; Set up this server, Why these are here, Open the Server page, Hide the setup guide, Show it again, Passwords, Change the dashboard password, Change the portal password; Advanced: the server's files, in the Secrets of the dashboard site | a file or a variable name, Configure, Enable, Disable, Settings, Wizard, Onboarding |
 | The guides | Step 2 of 3, Before you start, One command to run first, Check again, Next, Back, Save and continue, Save, Done; Create a check, Paste its ping URL, Ping URL, Wait for the first ping, Waiting for the monitor's next pass, Last pass 26s ago, Next pass; Choose where messages go, Paste the Slack address, Webhook address, Message format, From the address, Keep the current one, read from the address, as you chose; Create a bucket, Enter its details, Change its details, Endpoint, Bucket, Access key, Secret key, Region, Folder, Optional, Leave empty to keep it, Encryption passphrase, New passphrase, Generate, Copy, I saved it; Register the app, Issuer, Client ID, Client secret, Allowed domains, Admin emails, Provider name | Submit, Finish, Wizard, URL for a webhook (Webhook address), Prefix, Access key ID |
 | Toasts | Setup guide hidden. Every setting stays on the Server page., Undo, Offsite copy skipped. You can set it up on the Server page., The setup guide is back on Sites., The server is set up. The setup guide is gone., Heartbeat removed., Dismiss | Success, Done! |
-| Connectors | Connector, Add connector, Change, Remove connector, Requests, Grant, Withdraw, Granted, Granted, asked for, Asked, not granted, No such connector, Not asked for, Site removed, Base address, Header, Changed, Write-only (in the dialog and the sheet, never in a row) | Integration, Secret, Token, Revoke access, Grants |
-| Site sections | Overview, Services, Secrets, Access, Backups; the breadcrumb *All sites > cms*; *Switch site* | Settings, Details, Sharing, Guests, Members, Map, Topology |
-| The Services canvas | Visitors, Through Caddy, over HTTPS, Static files, Egress proxy, These hosts, and no other, Connectors, Lent by the machine, Any host, Another process; Server, Internal server, Database, Background, Scheduled, main service; All other paths, Every path; Open now, Seen before, Routed by Caddy, Declared; 2 open, 19h ago (a lit line's badge); 3 connections open, Last seen 2h ago, Declared in API_URL, Every service gets INFERENCE_URL, Declared on its command line; Loopback only, Loopback, out through the proxy, Outbound network; Zoom in, Zoom out, Fit to view, Actual size, Reset layout; See how they connect; Connections, From, To | Graph, Node, Edge, Topology, Upstream, Downstream, Dependency |
+| The Services canvas | Visitors, Through Caddy, over HTTPS, Static files, Egress proxy, These hosts, and no other, Any host, Another process; Server, Internal server, Database, Background, Scheduled, main service; All other paths, Every path; Open now, Seen before, Routed by Caddy, Declared; 2 open, 19h ago (a lit line's badge); 3 connections open, Last seen 2h ago, Declared in API_URL, Every service gets INFERENCE_URL, Declared on its command line; Loopback only, Loopback, out through the proxy, Outbound network; Zoom in, Zoom out, Fit to view, Actual size, Reset layout; See how they connect; Connections, From, To | Graph, Node, Edge, Topology, Upstream, Downstream, Dependency |
 | The machine | Server | VM, host |
 | Discrepancy | Refusal, issues; Error, Warning | Alert, Critical |
 | Verdict | All clear, `N errors, N warnings`, Stale data, No data | OK, Healthy |
@@ -776,7 +772,6 @@ One page per served file, the site in `?s=`:
 | Activity | `/activity/` | `activity/index.html` |
 | People | `/people/` | `people/index.html` |
 | Tokens | `/tokens/` | `tokens/index.html` |
-| Connectors | `/connectors/` | `connectors/index.html` |
 | Server, the owner's alone | `/server/` | `server/index.html` |
 | A site's Overview | `/site/?s=cms` | `site/index.html` |
 | A site's Services | `/site/services/?s=cms` | `site/services/index.html` |
@@ -790,7 +785,8 @@ entry (`LEGACY_PATHS` in `lib/pages.ts`): `/sites/?site=cms` and
 page, `/team/` to Tokens, `/members/` to People, and a site's
 `/site/guests/`, `/site/sharing/` and `/site/members/` to its Access, and
 `/site/audience/`, from before Audience was removed, to its Overview, `?s=`
-kept. A section without `?s=` goes to the home page.
+kept, and `/connectors/`, from before Connectors was removed, to Activity. A
+section without `?s=` goes to the home page.
 
 **Sites (the home page).** Is anything wrong on the machine, and which site
 to open. Its intro, behind the title's (i); *History* opens Activity on the
@@ -1057,33 +1053,8 @@ need more."; `no-role`, "This account has no access to any project
 here. Ask the owner, or an Admin of the project, to add you."; a domain not
 allowed, expired, not available.
 
-**Connectors.** Its intro behind the title's (i): what a connector is,
-and that a project gets one when its sitesolide.json asks for it under
-connectors and the owner grants it here, either alone lending nothing. *Add
-connector*, the header's primary action, asks for the unlock first;
-*History* opens Activity on the egress proxy's audit. First **Requests**,
-only while something waits, its count its rows', each a warning in the
-gutter: a grant left to a site that is gone, *Site removed* in attention,
-with *Withdraw* (a leftover that lends nothing until a project of that name
-asks again, as the server calls a Caddy fragment with no folder a warning);
-a project that asks for a connector
-not granted, *Asked, not granted* in attention, with *Grant*; one that asks
-for a connector the server lacks, *No such connector* in attention, with
-*Add connector*, its name filled in. Then the connectors, one 44 px row
-each: the name in mono, the base address without its scheme, muted and cut,
-the projects it is granted to, "cms, hiring", each linked to its site, one
-that does not ask for it muted, and when it changed; the row menu, *Change* and *Remove connector*,
-each asking for the unlock first. A click opens the sheet (`?connector=`):
-*Write-only*, said there and in the dialog rather than on every row; the
-whole base address, the header, when it changed; every project it concerns,
-its word and its one action, *Withdraw* or *Grant*; its last ten lines from
-the egress proxy itself, its calls, changes, grants and the refusals to reach
-it, and *All activity*; *Remove connector* at its foot. The add and change
-dialog types the value in a password field and leaves it empty on a change
-to keep it; a removal retypes the name.
-
 **Server.** The owner's alone, at `/server/`, `SlidersHorizontal` in the
-sidebar and a sixth tab on a phone, a dot beside it while the heartbeat is
+sidebar and a fifth tab on a phone, a dot beside it while the heartbeat is
 not set: the server's own settings, how it tells you it is down, who signs
 in, where its backups go. Its header is the other machine pages': the
 title, the (i) ("Only you see this page.", that no site reads them, that
@@ -1278,10 +1249,10 @@ reading from a collector older than connections says so in an attention
 banner: the map then holds what sitesolide.json declares.
 
 ```
- [Visitors       ]  /v1/*   +- playground  Loopback, out through the proxy -------------+   [Connectors ]
- [cms.example.com] -------> | [platform] ----> [api] ----> [inference]                  | ->[slack      ]
- [Restricted     ] --All--> | [indexer ] ---------------> [db        ]                  | ->[Egress proxy]
-                            | [evals   ] - - -^                                         |   [api.ex.com ]
+ [Visitors       ]  /v1/*   +- playground  Loopback, out through the proxy -------------+
+ [cms.example.com] -------> | [platform] ----> [api] ----> [inference]                  | ->[Egress proxy]
+ [Restricted     ] --All--> | [indexer ] ---------------> [db        ]                  |   [api.ex.com  ]
+                            | [evals   ] - - -^                                         |
                             +-----------------------------------------------------------+
  [- Open now  - Seen before, or routed  - - Declared]                        [Reset layout | - 100% + | Fit]
 ```
@@ -1290,8 +1261,7 @@ banner: the map then holds what sitesolide.json declares.
   the site serves pages, its address and its general access as the Access
   section words it; *Static files* when Caddy serves a `publicDir` first; a
   card per service; on the right, what leaves the machine, *Egress proxy*
-  with its hosts, *Connectors* with their names, *Any host* for outbound
-  network; *Another process* when one that is none of the site's services
+  with its hosts, *Any host* for outbound network; *Another process* when one that is none of the site's services
   was seen calling one. The services and the files sit inside the project's
   walls, a dashed frame titled by the slug in mono and how far the walls let
   them go, *Loopback only*, *Loopback, out through the proxy*, *Outbound
@@ -1659,7 +1629,7 @@ and no table.
     whole first phone screen of Activity, read once and then in the way of
     the list. It lives behind the title's (i), whole.
 18. **An activity panel on an object's page**, Tokens twice, Secrets,
-    Backups, Connectors: history at the weight of the object, mostly routine,
+    Backups: history at the weight of the object, mostly routine,
     "Scheduled run, Done" six times. Activity holds it, behind *History* and
     a sheet's *Recent*.
 19. **A status word and a dot on every healthy row**, *Running* fourteen
@@ -1737,48 +1707,40 @@ and no table.
     create projects*.
 40. **Domains in a panel of their own** under People: the same question,
     who gets in, answered twice. One list, its *Type* facet to narrow it.
-41. **A Grants panel of every pair**, its count the grants' while its rows
-    were the pairs, 3 over 6: a granted pair needs no decision. What waits
-    is *Requests*, which counts its rows; a granted pair lives in its
-    connector's row and sheet.
-42. **Created, used and until in a token's row, its made-by line, Write-only
-    on every connector**: the row keeps what a decision needs, Last used and
-    Expires; the rest, and what is true of every connector, is in the sheet
-    and the dialog.
-43. **The New token dialog at its full height**: 1002 px of content in an
+41. **Created, used and until in a token's row, its made-by line**: the row
+    keeps what a decision needs, Last used and Expires; the rest is in the
+    sheet and the dialog.
+42. **The New token dialog at its full height**: 1002 px of content in an
     868 px dialog, every project in two columns and four permissions always
     open. Six rows of projects with a filter, the permissions closed until
     one is on or needed, and a summary line in view of *Create token*.
-44. **Who added a person, and when, in People's sheet**: the People route
+43. **Who added a person, and when, in People's sheet**: the People route
     carries each person's roles, not who gave them. It is on the person's
     row in each project's Access section.
-45. **A status line and an activity panel in Secrets**, "Running, up 20h,
+44. **A status line and an activity panel in Secrets**, "Running, up 20h,
     cms" under the panel's title and a log of the site's operations below
     it: the Overview says the service, Activity the history. A restart
     pending is the panel's pill, and its button the primary only then.
-46. **Upload file and Add variable as two buttons at the panel's foot**,
+45. **Upload file and Add variable as two buttons at the panel's foot**,
     and Build secrets and Public variables as two panels: one *Add* menu in
     the panel's header, one disclosure with its count.
-47. **Masked dots in place of a value**: they say nothing the name does not,
+46. **Masked dots in place of a value**: they say nothing the name does not,
     and invite a read. A value shows on the owner's demand, otherwise
     nothing does.
-48. **The Backups' Schedule table and its activity panel**, five rows and
+47. **The Backups' Schedule table and its activity panel**, five rows and
     six "Scheduled run, Done": one status row, the rest behind *Details*,
     the runs in Activity.
-49. **Kind and Where in words on every snapshot**, "Scheduled" and "Server
+48. **Kind and Where in words on every snapshot**, "Scheduled" and "Server
     and offsite" twelve times, and a *Restore* button on each: a tag for a
     before-restore snapshot alone, two icons for where, *Restore* under the
     pointer and in the row menu.
-50. **Navigation drawn with the rows' icons**, Sites as a `Globe` and
+49. **Navigation drawn with the rows' icons**, Sites as a `Globe` and
     Secrets as a `KeyRound`, the icons that say *Public* and a code one
     column away: the sites are a stack, the secrets a masked value.
-51. **Running and a green dot on the site's card in the sidebar**, on every
+50. **Running and a green dot on the site's card in the sidebar**, on every
     healthy site, the word the rows had stopped saying: the card says what
     the site is when fine, its state in its tone when not.
-52. **A leftover grant in red** among Connectors' requests, under a verdict
-    saying *All clear*: it lends nothing until a project of that name asks
-    again, a warning like a Caddy fragment with no folder.
-53. **The server's own settings in the dashboard site's Secrets alone**, as
+51. **The server's own settings in the dashboard site's Secrets alone**, as
     variables of files named by their file: point 8 keeps everything about
     a site in that site, and these are about no site. The heartbeat, the
     alert webhook, the passwords, company sign-in and the offsite copy are
@@ -1788,7 +1750,7 @@ and no table.
     restart that applied nothing. They get a machine page of their own,
     Server, in words and in the order they are read, with a guide for each;
     the files stay in those Secrets, for repairs, one link away.
-54. **Four ways to the same settings**, mockups A to D: a page, each setting
+52. **Four ways to the same settings**, mockups A to D: a page, each setting
     in a sheet where its state shows, a guided list on the home page, a
     command menu. One row component in two places was kept: the Server page
     holds every setting for good, the guide on Sites only what is missing,

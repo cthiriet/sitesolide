@@ -83,7 +83,6 @@ export function machineIndicators(
     activity: null,
     people: null,
     tokens: null,
-    connectors: null,
     server: server === null ? null : { count: 1, tone: server.tone, label: server.label, dot: true },
   }
 }

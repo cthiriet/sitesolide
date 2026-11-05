@@ -5,10 +5,10 @@
  *
  * Two levels. The machine's: the home page, where the machine, its
  * discrepancies and the list of sites live, the machine's audit, the People
- * with a role somewhere, the Tokens that deploy without SSH, the
- * connectors the egress proxy lends, and the server's own settings. A site's: five sections, Overview,
- * Services, Secrets, Access and Backups, the site as a parameter; Services only for an app,
- * the one kind that runs any.
+ * with a role somewhere, the Tokens that deploy without SSH, and the server's
+ * own settings. A site's: five sections, Overview, Services, Secrets, Access
+ * and Backups, the site as a parameter; Services only for an app, the one
+ * kind that runs any.
  *
  * Every page is a file of the build, `site/secrets/index.html` for
  * `/site/secrets/`: Caddy serves `public/` through `file_server`, with no
@@ -22,8 +22,9 @@
  * Older addresses keep their file so bookmarks keep working: `/sites/`,
  * `/secrets/` and `/guests/` from before the per-site page, `/team/` and
  * `/members/` from before Tokens and People, a site's Guests, Sharing and
- * Members from before its one Access section, and its Audience, removed, which
- * opens its Overview. They are read like their
+ * Members from before its one Access section, its Audience, removed, which
+ * opens its Overview, and `/connectors/`, removed, which opens Activity,
+ * where the egress proxy's refusals are read. They are read like their
  * equivalent, and navigation replaces the address with the new one.
  */
 import { isPerson, roleOn, type Person } from "./identity"
@@ -34,7 +35,7 @@ import type { Verdict } from "./verdict"
 export type Section = "overview" | "services" | "secrets" | "access" | "backups"
 
 /** The pages of the machine level. */
-export type MachinePage = "home" | "activity" | "people" | "tokens" | "connectors" | "server"
+export type MachinePage = "home" | "activity" | "people" | "tokens" | "server"
 
 export type Page = { name: MachinePage } | { name: "site"; slug: string; section: Section }
 
@@ -47,7 +48,6 @@ export const MACHINE_PAGES: readonly MachineEntry[] = [
   { name: "activity", title: "Activity", path: "/activity/" },
   { name: "people", title: "People", path: "/people/" },
   { name: "tokens", title: "Tokens", path: "/tokens/" },
-  { name: "connectors", title: "Connectors", path: "/connectors/" },
   { name: "server", title: "Server", path: "/server/" },
 ]
 
@@ -143,6 +143,7 @@ export const LEGACY_PATHS: Readonly<Record<string, Legacy>> = {
   "/guests/": { kind: "section", section: null, param: LEGACY_PARAM },
   "/team/": { kind: "machine", page: "tokens" },
   "/members/": { kind: "machine", page: "people" },
+  "/connectors/": { kind: "machine", page: "activity" },
   "/site/guests/": { kind: "section", section: "access", param: SITE_PARAM },
   "/site/sharing/": { kind: "section", section: "access", param: SITE_PARAM },
   "/site/members/": { kind: "section", section: "access", param: SITE_PARAM },

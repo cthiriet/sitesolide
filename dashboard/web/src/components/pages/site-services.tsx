@@ -52,8 +52,6 @@ function nodeName(id: string, site: Site): string {
       return "Static files"
     case "egress":
       return "Egress proxy"
-    case "connectors":
-      return "Connectors"
     case "internet":
       return "Any host"
     default: {

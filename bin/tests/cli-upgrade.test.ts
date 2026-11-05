@@ -398,15 +398,12 @@ describe("components out of date", () => {
     }
   });
 
-  test("the egress proxy redeployed, then the steward started again after it, as docs/upgrading.md says", async () => {
+  test("the egress proxy redeployed alone: the steward reads nothing of it", async () => {
     const w = world({ stale: ["egress.js"] });
     const r = await upgrade(w);
     expect(r.code).toBe(0);
-    expect(runs(w)).toEqual(["kit deploy-egress.sh", "kit deploy-steward.sh"]);
-    const steward = r.print.checks.find((report) => report.step === "steward")!;
-    expect(steward.detail).toContain("steward-after-egress");
-    // setup's own check of the proxy passes afterwards: setup has nothing to redo.
-    expect(w.machine.labels.has("steward-after-egress")).toBe(true);
+    expect(runs(w)).toEqual(["kit deploy-egress.sh"]);
+    expect(r.print.checks.find((report) => report.step === "steward")!.status).toBe("done");
   });
 
   test("Caddy's drop-in: setup's own run, through systemctl, never caddy stop nor caddy start", async () => {
@@ -437,16 +434,15 @@ describe("components out of date", () => {
     expect(r.print.checks.find((report) => report.step === "steward")!.detail).toContain(STEWARD_WRITES_BACKUPS.label);
   });
 
-  test("the conditions that only hold when their component is there: no egress, no backups, nothing asked of the steward about them", async () => {
-    const w = world({ absent: ["egress", "backups"] });
+  test("the condition that only holds when its component is there: no backups, nothing asked of the steward about them", async () => {
+    const w = world({ absent: ["backups"] });
     await upgrade(w, { dryRun: true });
     const steward = w.machine.calls.find((call) => call.tag === "upgrade:steward:check")!;
-    expect(scriptLabels(steward.input)).not.toContain("steward-after-egress");
     expect(scriptLabels(steward.input)).not.toContain(STEWARD_WRITES_BACKUPS.label);
     const full = world();
     await upgrade(full, { dryRun: true });
     const all = full.machine.calls.find((call) => call.tag === "upgrade:steward:check")!;
-    expect(scriptLabels(all.input)).toEqual(expect.arrayContaining(["steward-active", "steward-code", "steward.js", "sitesolide-steward.service", "steward-after-egress", STEWARD_WRITES_BACKUPS.label]));
+    expect(scriptLabels(all.input)).toEqual(expect.arrayContaining(["steward-active", "steward-code", "steward.js", "sitesolide-steward.service", STEWARD_WRITES_BACKUPS.label]));
   });
 });
 
@@ -459,17 +455,15 @@ describe("--dry-run", () => {
     expect(w.machine.runs()).toEqual([]);
     const byStep = Object.fromEntries(r.print.checks.map((report) => [report.step, report]));
     expect(byStep.egress!.status).toBe("todo");
-    expect(byStep.egress!.detail).toBe("differs: egress.js; would run bin/deploy-egress.sh, the steward restarted after it");
-    // The proxy would run first: the steward would start again after it.
-    expect(byStep.steward!.status).toBe("todo");
-    expect(byStep.steward!.detail).toContain("steward-after-egress");
+    expect(byStep.egress!.detail).toBe("differs: egress.js; would run bin/deploy-egress.sh");
+    expect(byStep.steward!.status).toBe("done");
     expect(byStep.dashboard!.detail).toBe("differs: /srv/sites/dashboard/public: 3 entries to send or delete; would run sitesolide deploy in dashboard/");
     expect(byStep.installer).toMatchObject({ status: "skip", detail: NOT_INSTALLED });
     expect(byStep.monitor!.status).toBe("done");
     const result = r.print.results[0]!;
-    expect(result).toMatchObject({ dryRun: true, outOfDate: ["egress", "steward", "dashboard"], missing: ["installer"], upgraded: [] });
+    expect(result).toMatchObject({ dryRun: true, outOfDate: ["egress", "dashboard"], missing: ["installer"], upgraded: [] });
     expect((result.components as { component: string; state: string }[]).map((c) => `${c.component}:${c.state}`)).toContain("installer:missing");
-    expect(r.print.lines).toContain("-> dry run: 3 component(s) to upgrade, egress, steward, dashboard; nothing was changed");
+    expect(r.print.lines).toContain("-> dry run: 2 component(s) to upgrade, egress, dashboard; nothing was changed");
     // Only reads reached the kit: fingerprints and comparisons.
     expect(w.kit.tasks.every((task) => task.endsWith("--fingerprint") || task.includes("--compare"))).toBe(true);
   });
@@ -574,7 +568,7 @@ describe("components the machine does not carry", () => {
 
 describe("a failure, then the same command again", () => {
   test("stops at the component, quotes what it printed and what to inspect; the next run resumes there", async () => {
-    const w = world({ stale: ["egress.js", "gatekeeper.js", "monitor.js"] });
+    const w = world({ stale: ["egress.js", "steward.js", "gatekeeper.js", "monitor.js"] });
     w.kit.failing.add("deploy-steward.sh");
     const first = await upgrade(w);
     expect(first.code).toBe(1);

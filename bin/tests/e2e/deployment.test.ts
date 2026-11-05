@@ -901,7 +901,6 @@ describe("a project that reaches outside through the egress proxy", () => {
     expect(r.output).toContain("Environment=HTTPS_PROXY=http://127.0.0.1:3128");
     expect(r.output).toContain("Environment=http_proxy=http://127.0.0.1:3128");
     expect(r.output).toContain("Environment=NO_PROXY=localhost,127.0.0.1,::1");
-    expect(r.output).toContain("Environment=SITESOLIDE_CONNECTORS=http://127.0.0.1:3129/connectors");
   });
 
   test("the proxy's state is read before anything is built or pushed", async () => {

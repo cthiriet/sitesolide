@@ -66,7 +66,6 @@ beforeAll(async () => {
     systemctl: "/bin/false",
     journalctl: "/bin/false",
     backups: null,
-    connectors: null,
   });
   const system: ControlSystem = {
     ...real,

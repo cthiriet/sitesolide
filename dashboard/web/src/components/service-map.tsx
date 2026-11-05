@@ -21,7 +21,6 @@ import {
   Maximize,
   Minus,
   MousePointer2,
-  Plug,
   Plus,
   RotateCcw,
   Waypoints,
@@ -86,7 +85,6 @@ const ICON: Record<NodeKind, LucideIcon> = {
   scheduled: CalendarClock,
   database: Database,
   egress: Waypoints,
-  connectors: Plug,
   internet: Waypoints,
 }
 
@@ -100,7 +98,6 @@ const WIDTH: Record<NodeKind, number> = {
   scheduled: 236,
   database: 236,
   egress: 216,
-  connectors: 216,
   internet: 216,
 }
 
@@ -282,22 +279,6 @@ function EgressCard({ site }: { site: Site }) {
   )
 }
 
-function ConnectorsCard({ site }: { site: Site }) {
-  const names = site.network.connectors
-  return (
-    <>
-      <CardHead icon={ICON.connectors} title="Connectors" subtitle="Lent by the machine" />
-      {names.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {names.map((name) => (
-            <MonoChip key={name}>{name}</MonoChip>
-          ))}
-        </div>
-      )}
-    </>
-  )
-}
-
 function Card({ node, site, now }: { node: MapNode; site: Site; now: number }) {
   switch (node.kind) {
     case "visitors":
@@ -306,8 +287,6 @@ function Card({ node, site, now }: { node: MapNode; site: Site; now: number }) {
       return <FilesCard site={site} />
     case "egress":
       return <EgressCard site={site} />
-    case "connectors":
-      return <ConnectorsCard site={site} />
     case "internet":
       return <CardHead icon={ICON.internet} title="Any host" subtitle="Outbound network, no proxy" />
     case "outside":
@@ -844,7 +823,7 @@ export function ServiceMap({
 /** How far the project's walls let its services go: what the frame says beside its name. */
 function wallsLine(site: Pick<Site, "network">): string {
   if (site.network.outbound) return "Outbound network"
-  if (site.network.egress.length > 0 || site.network.connectors.length > 0) return "Loopback, out through the proxy"
+  if (site.network.egress.length > 0) return "Loopback, out through the proxy"
   return "Loopback only"
 }
 

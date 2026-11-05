@@ -126,7 +126,7 @@ describe("one page of the whole machine", () => {
       readers({
         dashboard: paged(() => rowsOf("dashboard", [{ id: 2, minute: 1, actor: "token:abc", action: "deploy.success", target: "shop" }])),
         portal: paged(() => rowsOf("portal", [{ id: 9, minute: 0, actor: "ada@test-zone.invalid", action: "portal.signin", target: "shop.test-zone.invalid" }])),
-        egress: paged(() => rowsOf("egress", [{ id: 4, minute: 3, action: "connector.update", target: "chat" }])),
+        egress: paged(() => rowsOf("egress", [{ id: 4, minute: 3, action: "egress.denied", target: null }])),
       }),
     );
     expect(answer.rows.map((row) => [row.id, row.site])).toEqual([

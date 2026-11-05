@@ -96,16 +96,6 @@ export type SecretsRoutes = {
    * to stop one from signing out.
    */
   forgetUnlock: (sessionHash: string) => Promise<void>;
-  /**
-   * Not a route either: the origin, session and token checks of every route
-   * above, for the routes of src/connectors/relay.ts, which write under the
-   * same unlock and must not hold a copy of those checks.
-   */
-  withToken: <D extends object>(
-    extract: Extraction<D>,
-    call: (requested: D & WithToken) => Promise<Response>,
-    options?: RouteOptions<D>,
-  ) => Handler;
 };
 
 const NO_CACHE = { "Cache-Control": "no-store" };
@@ -567,6 +557,5 @@ export function createSecretsRoutes(dependencies: SecretsDependencies, clock: ()
     ),
 
     forgetUnlock,
-    withToken,
   };
 }

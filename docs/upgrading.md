@@ -52,7 +52,7 @@ component (active, enabled, its files present), plus:
 | Caddy's drop-in | `override.conf` differs from the release's | setup's own step: the drop-in installed, `daemon-reload`, `systemctl restart caddy` |
 | backups | `backup.js` or one of its three units differs, or restic, the repository or its key is missing | `bin/deploy-backup.sh install`; the timer stays as it is |
 | egress proxy | `egress.js` or its unit differs | `bin/deploy-egress.sh` |
-| steward | `steward.js`, its unit or the portal relay's two units differ, or it started before the egress proxy's unit was last laid, or before the backups' folder existed | `bin/deploy-steward.sh` |
+| steward | `steward.js`, its unit or the portal relay's two units differ, or it started before the backups' folder existed | `bin/deploy-steward.sh` |
 | shared service | the release in service differs from `api/`, file by file, or its unit does | `bin/deploy-api.sh`, before the dashboard, whose deployment is the first to deposit the Caddyfile, whose certificates its ask endpoint allows |
 | dashboard | `sitesolide deploy --dry-run --compare` finds a difference: a file to send or delete, its manifest, a missing unit, its Caddy block; every new release, whose version its page names | `sitesolide deploy` in `dashboard/` |
 | collector | one of its two units differs | `bin/deploy-collector.sh` |
@@ -72,11 +72,10 @@ redeploys what they build, once.
 
 The order is the one this page has always given: the backup install before the
 steward, whose unit opens the backups' folder only if it exists when the
-steward starts; the egress proxy before the steward too, which starts again
-after it so that it may write the connectors' folder; the root components that
-only listen before the dashboard, which they accept old and new; the collector,
-the gatekeeper and the installer after the dashboard; the Caddyfile, the shared
-service, the portal and the monitor last.
+steward starts; the root components that only listen before the dashboard,
+which they accept old and new; the collector, the gatekeeper and the installer
+after the dashboard; the Caddyfile, the shared service, the portal and the
+monitor last.
 
 ### What it never does
 
@@ -119,6 +118,50 @@ A machine upgrades one release at a time: from 0.1, follow
 then `sitesolide upgrade` for every release after, reading the notes below
 for each, [Access: one registry](#access-one-registry) first, then
 [Anyone with the code, from the dashboard](#anyone-with-the-code-from-the-dashboard).
+
+## Connectors removed
+
+**What the release brings.** The egress proxy no longer lends credentials. The
+dashboard loses its *Connectors* page, the steward its routes and its writes
+into `/etc/sitesolide-egress`, and the manifest its `connectors` key, which
+`sitesolide deploy`, `sitesolide refresh` and a token's deployment now refuse
+with what to write instead: the credential among the project's secrets, the
+host it calls under `egress`. The allow list stays as it is, on
+127.0.0.1:3128, and 3129 now carries nothing but the dashboard's two
+read-only routes, `GET /status` and `GET /audit`; both ports stay refused to
+every project by its unit. The steward's unit no longer opens
+`/etc/sitesolide-egress`, `bin/deploy-egress.sh` no longer creates it, and the
+steward no longer has to start again after the proxy. Activity tells a proxy
+that is not installed from one that is down by its unit file,
+`/etc/systemd/system/sitesolide-egress.service`, and a bookmark to
+`/connectors/` opens Activity, where the proxy's refusals are read.
+
+**What `sitesolide upgrade` brings**: the egress proxy, the steward, whose unit
+changes, the dashboard, and the components that embed the manifest's rules,
+the backups, the gatekeeper, the installer and the monitor. Caddy is
+not reloaded. No project's unit changes, the `egress` lines included, nor the
+loopback rule: there is nothing to `refresh`.
+
+**What stays by hand.** A project whose deployed manifest still declares
+`connectors` keeps the unit it has, `SITESOLIDE_CONNECTORS` included, and
+calls to that address are refused from now on; its next deployment, and
+`sitesolide refresh`, refuse it until the key is gone. The files the steward
+wrote stay on the machine, `connectors.json`, which holds the credentials
+themselves, and `grants.json`:
+
+```bash
+ssh <server> "sudo ls -l /etc/sitesolide-egress"
+ssh <server> "sudo rm -r /etc/sitesolide-egress"
+```
+
+Revoke each credential at its provider, then remove the folder once the
+upgrade has run: neither the proxy nor the steward of this release reads it.
+The proxy's database keeps the `seen` table it compared the files with, which
+nothing reads any more, and its `connector.*` rows, pruned after 90 days.
+
+**Going back.** `sitesolide upgrade` with the previous binary brings the page
+and the routes back, and that release's `bin/deploy-egress.sh` lays the
+folder again, empty, if it was removed.
 
 ## Audience removed
 

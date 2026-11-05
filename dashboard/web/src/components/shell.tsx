@@ -9,7 +9,6 @@ import { useNavigation } from "@/components/navigation"
 import { CONTAINER, EmptyState, HeaderSkeleton, PageBody, PageHeader, Panel, PanelSkeleton } from "@/components/page"
 import { HomePage } from "@/components/pages/home"
 import { ActivityPage } from "@/components/pages/activity"
-import { ConnectorsPage } from "@/components/pages/connectors"
 import { TokensPage } from "@/components/pages/tokens"
 import { PeoplePage } from "@/components/pages/people"
 import { ServerPage } from "@/components/pages/server"
@@ -36,7 +35,6 @@ const MACHINE_PAGES: Record<MachinePage, ComponentType> = {
   activity: ActivityPage,
   people: PeoplePage,
   tokens: TokensPage,
-  connectors: ConnectorsPage,
   server: ServerPage,
 }
 

@@ -115,8 +115,6 @@ export type Manifest = {
   portalExempt?: string[];
   /** The hosts reachable through the egress proxy, see bin/cli/egress.ts. */
   egress?: string[];
-  /** The connectors asked for; a grant on the machine allows them, see bin/cli/egress.ts. */
-  connectors?: string[];
   /**
    * `false` keeps the data folder out of the machine's snapshots, see
    * isBackedUp. An object is the single service's own backup command, in the
@@ -153,9 +151,18 @@ export const KNOWN_KEYS = [
   "portal",
   "portalExempt",
   "egress",
-  "connectors",
   "backup",
 ];
+
+/**
+ * Keys a release took away, each with what to write instead. Refused like an
+ * unknown key, since nothing reads them any more, but with a sentence that
+ * names the removal rather than suggesting a typo.
+ */
+export const REMOVED_KEYS: Readonly<Record<string, string>> = {
+  connectors:
+    "removed, the egress proxy no longer adds a credential to a project's calls: delete the key, declare the credential among the project's secrets, and list the host it calls under egress",
+};
 
 /** The keys of one entry of `services`, refused beyond these for the same reason. */
 export const SERVICE_KEYS = ["start", "port", "routes", "internal", "memory", "cpu", "env", "backup", "schedule", "timeout"];
@@ -1011,7 +1018,9 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
   const isApplication = isApp(manifest);
 
   for (const key of Object.keys(manifest)) {
-    if (!KNOWN_KEYS.includes(key)) {
+    if (Object.hasOwn(REMOVED_KEYS, key)) {
+      errors.push(`${key}: ${REMOVED_KEYS[key]}`);
+    } else if (!KNOWN_KEYS.includes(key)) {
       errors.push(`${key}: unknown key, a typo here could deploy an open site`);
     }
   }

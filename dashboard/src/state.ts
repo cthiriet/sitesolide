@@ -39,7 +39,7 @@ import { timerUnit } from "../borrowed/unit";
 import { duration, monitorAlerting, monitorDiscrepancies, type Alerting } from "./monitor";
 export type { Alerting } from "./monitor";
 import { MISSING_SECRET_SEVERITY, type StoreMissing } from "../borrowed/store-protocol";
-import { CONNECTORS_PORT, EGRESS_PROXY_PORT } from "../borrowed/egress";
+import { EGRESS_PROXY_PORT } from "../borrowed/egress";
 import type { RawLink } from "./links";
 
 /**
@@ -344,8 +344,6 @@ export type Network = {
   outbound: boolean;
   /** The hosts the egress proxy lets them reach, as written. */
   egress: string[];
-  /** The connectors they ask the machine to lend them. */
-  connectors: string[];
 };
 
 /**
@@ -362,8 +360,7 @@ export type SiteLink = {
   from: string;
   /**
    * What it reaches: one of the site's services by unit; `egress` for the
-   * egress proxy, on its way to a host of `egress`; `connectors` for a
-   * connector the machine lends.
+   * egress proxy, on its way to a host of `egress`.
    */
   to: string;
   /** Connections open at the last reading. */
@@ -753,7 +750,6 @@ function readNetwork(manifest: Manifest | null): Network {
   return {
     outbound: manifest?.network === "outbound",
     egress: names(manifest?.egress),
-    connectors: names(manifest?.connectors),
   };
 }
 
@@ -768,7 +764,7 @@ function namesPort(text: string, port: number): boolean {
  *
  * Seen: a connection opened by one of the site's services, by Caddy, or by
  * another process, to a port one of its services listens on; and one a
- * service of the site opened to the egress proxy or its connectors. Every
+ * service of the site opened to the egress proxy. Every
  * other is another site's, and none of this one's business: whose they are
  * goes no further than `outside`.
  *
@@ -796,7 +792,7 @@ export function siteLinks(manifest: Manifest, views: readonly ServiceView[], ser
     const from = unit === "caddy" ? "caddy" : unit !== null && units.has(unit) ? unit : "outside";
     const to =
       byPort.get(raw.port) ??
-      (from === "caddy" || from === "outside" ? null : raw.port === EGRESS_PROXY_PORT ? "egress" : raw.port === CONNECTORS_PORT ? "connectors" : null);
+      (from === "caddy" || from === "outside" ? null : raw.port === EGRESS_PROXY_PORT ? "egress" : null);
     if (to === null || from === to) continue;
     const link = add(from, to);
     link.open += raw.open;

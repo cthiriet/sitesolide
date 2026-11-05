@@ -24,7 +24,6 @@ describe("the page for an address", () => {
   test("the machine's pages are read from their path", () => {
     expect(pageFromUrl("/")).toEqual({ name: "home" })
     expect(pageFromUrl("/activity/")).toEqual({ name: "activity" })
-    expect(pageFromUrl("/connectors/")).toEqual({ name: "connectors" })
     expect(pageFromUrl("/server/")).toEqual({ name: "server" })
   })
 
@@ -88,6 +87,8 @@ describe("older addresses", () => {
     // Tokens and People, and a site's one Access section, from before them.
     expect(pageFromUrl("/team/")).toEqual({ name: "tokens" })
     expect(pageFromUrl("/members/")).toEqual({ name: "people" })
+    // Connectors, removed: Activity, where the egress proxy's refusals are read.
+    expect(pageFromUrl("/connectors/")).toEqual({ name: "activity" })
     for (const old of ["/site/guests/", "/site/sharing/", "/site/members/"]) {
       expect(pageFromUrl(old, "?s=cms")).toEqual({ name: "site", slug: "cms", section: "access" })
       expect(pageFromUrl(old)).toEqual({ name: "home" })
@@ -104,6 +105,7 @@ describe("older addresses", () => {
     expect(redirect("/guests/")).toBe("/")
     expect(redirect("/team/")).toBe("/tokens/")
     expect(redirect("/members/index.html")).toBe("/people/")
+    expect(redirect("/connectors/")).toBe("/activity/")
     expect(redirect("/site/guests/", "?s=cms")).toBe("/site/access/?s=cms")
     expect(redirect("/site/sharing/", "?s=cms")).toBe("/site/access/?s=cms")
     expect(redirect("/site/members/", "?s=a%26b")).toBe("/site/access/?s=a%26b")
@@ -198,7 +200,7 @@ describe("the address of a page", () => {
       ...SECTIONS.map((entry) => entry.path),
       ...Object.keys(LEGACY_PATHS),
     ]
-    expect(Object.keys(LEGACY_PATHS).sort()).toEqual(["/guests/", "/members/", "/secrets/", "/site/audience/", "/site/guests/", "/site/members/", "/site/sharing/", "/sites/", "/team/"])
+    expect(Object.keys(LEGACY_PATHS).sort()).toEqual(["/connectors/", "/guests/", "/members/", "/secrets/", "/site/audience/", "/site/guests/", "/site/members/", "/site/sharing/", "/sites/", "/team/"])
     expect(paths.sort()).toEqual(expected.sort())
   })
 })
@@ -218,7 +220,6 @@ describe("titles", () => {
   test("the page's name, the slug for a site's Overview, the section otherwise", () => {
     expect(pageTitle({ name: "home" })).toBe("Sites")
     expect(pageTitle({ name: "activity" })).toBe("Activity")
-    expect(pageTitle({ name: "connectors" })).toBe("Connectors")
     expect(pageTitle({ name: "site", slug: "cms", section: "overview" })).toBe("cms")
     expect(pageTitle({ name: "site", slug: "cms", section: "access" })).toBe("Access")
   })
@@ -228,7 +229,6 @@ describe("titles", () => {
     expect(documentTitle({ name: "home" }, ok)).toBe("sitesolide")
     expect(documentTitle({ name: "home" }, null)).toBe("sitesolide")
     expect(documentTitle({ name: "activity" }, ok)).toBe("Activity · sitesolide")
-    expect(documentTitle({ name: "connectors" }, ok)).toBe("Connectors · sitesolide")
     expect(documentTitle({ name: "site", slug: "cms", section: "overview" }, null)).toBe("cms · sitesolide")
     expect(documentTitle({ name: "site", slug: "cms", section: "secrets" }, ok)).toBe("Secrets · cms · sitesolide")
   })
@@ -247,7 +247,7 @@ describe("titles", () => {
   test("during the check, a site file has no title yet", () => {
     expect(pendingTitle("/")).toBe("Sites")
     expect(pendingTitle("/activity/")).toBe("Activity")
-    expect(pendingTitle("/connectors/")).toBe("Connectors")
+    expect(pendingTitle("/connectors/")).toBe("Activity")
     expect(pendingTitle("/site/")).toBeNull()
     expect(pendingTitle("/site/secrets/")).toBeNull()
     expect(pendingTitle("/sites/")).toBe("Sites")

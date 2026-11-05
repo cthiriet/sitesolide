@@ -140,8 +140,6 @@ import type {
 import { RESTART_TIMEOUT_MS, MAX_PORTAL_MS } from "./protocol";
 import { isAnchorUnit, showArguments, readShow, restartPending, serviceView, verdict, withCredentials, type ServiceReading } from "./restart";
 import type { Command, Permissions, Examination, StorePreviousPart, System } from "./system";
-import { createConnectorRoutes } from "../connectors/steward";
-import type { ConnectorStore } from "../connectors/store";
 import { createBackupRoutes } from "../backup/routes";
 import type { BackupReader } from "../backup/reader";
 import { createMemberRoutes, type KeyState } from "../people/steward";
@@ -198,8 +196,6 @@ export type StewardOptions = {
    */
   schedule?: () => Promise<void>;
   random?: RandomSource;
-  /** The egress proxy's connectors files, see src/connectors/store.ts. */
-  connectors?: ConnectorStore;
   /** The backups' folders, read for `/backups`; absent, the routes say backups are not set up. */
   backups?: BackupReader | null;
   /**
@@ -2606,17 +2602,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
 
   // --- Routing -----------------------------------------------------------------
 
-  // The connectors of the egress proxy, written under the same unlock and the
-  // same lock as a secret: see src/connectors/steward.ts. Without a store, the
-  // routes do not exist, as on a steward that predates them.
-  const connectorRoutes =
-    options.connectors === undefined
-      ? {}
-      : createConnectorRoutes(options.connectors, { bodyWithToken, underLock, sites, now: () => system.now() });
-
   const routes: Routes = {
     ...storeRoutes(false),
-    ...connectorRoutes,
     ...(members?.dashboard ?? {}),
     ...(access?.dashboard ?? {}),
     ...memberActions,

@@ -32,7 +32,7 @@
  * a day is dropped, and the project, if there is one, is the owner's to
  * give. One undone, nothing laid, gives its name back. No token creates a
  * name under which the machine still keeps a removed project's snapshots or
- * connector grants (`judgeDeployment`): its creator would be their Admin.
+ * store of secrets (`judgeDeployment`): its creator would be their Admin.
  * The tokens from before every token belonged to someone are made someone's
  * once (`migrateTokens`), and the live tokens of anyone the registry gives no
  * rights are revoked every 30 seconds (`sweepTokens`), so that a person given
@@ -529,24 +529,23 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   /**
    * A deployment's slug judged as `judgeSlug` does, then, for a creation,
    * on what the machine still keeps under that name: a removed project's
-   * snapshots and connector grants, which the project created again would
+   * snapshots and store of secrets, which the project created again would
    * be handed (src/control/policy.ts, `leftoversReason`). Any token, a
    * person's or the owner's own: a person is made Admin of what their token
-   * creates, and a grant is lent to whatever code runs under the slug. A
+   * creates, and a store is read by whatever code runs under the slug. A
    * project on the machine is deployed again and never asked; the owner's
    * SSH deploy does not come here.
    *
    * Asked of the deployment itself, in the tokens' queue, right before the
    * request is written and the installer started: a name the machine does
    * not carry gains no snapshot until a run finds its folder, the new
-   * project's then, and no grant, which the Connectors page gives to a
-   * deployed site alone. So the installer does not ask again; it could not
+   * project's then. So the installer does not ask again; it could not
    * open the index besides, SQLite in WAL under its read-only /var/lib. One
    * gap stays, the owner's own doing: an index made again from a repository
    * that holds more, its database deleted by hand or a bucket attached from
    * another machine, lists again at its next run what it finds. What does
-   * not read refuses the creation: an index or a grants file that cannot be
-   * read must never pass for one that holds nothing.
+   * not read refuses the creation: an index that cannot be read must never
+   * pass for one that holds nothing.
    */
   async function judgeDeployment(holder: Holder, slug: unknown, state: SlugState): Promise<SlugDecision | Response> {
     const decision = judgeSlug(holder, slug, state);
@@ -557,7 +556,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       left = await system.leftovers(target);
     } catch (e) {
       console.error(`control: what the machine keeps under ${target} does not read (${e instanceof Error ? e.message : errorName(e)}): its creation refused`);
-      return failure("failure", `what a removed project may have left under ${target}, backups or connector grants, cannot be read on the machine, and no token creates it meanwhile: the owner must read the steward's log`);
+      return failure("failure", `what a removed project may have left under ${target}, its backups or its store of secrets, cannot be read on the machine, and no token creates it meanwhile: the owner must read the steward's log`);
     }
     // A store this token's write made ahead of its first deployment is its
     // own; any other is a leftover, whoever the registry names for the slug.
@@ -1392,8 +1391,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * A project removed from the machine by `sitesolide remove`, over the
    * owner's SSH: the token that created it no longer owns its name, so that
    * another token may create a project of that name later, once the machine
-   * keeps none of its snapshots and none of its connector grants, neither
-   * of which releasing the name withdraws (`judgeDeployment`). Only once the
+   * keeps none of its snapshots and no store of secrets, neither of which
+   * releasing the name withdraws (`judgeDeployment`). Only once the
    * machine no longer carries it: a removal stopped half way keeps the
    * ownership, and running it again finishes both. Journaled under `owner`,
    * the token in the detail. On the owner's socket alone: a compromised

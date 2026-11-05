@@ -154,12 +154,9 @@ export function siteResolver(snapshot: Snapshot | null, zone: string): SiteResol
   };
 }
 
-/**
- * The site of a row. A connector's change names the connector, which is no
- * site even when a site bears the same name.
- */
+/** The site of a row. */
 export function siteOf(row: Omit<AuditRow, "site">, resolve: SiteResolver): string | null {
-  if (row.target === null || row.action === "connector.update") return null;
+  if (row.target === null) return null;
   return resolve(row.target);
 }
 

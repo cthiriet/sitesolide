@@ -44,7 +44,7 @@ describe("each source's rows, in one shape", () => {
   });
 
   test("the egress proxy's detail, kept as text, reads as an object; text that is not one reads as none", () => {
-    expect(fromTableRow("egress", { id: 1, at: iso(T), actor: "system", action: "connector.use", target: "shop", detail: '{"connector":"chat","count":3}' })?.row.detail).toEqual({ connector: "chat", count: 3 });
+    expect(fromTableRow("egress", { id: 1, at: iso(T), actor: "system", action: "egress.denied", target: "shop", detail: '{"reason":"not in the list","count":3}' })?.row.detail).toEqual({ reason: "not in the list", count: 3 });
     expect(fromTableRow("egress", { id: 1, at: iso(T), actor: "system", action: "x", target: null, detail: "[1,2]" })?.row.detail).toBeNull();
     expect(fromTableRow("egress", { id: 1, at: iso(T), actor: "system", action: "x", target: null, detail: "{not json" })?.row.detail).toBeNull();
   });
@@ -267,11 +267,11 @@ describe("which site a target names", () => {
     expect(blind("shop.example.invalid")).toBeNull();
   });
 
-  test("a connector's change names the connector, never a site", () => {
-    const named = siteResolver(snapshot([{ slug: "chat", address: "chat.test-zone.invalid" }]), "test-zone.invalid");
-    const row = { id: "egress:1", source: "egress" as const, at: iso(T), actor: "owner", action: "connector.update", target: "chat", detail: null };
-    expect(siteOf(row, named)).toBeNull();
-    expect(siteOf({ ...row, action: "connector.grant" }, named)).toBe("chat");
+  test("a row's site is its target's, none without a target", () => {
+    const named = siteResolver(snapshot([{ slug: "shop", address: "shop.test-zone.invalid" }]), "test-zone.invalid");
+    const row = { id: "egress:1", source: "egress" as const, at: iso(T), actor: "system", action: "egress.denied", target: "shop", detail: null };
+    expect(siteOf(row, named)).toBe("shop");
+    expect(siteOf({ ...row, target: null }, named)).toBeNull();
   });
 });
 
@@ -298,7 +298,7 @@ describe("which rows match", () => {
   test("a site's filter finds its hosts, and a host finds the site's slug", () => {
     expect(matches(row(), { ...none, target: "cms" }, resolve)).toBe(true);
     expect(matches(row({ target: "cms", site: "cms", source: "steward" }), { ...none, target: "cms.test-zone.invalid" }, resolve)).toBe(true);
-    expect(matches(row({ target: "github", site: null, action: "connector.update" }), { ...none, target: "github" }, resolve)).toBe(true);
+    expect(matches(row({ target: "github", site: null, action: "egress.denied" }), { ...none, target: "github" }, resolve)).toBe(true);
     expect(matches(row(), { ...none, target: "shop" }, resolve)).toBe(false);
     expect(matches(row({ target: null, site: null }), { ...none, target: "cms" }, resolve)).toBe(false);
   });

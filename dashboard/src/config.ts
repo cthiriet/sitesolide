@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { PORTAL_PORT } from "../borrowed/portal";
-import { CONNECTORS_PORT, EGRESS_ADDRESS } from "../borrowed/egress";
+import { EGRESS_ADDRESS, EGRESS_STATUS_PORT } from "../borrowed/egress";
 import { DEFAULT_SOCKET } from "./secrets/protocol";
 
 /**
@@ -83,7 +83,7 @@ export const STEWARD_SOCKET = process.env.STEWARD_SOCKET ?? DEFAULT_SOCKET;
  * loopback rule closes: it answers them to site-dashboard alone, recognised by
  * the uid of the connection. See egress/README.md.
  */
-export const EGRESS_URL = (process.env.EGRESS_URL ?? `http://${EGRESS_ADDRESS}:${CONNECTORS_PORT}`).replace(/\/+$/, "");
+export const EGRESS_URL = (process.env.EGRESS_URL ?? `http://${EGRESS_ADDRESS}:${EGRESS_STATUS_PORT}`).replace(/\/+$/, "");
 
 /** Seven days: a tool consulted nearly every day does not ask again each morning. */
 export const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000;

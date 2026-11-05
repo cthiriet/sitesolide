@@ -40,8 +40,7 @@ import { DEFAULT_TIMEOUTS, localSteward } from "./src/secrets/client";
 import { readMissingSecrets } from "./src/secrets/missing";
 import { createTokens } from "./src/secrets/tokens";
 import { createSecretsRoutes } from "./src/secrets/routes";
-import { localConnectorsSteward, localEgress } from "./src/connectors/client";
-import { createConnectorsRoutes } from "./src/connectors/relay";
+import { localEgressAudit } from "./src/egress-audit";
 import { join } from "node:path";
 import { openDatabase } from "./src/database";
 import { createApiRoutes, failure, restartRoutes, STEWARD_IDLE_S, storeRoutes } from "./src/control/api";
@@ -103,16 +102,6 @@ const secrets = createSecretsRoutes({
   steward: localSteward(STEWARD_SOCKET),
   tokens: unlockTokens,
   backups: localBackupSteward(STEWARD_SOCKET),
-});
-
-// The egress proxy's connectors: written through the steward under the same
-// unlock as a secret, and their activity read from the proxy itself.
-const connectors = createConnectorsRoutes({
-  session: ownerReader,
-  steward: localConnectorsSteward(STEWARD_SOCKET),
-  egress: localEgress(EGRESS_URL),
-  tokens: unlockTokens,
-  withToken: secrets.withToken,
 });
 
 // The control API: deployments by token, under /api/v1/, and the Tokens page that
@@ -212,10 +201,9 @@ const audit = createAuditRoutes({
   readers: createReaders({
     store: controlStore,
     portal: localPortalAudit(PORTAL_URL),
-    egress: localEgress(EGRESS_URL),
+    egress: localEgressAudit(EGRESS_URL),
     steward: localSteward(STEWARD_SOCKET),
     backups: localBackupSteward(STEWARD_SOCKET),
-    connectors: localConnectorsSteward(STEWARD_SOCKET),
     portalDeployed: async () => {
       const reading = await read(STATE_FILE, Date.now());
       return reading.present ? reading.snapshot.sites.some((site) => site.slug === "portal") : null;
@@ -358,14 +346,6 @@ const server = Bun.serve({
     },
     "/api/secrets/store/restore": { POST: either((req, server) => long(req, server, secrets.restoreStore), (req, server) => long(req, server, memberRelay.restoreStore)) },
     "/api/secrets/store/value": { POST: owner((req, server) => long(req, server, secrets.revealStoreValue)) },
-    // The connectors: their writes wait in the steward's lock like a secret's.
-    "/api/connectors": { GET: owner(connectors.list) },
-    "/api/connectors/activity": { GET: owner(connectors.activity) },
-    "/api/connectors/connector": {
-      PUT: owner((req, server) => long(req, server, connectors.putConnector)),
-      DELETE: owner((req, server) => long(req, server, connectors.removeConnector)),
-    },
-    "/api/connectors/grant": { PUT: owner((req, server) => long(req, server, connectors.setGrant)) },
 
     // The owner sees and revokes every token; a member, their own, minted
     // within their roles and judged by the steward (src/people/relay.ts).

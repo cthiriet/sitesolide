@@ -24,7 +24,7 @@ import type { PortalAudit } from "../portal-audit";
 import type { Steward } from "../secrets/client";
 import { RETURNED_ENTRIES } from "../secrets/log";
 import type { BackupSteward } from "../backup/client";
-import type { ConnectorsSteward, EgressReader } from "../connectors/client";
+import type { EgressAudit } from "../egress-audit";
 import type { ControlStore } from "../control/store";
 import type { AuditReader, Readers, ReaderResult } from "./aggregate";
 import { fromJournal, fromTableRow, isAfter, isObject, type Position, type SourceRow } from "./normalize";
@@ -133,10 +133,9 @@ function windowed(rows: SourceRow[], listed: number, after: Position | null, siz
 export type AuditDependencies = {
   store: Pick<ControlStore, "readAudit">;
   portal: PortalAudit;
-  egress: Pick<EgressReader, "audit">;
+  egress: EgressAudit;
   steward: Pick<Steward, "readLog">;
   backups: Pick<BackupSteward, "readBackupAudit" | "readBackups">;
-  connectors: Pick<ConnectorsSteward, "read">;
   /**
    * Whether the snapshot lists the portal among the deployed sites, null
    * without a snapshot: the one way to tell a portal that is down from a
@@ -146,7 +145,7 @@ export type AuditDependencies = {
 };
 
 export function createReaders(dependencies: AuditDependencies): Readers {
-  const { store, portal, egress, steward, backups, connectors } = dependencies;
+  const { store, portal, egress, steward, backups } = dependencies;
 
   const dashboard: AuditReader = {
     async read(after, size) {
@@ -179,10 +178,13 @@ export function createReaders(dependencies: AuditDependencies): Readers {
     },
   };
 
-  /** The steward knows whether the egress proxy's folder exists: down is not the same as never installed. */
-  async function egressNotInstalled(): Promise<boolean> {
-    const answer = await receive(() => connectors.read());
-    return answer.kind === "answered" && answer.status === 200 && answer.body?.installed === false;
+  /** Whether the machine carries the proxy's unit: down is not the same as never installed. */
+  function egressNotInstalled(): boolean {
+    try {
+      return egress.installed() === false;
+    } catch {
+      return false;
+    }
   }
 
   const egressReader: AuditReader = {
@@ -190,7 +192,7 @@ export function createReaders(dependencies: AuditDependencies): Readers {
       const asked = Math.min(size, PAGE_MAX);
       const answer = await receive(() => egress.audit(asked, after?.[0] ?? null));
       if (answer.kind === "unreachable") {
-        if (await egressNotInstalled()) return failed("not-installed", "The egress proxy isn't installed on this server.");
+        if (egressNotInstalled()) return failed("not-installed", "The egress proxy isn't installed on this server.");
         return failed("unavailable", "Can't reach the egress proxy.");
       }
       if (answer.status === 404) return failed("outdated", "The egress proxy on this server predates its audit. Run sitesolide upgrade.");

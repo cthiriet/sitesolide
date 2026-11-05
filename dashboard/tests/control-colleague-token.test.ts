@@ -262,7 +262,7 @@ async function mount(): Promise<Machine> {
   });
 
   const started: string[] = [];
-  const controlReal = createControlSystem({ stateFolder: state, sitesDir: bench.sites, unitsFolder: bench.units, installerFolder: results, systemctl: "/bin/false", journalctl: "/bin/false", backups: null, connectors: null, storeRoot: bench.store });
+  const controlReal = createControlSystem({ stateFolder: state, sitesDir: bench.sites, unitsFolder: bench.units, installerFolder: results, systemctl: "/bin/false", journalctl: "/bin/false", backups: null, storeRoot: bench.store });
   const controlSystem: ControlSystem = {
     ...controlReal,
     now: () => clock.t,

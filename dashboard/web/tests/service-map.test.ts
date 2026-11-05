@@ -83,13 +83,12 @@ describe("the graph", () => {
   })
 
   test("what leaves the machine: from the services seen taking it, or else from every one that may, a database aside", () => {
-    const network = { outbound: false, egress: ["api.example.org"], connectors: ["slack"] }
+    const network = { outbound: false, egress: ["api.example.org"] }
     const declared = buildMap(playground([], { network }))
     expect(ids(declared.edges).filter((id) => id.endsWith(">egress"))).toEqual(["lab>egress", "lab.api>egress", "lab.queue>egress"])
     expect(declared.edges.filter((edge) => edge.to === "egress").every((edge) => edge.state === "declared" && edge.shared)).toBe(true)
     const seen = buildMap(playground([link({ from: "lab.api", to: "egress", open: 1, seen: NOW })], { network }))
     expect(ids(seen.edges).filter((id) => id.endsWith(">egress"))).toEqual(["lab.api>egress"])
-    expect(seen.nodes.map((node) => node.id)).toContain("connectors")
   })
 
   test("a project that serves no page has no visitors, and starts its columns at its services", () => {
@@ -109,7 +108,7 @@ describe("the columns", () => {
   test("who calls a service stands to its left; what leaves the machine comes last", () => {
     const map = buildMap(
       playground([link({ from: "lab", to: "lab.api", open: 1, seen: NOW }), link({ from: "lab.api", to: "lab.db", open: 1, seen: NOW })], {
-        network: { outbound: true, egress: [], connectors: [] },
+        network: { outbound: true, egress: [] },
       }),
     )
     const layer = (id: string) => map.nodes.find((node) => node.id === id)!.layer
