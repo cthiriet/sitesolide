@@ -114,7 +114,7 @@ missing. The output is a checklist: `[done]` already there, `[ok]` done now,
 | directories | `/srv/sites`, `/srv/api`, `/srv/data` exist | `mkdir` |
 | ssh | `sshd -T` says no root login, no password, no keyboard-interactive | `/etc/ssh/sshd_config.d/00-sitesolide.conf`, `systemctl reload ssh` |
 | fail2ban | enabled and active | `systemctl enable fail2ban`, a restart, your address spared for the run |
-| caddy | the package installed and Cloudflare's module listed, `dns.providers.cloudflare`; none under `--dns manual` | Caddy's apt repository, `caddy add-package`, or a build on the machine when Caddy's build service does not deliver within five minutes |
+| caddy | the package installed and Cloudflare's module listed, `dns.providers.cloudflare`, the package held; none of the two under `--dns manual` | Caddy's apt repository, `caddy add-package`, or a build on the machine when Caddy's build service does not deliver within five minutes; `apt-mark hold caddy`, so that no apt upgrade puts back a binary without the module ([upgrading Caddy](upgrading.md#upgrading-caddy)) |
 | bun | `/usr/local/bin/bun` exists | Bun's installer |
 | dns-credentials | `/etc/caddy/cloudflare.env` root:caddy 0640, holding the token given, and a running Caddy started after it was written | that file, once the token is proven against the zone, any other DNS credential it held kept; a restart of Caddy when the token changes on a running machine, since Caddy reads it at its start, unless the next step restarts it |
 | tls-zone | `/etc/caddy/tls-zone.caddy` root:root 0644, the zone's `tls` block: Cloudflare's DNS challenge, or `on_demand` | that file; `/etc/caddy/zone-names` under `--dns manual`; a restart of Caddy when it changes on a running machine |

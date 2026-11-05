@@ -93,6 +93,15 @@
 		Referrer-Policy strict-origin-when-cross-origin
 	}
 
+	# The zone is served over HTTPS alone, whoever serves it: the bare domain,
+	# its www, every site under it, the dashboard and the portal included. Up
+	# to 0.17 only www and a bare domain of the domain table sent it, and an app
+	# that declared the zone, the dashboard among the others, sent none: a first
+	# visit could be stripped to plain HTTP. Not a client's domain, which may
+	# move away from this machine: the matcher names the zone's hosts alone.
+	@sitesolide_zone host {$SITESOLIDE_ZONE} *.{$SITESOLIDE_ZONE}
+	header @sitesolide_zone Strict-Transport-Security "max-age=31536000"
+
 	# Cache policy of the repository: HTML stays fresh, media are frozen.
 	# These three rules are the reference: a site that serves the same files
 	# locally may copy them, and test that the two do not diverge.
@@ -165,10 +174,29 @@
 	# its own block, more specific than this one, which sends it to the bare
 	# domain the same way. redir comes before the locks' handles and the file
 	# server in Caddy's order of directives, so nothing is served on this name,
-	# open or closed; the header comes before redir and goes out with it.
+	# open or closed; the HSTS header of (commun) comes before redir and goes
+	# out with it.
 	@www host www.{$SITESOLIDE_ZONE}
-	header @www Strict-Transport-Security "max-age=31536000"
 	redir @www https://{$SITESOLIDE_ZONE}{uri} permanent
+
+	# A label that is not a slug names no folder. Over HTTP/2 and HTTP/3,
+	# Caddy up to 2.11.7 takes a host that holds a slash, `crm/.<zone>`, and
+	# the label then walks the root below /srv/sites: into an app's public/,
+	# past its portal, or into any folder named public deeper down
+	# (GHSA-r766-rf9f-588h). Met on production on 5 November 2026. Whatever
+	# Caddy accepts, the label here is a slug or nothing is served.
+	@not_slug not vars_regexp {$SITESOLIDE_SLUG} ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
+	respond @not_slug 404
+
+	# Nor is an app's folder ever served here, by whatever name reaches this
+	# block: an app's names are its own block's, guarded there by its portal
+	# or its code, as in the nameless block below. An app is a folder with a
+	# block in /etc/caddy/sites.
+	@app file {
+		root /etc/caddy/sites
+		try_files {$SITESOLIDE_SLUG}.caddy
+	}
+	respond @app 404
 
 	# Neither a repository's history nor a .env is ever served, at any depth,
 	# whatever an earlier deployment left in public/: they answer 404. hide
@@ -245,11 +273,9 @@ https:// {
 		import /etc/caddy/domaines.map
 	}
 
-	# The zone is served over HTTPS alone, whoever serves it: the bare domain
-	# keeps the header its own block sent, before it became a domain of the
-	# table. Not a client's domain, which may move away from this machine.
-	@bare host {$SITESOLIDE_ZONE}
-	header @bare Strict-Transport-Security "max-age=31536000"
+	# The bare domain, when the table serves it, takes its HSTS header from
+	# (commun), which names the zone's hosts alone: a client's domain gets
+	# none.
 
 	# A site that opens with a code closes on its own domain too: the
 	# preview locks recognise the site this block serves by this variable,

@@ -80,10 +80,22 @@ describe("infra/caddy/Caddyfile", () => {
     expect(wildcard).toInclude(`\tredir @www https://${ZONE_HOST}{uri} permanent\n`);
   });
 
-  test("the bare domain keeps the HSTS of its old block, and a client's domain gets none", () => {
-    const domains = block(caddyfile, "https:// {");
-    expect(domains).toInclude(`\t@bare host ${ZONE_HOST}\n\theader @bare Strict-Transport-Security "max-age=31536000"\n`);
-    expect(domains.split("\n").filter((line) => line.includes("Strict-Transport-Security"))).toHaveLength(1);
+  test("every host of the zone sends HSTS from (commun), and no block sends one of its own", () => {
+    // (commun) is imported by every block, the generated ones included: the
+    // matcher keeps a client's domain, which may move away, out of it.
+    const commun = block(caddyfile, "(commun) {");
+    expect(commun).toInclude(`\t@sitesolide_zone host ${ZONE_HOST} *.${ZONE_HOST}\n\theader @sitesolide_zone Strict-Transport-Security "max-age=31536000"\n`);
+    const lines = caddyfile.split("\n").filter((line) => !line.trimStart().startsWith("#") && line.includes("Strict-Transport-Security"));
+    expect(lines).toHaveLength(1);
+  });
+
+  test("the wildcard serves a slug's folder alone, never an app's, ahead of the file server", () => {
+    // Over HTTP/2, Caddy up to 2.11.7 takes a host holding a slash, whose
+    // label would walk the root into another folder. respond comes before
+    // file_server in Caddy's order.
+    const wildcard = block(caddyfile, "*.{$SITESOLIDE_ZONE} {");
+    expect(wildcard).toInclude("\t@not_slug not vars_regexp {$SITESOLIDE_SLUG} ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$\n\trespond @not_slug 404\n");
+    expect(wildcard).toInclude("\t@app file {\n\t\troot /etc/caddy/sites\n\t\ttry_files {$SITESOLIDE_SLUG}.caddy\n\t}\n\trespond @app 404\n");
   });
 
   test("the static sites' domains close with their previews, each by the site its table names", () => {

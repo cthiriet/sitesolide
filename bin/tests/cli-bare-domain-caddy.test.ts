@@ -190,10 +190,14 @@ describe.skipIf(CADDY === null)("the bare domain, declared by an app, in Caddy",
     service?.stop(true);
   });
 
-  test("the bare domain reaches the app", async () => {
+  test("the bare domain reaches the app, and is served over HTTPS alone", async () => {
     const response = await ask(port, ZONE, "/orders");
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("the app, at /orders");
+    // From (commun), which the app's block imports through its routes: up
+    // to 0.17 an app that declared the zone sent none.
+    expect(response.headers.get("Strict-Transport-Security")).toBe("max-age=31536000");
+    expect((await ask(port, `shop.${ZONE}`, "/")).headers.get("Strict-Transport-Security")).toBe("max-age=31536000");
   });
 
   test("www is the app's block, which sends to the bare domain", async () => {
@@ -249,9 +253,14 @@ describe.skipIf(CADDY === null)("the whole Caddyfile, with an app that declares 
     expect({ code: adapted.code, error: adapted.code === 0 ? "" : adapted.error }).toEqual({ code: 0, error: "" });
     const zone = adapted.policies.find((one) => one.subjects?.includes(`*.${ZONE}`));
     expect(zone?.on_demand).toBeUndefined();
-    expect(zone?.subjects).toContain(`shop.${ZONE}`);
     expect(zone?.subjects).not.toContain(ZONE);
     expect(zone?.subjects).not.toContain(`www.${ZONE}`);
+    // The app's preview under the zone's policy: the wildcard's own up to
+    // Caddy 2.11.7, from 2.11.8 a policy of its own with the same settings,
+    // whose wildcard certificate Caddy keeps serving it.
+    const preview = adapted.policies.find((one) => one.subjects?.includes(`shop.${ZONE}`));
+    const settings = (policy: Policy | undefined): string => JSON.stringify({ ...policy, subjects: undefined });
+    expect(settings(preview)).toBe(settings(zone));
     const onDemand = adapted.policies.find((one) => one.subjects?.includes(ZONE));
     expect(onDemand?.on_demand).toBe(true);
     expect(onDemand?.subjects).toContain(`www.${ZONE}`);

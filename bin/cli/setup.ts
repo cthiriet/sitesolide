@@ -830,7 +830,11 @@ ${
     : `# The standard build lacks the DNS module the wildcard certificate needs.
 if ! caddy list-modules 2>/dev/null | grep -q '^${dns.caddy.module}$'; then
 ${caddyModuleScript(dns.caddy.package, dns.caddy.module)}
-fi`
+fi
+# Held: the package's own binary lacks the module, and an apt upgrade that put
+# it back would leave Caddy refusing the zone's policy at its next restart,
+# every site with it. Caddy is upgraded by hand, see docs/upgrading.md.
+apt-mark hold caddy >/dev/null`
 }
 `,
   );
@@ -1224,7 +1228,12 @@ export function installSteps(tunnel = false): Step<SetupContext>[] {
       check: (context) =>
         installCheck("setup:caddy:check", [
           { label: "caddy-package", test: "dpkg-query -W -f='${Status}' caddy | grep -q 'ok installed'" },
-          ...(context.dns === null ? [] : [{ label: "dns-module", test: `caddy list-modules | grep -q '^${context.dns.caddy.module}$'` }]),
+          ...(context.dns === null
+            ? []
+            : [
+                { label: "dns-module", test: `caddy list-modules | grep -q '^${context.dns.caddy.module}$'` },
+                { label: "caddy-held", test: "apt-mark showhold | grep -qx caddy" },
+              ]),
         ])(context),
       run: (context) => rootRun(context.machine, context.operator, "setup:caddy:run", caddyRun(context.dns), "Caddy could not be installed"),
       inspect: (context) => `ssh ${context.server} 'caddy list-modules | grep dns.providers'`,

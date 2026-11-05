@@ -112,12 +112,99 @@ skipped, and it resumes at the one that failed.
   its notes, and `bin/deploy-loopback.sh close` lays it again, from a checkout
   or from the kit the binary unpacked into `~/.cache/sitesolide/<version>-<hash>/`.
   It changes what every service may reach, and keeps its own safety net.
+- **Caddy itself**, below.
+
+### Upgrading Caddy
+
+Caddy comes from its own apt repository, which unattended upgrades do not
+follow, and a machine whose zone has a DNS provider runs a binary rebuilt
+with that provider's module. The package is held (`apt-mark hold caddy`,
+laid by setup): its own binary lacks the module, and an apt upgrade that put
+it back would leave Caddy refusing the zone's policy at its next restart,
+every site with it. `apt list --upgradable` goes on listing caddy; that is
+expected. Nothing upgrades Caddy but you, and Caddy is what the internet
+talks to: read its [releases](https://github.com/caddyserver/caddy/releases)
+for security fixes, and upgrade this way.
+
+1. **A binary of the new version with the module, beside the one in
+   service**, never over it. Caddy's build service makes one (`arm64` on an
+   ARM machine):
+
+   ```bash
+   ssh <server> 'curl -fsSL -o /var/tmp/caddy.new "https://caddyserver.com/api/download?os=linux&arch=amd64&p=github.com/caddy-dns/cloudflare&version=v2.11.9" && chmod 0755 /var/tmp/caddy.new && /var/tmp/caddy.new version && /var/tmp/caddy.new list-modules | grep dns.providers'
+   ```
+
+   Or build it on the workstation with xcaddy (`GOOS=linux GOARCH=amd64
+   xcaddy build v2.11.9 --with github.com/caddy-dns/cloudflare`), and copy it
+   there.
+2. **The configuration in service, validated by the new binary**, with the
+   environment systemd hands Caddy:
+
+   ```bash
+   ssh <server> "sudo bash -c 'set -a; . /etc/caddy/cloudflare.env; . /etc/caddy/sitesolide.env; set +a; /var/tmp/caddy.new validate --config /etc/caddy/Caddyfile --adapter caddyfile'"
+   ```
+
+3. **The swap, the old binary kept, and a restart**: a reload never loads a
+   new binary. Never `caddy stop` nor `caddy start`, see CLAUDE.md. Every site
+   blinks for the second the restart takes; no deployment should run then.
+
+   ```bash
+   ssh <server> 'sudo cp -p /usr/bin/caddy /usr/bin/caddy.previous && sudo install -m 0755 /var/tmp/caddy.new /usr/bin/caddy && sudo systemctl restart caddy && systemctl is-active caddy && caddy version'
+   ```
+
+4. **Check**: the monitor's next pass (`journalctl -u sitesolide-monitor -n
+   3`), a site of each kind over HTTPS. Should anything be wrong, the old
+   binary goes back the same way:
+
+   ```bash
+   ssh <server> 'sudo install -m 0755 /usr/bin/caddy.previous /usr/bin/caddy && sudo systemctl restart caddy'
+   ```
 
 A machine upgrades one release at a time, reading the notes below for each.
 They begin at 0.14.0: a machine on an earlier release is brought to 0.16
 first, with that release's binary and [its
 notes](https://github.com/cthiriet/sitesolide/blob/v0.16.0/docs/upgrading.md),
 which go back to 0.1; this release converts nothing an earlier one left.
+
+## The wildcard serves slugs alone, and the zone sends HSTS
+
+**What the release brings.** Over HTTP/2 and HTTP/3, Caddy up to 2.11.7
+accepts a host that holds a slash. The wildcard block builds its root from
+the host's label, `/srv/sites/<label>/public`, so `finance/.<zone>` served
+the `public/` of an app behind its portal without asking anyone, and a longer
+label any folder named `public` deeper in `/srv/sites`, an app's sources
+among them (GHSA-r766-rf9f-588h, met on production). The wildcard block now
+answers 404 to a label that is not a slug, and to an app's slug, whose names
+are its own block's, as the customer domains' block already did. And every
+host of the zone, the dashboard, the portal and the apps that declare the
+bare domain included, now sends `Strict-Transport-Security`, from `(commun)`;
+up to this release only `www` and a bare domain of the domain table did. A
+client's domain still sends none.
+
+**What `sitesolide upgrade` brings**: the Caddyfile, through
+`bin/deploy-caddy.sh`, validated and reloaded. No project is redeployed: the
+blocks in service import `(commun)` by name.
+
+**Then by hand**, on a machine whose zone has a DNS provider:
+
+1. **Hold the package**, which setup now does, so that no apt upgrade puts
+   back a binary without the module: `sitesolide setup` again, or
+   `ssh <server> 'sudo apt-mark hold caddy'`.
+2. **Bring Caddy to 2.11.8 or later**, which refuses such a host before any
+   route sees it, the way [Upgrading Caddy](#upgrading-caddy) says. The
+   Caddyfile closes the hole without it; the new Caddy closes it for every
+   block, and carries the other fixes of its releases.
+
+**What changes for you.** A browser that has seen a host of the zone goes
+there over HTTPS alone for a year, which every host of the zone already
+serves. A host under the zone whose label is not a slug answers 404.
+
+**Going back.** The previous release's binary, then `sitesolide upgrade`,
+lays the previous Caddyfile again; browsers keep the HSTS they saw until it
+expires. `sudo apt-mark unhold caddy` lets apt upgrade the package again,
+which on a zone with a DNS provider puts back a binary without its module.
+A Caddy brought up to date goes back with `/usr/bin/caddy.previous`, as
+[Upgrading Caddy](#upgrading-caddy) says.
 
 ## Conversions of the releases before 0.14 removed
 

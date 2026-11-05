@@ -265,6 +265,8 @@ describe("a failure, then the same command again", () => {
     expect(script).toContain('"$GOPATH/bin/xcaddy" build "$version" --with github.com/caddy-dns/cloudflare --output "$work/caddy"');
     expect(script).toContain("grep -q '^dns.providers.cloudflare$'");
     expect(script).toContain("work=$(mktemp -d /var/tmp/sitesolide-caddy.XXXXXX)");
+    // The package held, so that no apt upgrade puts back a binary without the module.
+    expect(script).toContain("apt-mark hold caddy");
     expect(Bun.spawnSync(["sh", "-n"], { stdin: new TextEncoder().encode(script) }).exitCode).toBe(0);
   });
 
@@ -836,6 +838,8 @@ describe("--dns", () => {
     expect(b.machine.calls.find((call) => call.tag === "setup:tls-zone:run")!.input).toContain("on_demand");
     expect(b.machine.calls.find((call) => call.tag === "setup:dns-credentials:run")!.input).toContain("# --dns manual");
     expect(b.machine.calls.find((call) => call.tag === "setup:caddy:run")!.input).not.toContain("add-package");
+    // The stock binary: apt may upgrade it.
+    expect(b.machine.calls.find((call) => call.tag === "setup:caddy:run")!.input).not.toContain("apt-mark hold");
     expect(JSON.parse(readFileSync(join(folder, ".config", "sitesolide", "config.json"), "utf8")).dns).toBe("manual");
 
     // Run again without --dns: still manual, nothing asked of Cloudflare, nothing rewritten.
