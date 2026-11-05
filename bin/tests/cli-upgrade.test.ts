@@ -404,7 +404,24 @@ describe("components out of date", () => {
       expect(environment.SITESOLIDE_EMAIL).toBe(EMAIL);
       expect(environment.SITESOLIDE_CONFIG_DIR).toBe(join(w.home, ".config", "sitesolide"));
       expect(environment.CLOUDFLARE_API_TOKEN).toBeUndefined();
+      expect(environment.SITESOLIDE_ACME).toBe("");
     }
+  });
+
+  test("a test installation's scripts and deploys are told its certificates are staging's", async () => {
+    // Without it, SITESOLIDE_ACME came through empty and overrode the
+    // configuration: deploy-caddy.sh and deploy's verify refused staging's
+    // certificates, and every upgrade of a test installation stopped at the
+    // dashboard with each address at 000, its Caddy configuration restored.
+    const w = world({ stale: ["monitor.js", "dashboard-code"], config: { server: SERVER, zone: ZONE, email: EMAIL, acme: "staging" } });
+    const environments: Record<string, string>[] = [];
+    const recording: KitRunner = async (task, environment) => {
+      environments.push(environment);
+      return w.kit.run(task, environment);
+    };
+    await runUpgrade({ dryRun: false, json: false }, { connect: () => w.machine, kit: recording, kitRoot: REPO, home: w.home, environment: {}, output: printed().output });
+    expect(environments.length).toBeGreaterThan(0);
+    for (const environment of environments) expect(environment.SITESOLIDE_ACME).toBe("staging");
   });
 
   test("the egress proxy redeployed alone: the steward reads nothing of it", async () => {

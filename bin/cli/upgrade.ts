@@ -643,7 +643,7 @@ export async function runUpgrade(options: UpgradeOptions, deps: UpgradeDependenc
     config,
     options,
     deps,
-    childEnvironment: childEnvironment(deps.environment, { server: config.server, zone: config.zone, email: config.email, contact: config.contact, folder }, options.json),
+    childEnvironment: childEnvironment(deps.environment, { server: config.server, zone: config.zone, email: config.email, contact: config.contact, folder, acme: config.acme }, options.json),
     installed,
   };
   const plans = new Map(components.map((component) => [component.id, component.plan]));
