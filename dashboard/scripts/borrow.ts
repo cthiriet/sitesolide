@@ -75,6 +75,7 @@ const BORROWINGS = [
   // What a new name must be, and the project a former name now leads to:
   // the steward, the rename run and the installer judge with this copy.
   "bin/cli/rename.ts",
+  "bin/cli/lifecycle.ts",
   // The archive format the CLI writes for the control API, and that the
   // installer's tests write too, malicious archives included.
   "bin/cli/bundle.ts",

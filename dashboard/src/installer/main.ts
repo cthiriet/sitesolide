@@ -37,6 +37,8 @@ import { DOMAIN_TABLE_FILE } from "../../borrowed/config";
 import { RENAMES_FOLDER, renameResultName, type RenameResult } from "../control/protocol";
 import { readRenameLaunch, readRenameRequest, runRename } from "./rename";
 import { createRenameHost } from "./rename-host";
+import { readLifecycleLaunch, readLifecycleRequest, runLifecycle } from "./lifecycle";
+import { LIFECYCLE_FOLDER, lifecycleResultName, type LifecycleResult } from "../control/protocol";
 import { BIND_LINES_FEATURE } from "../../borrowed/unit";
 
 export const LIMITS = { maxBytes: MAX_EXTRACTED_BYTES, maxEntries: MAX_ENTRIES, maxPathBytes: MAX_PATH_BYTES };
@@ -178,6 +180,7 @@ export async function main(argv: string[], env: Environment, overrides: { comman
   }
 
   if (argv[0] === "--rename") return renameMain(argv, env, overrides);
+  if (argv[0] === "--lifecycle") return lifecycleMain(argv, env, overrides);
 
   const launch = readLaunch(argv);
   if (!launch.ok) {
@@ -349,6 +352,77 @@ export async function renameMain(argv: string[], env: Environment, overrides: { 
     result.log.push(`!! ${outcome.message}`);
   }
   console.log(`rename ${slug}: ${result.state}${outcome.ok ? "" : `, ${outcome.code}`}`);
+  write();
+  return 0;
+}
+
+/** The rename's host on this machine, for a rename and for a project turned off, on or removed alike. */
+function machineHost(env: Environment, overrides: { commands?: Commands; systemctl?: Systemctl }, stateFolder: string, log: (line: string) => void) {
+  const machineConfig = { ...configFrom(env, overrides.systemctl), holder: "installer" as const };
+  const config = hostConfig(env, machineConfig, stateFolder, env.DEPLOY_ACCOUNT ?? "", overrides.commands, log, () => undefined);
+  return createRenameHost({
+    installer: createHost(config),
+    sitesDir: config.sitesDir,
+    secretsFolder: config.secretsFolder,
+    storePreviousFolder: config.storePreviousFolder,
+    accountsFile: config.accountsFile,
+    domainTableFile: env.DOMAINS_FILE ?? DOMAIN_TABLE_FILE,
+    usermod: env.USERMOD ?? "/usr/sbin/usermod",
+    groupmod: env.GROUPMOD ?? "/usr/sbin/groupmod",
+    systemctl: config.commands.systemctl,
+  });
+}
+
+/**
+ * `installer.js --lifecycle %n`: a project turned off, on, or removed, as the
+ * steward asked, its result `lifecycle-<slug>.json` in the installer's run
+ * folder, rewritten on every line of its log. 0 as soon as a result is written.
+ */
+export async function lifecycleMain(argv: string[], env: Environment, overrides: { commands?: Commands; systemctl?: Systemctl } = {}): Promise<number> {
+  const launch = readLifecycleLaunch(argv);
+  if (!launch.ok) {
+    console.error(`lifecycle: refused to start: ${launch.reason} (got ${JSON.stringify((argv[1] ?? "").slice(0, 80))})`);
+    return 2;
+  }
+  const { slug } = launch;
+  const zone = env.SITESOLIDE_ZONE ?? "";
+  if (zone === "") {
+    console.error("lifecycle: SITESOLIDE_ZONE is required, it is read from /etc/caddy/sitesolide.env");
+    return 2;
+  }
+  const stateFolder = env.STEWARD_STATE ?? "/var/lib/sitesolide-steward";
+  const examination = readBounded(join(stateFolder, LIFECYCLE_FOLDER, `${slug}.json`), 64 * 1024);
+  const text = examination.kind === "present" && examination.bytes !== null ? new TextDecoder().decode(examination.bytes) : null;
+  const read = readLifecycleRequest(text, slug, Date.now());
+  if (!read.ok) {
+    console.error(`lifecycle ${slug}: nothing to do: ${read.reason}`);
+    return 0;
+  }
+  const { request } = read;
+  const folder = env.INSTALLER_FOLDER ?? INSTALLER_RUN_FOLDER;
+  const result: LifecycleResult = { slug, action: request.action, requestedAt: request.requestedAt, state: "running", startedAt: Date.now(), finishedAt: null, log: [], error: null };
+  const write = () => {
+    try {
+      writeAtomically(folder, lifecycleResultName(slug), new TextEncoder().encode(`${JSON.stringify(result)}\n`), { owner: null, mode: 0o600 });
+    } catch (error) {
+      console.log(`lifecycle ${slug}: result not written (${(error as Error).message})`);
+    }
+  };
+  const log = (line: string) => {
+    console.log(`lifecycle ${slug}: ${line}`);
+    result.log.push(line.length > MAX_LOG_LINE ? `${line.slice(0, MAX_LOG_LINE - 3)}...` : line);
+    if (result.log.length > MAX_LOG_LINES) result.log.splice(0, result.log.length - MAX_LOG_LINES);
+    write();
+  };
+  write();
+  const outcome = await runLifecycle(machineHost(env, overrides, stateFolder, log), request, { zone });
+  result.state = outcome.ok ? "succeeded" : "failed";
+  result.finishedAt = Date.now();
+  if (!outcome.ok) {
+    result.error = { code: outcome.code, message: outcome.message };
+    result.log.push(`!! ${outcome.message}`);
+  }
+  console.log(`lifecycle ${slug}: ${result.state}${outcome.ok ? "" : `, ${outcome.code}`}`);
   write();
   return 0;
 }

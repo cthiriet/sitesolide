@@ -112,6 +112,7 @@ import { madeStore, readClaims } from "../control/claims";
 import type { InstallRequest } from "../control/protocol";
 import { installBlock } from "./caddy";
 import { renamedTo } from "../../borrowed/rename";
+import { disabledRefusal } from "../../borrowed/lifecycle";
 import type { Host, Part } from "./host";
 
 /**
@@ -242,6 +243,9 @@ export function finalManifest(
   const renamed = raw === undefined ? renamedTo(deposited, slug) : null;
   if (renamed !== null) {
     throw new Stop("renamed", `${slug} was renamed ${renamed} on the machine: write "slug": "${renamed}" in sitesolide.json, then deploy again; nothing was changed`);
+  }
+  if (raw !== undefined && previousManifest(raw)?.disabled === true) {
+    throw new Stop("disabled", `${disabledRefusal(slug)}; nothing was changed`);
   }
   const onMachine = depositedDoor(raw, slug);
   if (onMachine.kind === "unreadable") {

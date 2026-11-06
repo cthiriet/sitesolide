@@ -662,3 +662,33 @@ export type RenameResult = {
   /** The project's new address, once renamed. */
   url: string | null;
 };
+
+// --- Turning a project off, on, removing it ------------------------------------------
+
+/**
+ * The run that turns one project off or on, or removes it, on the machine,
+ * `sitesolide-lifecycle@<slug>`: the same installer.js, started with
+ * `--lifecycle`. The steward writes the request, `lifecycle/<slug>.json` in
+ * its state folder, and reads the result, `lifecycle-<slug>.json` in the
+ * installer's run folder. See src/installer/lifecycle.ts.
+ */
+export const LIFECYCLE_PREFIX = "sitesolide-lifecycle";
+export const LIFECYCLE_TEMPLATE = `${LIFECYCLE_PREFIX}@.service`;
+export const LIFECYCLE_FOLDER = "lifecycle";
+
+export function lifecycleResultName(slug: string): string {
+  return `lifecycle-${slug}.json`;
+}
+
+export type LifecycleRequest = { slug: string; action: "disable" | "enable" | "remove"; requestedAt: number; actor: string };
+
+export type LifecycleResult = {
+  slug: string;
+  action: "disable" | "enable" | "remove";
+  requestedAt: number;
+  state: "running" | "succeeded" | "failed";
+  startedAt: number;
+  finishedAt: number | null;
+  log: string[];
+  error: { code: string; message: string } | null;
+};

@@ -4,7 +4,7 @@ import { KindIcon } from "@/components/legend"
 import { ExternalLink } from "@/components/link"
 import { PanelSkeleton, StateLabel } from "@/components/page"
 import { RestartButton } from "@/components/restart-button"
-import { RenameButton } from "@/components/rename-dialog"
+import { ProjectActions } from "@/components/project-actions"
 import { SitePage, useSite } from "@/components/site"
 import { SiteDiscrepancies, ServicePanel, ServicesPanel, SitePanel, type Headline } from "@/components/site-card"
 import { readAccess, readBackups } from "@/lib/api"
@@ -188,7 +188,7 @@ export function OverviewSection({ slug }: { slug: string }) {
       slug={slug}
       section="overview"
       history={{ target: slug }}
-      actions={!person && !platform && site !== null ? <RenameButton slug={slug} zone={data?.zone ?? null} /> : undefined}
+      actions={!person && !platform && site !== null ? <ProjectActions slug={slug} zone={data?.zone ?? null} disabled={site.disabled === true} /> : undefined}
       description={site === null ? undefined : <Summary site={site} discrepancies={discrepancies} />}
       skeleton={<OverviewSkeleton />}
     >

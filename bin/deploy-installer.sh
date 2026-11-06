@@ -35,6 +35,9 @@ UNIT_SOURCE="$REPO_ROOT/infra/installer/$UNIT"
 # The rename, the same installer.js under its own template and walls.
 RENAME_UNIT="sitesolide-rename@.service"
 RENAME_SOURCE="$REPO_ROOT/infra/installer/$RENAME_UNIT"
+# A project turned off, on or removed: the same installer.js again.
+LIFECYCLE_UNIT="sitesolide-lifecycle@.service"
+LIFECYCLE_SOURCE="$REPO_ROOT/infra/installer/$LIFECYCLE_UNIT"
 TARGET_JS="/usr/local/lib/sitesolide/installer.js"
 UNITS_FOLDER="/etc/systemd/system"
 ENV_FILE="/etc/sitesolide-installer.env"
@@ -57,6 +60,7 @@ esac
 
 [ -f "$UNIT_SOURCE" ] || fail "unit not found: $UNIT_SOURCE"
 [ -f "$RENAME_SOURCE" ] || fail "unit not found: $RENAME_SOURCE"
+[ -f "$LIFECYCLE_SOURCE" ] || fail "unit not found: $LIFECYCLE_SOURCE"
 # The account that owns the served trees, the one the SSH path deploys as: the
 # installer hands every tree it places to it, so that an owner deploying the
 # same project over SSH afterwards finds files it can replace.
@@ -82,6 +86,7 @@ if [ -n "$FINGERPRINT_ONLY" ]; then
   echo "$FINGERPRINT  $TARGET_JS"
   sitesolide_fingerprint "$UNIT_SOURCE" "$UNITS_FOLDER/$UNIT"
   sitesolide_fingerprint "$RENAME_SOURCE" "$UNITS_FOLDER/$RENAME_UNIT"
+  sitesolide_fingerprint "$LIFECYCLE_SOURCE" "$UNITS_FOLDER/$LIFECYCLE_UNIT"
   sitesolide_fingerprint "$LOCAL/sitesolide-installer.env" "$ENV_FILE"
   exit 0
 fi
@@ -106,7 +111,7 @@ fi
 
 # A deployment in progress is left to finish: replacing the template under a
 # running unit leaves it without a file, and nothing is urgent.
-in_progress="$(ssh -n "$SITESOLIDE_SERVER" "systemctl list-units --all --plain --no-legend --state=activating 'sitesolide-installer@*' 'sitesolide-rename@*' 2>/dev/null" || true)"
+in_progress="$(ssh -n "$SITESOLIDE_SERVER" "systemctl list-units --all --plain --no-legend --state=activating 'sitesolide-installer@*' 'sitesolide-rename@*' 'sitesolide-lifecycle@*' 2>/dev/null" || true)"
 if [ -n "$in_progress" ]; then
   fail "a deployment is in progress, try again in a few minutes" "$in_progress"
 fi
@@ -115,7 +120,7 @@ echo "-> sending"
 # A folder whose name is drawn by mktemp rather than predictable: what comes out
 # of it is installed as root.
 REMOTE="$(ssh -n "$SITESOLIDE_SERVER" "mktemp -d")"
-rsync -a "$LOCAL/installer.js" "$LOCAL/sitesolide-installer.env" "$UNIT_SOURCE" "$RENAME_SOURCE" "$SITESOLIDE_SERVER:$REMOTE/"
+rsync -a "$LOCAL/installer.js" "$LOCAL/sitesolide-installer.env" "$UNIT_SOURCE" "$RENAME_SOURCE" "$LIFECYCLE_SOURCE" "$SITESOLIDE_SERVER:$REMOTE/"
 
 echo "-> installation"
 # The stores' root, before the unit that makes it writable: the unit names it
@@ -129,6 +134,7 @@ ssh -n "$SITESOLIDE_SERVER" "
   sudo install -D -m 0644 -o root -g root $REMOTE/installer.js $TARGET_JS
   sudo install -m 0644 -o root -g root '$REMOTE/$UNIT' '$UNITS_FOLDER/$UNIT'
   sudo install -m 0644 -o root -g root '$REMOTE/$RENAME_UNIT' '$UNITS_FOLDER/$RENAME_UNIT'
+  sudo install -m 0644 -o root -g root '$REMOTE/$LIFECYCLE_UNIT' '$UNITS_FOLDER/$LIFECYCLE_UNIT'
   sudo install -m 0644 -o root -g root $REMOTE/sitesolide-installer.env $ENV_FILE
   rm -rf $REMOTE
   sudo systemctl daemon-reload
@@ -138,7 +144,7 @@ echo "-> verifications, read only"
 installed="$(ssh -n "$SITESOLIDE_SERVER" "sudo sha256sum $TARGET_JS" | cut -d' ' -f1)"
 [ "$installed" = "$FINGERPRINT" ] || fail "the installed file does not match the local build"
 
-permissions="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' $TARGET_JS '$UNITS_FOLDER/$UNIT' '$UNITS_FOLDER/$RENAME_UNIT' $ENV_FILE" | sort -u)"
+permissions="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' $TARGET_JS '$UNITS_FOLDER/$UNIT' '$UNITS_FOLDER/$RENAME_UNIT' '$UNITS_FOLDER/$LIFECYCLE_UNIT' $ENV_FILE" | sort -u)"
 [ "$permissions" = "644 root:root" ] || fail "unexpected permissions on the code, the unit or its environment: $permissions"
 
 # A template is only checked through an instance: the FILE:NAME syntax names it
@@ -150,6 +156,10 @@ fi
 verification="$(ssh -n "$SITESOLIDE_SERVER" "sudo systemd-analyze verify '$UNITS_FOLDER/$RENAME_UNIT:sitesolide-rename@verification.service' 2>&1" || true)"
 if [ -n "$verification" ]; then
   fail "systemd-analyze verify reports problems on $RENAME_UNIT" "$verification"
+fi
+verification="$(ssh -n "$SITESOLIDE_SERVER" "sudo systemd-analyze verify '$UNITS_FOLDER/$LIFECYCLE_UNIT:sitesolide-lifecycle@verification.service' 2>&1" || true)"
+if [ -n "$verification" ]; then
+  fail "systemd-analyze verify reports problems on $LIFECYCLE_UNIT" "$verification"
 fi
 
 echo "   installed, template verified, DEPLOY_ACCOUNT=$DEPLOY_USER, nothing started"

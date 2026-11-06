@@ -786,6 +786,14 @@ in its folder, sets it on the machine with the code, and the next `sitesolide
 deploy` writes it here, to commit. The code itself lives on the machine and
 never enters the repository. `lock` and `portal` never go together.
 
+### `disabled`
+
+Not written by hand. The project is turned off on the machine: its services
+stopped, every address answering that it is off, everything else kept. The
+dashboard and `sitesolide disable` write it, `sitesolide enable` takes it
+away; while it is there, `deploy` refuses, as do a change of general access
+and a rename. See [docs/commands.md](commands.md#turning-a-project-off-and-deleting-it).
+
 ### `portal` and `portalExempt`
 
 ```json

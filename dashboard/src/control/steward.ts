@@ -140,9 +140,10 @@ import {
   OWNER_HOLDER,
 } from "./protocol";
 import { cleanLine, interrupted, judgeResult } from "./results";
-import { judgeRenameResult, renameInClaims, renameInTeam } from "./rename";
+import { judgeLifecycleResult, judgeRenameResult, renameInClaims, renameInTeam } from "./rename";
+import { isLifecycle, lifecycleRefusal } from "../../borrowed/lifecycle";
 import { renameRefusal, renamedTo } from "../../borrowed/rename";
-import { RENAME_PREFIX, type RenameRequest, type RenameResult } from "./protocol";
+import { LIFECYCLE_PREFIX, RENAME_PREFIX, type LifecycleRequest, type RenameRequest, type RenameResult } from "./protocol";
 import {
   authenticate,
   createToken,
@@ -1410,6 +1411,11 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     if (body instanceof Response) return body;
     const { slug } = body;
     if (typeof slug !== "string" || !isValidSlug(slug)) return failure("invalid", "slug: lowercase letters, digits and dashes");
+    return releaseRemoved(slug);
+  }
+
+  /** A project gone from the machine: its name released from its token, its creation and claims dropped, its people let go. */
+  async function releaseRemoved(slug: string): Promise<Response> {
     const released = await serially(async () => {
       if (await system.projectExists(slug)) {
         return failure("busy", `${slug} is still on the machine: remove it first, with sitesolide remove --confirm ${slug}`);
@@ -1559,6 +1565,59 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       log: result?.log ?? [`-> ${slug} was already renamed ${to} on the machine: the registries followed`],
       people,
     });
+  }
+
+  // --- a project turned off, on, or removed ------------------------------------------------
+
+  /**
+   * The owner turns a project off or on, or removes it: from the dashboard,
+   * unlocked, the slug retyped for a removal; or over the owner's SSH,
+   * `sitesolide disable` and `enable`. The machine's own run does it,
+   * sitesolide-lifecycle@<slug> (src/installer/lifecycle.ts), which this
+   * waits on; a removal then lets go of the project's token and people, as
+   * `sitesolide remove` does through /tokens/project.
+   */
+  async function lifecycleRoute(req: Request, channel: "dashboard" | "ssh"): Promise<Response> {
+    const body = await readBody(req, channel === "dashboard" ? ["token", "slug", "action", "confirmation"] : ["slug", "action"]);
+    if (body instanceof Response) return body;
+    if (channel === "dashboard" && !(await options.isUnlocked(body.token))) return failure("locked", "locked, unlock again");
+    const { slug, action } = body;
+    if (typeof slug !== "string" || !isValidSlug(slug)) return failure("invalid", "slug: the project's slug");
+    if (!isLifecycle(action)) return failure("invalid", "action: disable, enable or remove");
+    if (action === "remove" && channel === "dashboard" && body.confirmation !== slug) return failure("invalid", `type ${slug} to confirm its removal`);
+    if (renaming.has(slug)) return failure("busy", `a change of ${slug} is already running: wait for it to finish`);
+    renaming.add(slug);
+    try {
+      if (!(await system.lifecycleInstalled())) return failure("not-available", "this machine cannot do that yet: the owner must run sitesolide upgrade");
+      let deposited: Map<string, string>;
+      try {
+        deposited = await system.readManifests();
+      } catch {
+        return failure("failure", "the manifests on the machine cannot be read: nothing was changed");
+      }
+      const refusal = lifecycleRefusal(action, slug, deposited, options.zone);
+      if (refusal !== null) return failure("invalid", `${refusal}: nothing was changed`);
+      if (await isActive(installerUnit(slug))) return failure("busy", `a deployment of ${slug} is running: wait for it to finish`);
+      const request: LifecycleRequest = { slug, action, requestedAt: system.now(), actor: OWNER_HOLDER };
+      await system.writeLifecycleRequest(slug, `${JSON.stringify(request)}\n`);
+      const unit = `${LIFECYCLE_PREFIX}@${slug}.service`;
+      console.log(`control: ${slug} ${action}, ${channel}`);
+      await system.systemctl(["start", unit], options.renameTimeoutMs ?? 11 * 60_000);
+      const judged = judgeLifecycleResult(await system.readLifecycleResult(slug), slug, request.requestedAt, options.uidRoot);
+      if (judged.kind !== "read") return failure("failure", `the run left no result to read (${judged.kind === "absent" ? "none written" : judged.reason}): the owner must read journalctl -u ${unit}`);
+      const result = judged.result;
+      if (result.state !== "succeeded") {
+        const code = result.error?.code;
+        return failure(code === "refused" ? "invalid" : code === "caddy-busy" ? "busy" : "failure", result.error?.message ?? `the run stopped before finishing: the owner must read journalctl -u ${unit}`, result.log);
+      }
+      if (action === "remove") {
+        const released = await releaseRemoved(slug);
+        if (!released.ok) return failure("failure", `${slug} is removed from the machine, but its token and people with access were not let go: run sitesolide remove --confirm ${slug} in its folder, which finishes it`, result.log);
+      }
+      return Response.json({ slug, action, log: result.log });
+    } finally {
+      renaming.delete(slug);
+    }
   }
 
   // --- a name a token claims, taken back by the owner -----------------------------------
@@ -1958,6 +2017,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     "/control/access/list": { POST: accessList },
     "/control/access": { PUT: accessGrant, DELETE: accessRemove },
     "/control/rename": { POST: (req) => renameRoute(req, "dashboard") },
+    "/control/lifecycle": { POST: (req) => lifecycleRoute(req, "dashboard") },
     ...(secrets === null
       ? {}
       : {
@@ -1989,6 +2049,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       "/tokens/project": { DELETE: forgetProject },
       "/tokens/claim": { GET: claimRoute, DELETE: takeBackRoute },
       "/control/rename": { POST: (req) => renameRoute(req, "ssh") },
+      "/control/lifecycle": { POST: (req) => lifecycleRoute(req, "ssh") },
     }),
     ownerWroteStore,
     storeClaimed,

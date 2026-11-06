@@ -1,12 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readManifest } from "../borrowed/manifest";
-import type { InstallRequest, RenameRequest, Scope } from "../src/control/protocol";
-import { runPipeline } from "../src/installer/pipeline";
+import type { RenameRequest } from "../src/control/protocol";
 import { readRenameLaunch, readRenameRequest, runRename } from "../src/installer/rename";
-import { createRenameHost } from "../src/installer/rename-host";
-import { commandsOf, createBench as newBench, file, hostOf, stageBundle, ZONE, type Bench, type BenchOptions } from "./installer-bench";
+import { ZONE, type Bench } from "./installer-bench";
+import { APP, createBench, deploy, NOW, renameHost } from "./rename-bench";
 
 /**
  * The rename run on the installer's bench: a project deployed for real by
@@ -14,63 +13,6 @@ import { commandsOf, createBench as newBench, file, hostOf, stageBundle, ZONE, t
  * throwaway tree, `usermod` and `groupmod` standing in as scripts that edit
  * the bench's passwd and group. systemd and Caddy are the bench's.
  */
-
-const DEPLOYMENT = "0123456789abcdef01234567";
-const NOW = Date.now();
-const PUBLIC: Scope = { slugs: [], create: true, outbound: false, domain: true, public: true };
-const APP = { slug: "nis2", port: 3035, start: "/usr/local/bin/bun run server.ts", publicDir: "public", secrets: ["STRIPE_SECRET_KEY"] };
-const FILES = [file("app/server.ts", "Bun.serve({})"), file("public/index.html", "<h1>nis2</h1>")];
-
-const benches: Bench[] = [];
-afterEach(() => {
-  for (const bench of benches.splice(0)) bench.cleanup();
-});
-
-/** The bench, with the scripts usermod and groupmod become. */
-function createBench(options: BenchOptions = {}): Bench {
-  const bench = newBench(options);
-  benches.push(bench);
-  writeFileSync(join(bench.root, "group"), "root:x:0:\n");
-  // The new name second, the old one last, `-d <home>` between them for an account whose home follows.
-  const edit = (file: string) =>
-    `#!/bin/sh\nset -e\nNEW="$2"\nfor OLD in "$@"; do :; done\ngrep -q "^$OLD:" "${join(bench.root, file)}" || { echo "no such account $OLD" >&2; exit 6; }\nsed -i.bak "s#^$OLD:#$NEW:#" "${join(bench.root, file)}"\n[ "$3" = "-d" ] && sed -i.bak "s#^\\($NEW:[^:]*:[^:]*:[^:]*:[^:]*:\\)[^:]*#\\1$4#" "${join(bench.root, file)}"\nexit 0\n`;
-  writeFileSync(join(bench.root, "stubs", "usermod"), edit("passwd"), { mode: 0o755 });
-  writeFileSync(join(bench.root, "stubs", "groupmod"), edit("group"), { mode: 0o755 });
-  return bench;
-}
-
-async function deploy(bench: Bench, manifest: object = APP): Promise<void> {
-  stageBundle(bench, DEPLOYMENT, FILES);
-  const request: InstallRequest = {
-    deployment: DEPLOYMENT,
-    slug: (manifest as { slug: string }).slug,
-    requestedAt: NOW,
-    token: { id: "aaaaaaaaaaaa", email: "ada@test-zone.invalid", member: null },
-    scope: PUBLIC,
-    creating: true,
-    manifest: JSON.stringify(manifest),
-  };
-  const outcome = await runPipeline(hostOf(bench), request, { zone: ZONE, runFolder: bench.run });
-  expect(outcome.ok).toBe(true);
-  // The group useradd would have made beside the account.
-  writeFileSync(join(bench.root, "group"), `${readFileSync(join(bench.root, "group"), "utf8")}site-${request.slug}:x:2000:\n`);
-  bench.events.length = 0;
-}
-
-function renameHost(bench: Bench) {
-  const installer = hostOf(bench);
-  return createRenameHost({
-    installer,
-    sitesDir: bench.sites,
-    secretsFolder: bench.secrets,
-    storePreviousFolder: bench.previous,
-    accountsFile: join(bench.root, "passwd"),
-    domainTableFile: join(bench.root, "domaines.map"),
-    usermod: join(bench.root, "stubs", "usermod"),
-    groupmod: join(bench.root, "stubs", "groupmod"),
-    systemctl: commandsOf(bench).systemctl,
-  });
-}
 
 const renaming = (slug: string, to: string): RenameRequest => ({ slug, to, requestedAt: Date.now(), actor: "owner" });
 

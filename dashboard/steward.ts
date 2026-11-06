@@ -280,7 +280,7 @@ const IDLE_S = Math.min(255, Math.ceil((MAX_PORTAL_MS + MAX_RESTART_MS) / 1000) 
 // the longest Bun lets a request wait. A client gone before the end changes
 // nothing, the run and the registries finish all the same.
 const RENAME_IDLE_S = 255;
-const RENAME_PATH = "/control/rename";
+const LONG_PATHS = ["/control/rename", "/control/lifecycle"];
 
 // The owner's socket: the access registry for root, over the owner's SSH. No
 // group: the folder and the socket stay root's alone.
@@ -305,7 +305,7 @@ const ownerServer =
               // The access registry, and the token ownership of a project removed.
               fetch: (req, server) => {
                 const path = new URL(req.url).pathname;
-                server.timeout(req, path === RENAME_PATH ? RENAME_IDLE_S : IDLE_S);
+                server.timeout(req, LONG_PATHS.includes(path) ? RENAME_IDLE_S : IDLE_S);
                 return isControlPath(path) ? control.owner(req) : handler.owner(req);
               },
               development: false,
@@ -321,7 +321,7 @@ const server = openSocket(SOCKET, gid, (path) =>
     unix: path,
     fetch(req, server) {
       const path = new URL(req.url).pathname;
-      server.timeout(req, path === RENAME_PATH ? RENAME_IDLE_S : IDLE_S);
+      server.timeout(req, LONG_PATHS.includes(path) ? RENAME_IDLE_S : IDLE_S);
       return isControlPath(path) ? control(req) : handler(req);
     },
     // Never the detailed error page of development mode: it would quote a

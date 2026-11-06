@@ -36,6 +36,8 @@ export function fixedRefusal(slug: string, manifest: Manifest | null): string | 
   // unreadable manifest is not rewritten.
   if (manifest === null) return "no readable sitesolide.json on the server";
   if (manifest.slug !== slug) return "sitesolide.json names another slug";
+  // Its own block laid back would serve it: turned on first.
+  if (manifest.disabled === true) return "the site is turned off: turn it on first, from its Overview";
   const errors = validate(manifest);
   if (errors.length > 0) return `sitesolide.json is invalid: ${errors[0]}`;
   return null;

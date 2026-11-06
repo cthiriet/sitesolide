@@ -286,6 +286,11 @@ export function renameProject(slug: string, to: string) {
   return send<{ slug?: string; to?: string; url?: string; log?: unknown[] } & SecretsRefusal>("POST", "/api/projects/rename", { slug, to })
 }
 
+/** A project turned off, on, or deleted, the owner's, under the unlock; the slug retyped for a deletion. */
+export function projectLifecycle(slug: string, action: "disable" | "enable" | "remove", confirmation: string) {
+  return send<{ slug?: string; action?: string; log?: unknown[] } & SecretsRefusal>("POST", "/api/projects/lifecycle", { slug, action, confirmation })
+}
+
 // --- The backups ---------------------------------------------------------------
 //
 // Read with the session; a restore goes through the steward with the session's

@@ -1422,6 +1422,29 @@ const steward =
               return Response.json({ slug, to, url: `https://${to}.example.com/`, log: [`-> ${slug} renamed ${to}, for owner`, "-> verify", `   https://${to}.example.com/ answers as ${slug}.example.com did`], people: 0 });
             },
           },
+          // Turning a project off, on, or removing it, simulated: three
+          // seconds, then the snapshot follows, the manifest marked or the
+          // folder gone, as the collector would read them.
+          "/control/lifecycle": {
+            POST: async (req) => {
+              const requested = await readBody(req);
+              if (!isValidToken(requested)) return refusal(401, "locked", "locked, unlock again");
+              const slug = text(requested.slug);
+              const action = text(requested.action);
+              const index = FOLDERS.findIndex((folder) => folder.slug === slug);
+              if (index === -1) return refusal(400, "invalid", `the machine carries no project named ${slug}: nothing was changed`);
+              if (action === "remove" && requested.confirmation !== slug) return refusal(400, "invalid", `type ${slug} to confirm its removal`);
+              await Bun.sleep(3_000);
+              const folder = FOLDERS[index]!;
+              if (action === "remove") FOLDERS.splice(index, 1);
+              else if (folder.manifest !== null) {
+                if (action === "disable") folder.manifest.disabled = true;
+                else delete folder.manifest.disabled;
+              }
+              await writeState();
+              return Response.json({ slug, action, log: [`-> ${slug} ${action}, for owner`] });
+            },
+          },
           // A member's own tokens, judged by the real rules (src/people/tokens.ts) on her session and unlock.
           "/tokens/person/list": {
             POST: async (req) => {

@@ -209,10 +209,14 @@ export type RowState = {
 
 export const PENDING_LINE = "Restart pending: a secret changed after the service last started"
 
+export const TURNED_OFF_LINE = "Turned off by its owner: its services are stopped and every address says so. Turn it on from its Overview"
+
 export function rowState(
-  site: Pick<Site, "slug"> & Partial<Pick<SiteSecretsPanel, "restartPending">>,
+  site: Pick<Site, "slug"> & Partial<Pick<SiteSecretsPanel, "restartPending">> & { disabled?: boolean },
   discrepancies: readonly Discrepancy[],
 ): RowState | null {
+  // Off on purpose: said, in the attention tone, and never in the gutter.
+  if (site.disabled === true) return { severity: null, tone: "attention", label: "Turned off", more: 0, lines: [TURNED_OFF_LINE] }
   const issues = sortDiscrepancies(discrepancies.filter((discrepancy) => discrepancy.slug === site.slug))
   const pending = site.restartPending === true
   const first = issues[0]

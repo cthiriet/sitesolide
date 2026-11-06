@@ -174,6 +174,8 @@ export function machineOf(bench: Bench): Machine {
     removeBlock: async (slug) => rmSync(blockPath(slug), { force: true }),
     validateCaddy: async () => bench.options.validate?.(bench) ?? { ok: true, output: "Valid configuration" },
     async reloadCaddy() {
+      // What Caddy serves is the folder as it stands: a block removed is gone.
+      bench.served.clear();
       for (const name of readdirSync(bench.blocks)) bench.served.set(name.replace(/\.caddy$/, ""), readFileSync(join(bench.blocks, name), "utf8"));
       bench.events.push("reload");
       return { ok: true, output: "" };

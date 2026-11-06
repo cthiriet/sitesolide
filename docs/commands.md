@@ -68,6 +68,8 @@ sitesolide remove --confirm <slug>
    --dry-run                    show every step, remove nothing
 sitesolide rename <new-slug>    rename the project and its address on the machine, sitesolide.json rewritten
    --dry-run                    show the request, change nothing
+sitesolide disable              turn the project off: services stopped, every address says so, everything kept
+sitesolide enable               turn it on again
 sitesolide secrets              this project's secrets: names, sources, states, never a value
    set <NAME> [--stdin]         set a variable, typed at a prompt that does not echo, or piped
    generate <NAME>              a random value drawn on the server, never shown: --format, --bytes, --replace
@@ -218,6 +220,32 @@ keep the old name in what they said before. A site that opens with a code is
 refused: choose Public or Restricted, rename it, then Anyone with the code
 again, which draws a new code. The platform's own projects, the dashboard,
 the portal and `api`, keep their names.
+
+## Turning a project off, and deleting it
+
+```bash
+sitesolide disable
+sitesolide enable
+```
+
+**Turned off**, a project keeps everything: its code, data, secrets, account,
+units, people with access and tokens. Its services stop and stay stopped at
+boot, and every address it has, its preview and its own domain, answers a
+503 that says it is turned off. Its manifest on the machine carries
+`disabled`; deploying it, changing its general access and renaming it are
+refused until it is turned on again, since each would lay its own block back
+and serve it. The monitor does not count it as down. **Turned on**, its own
+block and its services are back, and it answers as before. In the dashboard,
+both are in the "..." of its Overview.
+
+**Deleted** from the dashboard, *Delete project* in the same menu, the slug
+retyped, it goes as `sitesolide remove` takes it: its services, folder and
+data, store of secrets, account and block; its people with access and the
+token that created it let go of it; the domain table drops its names. Its
+backup snapshots stay. What can be undone comes first, Caddy reloaded
+without it and every other site probed, and nothing is deleted if that
+fails. A site that opens with a code is refused: choose Public or Restricted
+first. The repository's folder is the owner's to `git rm`.
 
 ## Upgrading the machine
 

@@ -103,13 +103,20 @@ export type RenameHost = {
   domainTable: {
     /** /etc/caddy/domaines.map, null when missing. */
     read: () => Promise<string | null>;
-    /** The table api/ generates from the manifests on the machine now. */
-    build: () => Promise<string>;
+    /** The table api/ generates from the manifests on the machine now, without `without`'s names when given. */
+    build: (without?: string) => Promise<string>;
     /** Written atomically, root 0644; null removes it. */
     write: (text: string | null) => Promise<void>;
   };
   /** The zone's sites for the ask endpoint, see src/installer/pipeline.ts. */
   refreshZoneNames: () => Promise<Execution>;
+
+  /** A place removed whole, links inside removed and never followed: a removal. */
+  removePlace: (place: Place, slug: string) => Promise<void>;
+  /** A unit's drop-in folder removed, when there is one. */
+  removeDropIn: (unit: string) => Promise<void>;
+  /** `userdel site-<slug>`, its group with it. */
+  deleteAccount: (slug: string) => Promise<Execution>;
 };
 
 export type RenameOutcome = { ok: true; url: string } | { ok: false; code: string; message: string };

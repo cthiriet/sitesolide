@@ -375,7 +375,8 @@ export function judgeTunnel(unit: ListedUnit, ready: ProbeResponse): Result {
 
 // --- sites over HTTPS ----------------------------------------------------------
 
-export type ProbeResponse = { status: number } | { error: string };
+/** `off`: the answer of a project its owner turned off, which is no failure. */
+export type ProbeResponse = { status: number; off?: boolean } | { error: string };
 
 /**
  * A site answers when Caddy hands back anything below 500, certificate
@@ -392,6 +393,7 @@ export function judgeProbe(host: string, slug: string | null, response: ProbeRes
   if ("error" in response) {
     return { ...base, verdict: "fail", summary: `https://${host}/ did not answer: ${response.error}` };
   }
+  if (response.off === true) return { ...base, verdict: "ok", summary: `https://${host}/ is turned off by its owner (${response.status})` };
   return {
     ...base,
     verdict: response.status < 500 ? "ok" : "fail",

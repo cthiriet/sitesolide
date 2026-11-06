@@ -353,6 +353,13 @@ const server = Bun.serve({
     "/api/tokens/revoke": { POST: either(team.revokeToken, memberRelay.revokeToken) },
     // A project renamed, the owner's alone: the machine's run stops, moves,
     // reloads, starts and probes, which the longest delay Bun allows covers.
+    // A project turned off, on, or removed, the owner's alone, as long.
+    "/api/projects/lifecycle": {
+      POST: owner((req, server) => {
+        server.timeout(req, 255);
+        return team.projectLifecycle(req);
+      }),
+    },
     "/api/projects/rename": {
       POST: owner((req, server) => {
         server.timeout(req, 255);

@@ -18,6 +18,7 @@
  *     /etc/passwd names the uid, and a project's sitesolide.json is 0644 in a
  *     folder of 0755, read only when a later block's port is listened on.
  */
+import { DISABLED_HEADER } from "../../bin/cli/fragment";
 import { readdirSync, readFileSync, renameSync, statfsSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { connect, type TLSSocket } from "node:tls";
@@ -326,7 +327,8 @@ export function createMachine(config: Config, options: MachineOptions = { system
       try {
         const response = await fetch(url, options);
         await response.body?.cancel();
-        return { status: response.status };
+        // A project its owner turned off says so, see disabledFragment in bin/cli/fragment.ts.
+        return response.headers.has(DISABLED_HEADER) ? { status: response.status, off: true } : { status: response.status };
       } catch (error) {
         return { error: errorCode(error) };
       }

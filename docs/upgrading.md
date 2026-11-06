@@ -166,6 +166,33 @@ first, with that release's binary and [its
 notes](https://github.com/cthiriet/sitesolide/blob/v0.16.0/docs/upgrading.md),
 which go back to 0.1; this release converts nothing an earlier one left.
 
+## Turning a project off, and deleting it from the dashboard
+
+**What the release brings.** A project can be turned off and on again, and
+deleted, from the "..." of its Overview in the dashboard, the owner's,
+unlocked; `sitesolide disable` and `sitesolide enable` do the first two from
+its folder. A new root one-shot, `sitesolide-lifecycle@<slug>`, does each
+under the Caddy lock and puts everything back on failure. Turned off, a
+project keeps everything, its services stopped, and every address answers a
+503 that says so; its manifest on the machine carries `disabled`, a new key
+the machine writes. Deleted, it goes as `sitesolide remove` takes it, its
+backup snapshots kept. See
+[docs/commands.md](commands.md#turning-a-project-off-and-deleting-it).
+
+**What `sitesolide upgrade` brings**: the installer with the new template,
+the steward, the dashboard, the gatekeeper, which refuses to change the
+general access of a project turned off, and the monitor, which counts a
+project turned off as no failure. No project is redeployed.
+
+**What changes for you.** Deploying a project turned off is refused, as are
+a change of its general access and a rename, until it is turned on.
+`sitesolide refresh --all` leaves it as it is.
+
+**Going back.** The previous release's binary, then `sitesolide upgrade`.
+Turn every project on before: a project still off keeps its block and its
+stopped services, and its `disabled`, which the previous release refuses as
+an unknown key.
+
 ## Renaming a project
 
 **What the release brings.** A project can be renamed, its address with it:

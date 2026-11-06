@@ -14,6 +14,7 @@
  *   sitesolide people               everyone with access, and who may create projects
  *   sitesolide remove --confirm <slug>  take the project off the machine
  *   sitesolide rename <new-slug>    the project and its address renamed on the machine
+ *   sitesolide disable | enable     the project turned off, kept whole, or on again
  *   sitesolide secrets [set|generate|remove|set-file|remove-file]
  *                                   the project's store of secrets, see bin/cli/store-cli.ts
  *   sitesolide run -- <command>     the workstation's own credentials for it, then run
@@ -170,6 +171,7 @@ import {
 } from "./cli/output";
 import { choosePort, needsPort, setPort } from "./cli/ports";
 import { followMachine } from "./cli/rename";
+import { disabledRefusal } from "./cli/lifecycle";
 import {
   switchAnnouncement,
   depositedManifestPath,
@@ -268,7 +270,7 @@ import { machine, sshLogin } from "./cli/machine";
 import { DNS_CHOICES, dnsEntry, shownDns } from "./cli/dns/registry";
 import { eventOutput, humanOutput, login, promptWithoutEcho, remoteMode, REMOTE_USAGE, runRemote, type BuildContext } from "./cli/remote";
 import { buildEnv, KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
-import { ownerGeneralCommand, ownerWriteCommand, PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshClaim, sshGeneral, sshPeople, sshRename, sshTakeBack } from "./cli/access";
+import { ownerGeneralCommand, ownerWriteCommand, PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshClaim, sshGeneral, sshLifecycle, sshPeople, sshRename, sshTakeBack } from "./cli/access";
 import {
   foreignUnit,
   laterBlockPorts,
@@ -1681,6 +1683,8 @@ async function reconcilePortal(
     const renamed = await renamedOnServer(project, config, executor);
     if (renamed !== null) return { renamed };
   }
+  // Turned off on the machine: its own block and its services would serve it again.
+  if (reading.kind === "present" && reading.disabled === true) die(disabledRefusal(manifest.slug), ["nothing was pushed"]);
   // The former names a rename left are the machine's, as the door is.
   if (reading.kind === "present" && (reading.formerSlugs ?? []).join(",") !== (manifest.formerSlugs ?? []).join(",")) {
     const raw = setFormerSlugs(project.raw, reading.formerSlugs);
@@ -3662,6 +3666,11 @@ async function refreshProject(folder: string, raw: string, run: RefreshRun, conf
     say(`-> ${slug}, static: no unit to refresh`);
     return emptyReport(slug, "static");
   }
+  // Turned off: its units would be enabled and started again. Refreshed once turned on.
+  if (manifest.disabled === true) {
+    say(`-> ${slug}, turned off: its units are refreshed once it is turned on`);
+    return emptyReport(slug, "static");
+  }
 
   step(`${slug}, ${describeRuns(true, runsOf(servicesOf(manifest)))}`);
   const units = generateUnits(manifest);
@@ -4048,6 +4057,27 @@ async function rename(project: Project, config: Config, executor: Executor, to: 
   say(`   written into ${join(project.folder, MANIFEST_NAME)}: commit it`);
 }
 
+/**
+ * `sitesolide disable` and `enable`, in the project's folder: the project
+ * turned off or on, on the server, by the machine's own run, asked of the
+ * steward over the owner's SSH as the dashboard asks it. See bin/cli/lifecycle.ts.
+ * Nothing is written in the folder: `disabled` is the machine's, and a
+ * deployment is refused while it is off.
+ */
+async function turn(slug: string, action: "disable" | "enable", config: Config, executor: Executor): Promise<void> {
+  note({ slug, action, dryRun: executor.simulated });
+  say(`-> ${slug} turned ${action === "disable" ? "off" : "on"}, on ${config.server}`);
+  if (executor.simulated) {
+    say(`   [dry-run] ssh ${config.server} ${ownerWriteCommand("POST", "/control/lifecycle")}`);
+    say(`   [dry-run]   with ${JSON.stringify({ slug, action })}`);
+    return;
+  }
+  const answer = await sshLifecycle((remote, input) => executor.execute(config, remote, input), slug, action);
+  if (!answer.ok) die(answer.failure.message, answer.failure.details ?? []);
+  for (const line of answer.value.log) say(`   ${line}`);
+  say(action === "disable" ? `-> ${slug} is off: every address says so; sitesolide enable turns it on` : `-> ${slug} is on again`);
+}
+
 /** The value given to an option, `--slug shop`, or undefined. */
 function optionValue(arguments_: string[], name: string): string | undefined {
   const marker = arguments_.indexOf(name);
@@ -4179,6 +4209,8 @@ function usage(zone: string | null): string {
     "     --dry-run                    show every step, remove nothing",
     "  sitesolide rename <new-slug>    rename the project and its address on the machine, sitesolide.json rewritten",
     "     --dry-run                    show the request, change nothing",
+    "  sitesolide disable              turn the project off: services stopped, every address says so, everything kept",
+    "  sitesolide enable               turn it on again",
     "  sitesolide secrets              this project's secrets: names, sources, states, never a value",
     "     set <NAME> [--stdin]         set a variable, typed at a prompt that does not echo, or piped",
     "     generate <NAME>              a random value drawn on the server, never shown: --format, --bytes, --replace",
@@ -4467,6 +4499,10 @@ if (import.meta.main) {
       break;
     case "rename":
       await rename(readProject(folder, { portLater: true }), config, executor, arguments_[1]);
+      break;
+    case "disable":
+    case "enable":
+      await turn(readProject(folder, { portLater: true }).manifest.slug, command, config, executor);
       break;
     case "run": {
       const separator = arguments_.indexOf("--");

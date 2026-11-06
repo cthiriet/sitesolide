@@ -41,7 +41,7 @@ export type TeamDependencies = {
 
 type Handler = (req: Request) => Promise<Response>;
 
-export type TeamRoutes = { team: Handler; createToken: Handler; revokeToken: Handler; renameProject: Handler };
+export type TeamRoutes = { team: Handler; createToken: Handler; revokeToken: Handler; renameProject: Handler; projectLifecycle: Handler };
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
@@ -152,6 +152,28 @@ export function createTeamRoutes(dependencies: TeamDependencies, clock: () => nu
       }
       if (reached.kind !== "received") return relayRefusal(reached);
       store.recordAudit({ at: clock(), actor: "owner", action: "project.rename", target: body.slug as string, detail: { to: body.to } });
+      return json(reached.body);
+    },
+
+    /** The owner turns a project off or on, or removes it, under the session's unlock. */
+    async projectLifecycle(req) {
+      const open = await check(req, true);
+      if (open instanceof Response) return open;
+      const body = await readBody(req);
+      if (body === null || typeof body.slug !== "string" || typeof body.action !== "string") return error(400, "invalid", "Missing or non-text field: slug, action.");
+      const kept = tokens.read(open.hash);
+      if (kept === null) return error(423, "locked", "Unlock first: this needs the dashboard password.");
+      const confirmation = typeof body.confirmation === "string" ? body.confirmation : "";
+      const reached = await reach(() => steward.lifecycle({ token: kept.token, slug: body.slug as string, action: body.action as string, confirmation }), [kept.token]);
+      if (reached.kind === "received" && reached.status === 401 && reached.body.error === "locked") {
+        if (tokens.read(open.hash)?.token === kept.token) tokens.forget(open.hash);
+        return error(423, "locked", "Unlock first: this needs the dashboard password.");
+      }
+      if (reached.kind === "received" && reached.status !== 200) {
+        return json({ error: reached.body.error, message: reached.body.message, log: Array.isArray(reached.body.details) ? reached.body.details : [] }, reached.status);
+      }
+      if (reached.kind !== "received") return relayRefusal(reached);
+      store.recordAudit({ at: clock(), actor: "owner", action: `project.${body.action}`, target: body.slug as string, detail: {} });
       return json(reached.body);
     },
 

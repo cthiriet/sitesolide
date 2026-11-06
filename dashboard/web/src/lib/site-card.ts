@@ -60,7 +60,11 @@ const TONE_RANK: Record<Tone, number> = { neutral: 0, ok: 1, attention: 2, error
  * is the worse of the two: a running service on a site in error is still an
  * error.
  */
-export function siteState(site: Pick<Site, "type" | "service">, discrepancies: readonly Discrepancy[]): ServiceState {
+/** What a project its owner turned off says, everywhere its state is said: on purpose, never an error. */
+export const TURNED_OFF: ServiceState = { tone: "attention", label: "Turned off" }
+
+export function siteState(site: Pick<Site, "type" | "service"> & { disabled?: boolean }, discrepancies: readonly Discrepancy[]): ServiceState {
+  if (site.disabled === true) return TURNED_OFF
   const service = serviceState(site)
   const { errors, warnings } = countBySeverity(discrepancies)
   const parts = [service.label]
@@ -506,7 +510,8 @@ export function kindLine(site: Pick<Site, "type" | "headless" | "services">): { 
  * "Running, 1 warning" or "Static files, 1 warning", which the kind beside
  * it already says. Null when there is nothing to say.
  */
-export function headerState(site: Pick<Site, "type" | "service">, discrepancies: readonly Discrepancy[]): ServiceState | null {
+export function headerState(site: Pick<Site, "type" | "service"> & { disabled?: boolean }, discrepancies: readonly Discrepancy[]): ServiceState | null {
+  if (site.disabled === true) return TURNED_OFF
   const state = siteState(site, discrepancies)
   if (state.tone === "ok") return null
   if (state.tone === "neutral" && site.type !== "app") return null

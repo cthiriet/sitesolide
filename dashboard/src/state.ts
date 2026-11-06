@@ -270,6 +270,12 @@ export type Site = {
    * the owner's site, and not one of them.
    */
   platform: boolean;
+  /**
+   * Turned off by its owner: its services stopped and disabled on purpose,
+   * every address answering that it is off, see bin/cli/lifecycle.ts. Its
+   * stopped services and its block are then no discrepancy.
+   */
+  disabled: boolean;
   domain: Domain | null;
   lock: Lock;
   portal: Portal;
@@ -894,6 +900,7 @@ export function buildSnapshot(raw: Raw): Snapshot {
       address: addressOf(slug, raw.zone),
       headless: manifest !== null && app && isHeadless(manifest),
       platform: port !== null && PLATFORM_PORTS.get(port) === slug,
+      disabled: manifest?.disabled === true,
       domain,
       lock: readLock(slug, manifest, codes, raw.zone),
       portal: readPortal(manifest, raw.blocks[slug]),
@@ -1018,6 +1025,8 @@ export function findDiscrepancies(sites: Site[], raw: Raw): Discrepancy[] {
 
   for (const site of sites) {
     const { slug, lock } = site;
+    // Off on purpose: its services are stopped and its block says so.
+    if (site.disabled) continue;
 
     if (lock.closed && lock.code === null) {
       discrepancies.push({

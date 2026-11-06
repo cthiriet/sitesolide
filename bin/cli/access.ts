@@ -530,7 +530,8 @@ export type OwnerWritePath =
   | "/general"
   | "/tokens/claim"
   | "/tokens/project"
-  | "/control/rename";
+  | "/control/rename"
+  | "/control/lifecycle";
 
 /**
  * How long curl waits, in seconds, for the routes not given the thirty of
@@ -539,7 +540,7 @@ export type OwnerWritePath =
  * gatekeeper, up to ninety seconds: both are given longer. The release of a
  * removed project's name comes once the project is gone, and is given less.
  */
-const WRITE_SECONDS: Partial<Record<OwnerWritePath, number>> = { "/restart": 120, "/general": 240, "/tokens/project": 10, "/control/rename": 270 };
+const WRITE_SECONDS: Partial<Record<OwnerWritePath, number>> = { "/restart": 120, "/general": 240, "/tokens/project": 10, "/control/rename": 270, "/control/lifecycle": 270 };
 
 /** A change, the JSON body on standard input: no address of the request, nor any value, ever goes through a shell. */
 export function ownerWriteCommand(method: "PUT" | "DELETE" | "POST" | "PATCH", path: OwnerWritePath): string {
@@ -673,6 +674,28 @@ export type GeneralAnswer = {
   /** The code in force when the site opens with one: the steward read it back from the machine. */
   code: { code: string; url: string | null } | null;
 };
+
+/**
+ * A project turned off or on, over the owner's socket: the steward runs the
+ * machine's own run and waits on it. A refusal carries the run's log.
+ */
+export async function sshLifecycle(run: RunOnMachine, slug: string, action: "disable" | "enable"): Promise<Reading<{ log: string[] }>> {
+  const done = await run(ownerWriteCommand("POST", "/control/lifecycle"), JSON.stringify({ slug, action }));
+  const read = await askSteward(async () => done, "", undefined, { outdated: "the steward on the server cannot turn a project off or on yet: run sitesolide upgrade first", unchanged: false });
+  if (!read.ok) {
+    const answer = readCurlAnswer(done.output);
+    let details: string[] = [];
+    try {
+      const body = answer === null ? null : (JSON.parse(answer.body) as { details?: unknown });
+      if (Array.isArray(body?.details)) details = body.details.filter((line): line is string => typeof line === "string");
+    } catch {
+      // No log to quote.
+    }
+    return { ok: false, failure: { ...read.failure, details: [...(read.failure.details ?? []), ...details] } };
+  }
+  const { log } = read.value;
+  return { ok: true, value: { log: Array.isArray(log) ? log.filter((line): line is string => typeof line === "string") : [] } };
+}
 
 /** A rename as the steward answered it: the new address and the machine's log. */
 export type RenameAnswer = { slug: string; to: string; url: string; log: string[] };

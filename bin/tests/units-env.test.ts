@@ -30,6 +30,7 @@ const UNITS: ReadonlyArray<readonly [unit: string, entryPoint: string]> = [
   ["infra/steward/sitesolide-steward.service", "dashboard/steward.ts"],
   ["infra/installer/sitesolide-installer@.service", "dashboard/src/installer/main.ts"],
   ["infra/installer/sitesolide-rename@.service", "dashboard/src/installer/main.ts"],
+  ["infra/installer/sitesolide-lifecycle@.service", "dashboard/src/installer/main.ts"],
   ["api/deploy/sitesolide-api.service", "api/src/config.ts"],
   ["infra/monitor/sitesolide-monitor.service", "monitor/src/config.ts"],
   ["infra/egress/sitesolide-egress.service", "egress/src/config.ts"],

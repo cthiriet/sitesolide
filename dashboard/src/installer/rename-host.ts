@@ -141,6 +141,16 @@ export function createRenameHost(config: RenameHostConfig): RenameHost {
       return true;
     },
 
+    async removePlace(place, slug) {
+      rmSync(pathOf(place, slug), { recursive: true, force: true });
+    },
+
+    async removeDropIn(unit) {
+      rmSync(join(installer.unitsFolder, `${unitFileName(unit)}.d`), { recursive: true, force: true });
+    },
+
+    deleteAccount: (slug) => installer.removeAccount(slug),
+
     async writeManifest(slug, text, read) {
       await installer.machine.writeManifest(slug, text, read.permissions);
     },
@@ -152,8 +162,10 @@ export function createRenameHost(config: RenameHostConfig): RenameHost {
         if (examination.bytes === null) throw new Error(`${config.domainTableFile} is not a plain file of a reasonable size`);
         return new TextDecoder().decode(examination.bytes);
       },
-      async build() {
-        return `${render(buildTable(config.sitesDir))}\n`;
+      async build(without) {
+        const table = buildTable(config.sitesDir);
+        for (const [name, folder] of table) if (folder === without) table.delete(name);
+        return `${render(table)}\n`;
       },
       async write(text) {
         if (text === null) {

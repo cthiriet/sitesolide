@@ -262,6 +262,8 @@ type StewardOperation = Exclude<
   | "project.create"
   | "project.remove"
   | "project.rename"
+  | "project.disable"
+  | "project.enable"
 >
 
 /** What an Admin's change the steward refused tried to do, in rows written before the access registry. */
@@ -532,6 +534,10 @@ export function auditWords(row: AuditRow, timeZone?: string): AuditWords {
       return { summary: "Removed the project: its name free for another token", note: text(detail.note), tone: "neutral" }
     case "project.rename":
       return { summary: "Renamed the project", note: text(detail.note), tone: "neutral" }
+    case "project.disable":
+      return { summary: "Turned the project off", note: null, tone: "neutral" }
+    case "project.enable":
+      return { summary: "Turned the project on", note: null, tone: "neutral" }
     case "deploy.start":
       return { summary: detail.creating === true ? "Started deploying a new project" : "Started a deployment", note: null, tone: "neutral" }
     case "deploy.success":

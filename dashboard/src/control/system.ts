@@ -20,7 +20,7 @@
 import { lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readBounded, writeAtomically, type Command, type Examination } from "../secrets/system";
-import { DEPLOYMENT_ID_SHAPE, INSTALLER_TEMPLATE, RENAME_TEMPLATE, RENAMES_FOLDER, renameResultName } from "./protocol";
+import { DEPLOYMENT_ID_SHAPE, INSTALLER_TEMPLATE, LIFECYCLE_FOLDER, LIFECYCLE_TEMPLATE, lifecycleResultName, RENAME_TEMPLATE, RENAMES_FOLDER, renameResultName } from "./protocol";
 import { CREATIONS_NAME } from "./creations";
 import { CLAIMS_NAME } from "./claims";
 import type { Leftovers } from "./policy";
@@ -92,6 +92,12 @@ export type ControlSystem = {
   renameInstalled: () => Promise<boolean>;
   /** The rename run's result for this slug, `rename-<slug>.json`. */
   readRenameResult: (slug: string) => Promise<Examination>;
+  /** `lifecycle/<slug>.json`, read by the run that turns a project off, on, or removes it. */
+  writeLifecycleRequest: (slug: string, text: string) => Promise<void>;
+  /** Is that run's template in place? */
+  lifecycleInstalled: () => Promise<boolean>;
+  /** Its result for this slug, `lifecycle-<slug>.json`. */
+  readLifecycleResult: (slug: string) => Promise<Examination>;
   systemctl: (arguments_: string[], timeoutMs: number) => Promise<Command>;
   /** `journalctl` for these units, its standard output as it is. */
   journal: (units: string[], lines: number, cursor: string | null, timeoutMs: number) => Promise<Command>;
@@ -243,6 +249,27 @@ export function createControlSystem(config: ControlSystemConfig): ControlSystem 
     async readRenameResult(slug) {
       if (!isValidSlug(slug)) return { kind: "absent" };
       return readBounded(join(config.installerFolder, renameResultName(slug)), MAX_CONTROL_FILE_BYTES);
+    },
+
+    async writeLifecycleRequest(slug, text) {
+      if (!isValidSlug(slug)) throw new Error("not a slug");
+      const folder = join(config.stateFolder, LIFECYCLE_FOLDER);
+      mkdirSync(folder, { recursive: true, mode: 0o700 });
+      writeAtomically(folder, `${slug}.json`, encoder.encode(text), ROOT_ONLY);
+    },
+
+    async lifecycleInstalled() {
+      try {
+        readFileSync(join(config.unitsFolder, LIFECYCLE_TEMPLATE));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    async readLifecycleResult(slug) {
+      if (!isValidSlug(slug)) return { kind: "absent" };
+      return readBounded(join(config.installerFolder, lifecycleResultName(slug)), MAX_CONTROL_FILE_BYTES);
     },
 
     async readResult(deployment) {

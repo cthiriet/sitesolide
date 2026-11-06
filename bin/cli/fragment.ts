@@ -670,3 +670,54 @@ export function decideBlock(state: {
   }
   return state.replace ? "forced" : "diverged";
 }
+
+/** What a disabled project answers on every address it has, with DISABLED_HEADER naming it. */
+export const DISABLED_ANSWER = "This site is turned off for now.";
+export const DISABLED_HEADER = "X-Sitesolide-Disabled";
+
+/**
+ * The block of a disabled project, in place of its own: every address it is
+ * served on, its preview and its own domain when switched on, answers a 503
+ * and DISABLED_ANSWER, whatever the path, open or restricted alike, its
+ * services stopped behind. Nothing of the site is served, nothing reaches its
+ * portal or its code: the block names no route of the project. A static site
+ * gets one too, which outranks the zone's wildcard and the nameless block of
+ * customer domains, both of which would serve its files.
+ *
+ * The domain keeps its entry in the table and its certificate, which the ask
+ * endpoint goes on allowing: enabled again, the site answers there at once.
+ * See dashboard/src/installer/lifecycle.ts, which lays and removes it.
+ */
+export function disabledFragment(manifest: Manifest): string {
+  const slug = manifest.slug;
+  if (!isValidSlug(slug)) throw new Error(`slug: ${JSON.stringify(slug)} is not what validate() accepts, it is never written into a Caddy block`);
+  const domain = manifest.domain;
+  const own = domain !== undefined && domain.active === true ? domainHosts(domain) : [];
+  for (const host of own) {
+    if (!isValidDomain(host)) throw new Error(`domain: ${JSON.stringify(host)} is not a name validate() accepts, it is never written into a Caddy block`);
+  }
+  const answer = [
+    "\timport commun",
+    '\theader X-Robots-Tag "noindex, nofollow"',
+    `\theader ${DISABLED_HEADER} ${slug}`,
+    `\trespond "${DISABLED_ANSWER}" 503`,
+  ];
+  const lines = [
+    `# Caddy block for project ${slug}, disabled: written by its owner's`,
+    "# Disable, from the dashboard or sitesolide disable, in place of its own.",
+    "# Enabling it again lays its own block back. Do not edit by hand.",
+    "",
+    `${slug}.${ZONE_HOST} {`,
+    "\timport tls-zone",
+    ...answer,
+    "}",
+    "",
+  ];
+  if (own.length > 0) lines.push(...OWN_DOMAIN_COMMENT, `${own.join(", ")} {`, ...ON_DEMAND_TLS, ...answer, "}", "");
+  return lines.join("\n");
+}
+
+/** Is this block a disabled project's? */
+export function isDisabledBlock(block: string | null): boolean {
+  return block !== null && block.includes(`\theader ${DISABLED_HEADER} `);
+}

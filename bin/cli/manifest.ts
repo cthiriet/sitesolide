@@ -115,6 +115,12 @@ export type Manifest = {
   secrets?: string[] | SecretsLongForm;
   domain?: { name: string; aliases?: string[]; active?: boolean };
   lock?: boolean;
+  /**
+   * The project is turned off on the machine, not written by hand: its
+   * services stopped, every address answering that it is off, everything
+   * else kept. See bin/cli/lifecycle.ts.
+   */
+  disabled?: boolean;
   /** The site goes behind the shared portal, see portal/README.md. */
   portal?: boolean;
   /** The paths the portal lets through: signed webhooks, above all. */
@@ -155,6 +161,7 @@ export const KNOWN_KEYS = [
   "secrets",
   "domain",
   "lock",
+  "disabled",
   "portal",
   "portalExempt",
   "egress",
@@ -1237,6 +1244,9 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
     }
   }
 
+  // Like lock: its absence is the shape of a project that runs.
+  if (manifest.disabled !== undefined && manifest.disabled !== true) errors.push("disabled: true, or absent; written by the machine when the project is turned off");
+
   if (manifest.portalExempt !== undefined) {
     // Without `portal`, the exemptions are accepted and do nothing: the
     // generator only reads them behind the door. That is the shape left by a
@@ -1858,4 +1868,16 @@ export function setFormerSlugs(raw: string, former: readonly string[] | undefine
     if (key === "slug" && former !== undefined && former.length > 0) ordered.formerSlugs = [...former];
   }
   return `${JSON.stringify(ordered, null, 2)}\n`;
+}
+
+/**
+ * The manifest with its `disabled` field, as the machine writes it when the
+ * project is turned off or on: present and true while off, absent otherwise,
+ * as `lock` is.
+ */
+export function setDisabled(raw: string, disabled: boolean): string {
+  const parsed = readObject(raw);
+  if (disabled) parsed.disabled = true;
+  else delete parsed.disabled;
+  return `${JSON.stringify(parsed, null, 2)}\n`;
 }

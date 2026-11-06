@@ -44,6 +44,12 @@ relays to a component that judges for itself what it accepts:
   Caddy, probes every site and puts everything back at the first failure;
   then it moves its own registries, people with access and tokens, to the
   new name. See [docs/commands.md](../docs/commands.md#renaming-a-project);
+- **a project turned off, on, or deleted**, in the "..." of its *Overview*,
+  the owner's, unlocked, the slug retyped to delete it. The steward starts
+  `sitesolide-lifecycle@<slug>`, a root one-shot that stops its services and
+  lays the block that says it is off, or puts its own back, or removes it
+  as `sitesolide remove` does, then lets go of its people and token. See
+  [docs/commands.md](../docs/commands.md#turning-a-project-off-and-deleting-it);
 - **a deployment by a token**, the control API under `/api/v1/` and the
   *Tokens* page. The steward judges every token and starts the installer, a
   root one-shot that deploys one project as `sitesolide deploy` would. See

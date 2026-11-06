@@ -61,6 +61,8 @@ export function renameRefusal(from: string, to: string, deposited: Deposited, zo
   if (holder !== null && holder !== from) {
     return `${to} is a former name of ${holder}, which a deployment from a checkout that still says ${to} reaches: pick another name`;
   }
+  // Its block generated again would serve it: turned on first.
+  if (manifest.disabled === true) return `${from} is turned off: turn it on first, from its Overview in the dashboard or with sitesolide enable, then rename it`;
   // The code's stanza, its cookie and its door page are all named after the
   // slug: the gatekeeper writes them, and the rename does not.
   if (manifest.lock === true) {

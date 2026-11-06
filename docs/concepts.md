@@ -120,6 +120,7 @@ more.
 | The portal relay | root, no capability, on demand | forward the steward's connections to the portal's admin API, and to nothing else; the steward asks it `GET /admin/access` alone |
 | The gatekeeper | root, one-shot | change one project's general access: its manifest, its block, the preview locks; reload Caddy, probe, roll back |
 | The installer | root, one-shot | deploy one project for a token, the archive read by the project's own account |
+| The lifecycle run | root, one-shot | turn one project off or on, or remove it, for the owner: its units, its block or the block of a site turned off, its folder, store and account on removal; reload Caddy, probe, put back on failure |
 | The rename | root, one-shot | rename one project for the owner: its account, folders, store, units, block and domain table moved under the new slug, reload Caddy, probe, put everything back on failure |
 | The collector | root, on a timer | read the machine, drop a snapshot where the dashboard can read it |
 | The monitor | `sitesolide-monitor`, on a timer | read what any account reads, ask Caddy for every site over HTTPS, alert |
