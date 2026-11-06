@@ -232,9 +232,10 @@ sitesolide enable
 units, people with access and tokens. Its services stop and stay stopped at
 boot, and every address it has, its preview and its own domain, answers a
 503 that says it is turned off. Its manifest on the machine carries
-`disabled`; deploying it, changing its general access and renaming it are
-refused until it is turned on again, since each would lay its own block back
-and serve it. The monitor does not count it as down. **Turned on**, its own
+`disabled`; deploying it, changing its general access, renaming it,
+switching its domain and restarting it are refused until it is turned on
+again, since each would serve it or run its code again. Its scheduled backup
+runs no backup command: its data is saved as its stopped services left it. The monitor does not count it as down. **Turned on**, its own
 block and its services are back, and it answers as before. In the dashboard,
 both are in the "..." of its Overview.
 

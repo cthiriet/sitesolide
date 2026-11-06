@@ -203,7 +203,9 @@ export async function takeSnapshot(
   const place = staging(config, project.folder);
   if (config.isolation === "none") mkdirSync(place.path, { recursive: true, mode: 0o700 });
 
-  const stopped = options.stopped === true;
+  // A project turned off has its services stopped and runs no code, its
+  // backup commands included: its data is saved as the files they left.
+  const stopped = options.stopped === true || project.manifest?.disabled === true;
   let hooks: Hook[] = [];
   const declared = projectHooks(project, place.path);
   if ("error" in declared) {

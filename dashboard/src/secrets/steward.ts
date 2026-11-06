@@ -1592,6 +1592,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       const found = checkSite(await sites(), body.slug);
       if ("refusal" in found) return refuse("restart", body, found.refusal);
       const { site } = found;
+      if (site.manifest?.disabled === true) return refuse("restart", body, turnedOff(site.folder));
       const unit = unitOf(site.folder);
 
       const text = site.isStatic ? null : await system.readUnit(unit);
@@ -1638,6 +1639,13 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /**
+   * A project turned off stays stopped: systemd starts a disabled unit when
+   * asked by name, so a restart, whoever asks, would run its code again
+   * behind the 503 its block answers. Turning it on is the owner's gesture.
+   */
+  const turnedOff = (slug: string): Refusal => ({ error: "refused", message: `${slug} is turned off: turn it on first` });
+
+  /**
    * A member's restart, the role already judged by src/people/steward.ts and
    * judged again here once the lock is taken. Unlike the Secrets section's, it
    * does not ask whether the unit reads a managed file: a member restarts a
@@ -1679,6 +1687,11 @@ export function createSteward(system: System, options: StewardOptions): StewardH
         return error(found.refusal.error, found.refusal.message);
       }
       const { site } = found;
+      if (site.manifest?.disabled === true) {
+        const refusal = turnedOff(site.folder);
+        await writeLog("restart", "rejects", body, refusal.error, null, who);
+        return error(refusal.error, refusal.message);
+      }
       // A person's or a token's: never the platform's projects. Root over the
       // owner's socket restarts any of them, the dashboard included, whose
       // relay is not in the way there.

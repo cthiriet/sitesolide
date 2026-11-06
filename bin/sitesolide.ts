@@ -1638,12 +1638,29 @@ async function rereadUnderLock(
  */
 async function requireAgreedDoor(project: Project, config: Config, executor: Executor): Promise<void> {
   const { manifest } = project;
-  const agreement = guardDepositedManifest(
-    manifest.slug,
-    { portal: isProtected(manifest), lock: manifest.lock === true },
-    await readDepositedDoor(manifest.slug, config, executor),
-  );
+  const reading = await readDepositedDoor(manifest.slug, config, executor);
+  const agreement = guardDepositedManifest(manifest.slug, { portal: isProtected(manifest), lock: manifest.lock === true }, reading);
   if (agreement.kind === "rejects") die(agreement.message, agreement.details);
+  // The checkout's manifest leaves as it is: it must not switch a project
+  // turned off back on in the machine's eyes, nor drop its former names.
+  if (reading.kind === "present" && reading.disabled === true) die(disabledRefusal(manifest.slug), ["nothing was written"]);
+  refuseLocalDisabled(manifest);
+  if (reading.kind === "present" && (reading.formerSlugs ?? []).join(",") !== (manifest.formerSlugs ?? []).join(",")) {
+    die(`the former names of ${manifest.slug} differ on the server: run \`sitesolide deploy\` in its folder first`, [
+      "depositing this sitesolide.json would drop or change them",
+      "nothing was written",
+    ]);
+  }
+}
+
+/** `disabled` is the machine's to write, when its owner turns the project off: a checkout never carries it there. */
+function refuseLocalDisabled(manifest: Manifest): void {
+  if (manifest.disabled === true) {
+    die(`${MANIFEST_NAME} says "disabled": true, which only the machine writes`, [
+      "remove the field; to turn the project off: sitesolide disable",
+      "nothing was pushed",
+    ]);
+  }
 }
 
 /**
@@ -1685,6 +1702,7 @@ async function reconcilePortal(
   }
   // Turned off on the machine: its own block and its services would serve it again.
   if (reading.kind === "present" && reading.disabled === true) die(disabledRefusal(manifest.slug), ["nothing was pushed"]);
+  refuseLocalDisabled(manifest);
   // The former names a rename left are the machine's, as the door is.
   if (reading.kind === "present" && (reading.formerSlugs ?? []).join(",") !== (manifest.formerSlugs ?? []).join(",")) {
     const raw = setFormerSlugs(project.raw, reading.formerSlugs);

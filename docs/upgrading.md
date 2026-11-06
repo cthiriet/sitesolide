@@ -185,8 +185,19 @@ general access of a project turned off, and the monitor, which counts a
 project turned off as no failure. No project is redeployed.
 
 **What changes for you.** Deploying a project turned off is refused, as are
-a change of its general access and a rename, until it is turned on.
-`sitesolide refresh --all` leaves it as it is.
+a change of its general access, a rename, `sitesolide domain`, and a restart,
+whoever asks, until it is turned on. `sitesolide refresh --all` leaves it as
+it is; its scheduled backup runs no backup command and saves its data as the
+stopped services left it; a restore leaves it stopped.
+
+The same release closes what an audit of renaming and removing found: a
+removal sets a restricted site's `public/` aside before it takes its block
+out, and a rename lays the new name's block before it moves the folder, so
+the zone's wildcard never serves either; a token's deployment can no longer
+write `disabled`, nor learn the new name of a project it has no access to;
+token work waits while the owner renames, turns off or deletes the project;
+and the monitor takes a site for turned off only when its manifest on the
+machine says so, never on a header an app could send.
 
 **Going back.** The previous release's binary, then `sitesolide upgrade`.
 Turn every project on before: a project still off keeps its block and its

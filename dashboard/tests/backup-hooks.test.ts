@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, closeSync, existsSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { readSnapshotName, SERVICE_COMMANDS_FEATURE, snapshotName } from "../borrowed/backups";
 import type { Manifest } from "../borrowed/manifest";
 import { BIND_LINES_FEATURE, generateUnits, unitFileName, withoutStoreLines } from "../borrowed/unit";
@@ -1032,5 +1032,20 @@ describe("a backup command and its project's store", () => {
       cause: null,
     });
     expect(journal.some((line) => line.includes("failed, exit code 243"))).toBe(true);
+  });
+});
+
+describe.skipIf(NO_RESTIC)("a project turned off", () => {
+  test("runs no backup command: its data is saved as the files its stopped services left", async () => {
+    const marker = join(mkdtempSync(join(tmpdir(), "backup-off-")), "ran");
+    roots.push(dirname(marker));
+    const made = vault(`printf ran > ${marker}\nprintf copy > "$BACKUP_DIR/state"`);
+    const off = { ...made.project, manifest: { ...made.project.manifest!, disabled: true } };
+    const outcome = await takeSnapshot(made.config, off, "scheduled", T, silent);
+    expect(outcome.ok).toBe(true);
+    expect(existsSync(marker)).toBe(false);
+    const names = listing(dumped(made.config, "vault", snapshotName("vault", T, "scheduled")));
+    expect(names).toEqual(expect.arrayContaining(["data/db/PG_VERSION", "data/notes.txt"]));
+    expect(names).not.toContain("data/db/state");
   });
 });

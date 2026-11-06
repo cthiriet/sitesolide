@@ -49,6 +49,9 @@ export function createRenameHost(config: RenameHostConfig): RenameHost {
     return join(previousRoot, slug);
   }
 
+  /** Where a removal sets public/ while Caddy is reloaded without the site's block: the wildcard serves public/ alone. */
+  const PUBLIC_ASIDE = ".public-removed";
+
   function present(path: string): boolean {
     try {
       lstatSync(path);
@@ -143,6 +146,23 @@ export function createRenameHost(config: RenameHostConfig): RenameHost {
 
     async removePlace(place, slug) {
       rmSync(pathOf(place, slug), { recursive: true, force: true });
+    },
+
+    async setPublicAside(slug, aside) {
+      const tree = pathOf("tree", slug);
+      if (!present(tree)) return false;
+      if (lstatSync(tree).isSymbolicLink()) throw new Error(`${tree} is not a folder`);
+      const shown = join(tree, "public");
+      const hidden = join(tree, PUBLIC_ASIDE);
+      const [source, destination] = aside ? [shown, hidden] : [hidden, shown];
+      if (!present(source)) return false;
+      if (present(destination)) {
+        // Whatever the project left under that name is no folder of ours: links inside are removed, never followed.
+        if (aside) rmSync(destination, { recursive: true, force: true });
+        else throw new Error(`${destination} already exists`);
+      }
+      renameSync(source, destination);
+      return true;
     },
 
     async removeDropIn(unit) {

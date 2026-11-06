@@ -50,6 +50,8 @@ const LOCK_BUSY = "someone else is changing Caddy right now: wait a minute, then
 export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   // --- setup: first, since a step's failure may quote a message of the
   // patterns below, a domain that does not resolve for one
+  [/^the former names of .* differ on the server: /, "run `sitesolide deploy` in the project's folder first, which writes the server's former names into sitesolide.json, commit it, then run the same command again; never edit formerSlugs by hand"],
+  [/says "disabled": true, which only the machine writes$/, "remove the disabled field from sitesolide.json, then run the same command again; to turn the project off, the owner runs sitesolide disable or uses the dashboard"],
   [/^acme is not valid: |^setup: --acme is not valid: /, "pass --acme staging for a test installation, or leave it out for production: nothing else is a certificate authority setup knows"],
   [/^dns is not valid: |^setup: --dns is not valid: |^setup: dns in the configuration is not valid: /, "pass --dns cloudflare or --dns manual, or leave it out for Cloudflare; a configuration naming another provider is a machine set up before that provider was removed, which keeps serving: ask the owner which of the two it moves to, see docs/upgrading.md; never guess who serves the zone's DNS"],
   [/^usage: sitesolide setup|^setup: .* is not valid: /, "pass the machine as user@host and the options it needs: sitesolide setup root@<address> --zone <dns.zone> --email <address>; docs/setup.md lists them all"],

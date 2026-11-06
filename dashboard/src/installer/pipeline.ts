@@ -93,6 +93,7 @@ import {
   servicePortsProse,
   servicesOf,
   setDomainActive,
+  setDisabled,
   setFormerSlugs,
   setLock,
   setPortal,
@@ -242,7 +243,12 @@ export function finalManifest(
   // deploying it would create the project again under its old name.
   const renamed = raw === undefined ? renamedTo(deposited, slug) : null;
   if (renamed !== null) {
-    throw new Stop("renamed", `${slug} was renamed ${renamed} on the machine: write "slug": "${renamed}" in sitesolide.json, then deploy again; nothing was changed`);
+    // The new name only to a token that may deploy it: to any other, a
+    // project's name it has no access to is none of its business.
+    if (scope.slugs.includes(renamed)) {
+      throw new Stop("renamed", `${slug} was renamed ${renamed} on the machine: write "slug": "${renamed}" in sitesolide.json, then deploy again; nothing was changed`);
+    }
+    throw new Stop("renamed", `${slug} is the former name of a project renamed since, and stays reserved to it: deploy under its new name, which its owner can tell you; nothing was changed`);
   }
   if (raw !== undefined && previousManifest(raw)?.disabled === true) {
     throw new Stop("disabled", `${disabledRefusal(slug)}; nothing was changed`);
@@ -274,6 +280,9 @@ export function finalManifest(
   // So are a renamed project's former names, which deploy from an old
   // checkout follows: a token neither writes nor drops them.
   text = setFormerSlugs(text, previous?.formerSlugs);
+  // And so is whether it is turned off: the owner's gesture, never a token's.
+  // A project the machine says is off never gets here (refused above).
+  text = setDisabled(text, previous?.disabled === true);
   // So is a domain's switch: `sitesolide domain --activate` sets
   // `domain.active` after checking the DNS and that a closed site's domain
   // closes with it, and the table api/ certifies and routes from reads that
@@ -564,6 +573,18 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     const collisions = current === null ? [] : portConflicts(manifest, current);
     if (collisions.length > 0) {
       throw new Stop("port-taken", `${collisions.join("; ")}, since this deployment started: nothing served was changed, deploy again`);
+    }
+    // The owner's rename or turn-off, run meanwhile under this same lock: the
+    // first reading predates it, and going on would serve a project turned
+    // off again, or lay its former name back beside its new one.
+    if (current !== null && previousManifest(current.get(slug))?.disabled === true) {
+      throw new Stop("disabled", `${disabledRefusal(slug)}, since this deployment started; nothing served was changed`);
+    }
+    if (current !== null && !current.has(slug) && renamedTo(current, slug) !== null) {
+      throw new Stop("renamed", `${slug} was renamed since this deployment started; nothing served was changed`);
+    }
+    if (current !== null && !request.creating && !current.has(slug)) {
+      throw new Stop("removed", `${slug} was removed since this deployment started; nothing served was changed`);
     }
     const claimed = current === null ? [] : domainConflicts(manifest, current);
     if (claimed.length > 0) throw new Stop("domain-taken", `${claimed.join("; ")}, since this deployment started: nothing served was changed`);

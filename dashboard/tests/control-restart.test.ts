@@ -650,3 +650,29 @@ describe("the API: restarting", () => {
     expect((await restartIt("kanban", GRACE, "203.0.113.10")).status).toBe(200);
   });
 });
+
+describe("the steward: a project turned off", () => {
+  /** blog as the lifecycle run leaves it turned off: its manifest marked, its unit file kept. */
+  const turnOff = (b: Bench) => {
+    const path = join(b.root, "sites", "blog", "sitesolide.json");
+    writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), disabled: true }));
+  };
+
+  test("is not restarted by a token scoped to it: systemd would start the disabled unit again", async () => {
+    const b = await mount();
+    turnOff(b);
+    const { secret } = await b.ownerToken({ slugs: ["blog"] });
+    const answer = await body(await restart(b, secret, "blog"));
+    expect(answer).toMatchObject({ error: "refused", message: "blog is turned off: turn it on first" });
+    expect(answer.status).not.toBe(200);
+    expect(b.calls).not.toContainEqual(["restart", "blog"]);
+  });
+
+  test("nor by a developer's own token", async () => {
+    const b = await mount();
+    turnOff(b);
+    const { secret } = await b.personToken(ALICE, { slugs: ["blog"] });
+    expect((await restart(b, secret, "blog")).status).not.toBe(200);
+    expect(b.calls).not.toContainEqual(["restart", "blog"]);
+  });
+});

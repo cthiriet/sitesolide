@@ -311,7 +311,9 @@ export async function restore(dependencies: RestoreDependencies, folder: string)
     }
 
     // --- Stop, save, swap, start
-    const units = await loadedUnits(dependencies, projectUnitNames.all);
+    // A project turned off has nothing running, and nothing is started after:
+    // it stays off, its data restored, until its owner turns it on.
+    const units = project.manifest?.disabled === true ? [] : await loadedUnits(dependencies, projectUnitNames.all);
     if (units.length > 0) {
       publish("running", `Stopping ${folder}.`);
       markStopped(units);

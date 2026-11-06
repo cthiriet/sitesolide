@@ -181,11 +181,13 @@ export async function runLifecycle(host: RenameHost, request: LifecycleRequest, 
     };
 
     if (action === "disable") {
-      await stopUnits();
+      // Marked first: a restart asked meanwhile, whoever asks, reads it and
+      // is refused, rather than starting a service just stopped.
       host.log("-> manifest marked turned off, the block that says so in place of its own");
       const text = setDisabled(read.text, true);
       undos.push({ what: "manifest written back", run: () => host.writeManifest(slug, read.text, read) });
       await host.writeManifest(slug, text, read);
+      await stopUnits();
       undos.push({ what: "its own block put back", run: () => putBlock(oldBlock) });
       await putBlock(disabledFragment(readManifest(text).manifest!));
       await reload();
@@ -217,6 +219,14 @@ export async function runLifecycle(host: RenameHost, request: LifecycleRequest, 
     } else {
       // What can be undone first: nothing is deleted before Caddy holds.
       await stopUnits();
+      // Without its block, the wildcard serves /srv/sites/<slug>/public to
+      // anyone, an app's or a protected site's included, from the reload until
+      // the folder is gone, and for good if deleting it fails: public/ is set
+      // aside first, out of what the wildcard serves.
+      if (oldBlock !== null && (await host.setPublicAside(slug, true))) {
+        undos.push({ what: "public/ put back", run: async () => void (await host.setPublicAside(slug, false)) });
+        host.log("-> public/ set aside, out of what the wildcard serves");
+      }
       host.log("-> its block taken out, the domain table written again");
       if (oldBlock !== null) {
         undos.push({ what: "its block put back", run: () => putBlock(oldBlock) });

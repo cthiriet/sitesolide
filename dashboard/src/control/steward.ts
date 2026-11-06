@@ -712,6 +712,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       }
       const unit = installerUnit(target);
       if (await isActive(unit)) return failure("busy", `a deployment of ${target} is already running: wait for it to finish, then try again`);
+      if (await ownerChanging(target)) return ownerBusy(target);
 
       if (decision.creating) {
         // A name per attempt would grow the registry until nothing reads it:
@@ -1044,6 +1045,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     const refused = await judgeWork(holder, slug, "restart", "restart");
     if (refused !== null) return refused;
     if (await isActive(installerUnit(slug))) return deploying(slug);
+    if (await ownerChanging(slug)) return ownerBusy(slug);
     const id = holder.identity.id;
     if (restarting.has(id)) return failure("busy", "this token's previous restart is still under way: wait for its verdict, then ask again");
     const bounded = withinHour(`restart:${id}`, 1, restartsPerHour, "restarts");
@@ -1207,6 +1209,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     if (slug instanceof Response) return slug;
     const judged = await judgeStoreWork(holder, slug, "write", operation);
     if (judged instanceof Response) return judged;
+    // A store written under a name a rename is moving would be left behind it.
+    if (await ownerChanging(slug)) return ownerBusy(slug);
     const key = `secrets:${holder.identity.id}`;
     const bounded = withinHour(key, Math.max(1, cost), secretChangesPerHour, "secret names and files changed");
     if (bounded !== null) return bounded;
@@ -1218,7 +1222,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       const again = await identify(body.bearer, false);
       if (again instanceof Response) return again;
       const rejudged = await judgeStoreWork(again, slug, "write", operation, true);
-      return rejudged instanceof Response ? rejudged : null;
+      if (rejudged instanceof Response) return rejudged;
+      return (await ownerChanging(slug)) ? ownerBusy(slug) : null;
     };
     const answer = await hand(whoOf(holder), slug, judged.creating, still);
     if (await answerMadeStore(answer)) {
@@ -1456,6 +1461,17 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
 
   /** The renames under way, by their current slug: one at a time per project. */
   const renaming = new Set<string>();
+  /**
+   * The owner's rename or turn off, on, or delete of `slug` under way, or a
+   * rename to it: a token's deployment or restart started meanwhile would
+   * work from a reading taken before it. The units too, for a run this
+   * steward did not start, from before its own restart.
+   */
+  async function ownerChanging(slug: string): Promise<boolean> {
+    if (renaming.has(slug)) return true;
+    return (await isActive(`${RENAME_PREFIX}@${slug}.service`)) || (await isActive(`${LIFECYCLE_PREFIX}@${slug}.service`));
+  }
+  const ownerBusy = (slug: string) => failure("busy", `the owner is changing ${slug} right now: wait for it to finish, then try again`);
 
   /**
    * The owner renames a project, from the dashboard, unlocked, or over the
@@ -1478,10 +1494,12 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     if (typeof to !== "string" || to.length > 63) return failure("invalid", "to: the project's new slug");
     if (renaming.has(slug) || renaming.has(to)) return failure("busy", `a rename of ${slug} is already running: wait for it to finish`);
     renaming.add(slug);
+    renaming.add(to);
     try {
       return await renameProject(slug, to, channel);
     } finally {
       renaming.delete(slug);
+      renaming.delete(to);
     }
   }
 

@@ -19,6 +19,7 @@
  *     folder of 0755, read only when a later block's port is listened on.
  */
 import { DISABLED_HEADER } from "../../bin/cli/fragment";
+import { isValidSlug } from "../../bin/cli/manifest";
 import { readdirSync, readFileSync, renameSync, statfsSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { connect, type TLSSocket } from "node:tls";
@@ -120,6 +121,24 @@ function errorCode(error: unknown): string {
   if (typeof code === "string" && code !== "") return code;
   if (typeof name === "string" && name !== "" && name !== "Error") return name;
   return clip(typeof message === "string" ? message : String(error));
+}
+
+/**
+ * Whether an answer is that of a project its owner turned off: the 503 of
+ * disabledFragment in bin/cli/fragment.ts, naming a project whose manifest on
+ * the machine is marked off. The header alone proves nothing, an app may send
+ * it on its own failures; the mark is the owner's alone to write.
+ */
+export function answeredOff(sitesDir: string, status: number, slug: string | null): boolean {
+  if (status !== 503 || slug === null || !isValidSlug(slug)) return false;
+  const text = readOptional(join(sitesDir, slug, "sitesolide.json"));
+  if ("error" in text || text.value === null) return false;
+  try {
+    const parsed = JSON.parse(text.value) as { slug?: unknown; disabled?: unknown } | null;
+    return parsed !== null && typeof parsed === "object" && parsed.slug === slug && parsed.disabled === true;
+  } catch {
+    return false;
+  }
 }
 
 /** A file's text, null when it does not exist, or why it could not be read. */
@@ -327,8 +346,9 @@ export function createMachine(config: Config, options: MachineOptions = { system
       try {
         const response = await fetch(url, options);
         await response.body?.cancel();
-        // A project its owner turned off says so, see disabledFragment in bin/cli/fragment.ts.
-        return response.headers.has(DISABLED_HEADER) ? { status: response.status, off: true } : { status: response.status };
+        // A project its owner turned off says so, and the machine agrees: answeredOff.
+        const off = response.headers.get(DISABLED_HEADER);
+        return off !== null && answeredOff(config.sitesDir, response.status, off) ? { status: response.status, off } : { status: response.status };
       } catch (error) {
         return { error: errorCode(error) };
       }

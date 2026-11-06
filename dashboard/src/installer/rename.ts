@@ -113,6 +113,11 @@ export type RenameHost = {
 
   /** A place removed whole, links inside removed and never followed: a removal. */
   removePlace: (place: Place, slug: string) => Promise<void>;
+  /**
+   * `/srv/sites/<slug>/public` renamed beside itself, out of what the wildcard
+   * block serves, or back (`aside` false). False when there was nothing to move.
+   */
+  setPublicAside: (slug: string, aside: boolean) => Promise<boolean>;
   /** A unit's drop-in folder removed, when there is one. */
   removeDropIn: (unit: string) => Promise<void>;
   /** `userdel site-<slug>`, its group with it. */
@@ -331,7 +336,22 @@ export async function runRename(host: RenameHost, request: RenameRequest, option
       });
     }
 
-    // --- 3. the folders ----------------------------------------------------------------
+    // --- 3. the folders, behind their block --------------------------------------------
+    // An app's block, or a protected static site's, as deploy writes them. It
+    // is laid before the folder moves: the wildcard serves /srv/sites/<to>/public
+    // to anyone as long as no <to>.caddy exists, and the moved folder would
+    // otherwise be there first. Caddy reads it at the reload of step 6 only.
+    const block = application || isProtected(after) ? generateFragment(after) : null;
+    if (block !== null || oldBlock !== null) {
+      undos.push({
+        what: "Caddy blocks put back",
+        run: async () => {
+          await host.machine.removeBlock(to);
+          if (oldBlock !== null) await host.machine.writeBlock(from, oldBlock);
+        },
+      });
+    }
+    if (block !== null) await host.machine.writeBlock(to, block);
     host.log("-> folders moved");
     if (await host.exists("previous", to)) await host.dropPrevious(to);
     for (const place of ["tree", "store", "previous"] as const) {
@@ -370,17 +390,7 @@ export async function runRename(host: RenameHost, request: RenameRequest, option
 
     // --- 6. Caddy -------------------------------------------------------------------------------
     host.log("-> Caddy: the block, the domain table, validated and reloaded");
-    // An app's block, or a protected static site's, as deploy writes them.
-    const block = application || isProtected(after) ? generateFragment(after) : null;
     if (block !== null || oldBlock !== null) {
-      undos.push({
-        what: "Caddy blocks put back",
-        run: async () => {
-          await host.machine.removeBlock(to);
-          if (oldBlock !== null) await host.machine.writeBlock(from, oldBlock);
-        },
-      });
-      if (block !== null) await host.machine.writeBlock(to, block);
       if (oldBlock !== null) await host.machine.removeBlock(from);
       host.log(`   ${block === null ? "no block" : `/etc/caddy/sites/${to}.caddy`}${oldBlock !== null ? `, ${from}.caddy removed` : ""}`);
     }
