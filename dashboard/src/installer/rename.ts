@@ -118,6 +118,13 @@ export type RenameHost = {
    * block serves, or back (`aside` false). False when there was nothing to move.
    */
   setPublicAside: (slug: string, aside: boolean) => Promise<boolean>;
+  /**
+   * The backups' own lock, which a backup run and a restore take
+   * (src/backup/lock.ts), waited for up to `waitMs`: a rename, a removal or a
+   * project turned off never moves or deletes a folder a backup is copying or
+   * a restore is swapping. Null when it is still held after that.
+   */
+  takeBackupLock: (who: "rename" | "lifecycle", waitMs: number) => Promise<(() => void) | null>;
   /** A unit's drop-in folder removed, when there is one. */
   removeDropIn: (unit: string) => Promise<void>;
   /** `userdel site-<slug>`, its group with it. */
@@ -214,11 +221,20 @@ async function judgeAfter(host: RenameHost, oldHost: string, newHost: string, be
   }
 }
 
+/**
+ * How long a rename, or a project turned off, on or removed, waits for the
+ * hourly backup or a restore to finish: a run takes a minute or two, and the
+ * steward waits on the whole run for a little over four.
+ */
+export const BACKUP_LOCK_WAIT_MS = 2 * 60 * 1000;
+export const BACKUP_BUSY = "a backup or a restore is still running on the machine: nothing was changed, try again in a few minutes";
+
 export async function runRename(host: RenameHost, request: RenameRequest, options: { zone: string }): Promise<RenameOutcome> {
   const { slug: from, to } = request;
   const { zone } = options;
   const undos: Undo[] = [];
   let release: (() => void) | null = null;
+  let releaseBackups: (() => void) | null = null;
   let backedUp = false;
   let reloadAttempted = false;
 
@@ -235,6 +251,9 @@ export async function runRename(host: RenameHost, request: RenameRequest, option
     });
     check(deposited);
 
+    host.log("-> the backups' lock: waiting for any backup or restore to finish");
+    releaseBackups = await host.takeBackupLock("rename", BACKUP_LOCK_WAIT_MS);
+    if (releaseBackups === null) throw new RenameStop("backup-busy", BACKUP_BUSY);
     host.log("-> Caddy lock, shared with the gatekeeper, the installer and the workstation");
     const taken = await host.machine.takeLock();
     if (taken.kind === "held") throw new RenameStop("caddy-busy", `Caddy is being changed by ${taken.who ?? "another action"}: nothing was changed, try again in a moment`);
@@ -470,5 +489,6 @@ export async function runRename(host: RenameHost, request: RenameRequest, option
     return { ok: false, code: stop.code, message: `${stop.message}; ${from} is back as it was` };
   } finally {
     if (release !== null) release();
+    if (releaseBackups !== null) releaseBackups();
   }
 }

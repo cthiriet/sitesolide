@@ -196,7 +196,7 @@ function RenameFlow({ slug, zone, busy, onClose }: { slug: string; zone: string 
         <FormError>{error}</FormError>
       </div>
 
-      {inProgress && <p className="text-xs text-pretty text-muted-foreground">Usually under a minute. Keep this open: the result always comes, and a failure puts everything back.</p>}
+      {inProgress && <p className="text-xs text-pretty text-muted-foreground">Usually under a minute, a few more while the hourly backup finishes. Keep this open: the result always comes, and a failure puts everything back.</p>}
 
       <DialogFooter>
         {!inProgress && <DialogClose render={<Button type="button" variant="outline" className="max-sm:h-11" />}>Cancel</DialogClose>}

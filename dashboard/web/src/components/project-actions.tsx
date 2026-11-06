@@ -176,7 +176,7 @@ function LifecycleFlow({ slug, action, busy, onClose }: { slug: string; action: 
         </div>
       )}
       <FormError>{error}</FormError>
-      {inProgress && <p className="text-xs text-pretty text-muted-foreground">Usually under a minute. Keep this open: the result always comes.</p>}
+      {inProgress && <p className="text-xs text-pretty text-muted-foreground">Usually under a minute, a few more while the hourly backup finishes. Keep this open: the result always comes.</p>}
       <DialogFooter>
         {!inProgress && <DialogClose render={<Button type="button" variant="outline" className="max-sm:h-11" />}>Cancel</DialogClose>}
         <Button

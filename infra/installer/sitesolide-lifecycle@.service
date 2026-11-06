@@ -63,6 +63,11 @@ ProtectSystem=strict
 ReadWritePaths=/srv/sites /etc /run/sitesolide-gatekeeper -/var/log/lastlog -/var/log/faillog
 ReadOnlyPaths=/etc/sitesolide
 ReadWritePaths=-/etc/sitesolide/projects -/var/lib/sitesolide-steward/precedents/projects
+# The backups' lock, which a backup run and a restore take: the run waits
+# for it, and never moves or deletes a folder either is copying or swapping.
+# Laid first, with the backup units' own mode, when none has run since boot.
+ReadWritePaths=/run/sitesolide-backup
+ExecStartPre=+/usr/bin/install -d -m 0755 /run/sitesolide-backup
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true

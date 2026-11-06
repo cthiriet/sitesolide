@@ -10,6 +10,7 @@ import { buildTable, render } from "../../borrowed/table";
 import { isValidSlug } from "../../borrowed/manifest";
 import { STORE_PREVIOUS_ROOT, storePaths } from "../../borrowed/store";
 import { isTimerUnit, systemUser, unitFileName } from "../../borrowed/unit";
+import { waitForLock } from "../backup/lock";
 import { readAccount, readBounded, writeAtomically } from "../secrets/system";
 import type { Host } from "./host";
 import { spawn } from "./real";
@@ -31,6 +32,11 @@ export type RenameHostConfig = {
   usermod: string;
   groupmod: string;
   systemctl: (arguments_: string[], timeoutMs: number) => Promise<{ code: number; output: string }>;
+  /** /run/sitesolide-backup, where the backups' lock lives (src/backup/lock.ts). */
+  backupRunFolder: string;
+  /** The pause between two attempts at the backups' lock, and the wait itself in place of the run's. */
+  backupLockStepMs?: number;
+  backupLockWaitMs?: number;
 };
 
 function code(error: unknown): string | undefined {
@@ -163,6 +169,12 @@ export function createRenameHost(config: RenameHostConfig): RenameHost {
       }
       renameSync(source, destination);
       return true;
+    },
+
+    async takeBackupLock(who, waitMs) {
+      // The unit lays the folder before it starts, when no backup has run since boot.
+      const taken = await waitForLock(config.backupRunFolder, who, config.backupLockWaitMs ?? waitMs, config.backupLockStepMs);
+      return taken.ok ? taken.release : null;
     },
 
     async removeDropIn(unit) {

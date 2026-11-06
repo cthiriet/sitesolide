@@ -166,6 +166,21 @@ first, with that release's binary and [its
 notes](https://github.com/cthiriet/sitesolide/blob/v0.16.0/docs/upgrading.md),
 which go back to 0.1; this release converts nothing an earlier one left.
 
+## Renaming, turning off and deleting wait for the backups
+
+**What the release brings.** A rename, a project turned off or on, and a
+deletion take the backups' own lock, the one the hourly run and a restore
+share: each waits up to two minutes for a run or a restore under way, then
+refuses with nothing changed. Before, a rename during the hourly run moved
+the folder it was copying, and that hour's snapshot of the project failed; a
+deletion during a restore removed the folder the restore was swapping.
+
+**What `sitesolide upgrade` brings**: the installer, with the two templates
+now reaching `/run/sitesolide-backup`, the steward, and the dashboard. No
+project is redeployed.
+
+**Going back.** The previous release's binary, then `sitesolide upgrade`.
+
 ## Turning a project off, and deleting it from the dashboard
 
 **What the release brings.** A project can be turned off and on again, and

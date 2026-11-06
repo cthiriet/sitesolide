@@ -6,7 +6,9 @@ import { readManifest } from "../borrowed/manifest";
 import type { LifecycleRequest } from "../src/control/protocol";
 import { readLifecycleLaunch, readLifecycleRequest, runLifecycle } from "../src/installer/lifecycle";
 import { ZONE, type Bench } from "./installer-bench";
-import { APP, createBench, deploy, NOW, renameHost } from "./rename-bench";
+import { takeLock } from "../src/backup/lock";
+import { runRename } from "../src/installer/rename";
+import { APP, backupRunFolderOf, createBench, deploy, NOW, renameHost } from "./rename-bench";
 
 /**
  * Turning a project off, on, and removing it, on the installer's bench: a
@@ -124,6 +126,35 @@ describe("a project removed", () => {
     expect(existsSync(join(b.sites, "nis2", "sitesolide.json"))).toBe(true);
     expect(existsSync(join(b.blocks, "nis2.caddy"))).toBe(true);
     expect(b.events).toContain("systemctl restart nis2");
+  });
+});
+
+describe("a backup or a restore under way", () => {
+  test("a removal waits for it, then refuses, nothing changed", async () => {
+    const b = bench();
+    await deploy(b);
+    // The hourly run, alive: this very process holds it.
+    const run = takeLock(backupRunFolderOf(b), "run");
+    expect(run.ok).toBe(true);
+    const outcome = await runLifecycle(renameHost(b, { backupLockWaitMs: 50 }), asking("nis2", "remove"), { zone: ZONE });
+    expect(outcome).toMatchObject({ ok: false, code: "backup-busy" });
+    expect(existsSync(join(b.sites, "nis2", "sitesolide.json"))).toBe(true);
+    expect(b.events.filter((event) => event.startsWith("systemctl disable"))).toEqual([]);
+    if (run.ok) run.release();
+  });
+
+  test("a rename waits for it, then goes on once it is over, and lets the lock go", async () => {
+    const b = bench();
+    await deploy(b);
+    const run = takeLock(backupRunFolderOf(b), "run");
+    if (!run.ok) throw new Error("the lock was not taken");
+    setTimeout(run.release, 100);
+    const outcome = await runRename(renameHost(b, { backupLockWaitMs: 5000 }), { slug: "nis2", to: "cyber", requestedAt: Date.now(), actor: "owner" }, { zone: ZONE });
+    expect(outcome.ok).toBe(true);
+    // Free again for the next backup run.
+    const next = takeLock(backupRunFolderOf(b), "run");
+    expect(next.ok).toBe(true);
+    if (next.ok) next.release();
   });
 });
 

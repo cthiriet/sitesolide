@@ -5,7 +5,7 @@
  * that edit the bench's passwd and group.
  */
 import { afterEach, expect } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { InstallRequest, Scope } from "../src/control/protocol";
 import { runPipeline } from "../src/installer/pipeline";
@@ -54,7 +54,14 @@ export async function deploy(bench: Bench, manifest: object = APP): Promise<void
   bench.events.length = 0;
 }
 
-export function renameHost(bench: Bench) {
+/** The bench's own /run/sitesolide-backup, laid as the units lay it. */
+export function backupRunFolderOf(bench: Bench): string {
+  const folder = join(bench.root, "run-backup");
+  mkdirSync(folder, { recursive: true });
+  return folder;
+}
+
+export function renameHost(bench: Bench, options: { backupLockWaitMs?: number } = {}) {
   const installer = hostOf(bench);
   return createRenameHost({
     installer,
@@ -66,6 +73,9 @@ export function renameHost(bench: Bench) {
     usermod: join(bench.root, "stubs", "usermod"),
     groupmod: join(bench.root, "stubs", "groupmod"),
     systemctl: commandsOf(bench).systemctl,
+    backupRunFolder: backupRunFolderOf(bench),
+    backupLockStepMs: 10,
+    ...options,
   });
 }
 

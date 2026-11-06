@@ -35,7 +35,7 @@ import { runningUnits, systemUser, unitArgument } from "../../borrowed/unit";
 import { describe, regressions, servedHosts, fromPortal, type ProbeResponse } from "../gatekeeper/probe";
 import { TIMEOUTS, caddyExtract, errorMessage, probeAll, reloadRestored } from "../gatekeeper/transaction";
 import { LIFECYCLE_PREFIX, REQUEST_MAX_AGE_MS, type LifecycleRequest } from "../control/protocol";
-import { RenameStop as Stop, type RenameHost } from "./rename";
+import { BACKUP_BUSY, BACKUP_LOCK_WAIT_MS, RenameStop as Stop, type RenameHost } from "./rename";
 import { domainHosts } from "../../borrowed/manifest";
 
 export type LifecycleOutcome = { ok: true } | { ok: false; code: string; message: string };
@@ -116,6 +116,7 @@ export async function runLifecycle(host: RenameHost, request: LifecycleRequest, 
   const { zone } = options;
   const undos: Undo[] = [];
   let release: (() => void) | null = null;
+  let releaseBackups: (() => void) | null = null;
   let backedUp = false;
   let reloadAttempted = false;
   const check = (deposited: Map<string, string>): void => {
@@ -126,6 +127,9 @@ export async function runLifecycle(host: RenameHost, request: LifecycleRequest, 
   try {
     host.log(`-> ${slug} ${VERB[action]}, for ${request.actor}`);
     check(await host.readManifests());
+    host.log("-> the backups' lock: waiting for any backup or restore to finish");
+    releaseBackups = await host.takeBackupLock("lifecycle", BACKUP_LOCK_WAIT_MS);
+    if (releaseBackups === null) throw new Stop("backup-busy", BACKUP_BUSY);
     host.log("-> Caddy lock, shared with the gatekeeper, the installer and the workstation");
     const taken = await host.machine.takeLock();
     if (taken.kind === "held") throw new Stop("caddy-busy", `Caddy is being changed by ${taken.who ?? "another action"}: nothing was changed, try again in a moment`);
@@ -316,5 +320,6 @@ export async function runLifecycle(host: RenameHost, request: LifecycleRequest, 
     return { ok: false, code: stop.code, message: `${stop.message}; ${slug} is back as it was` };
   } finally {
     if (release !== null) release();
+    if (releaseBackups !== null) releaseBackups();
   }
 }

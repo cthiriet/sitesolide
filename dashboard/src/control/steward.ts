@@ -1549,7 +1549,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       result = judged.result;
       if (result.state !== "succeeded") {
         const message = result.error?.message ?? `the rename stopped before finishing: the owner must read journalctl -u ${unit}`;
-        return failure(result.error?.code === "refused" ? "invalid" : result.error?.code === "caddy-busy" ? "busy" : "failure", message, result.log);
+        return failure(result.error?.code === "refused" ? "invalid" : result.error?.code === "caddy-busy" || result.error?.code === "backup-busy" ? "busy" : "failure", message, result.log);
       }
     }
 
@@ -1626,7 +1626,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       const result = judged.result;
       if (result.state !== "succeeded") {
         const code = result.error?.code;
-        return failure(code === "refused" ? "invalid" : code === "caddy-busy" ? "busy" : "failure", result.error?.message ?? `the run stopped before finishing: the owner must read journalctl -u ${unit}`, result.log);
+        return failure(code === "refused" ? "invalid" : code === "caddy-busy" || code === "backup-busy" ? "busy" : "failure", result.error?.message ?? `the run stopped before finishing: the owner must read journalctl -u ${unit}`, result.log);
       }
       if (action === "remove") {
         const released = await releaseRemoved(slug);

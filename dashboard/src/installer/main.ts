@@ -340,6 +340,7 @@ export async function renameMain(argv: string[], env: Environment, overrides: { 
     usermod: env.USERMOD ?? "/usr/sbin/usermod",
     groupmod: env.GROUPMOD ?? "/usr/sbin/groupmod",
     systemctl,
+    backupRunFolder: env.BACKUP_RUN_FOLDER ?? BACKUP_RUN_FOLDER,
   });
   const outcome = await runRename(host, request, { zone });
   result.state = outcome.ok ? "succeeded" : "failed";
@@ -370,8 +371,12 @@ function machineHost(env: Environment, overrides: { commands?: Commands; systemc
     usermod: env.USERMOD ?? "/usr/sbin/usermod",
     groupmod: env.GROUPMOD ?? "/usr/sbin/groupmod",
     systemctl: config.commands.systemctl,
+    backupRunFolder: env.BACKUP_RUN_FOLDER ?? BACKUP_RUN_FOLDER,
   });
 }
+
+/** Where the backup run and the restore keep their lock, the backup units' RuntimeDirectory. */
+const BACKUP_RUN_FOLDER = "/run/sitesolide-backup";
 
 /**
  * `installer.js --lifecycle %n`: a project turned off, on, or removed, as the

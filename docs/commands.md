@@ -195,6 +195,9 @@ A project's slug is its only name: its address, `<slug>.<zone>`, its folder,
 its account, its units. Renaming it moves all of that on the machine in one
 run, the dashboard's *Rename* on the site's Overview doing the same thing:
 
+- it first waits, two minutes at most, for a backup run or a restore under
+  way to finish, then refuses with nothing changed: the same holds for
+  turning a project off or on and deleting it;
 - its services stop for a few seconds, its account and group are renamed
   with their uid kept, its folder, data, store of secrets and units' drop-ins
   move, its units and Caddy block are generated again under the new name, the
