@@ -166,6 +166,37 @@ first, with that release's binary and [its
 notes](https://github.com/cthiriet/sitesolide/blob/v0.16.0/docs/upgrading.md),
 which go back to 0.1; this release converts nothing an earlier one left.
 
+## Renaming a project
+
+**What the release brings.** A project can be renamed, its address with it:
+*Rename* on its Overview in the dashboard, the owner's, or `sitesolide
+rename <new-slug>` in its folder. A new root one-shot,
+`sitesolide-rename@<slug>`, moves everything the slug names on the machine,
+the account renamed with its uid kept, the folder and its data, the store of
+secrets, the units and the Caddy block generated again, the domain table,
+reloads Caddy, starts the services and probes every site, and puts everything
+back at the first failure; the steward then moves the people with access and
+the tokens to the new name. The manifest gains `formerSlugs`, which the
+machine writes: a checkout that still says the old name deploys to the
+renamed project and rewrites its `sitesolide.json`, and a token's deployment
+of the old name is refused with the name to write. See
+[docs/commands.md](commands.md#renaming-a-project).
+
+**What `sitesolide upgrade` brings**: the installer, with the rename's
+template beside its own, through `bin/deploy-installer.sh`; the steward, for
+the rename's route and the registries it moves; the dashboard, for its
+*Rename* button. No project is redeployed.
+
+**What changes for you.** A deployment of a project the machine does not
+carry reads every deposited manifest once more, to tell a new project from a
+renamed one. The data snapshots taken before a rename stay under the old
+name in the backup repository; the next backup run starts the new one's.
+
+**Going back.** The previous release's binary, then `sitesolide upgrade`.
+A project renamed meanwhile keeps its new name, and its `formerSlugs`, which
+the previous release refuses as an unknown key: remove the key from its
+`sitesolide.json` before deploying it with that release.
+
 ## The wildcard serves slugs alone, and the zone sends HSTS
 
 **What the release brings.** Over HTTP/2 and HTTP/3, Caddy up to 2.11.7

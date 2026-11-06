@@ -182,7 +182,7 @@ export function portalFromManifest(raw: string, slug?: string): PortalRead {
 
 export type DepositedRead =
   | { kind: "absent" }
-  | { kind: "present"; portal: boolean; lock: boolean }
+  | { kind: "present"; portal: boolean; lock: boolean; formerSlugs?: string[] }
   | { kind: "unreadable"; reason: string };
 
 /** What the manifests read say of one site's general access. */
@@ -190,7 +190,17 @@ function doorIn(manifests: ReadonlyMap<string, string>, slug: string): Deposited
   const raw = manifests.get(slug);
   if (raw === undefined) return { kind: "absent" };
   const general = portalFromManifest(raw, slug);
-  return general.kind === "read" ? { kind: "present", portal: general.portal, lock: general.lock } : general;
+  if (general.kind !== "read") return general;
+  // The names a rename left, which deploy makes the repository follow: a
+  // list that does not read is left out, the manifest's validation says why.
+  let former: unknown;
+  try {
+    former = (JSON.parse(raw) as { formerSlugs?: unknown }).formerSlugs;
+  } catch {
+    former = undefined;
+  }
+  const formerSlugs = Array.isArray(former) && former.every((name) => typeof name === "string") ? (former as string[]) : undefined;
+  return { kind: "present", portal: general.portal, lock: general.lock, ...(formerSlugs === undefined ? {} : { formerSlugs }) };
 }
 
 /** The reading of a single site's manifest, for `deploy`. */

@@ -66,6 +66,8 @@ sitesolide domain               where this project's own domain stands
 sitesolide remove --confirm <slug>
                                 take the project off the machine, for good, its name freed from the token that created it
    --dry-run                    show every step, remove nothing
+sitesolide rename <new-slug>    rename the project and its address on the machine, sitesolide.json rewritten
+   --dry-run                    show the request, change nothing
 sitesolide secrets              this project's secrets: names, sources, states, never a value
    set <NAME> [--stdin]         set a variable, typed at a prompt that does not echo, or piped
    generate <NAME>              a random value drawn on the server, never shown: --format, --bytes, --replace
@@ -180,6 +182,42 @@ block that differs. A unit edited on the machine is reported and never
 counted, deploy leaving it as it is without `--force`; a block edited there is
 refused, as deploy refuses it. `upgrade` asks exactly this of the dashboard and
 the portal.
+
+## Renaming a project
+
+```bash
+sitesolide rename cybersolide
+```
+
+A project's slug is its only name: its address, `<slug>.<zone>`, its folder,
+its account, its units. Renaming it moves all of that on the machine in one
+run, the dashboard's *Rename* on the site's Overview doing the same thing:
+
+- its services stop for a few seconds, its account and group are renamed
+  with their uid kept, its folder, data, store of secrets and units' drop-ins
+  move, its units and Caddy block are generated again under the new name, the
+  domain table follows when it has its own domain, Caddy is validated and
+  reloaded, the services start, and every site is probed;
+- its people with access keep their roles, the token that created it still
+  owns it, every token scoped to it reaches it under the new name;
+- the first step that fails puts everything back, the old name answering as
+  before.
+
+The old address stops answering; the project's own domain does not change.
+The folder's `sitesolide.json` is rewritten with `"slug": "<new-slug>"` and
+the old one under `formerSlugs`: commit it. A checkout that still says the
+old name does not create the project again: its next `sitesolide deploy`
+finds the project under its new name, rewrites its `sitesolide.json` the same
+way, and deploys there; a token's deployment of the old name is refused with
+the name to write. A former name stays the project's: another project cannot
+take it, and the project can take it back.
+
+What does not move: the backup snapshots taken before stay in the repository
+under the old name, the next backup run starts the new one's; the journals
+keep the old name in what they said before. A site that opens with a code is
+refused: choose Public or Restricted, rename it, then Anyone with the code
+again, which draws a new code. The platform's own projects, the dashboard,
+the portal and `api`, keep their names.
 
 ## Upgrading the machine
 

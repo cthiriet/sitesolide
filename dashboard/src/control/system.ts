@@ -17,10 +17,10 @@
  * secrets is only looked at: whether its folder is there, never what it
  * holds.
  */
-import { lstatSync, mkdirSync, readFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readBounded, writeAtomically, type Command, type Examination } from "../secrets/system";
-import { DEPLOYMENT_ID_SHAPE, INSTALLER_TEMPLATE } from "./protocol";
+import { DEPLOYMENT_ID_SHAPE, INSTALLER_TEMPLATE, RENAME_TEMPLATE, RENAMES_FOLDER, renameResultName } from "./protocol";
 import { CREATIONS_NAME } from "./creations";
 import { CLAIMS_NAME } from "./claims";
 import type { Leftovers } from "./policy";
@@ -84,6 +84,14 @@ export type ControlSystem = {
   /** Is the installer's template in place? Without it, nothing can start. */
   installerInstalled: () => Promise<boolean>;
   readResult: (deployment: string) => Promise<Examination>;
+  /** Every deposited manifest, by folder, those that read. */
+  readManifests: () => Promise<Map<string, string>>;
+  /** `renames/<slug>.json`, read by the rename run when it starts. */
+  writeRenameRequest: (slug: string, text: string) => Promise<void>;
+  /** Is the rename's template in place? Before the release that brought it, it is not. */
+  renameInstalled: () => Promise<boolean>;
+  /** The rename run's result for this slug, `rename-<slug>.json`. */
+  readRenameResult: (slug: string) => Promise<Examination>;
   systemctl: (arguments_: string[], timeoutMs: number) => Promise<Command>;
   /** `journalctl` for these units, its standard output as it is. */
   journal: (units: string[], lines: number, cursor: string | null, timeoutMs: number) => Promise<Command>;
@@ -199,6 +207,42 @@ export function createControlSystem(config: ControlSystemConfig): ControlSystem 
       } catch {
         return false;
       }
+    },
+
+    async readManifests() {
+      const manifests = new Map<string, string>();
+      for (const entry of readdirSync(config.sitesDir, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !isValidSlug(entry.name)) continue;
+        const examination = readBounded(join(config.sitesDir, entry.name, "sitesolide.json"), MAX_MANIFEST);
+        if (examination.kind !== "present" || examination.bytes === null) continue;
+        try {
+          manifests.set(entry.name, decoder.decode(examination.bytes));
+        } catch {
+          // Not UTF-8: no manifest a rename could read either.
+        }
+      }
+      return manifests;
+    },
+
+    async writeRenameRequest(slug, text) {
+      if (!isValidSlug(slug)) throw new Error("not a slug");
+      const folder = join(config.stateFolder, RENAMES_FOLDER);
+      mkdirSync(folder, { recursive: true, mode: 0o700 });
+      writeAtomically(folder, `${slug}.json`, encoder.encode(text), ROOT_ONLY);
+    },
+
+    async renameInstalled() {
+      try {
+        readFileSync(join(config.unitsFolder, RENAME_TEMPLATE));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    async readRenameResult(slug) {
+      if (!isValidSlug(slug)) return { kind: "absent" };
+      return readBounded(join(config.installerFolder, renameResultName(slug)), MAX_CONTROL_FILE_BYTES);
     },
 
     async readResult(deployment) {

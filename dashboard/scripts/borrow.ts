@@ -72,6 +72,9 @@ const BORROWINGS = [
   "bin/cli/services.ts",
   "bin/cli/loopback.ts",
   "bin/cli/portal-vm.ts",
+  // What a new name must be, and the project a former name now leads to:
+  // the steward, the rename run and the installer judge with this copy.
+  "bin/cli/rename.ts",
   // The archive format the CLI writes for the control API, and that the
   // installer's tests write too, malicious archives included.
   "bin/cli/bundle.ts",

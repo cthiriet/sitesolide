@@ -33,6 +33,10 @@ import { readLaunch, readRequest } from "./instance";
 import { runPipeline, type Outcome } from "./pipeline";
 import { createHost, realCommands, type Commands } from "./real";
 import { TLS_ZONE_PATH, ZONE_NAMES_PATH } from "../../borrowed/zone-names";
+import { DOMAIN_TABLE_FILE } from "../../borrowed/config";
+import { RENAMES_FOLDER, renameResultName, type RenameResult } from "../control/protocol";
+import { readRenameLaunch, readRenameRequest, runRename } from "./rename";
+import { createRenameHost } from "./rename-host";
 import { BIND_LINES_FEATURE } from "../../borrowed/unit";
 
 export const LIMITS = { maxBytes: MAX_EXTRACTED_BYTES, maxEntries: MAX_ENTRIES, maxPathBytes: MAX_PATH_BYTES };
@@ -173,6 +177,8 @@ export async function main(argv: string[], env: Environment, overrides: { comman
     return 0;
   }
 
+  if (argv[0] === "--rename") return renameMain(argv, env, overrides);
+
   const launch = readLaunch(argv);
   if (!launch.ok) {
     console.error(`installer: refused to start: ${launch.reason} (got ${JSON.stringify((argv[0] ?? "").slice(0, 80))})`);
@@ -223,7 +229,24 @@ export async function main(argv: string[], env: Environment, overrides: { comman
     reporter.finish({ ok: false, code: "misconfigured", message: "DEPLOY_ACCOUNT is missing from /etc/sitesolide-installer.env: the owner must run sitesolide upgrade", allocated: [] });
     return 0;
   }
-  const host = createHost({
+  const host = createHost(hostConfig(env, machineConfig, stateFolder, deployAccount, commands, (line) => reporter.log(line), (laid) => reporter.laid(laid)));
+
+  const outcome = await runPipeline(host, request, { zone, runFolder: machineConfig.runFolder });
+  reporter.finish(outcome);
+  return 0;
+}
+
+/** The host's settings, each path from a variable with the production default, for a deployment and a rename alike. */
+function hostConfig(
+  env: Environment,
+  machineConfig: ReturnType<typeof configFrom> & { holder: "installer" },
+  stateFolder: string,
+  deployAccount: string,
+  commands: Commands | undefined,
+  log: (line: string) => void,
+  laid: (laid: boolean) => void,
+) {
+  return {
     sitesDir: machineConfig.sitesDir,
     unitsFolder: env.UNITS_FOLDER ?? "/etc/systemd/system",
     secretsFolder: env.SECRETS_FOLDER ?? "/etc/sitesolide",
@@ -250,11 +273,82 @@ export async function main(argv: string[], env: Environment, overrides: { comman
         nft: env.NFT ?? "/usr/sbin/nft",
         systemdAnalyze: env.SYSTEMD_ANALYZE ?? "/usr/bin/systemd-analyze",
       }),
-    log: (line) => reporter.log(line),
-    laid: (laid) => reporter.laid(laid),
-  });
+    log,
+    laid,
+  };
+}
 
-  const outcome = await runPipeline(host, request, { zone, runFolder: machineConfig.runFolder });
-  reporter.finish(outcome);
+/**
+ * `installer.js --rename %n`: the rename the steward asked for, its result
+ * rewritten on every line of its log, `rename-<slug>.json` in the
+ * installer's run folder, root's 0600. The exit code does not carry the
+ * verdict: 0 as soon as a result is written.
+ */
+export async function renameMain(argv: string[], env: Environment, overrides: { commands?: Commands; systemctl?: Systemctl } = {}): Promise<number> {
+  const launch = readRenameLaunch(argv);
+  if (!launch.ok) {
+    console.error(`rename: refused to start: ${launch.reason} (got ${JSON.stringify((argv[1] ?? "").slice(0, 80))})`);
+    return 2;
+  }
+  const { slug } = launch;
+  const zone = env.SITESOLIDE_ZONE ?? "";
+  if (zone === "") {
+    console.error("rename: SITESOLIDE_ZONE is required, it is read from /etc/caddy/sitesolide.env");
+    return 2;
+  }
+  const stateFolder = env.STEWARD_STATE ?? "/var/lib/sitesolide-steward";
+  const examination = readBounded(join(stateFolder, RENAMES_FOLDER, `${slug}.json`), 64 * 1024);
+  const text = examination.kind === "present" && examination.bytes !== null ? new TextDecoder().decode(examination.bytes) : null;
+  const read = readRenameRequest(text, slug, Date.now());
+  if (!read.ok) {
+    console.error(`rename ${slug}: nothing to do: ${read.reason}`);
+    return 0;
+  }
+  const { request } = read;
+  const folder = env.INSTALLER_FOLDER ?? INSTALLER_RUN_FOLDER;
+  const result: RenameResult = { slug, to: request.to, requestedAt: request.requestedAt, state: "running", startedAt: Date.now(), finishedAt: null, log: [], error: null, url: null };
+  const write = () => {
+    try {
+      writeAtomically(folder, renameResultName(slug), new TextEncoder().encode(`${JSON.stringify(result)}\n`), { owner: null, mode: 0o600 });
+    } catch (error) {
+      console.log(`rename ${slug}: result not written (${(error as Error).message})`);
+    }
+  };
+  const log = (line: string) => {
+    console.log(`rename ${slug}: ${line}`);
+    result.log.push(line.length > MAX_LOG_LINE ? `${line.slice(0, MAX_LOG_LINE - 3)}...` : line);
+    if (result.log.length > MAX_LOG_LINES) result.log.splice(0, result.log.length - MAX_LOG_LINES);
+    write();
+  };
+  write();
+
+  const machineConfig = { ...configFrom(env, overrides.systemctl), holder: "installer" as const };
+  const deployAccount = env.DEPLOY_ACCOUNT ?? "";
+  const config = hostConfig(env, machineConfig, stateFolder, deployAccount, overrides.commands, log, () => undefined);
+  const installer = createHost(config);
+  const systemctl = config.commands.systemctl;
+  const host = createRenameHost({
+    installer,
+    sitesDir: config.sitesDir,
+    secretsFolder: config.secretsFolder,
+    storePreviousFolder: config.storePreviousFolder,
+    accountsFile: config.accountsFile,
+    domainTableFile: env.DOMAINS_FILE ?? DOMAIN_TABLE_FILE,
+    usermod: env.USERMOD ?? "/usr/sbin/usermod",
+    groupmod: env.GROUPMOD ?? "/usr/sbin/groupmod",
+    systemctl,
+  });
+  const outcome = await runRename(host, request, { zone });
+  result.state = outcome.ok ? "succeeded" : "failed";
+  result.finishedAt = Date.now();
+  if (outcome.ok) {
+    result.url = outcome.url;
+    result.log.push(`-> renamed: ${outcome.url}`);
+  } else {
+    result.error = { code: outcome.code, message: outcome.message };
+    result.log.push(`!! ${outcome.message}`);
+  }
+  console.log(`rename ${slug}: ${result.state}${outcome.ok ? "" : `, ${outcome.code}`}`);
+  write();
   return 0;
 }

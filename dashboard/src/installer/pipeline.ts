@@ -93,6 +93,7 @@ import {
   servicePortsProse,
   servicesOf,
   setDomainActive,
+  setFormerSlugs,
   setLock,
   setPortal,
   type Manifest,
@@ -110,6 +111,7 @@ import { allocatePorts, decideDoor, scopeRefusals, takenPorts } from "../control
 import { madeStore, readClaims } from "../control/claims";
 import type { InstallRequest } from "../control/protocol";
 import { installBlock } from "./caddy";
+import { renamedTo } from "../../borrowed/rename";
 import type { Host, Part } from "./host";
 
 /**
@@ -235,6 +237,12 @@ export function finalManifest(
   if (!isObject(object)) throw new Stop("invalid-manifest", "sitesolide.json must contain an object");
 
   const raw = deposited.get(slug);
+  // A former name of a project renamed since: the checkout lags behind, and
+  // deploying it would create the project again under its old name.
+  const renamed = raw === undefined ? renamedTo(deposited, slug) : null;
+  if (renamed !== null) {
+    throw new Stop("renamed", `${slug} was renamed ${renamed} on the machine: write "slug": "${renamed}" in sitesolide.json, then deploy again; nothing was changed`);
+  }
   const onMachine = depositedDoor(raw, slug);
   if (onMachine.kind === "unreadable") {
     throw new Stop("machine-unreadable", `the manifest on the machine does not read (${onMachine.reason}): nothing was changed, the owner must look at /srv/sites/${slug}/sitesolide.json`);
@@ -259,6 +267,9 @@ export function finalManifest(
   let text = `${JSON.stringify(allocation.object, null, 2)}\n`;
   text = setPortal(text, door.portal);
   text = setLock(text, previous?.lock === true);
+  // So are a renamed project's former names, which deploy from an old
+  // checkout follows: a token neither writes nor drops them.
+  text = setFormerSlugs(text, previous?.formerSlugs);
   // So is a domain's switch: `sitesolide domain --activate` sets
   // `domain.active` after checking the DNS and that a closed site's domain
   // closes with it, and the table api/ certifies and routes from reads that

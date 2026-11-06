@@ -351,6 +351,14 @@ const server = Bun.serve({
     // within their roles and judged by the steward (src/people/relay.ts).
     "/api/tokens": { GET: either(team.team, memberRelay.team), POST: either(team.createToken, memberRelay.createToken) },
     "/api/tokens/revoke": { POST: either(team.revokeToken, memberRelay.revokeToken) },
+    // A project renamed, the owner's alone: the machine's run stops, moves,
+    // reloads, starts and probes, which the longest delay Bun allows covers.
+    "/api/projects/rename": {
+      POST: owner((req, server) => {
+        server.timeout(req, 255);
+        return team.renameProject(req);
+      }),
+    },
 
     // The control API. The archive streams for as long as it takes to arrive:
     // Bun's ten seconds of silence would cut a slow upload in the middle.

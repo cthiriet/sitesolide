@@ -13,6 +13,7 @@
  *   sitesolide share [<email|@domain>...]   general access and people with access
  *   sitesolide people               everyone with access, and who may create projects
  *   sitesolide remove --confirm <slug>  take the project off the machine
+ *   sitesolide rename <new-slug>    the project and its address renamed on the machine
  *   sitesolide secrets [set|generate|remove|set-file|remove-file]
  *                                   the project's store of secrets, see bin/cli/store-cli.ts
  *   sitesolide run -- <command>     the workstation's own credentials for it, then run
@@ -101,7 +102,7 @@
  * depend on the punctuation it contains.
  */
 import { resolve4, resolve6 } from "node:dns/promises";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { compareDirectives, countItemized, summariseDivergence } from "./cli/comparison";
@@ -145,6 +146,9 @@ import {
   setDomainActive,
   setLock,
   setPortal,
+  setFormerSlugs,
+  setSlug,
+  slugRefusal,
   validate,
   PORTAL_SLUG,
   FIRST_BLOCK,
@@ -165,6 +169,7 @@ import {
   type OutputEvent,
 } from "./cli/output";
 import { choosePort, needsPort, setPort } from "./cli/ports";
+import { followMachine } from "./cli/rename";
 import {
   switchAnnouncement,
   depositedManifestPath,
@@ -263,7 +268,7 @@ import { machine, sshLogin } from "./cli/machine";
 import { DNS_CHOICES, dnsEntry, shownDns } from "./cli/dns/registry";
 import { eventOutput, humanOutput, login, promptWithoutEcho, remoteMode, REMOTE_USAGE, runRemote, type BuildContext } from "./cli/remote";
 import { buildEnv, KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
-import { ownerGeneralCommand, PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshClaim, sshGeneral, sshPeople, sshTakeBack } from "./cli/access";
+import { ownerGeneralCommand, ownerWriteCommand, PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshClaim, sshGeneral, sshPeople, sshRename, sshTakeBack } from "./cli/access";
 import {
   foreignUnit,
   laterBlockPorts,
@@ -1318,7 +1323,10 @@ async function deploy(
   // depend on it. From here on, `project` carries the value the VM makes
   // authoritative, and `rawProject` is of no further use. An app that declares
   // no port gets one first: every read of the manifest after this needs it.
-  const { project, switched, doorConfirmed } = await reconcilePortal(await allocatePort(rawProject, config, executor), config, executor);
+  const reconciled = await reconcilePortal(await allocatePort(rawProject, config, executor), config, executor);
+  // Renamed on the server: the deployment starts again under its new name.
+  if ("renamed" in reconciled) return deploy(reconciled.renamed, config, executor, replace, adopt);
+  const { project, switched, doorConfirmed } = reconciled;
   const { manifest } = project;
   note({ port: mainPort(manifest), portal: isProtected(manifest) });
   if (switched) note({ manifestWritten: !executor.simulated });
@@ -1665,9 +1673,29 @@ async function reconcilePortal(
   project: Project,
   config: Config,
   executor: Executor,
-): Promise<{ project: Project; switched: boolean; doorConfirmed: boolean }> {
-  const { manifest } = project;
+): Promise<{ project: Project; switched: boolean; doorConfirmed: boolean } | { renamed: Project }> {
+  let { manifest } = project;
   const reading = await readDepositedDoor(manifest.slug, config, executor);
+  // Absent: a new project, or one renamed on the server since this checkout.
+  if (reading.kind === "absent") {
+    const renamed = await renamedOnServer(project, config, executor);
+    if (renamed !== null) return { renamed };
+  }
+  // The former names a rename left are the machine's, as the door is.
+  if (reading.kind === "present" && (reading.formerSlugs ?? []).join(",") !== (manifest.formerSlugs ?? []).join(",")) {
+    const raw = setFormerSlugs(project.raw, reading.formerSlugs);
+    const read = readManifest(raw);
+    if (read.manifest === undefined || read.errors.length > 0) die(`${MANIFEST_NAME} rejected once the server's formerSlugs are applied`, read.errors);
+    step("the project's former names, as the server keeps them");
+    const path = join(project.folder, MANIFEST_NAME);
+    if (executor.simulated) say(`   [dry-run] write ${path}`);
+    else {
+      writeFileSync(path, raw);
+      say(`   written into ${path}: commit it`);
+    }
+    manifest = read.manifest;
+    project = { ...project, manifest, raw };
+  }
   const decision = decidePortal(manifest.slug, { portal: isProtected(manifest), lock: manifest.lock === true }, reading);
   if (decision.kind === "rejects") die(decision.message, decision.details);
   const doorConfirmed = reading.kind === "present";
@@ -3949,6 +3977,77 @@ async function allocatePort(project: Project, config: Config, executor: Executor
   return { ...project, manifest, raw };
 }
 
+/**
+ * A project renamed on the server since this checkout was written: the
+ * machine carries no project under this slug, but one that lists it among its
+ * former names. sitesolide.json is rewritten under that slug, to commit, and
+ * the deployment starts again for it rather than create the project again
+ * under the old name; the workstation's build secrets, kept under the slug,
+ * follow. Read only for a project the machine does not carry, every manifest
+ * then: a read, hence done in a dry run too, which only skips the writes.
+ */
+async function renamedOnServer(project: Project, config: Config, executor: Executor): Promise<Project | null> {
+  const slug = project.manifest.slug;
+  const reading = readDepositedManifests(await executor.read(config, readManifestsCommand("*")));
+  if (reading.kind === "unreadable") die("cannot read the manifests on the server", [reading.reason, "nothing was pushed"]);
+  const followed = followMachine(project.raw, slug, reading.manifests);
+  if (followed.kind !== "renamed") return null;
+  step(`${slug} was renamed ${followed.to} on the server: this deployment goes to ${followed.to}`);
+  const path = join(project.folder, MANIFEST_NAME);
+  const from = workstationSecretsPath(config.vault, slug);
+  const to = workstationSecretsPath(config.vault, followed.to);
+  if (executor.simulated) {
+    say(`   [dry-run] write ${path} with "slug": "${followed.to}"`);
+    if (existsSync(from) && !existsSync(to)) say(`   [dry-run] rename ${from} to ${to}`);
+  } else {
+    writeFileSync(path, followed.text);
+    say(`   written into ${path}: commit it`);
+    if (existsSync(from) && !existsSync(to)) {
+      renameSync(from, to);
+      say(`   the build's secrets follow: ${to}`);
+    }
+  }
+  note({ manifestWritten: !executor.simulated, renamedTo: followed.to });
+  const { manifest, errors } = readManifest(followed.text);
+  if (manifest === undefined || errors.length > 0) die(`${MANIFEST_NAME} rejected`, errors);
+  return { ...project, manifest, raw: followed.text };
+}
+
+/**
+ * `sitesolide rename <new-slug>`, in the project's folder: the project renamed
+ * on the server, everything its slug names moved there by the machine's own
+ * run (dashboard/src/installer/rename.ts), asked of the steward over the
+ * owner's SSH as the dashboard asks it; then this folder's sitesolide.json
+ * rewritten under the new slug, the old one among its former names, to
+ * commit. The folder itself keeps its name: nothing reads it.
+ */
+async function rename(project: Project, config: Config, executor: Executor, to: string | undefined): Promise<void> {
+  const from = project.manifest.slug;
+  if (to === undefined || to.startsWith("-")) die("usage: sitesolide rename <new-slug>", ["the project's new name, which is also its address under the zone"]);
+  const refused = slugRefusal(to);
+  if (refused !== null) die(`the new name: ${refused}`, ["nothing was changed"]);
+  if (to === from) die(`${from} already has that name`, ["nothing was changed"]);
+  note({ slug: from, to, dryRun: executor.simulated });
+  say(`-> ${from} renamed ${to}, on ${config.server}`);
+  if (executor.simulated) {
+    say(`   [dry-run] ssh ${config.server} ${ownerWriteCommand("POST", "/control/rename")}`);
+    say(`   [dry-run]   with ${JSON.stringify({ slug: from, to })}`);
+    say(`   [dry-run] write ${join(project.folder, MANIFEST_NAME)} with "slug": "${to}"`);
+    return;
+  }
+  const answer = await sshRename((remote, input) => executor.execute(config, remote, input), from, to);
+  if (!answer.ok) die(answer.failure.message, answer.failure.details ?? []);
+  for (const line of answer.value.log) say(`   ${line}`);
+  const text = setSlug(project.raw, to);
+  writeFileSync(join(project.folder, MANIFEST_NAME), text);
+  const secretsFrom = workstationSecretsPath(config.vault, from);
+  const secretsTo = workstationSecretsPath(config.vault, to);
+  if (existsSync(secretsFrom) && !existsSync(secretsTo)) renameSync(secretsFrom, secretsTo);
+  note({ url: answer.value.url, manifestWritten: true });
+  say(`-> ${to}: ${answer.value.url}`);
+  say(`   written into ${join(project.folder, MANIFEST_NAME)}: commit it`);
+}
+
 /** The value given to an option, `--slug shop`, or undefined. */
 function optionValue(arguments_: string[], name: string): string | undefined {
   const marker = arguments_.indexOf(name);
@@ -4078,6 +4177,8 @@ function usage(zone: string | null): string {
     "  sitesolide remove --confirm <slug>",
     "                                  take the project off the machine, for good, its name freed from the token that created it",
     "     --dry-run                    show every step, remove nothing",
+    "  sitesolide rename <new-slug>    rename the project and its address on the machine, sitesolide.json rewritten",
+    "     --dry-run                    show the request, change nothing",
     "  sitesolide secrets              this project's secrets: names, sources, states, never a value",
     "     set <NAME> [--stdin]         set a variable, typed at a prompt that does not echo, or piped",
     "     generate <NAME>              a random value drawn on the server, never shown: --format, --bytes, --replace",
@@ -4363,6 +4464,9 @@ if (import.meta.main) {
     }
     case "remove":
       await remove(readProject(folder), config, executor, optionValue(arguments_, "--confirm"));
+      break;
+    case "rename":
+      await rename(readProject(folder, { portLater: true }), config, executor, arguments_[1]);
       break;
     case "run": {
       const separator = arguments_.indexOf("--");

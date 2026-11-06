@@ -1408,6 +1408,20 @@ const steward =
               return Response.json({ token: created, secret: `sst_${draw(43, ALPHABET)}` }, { status: 201 });
             },
           },
+          // A rename, simulated: three seconds of the machine's run, then its
+          // log; a name another site has is refused as the steward refuses it.
+          // The snapshot does not follow: the bench's sites keep their names.
+          "/control/rename": {
+            POST: async (req) => {
+              const requested = await readBody(req);
+              if (!isValidToken(requested)) return refusal(401, "locked", "locked, unlock again");
+              const slug = text(requested.slug);
+              const to = text(requested.to);
+              if (FOLDERS.some((folder) => folder.slug === to)) return refusal(400, "invalid", `${to} is already the name of a project on this machine: nothing was changed`);
+              await Bun.sleep(3_000);
+              return Response.json({ slug, to, url: `https://${to}.example.com/`, log: [`-> ${slug} renamed ${to}, for owner`, "-> verify", `   https://${to}.example.com/ answers as ${slug}.example.com did`], people: 0 });
+            },
+          },
           // A member's own tokens, judged by the real rules (src/people/tokens.ts) on her session and unlock.
           "/tokens/person/list": {
             POST: async (req) => {

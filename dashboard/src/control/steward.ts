@@ -140,6 +140,9 @@ import {
   OWNER_HOLDER,
 } from "./protocol";
 import { cleanLine, interrupted, judgeResult } from "./results";
+import { judgeRenameResult, renameInClaims, renameInTeam } from "./rename";
+import { renameRefusal, renamedTo } from "../../borrowed/rename";
+import { RENAME_PREFIX, type RenameRequest, type RenameResult } from "./protocol";
 import {
   authenticate,
   createToken,
@@ -214,6 +217,10 @@ export type ControlStewardOptions = {
   access?: AccessRoutes["forToken"] | null;
   /** A project removed from the machine: its people with access dropped. Absent, a steward without the registry. */
   forgetAccess?: AccessRoutes["forgetProject"] | null;
+  /** A project renamed on the machine: its people with access moved to the new name. Absent, a steward without the registry. */
+  renameAccess?: AccessRoutes["renameProject"] | null;
+  /** How long the steward waits on a rename run, its unit's TimeoutStartSec and a margin. */
+  renameTimeoutMs?: number;
   /**
    * A token's secrets and restart (src/secrets/steward.ts), the token judged
    * here first. Absent, the routes do not exist, as on a steward that
@@ -1439,6 +1446,121 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     return Response.json({ slug, forgotten: released, access: dropped });
   }
 
+  // --- a project renamed ------------------------------------------------------------------
+
+  /** The renames under way, by their current slug: one at a time per project. */
+  const renaming = new Set<string>();
+
+  /**
+   * The owner renames a project, from the dashboard, unlocked, or over the
+   * owner's SSH, `sitesolide rename`. The machine is renamed by its own run,
+   * sitesolide-rename@<slug> (src/installer/rename.ts), which this waits
+   * on; then this steward's registries follow: the token that created the
+   * project still owns it, every token scoped to it reaches it under its new
+   * name, its people keep their roles.
+   *
+   * Asked again for a project already renamed on the machine, whose
+   * registries did not follow, a crash between the two, it finishes the
+   * registries alone: the request is the same, and it is safe to repeat.
+   */
+  async function renameRoute(req: Request, channel: "dashboard" | "ssh"): Promise<Response> {
+    const body = await readBody(req, channel === "dashboard" ? ["token", "slug", "to"] : ["slug", "to"]);
+    if (body instanceof Response) return body;
+    if (channel === "dashboard" && !(await options.isUnlocked(body.token))) return failure("locked", "locked, unlock again");
+    const { slug, to } = body;
+    if (typeof slug !== "string" || !isValidSlug(slug)) return failure("invalid", "slug: the project's current slug");
+    if (typeof to !== "string" || to.length > 63) return failure("invalid", "to: the project's new slug");
+    if (renaming.has(slug) || renaming.has(to)) return failure("busy", `a rename of ${slug} is already running: wait for it to finish`);
+    renaming.add(slug);
+    try {
+      return await renameProject(slug, to, channel);
+    } finally {
+      renaming.delete(slug);
+    }
+  }
+
+  async function renameProject(slug: string, to: string, channel: "dashboard" | "ssh"): Promise<Response> {
+    if (!(await system.renameInstalled())) {
+      return failure("not-available", "this machine cannot rename a project yet: the owner must run sitesolide upgrade");
+    }
+    let deposited: Map<string, string>;
+    try {
+      deposited = await system.readManifests();
+    } catch (e) {
+      console.error(`control: manifests unreadable (${errorName(e)})`);
+      return failure("failure", "the manifests on the machine cannot be read: nothing was changed");
+    }
+    // Renamed on the machine already, by a run whose answer this steward
+    // never got to: the registries alone are left.
+    const done = !deposited.has(slug) && renamedTo(deposited, slug) === to;
+    let result: RenameResult | null = null;
+    if (!done) {
+      const refusal = renameRefusal(slug, to, deposited, options.zone);
+      if (refusal !== null) return failure("invalid", `${refusal}: nothing was changed`);
+      let left: Leftovers;
+      try {
+        left = await system.leftovers(to);
+      } catch {
+        return failure("failure", "the backups' index does not read: nothing was changed");
+      }
+      // A removed project's snapshots under the new name would be taken for this one's.
+      if (left.snapshots > 0 || left.store) {
+        return failure("invalid", `${to} was the name of a removed project, which left ${left.snapshots > 0 ? "backup snapshots" : "a secrets store"} under it: pick another name; nothing was changed`);
+      }
+      if (await isActive(installerUnit(slug))) return failure("busy", `a deployment of ${slug} is running: wait for it to finish, then rename`);
+      const waiting = await pending();
+      if (waiting instanceof Response) return waiting;
+      if (waiting.some((creation) => creation.slug === slug)) return failure("busy", `${slug} is still being created: wait for its deployment to finish, then rename`);
+
+      const request: RenameRequest = { slug, to, requestedAt: system.now(), actor: OWNER_HOLDER };
+      await system.writeRenameRequest(slug, `${JSON.stringify(request)}\n`);
+      const unit = `${RENAME_PREFIX}@${slug}.service`;
+      console.log(`control: rename of ${slug} to ${to} started, ${channel}`);
+      // `start` waits for the run, a oneshot; its result, not its exit code, decides.
+      await system.systemctl(["start", unit], options.renameTimeoutMs ?? 11 * 60_000);
+      const judged = judgeRenameResult(await system.readRenameResult(slug), slug, request.requestedAt, options.uidRoot);
+      if (judged.kind !== "read") {
+        return failure("failure", `the rename left no result to read (${judged.kind === "absent" ? "none written" : judged.reason}): the owner must read journalctl -u ${unit}`);
+      }
+      result = judged.result;
+      if (result.state !== "succeeded") {
+        const message = result.error?.message ?? `the rename stopped before finishing: the owner must read journalctl -u ${unit}`;
+        return failure(result.error?.code === "refused" ? "invalid" : result.error?.code === "caddy-busy" ? "busy" : "failure", message, result.log);
+      }
+    }
+
+    // The registries, the machine renamed.
+    const moved = await serially(async () => {
+      const claims = await claimsToChange();
+      if (claims instanceof Response) return claims;
+      const renamedClaims = renameInClaims(claims, slug, to);
+      if (renamedClaims !== null) await system.writeClaims(encodeClaims(renamedClaims));
+      const registry = await team();
+      if (registry instanceof Response) return registry;
+      const renamed = renameInTeam(registry, slug, to);
+      if (renamed !== null) {
+        const refused = await save(renamed);
+        if (refused !== null) return refused;
+      }
+      return null;
+    });
+    if (moved instanceof Response) return failure("failure", `${slug} is renamed ${to} on the machine, but the tokens' registry did not follow: rename it again, which finishes it`);
+    let people = 0;
+    if (options.renameAccess !== undefined && options.renameAccess !== null) {
+      const answer = await options.renameAccess(slug, to, OWNER_HOLDER);
+      if (answer instanceof Response) return failure("failure", `${slug} is renamed ${to} on the machine, but its people with access did not follow: rename it again, which finishes it`);
+      people = answer;
+    }
+    console.log(`control: ${slug} renamed ${to}`);
+    return Response.json({
+      slug,
+      to,
+      url: result?.url ?? `https://${to}.${options.zone}/`,
+      log: result?.log ?? [`-> ${slug} was already renamed ${to} on the machine: the registries followed`],
+      people,
+    });
+  }
+
   // --- a name a token claims, taken back by the owner -----------------------------------
 
   /** The token the registry names for a slug, but one whose hold is released (`releasedNow`). */
@@ -1835,6 +1957,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     "/control/logs": { POST: logs },
     "/control/access/list": { POST: accessList },
     "/control/access": { PUT: accessGrant, DELETE: accessRemove },
+    "/control/rename": { POST: (req) => renameRoute(req, "dashboard") },
     ...(secrets === null
       ? {}
       : {
@@ -1865,6 +1988,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     owner: serve({
       "/tokens/project": { DELETE: forgetProject },
       "/tokens/claim": { GET: claimRoute, DELETE: takeBackRoute },
+      "/control/rename": { POST: (req) => renameRoute(req, "ssh") },
     }),
     ownerWroteStore,
     storeClaimed,

@@ -195,6 +195,9 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^cannot tell whether the machine's tunnel carries a site's own domain/, READ_FAILED],
   [/^the machine's tunnel files are not this release's/, "the owner brings the machine to this release, `sitesolide upgrade --dry-run` then `sitesolide upgrade`, which lays the tunnel's files again and restarts its connector once, then runs this command again; nothing was written; do not re-run with --force, which does not skip this, and never edit /etc/cloudflared or /etc/caddy on the machine by hand"],
   [/^not served by Cloudflare's edge through the tunnel: /, "the machine is behind a Cloudflare Tunnel: the owner creates the proxied CNAMEs `details` list, in the domain's zone at Cloudflare in the tunnel's own account; run the same command again once the edge serves them, a few minutes later; nothing was written; do not re-run with --force on your own, and never change the zone's records or the machine's token yourself"],
+  [/^usage: sitesolide rename/, "run it in the project's folder with the new name, lowercase letters, digits and dashes: sitesolide rename <new-slug>"],
+  [/^the new name: /, "pick a name of lowercase letters, digits and dashes that the machine does not keep for itself; nothing was changed"],
+  [/already has that name$/, "nothing to rename: the project already answers under that name"],
   [/^removal needs the slug typed back/, "re-run with --confirm <slug>, and only if the owner asked for this project to be removed: what it wrote since the last backup is lost for good"],
 
   // --- the binary's kit, see bin/cli/kit.ts

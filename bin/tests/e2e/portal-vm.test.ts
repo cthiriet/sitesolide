@@ -83,8 +83,10 @@ describe("deploy reads the door on the VM", () => {
     // the other sites' blocks are not this deployment's business, and in a
     // dry run there is no lock. The claim on its name is a read too, which
     // the machine does not carry yet; its store is not read, the project
-    // declaring no runtime secret.
-    expect(vm.logs()).toEqual(["READ sample-door", "UNITS sample-door", "READ *", "SECOND-BLOCK", "CLAIM GET sample-door"]);
+    // declaring no runtime secret. The machine not carrying it, every
+    // manifest is read at once, for a project renamed since that lists it
+    // among its former names.
+    expect(vm.logs()).toEqual(["READ sample-door", "READ *", "UNITS sample-door", "READ *", "SECOND-BLOCK", "CLAIM GET sample-door"]);
   });
 
   test("the same value on both sides changes nothing", async () => {

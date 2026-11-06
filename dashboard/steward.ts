@@ -227,6 +227,8 @@ const control = createControlSteward(
     members: handler.memberAuthority ?? undefined,
     access: handler.accessForToken,
     forgetAccess: handler.forgetProjectAccess,
+    // A project renamed: its people keep their roles under the new name.
+    renameAccess: handler.renameProjectAccess,
     secrets: handler.secretsForToken,
     // A token's work on a project's store, judged by the control routes then
     // done by the secrets routes' own code (src/secrets/store-api.ts).
@@ -274,6 +276,11 @@ setInterval(
  * socket, hence the per-request setting. Bun caps it at 255 seconds.
  */
 const IDLE_S = Math.min(255, Math.ceil((MAX_PORTAL_MS + MAX_RESTART_MS) / 1000) + 10);
+// A rename waits on its run, which stops, moves, reloads, starts and probes:
+// the longest Bun lets a request wait. A client gone before the end changes
+// nothing, the run and the registries finish all the same.
+const RENAME_IDLE_S = 255;
+const RENAME_PATH = "/control/rename";
 
 // The owner's socket: the access registry for root, over the owner's SSH. No
 // group: the folder and the socket stay root's alone.
@@ -296,7 +303,11 @@ const ownerServer =
             Bun.serve({
               unix: path,
               // The access registry, and the token ownership of a project removed.
-              fetch: (req) => (isControlPath(new URL(req.url).pathname) ? control.owner(req) : handler.owner(req)),
+              fetch: (req, server) => {
+                const path = new URL(req.url).pathname;
+                server.timeout(req, path === RENAME_PATH ? RENAME_IDLE_S : IDLE_S);
+                return isControlPath(path) ? control.owner(req) : handler.owner(req);
+              },
               development: false,
               error: () => Response.json({ error: "failure", message: "unexpected error" }, { status: 500 }),
               maxRequestBodySize: 64 * 1024,
@@ -309,8 +320,9 @@ const server = openSocket(SOCKET, gid, (path) =>
   Bun.serve({
     unix: path,
     fetch(req, server) {
-      server.timeout(req, IDLE_S);
-      return isControlPath(new URL(req.url).pathname) ? control(req) : handler(req);
+      const path = new URL(req.url).pathname;
+      server.timeout(req, path === RENAME_PATH ? RENAME_IDLE_S : IDLE_S);
+      return isControlPath(path) ? control(req) : handler(req);
     },
     // Never the detailed error page of development mode: it would quote a
     // stack, and the handler already catches everything.

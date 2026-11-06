@@ -262,6 +262,7 @@ export type StewardHandler = Handler & {
   startAccess: () => Promise<void>;
   /** A project removed from the machine: its people with access dropped (src/access/steward.ts); null without them. */
   forgetProjectAccess: AccessRoutes["forgetProject"] | null;
+  renameProjectAccess: AccessRoutes["renameProject"] | null;
   /** What the control routes ask of the people for a person's own tokens; null without them. */
   memberAuthority: MemberAuthority | null;
   /** A token's changes of access, the token judged by the control routes. */
@@ -2639,6 +2640,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     ensureMemberKeys: async () => (members === null ? null : members.ensureKeys()),
     startAccess: async () => accessStore?.start(),
     forgetProjectAccess: access?.forgetProject ?? null,
+    renameProjectAccess: access?.renameProject ?? null,
     memberAuthority:
       members === null
         ? null

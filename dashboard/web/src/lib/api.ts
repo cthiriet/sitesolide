@@ -281,6 +281,11 @@ export function revokeToken(id: string) {
   return send<{ token: TokenView } & SecretsRefusal>("POST", "/api/tokens/revoke", { id })
 }
 
+/** A project renamed, the owner's, under the same unlock as a token: the answer carries the new address, a refusal the run's log. */
+export function renameProject(slug: string, to: string) {
+  return send<{ slug?: string; to?: string; url?: string; log?: unknown[] } & SecretsRefusal>("POST", "/api/projects/rename", { slug, to })
+}
+
 // --- The backups ---------------------------------------------------------------
 //
 // Read with the session; a restore goes through the steward with the session's

@@ -627,3 +627,38 @@ export type ProjectAccess = {
   entries: EntryView[];
   signIn: { configured: boolean; allowedDomains: string[]; providerName: string | null };
 };
+
+// --- Renaming a project -------------------------------------------------------------
+
+/**
+ * The run that renames one project on the machine, `sitesolide-rename@<slug>`,
+ * the current slug as the instance: the same installer.js, started with
+ * `--rename`. The steward writes the request it reads, `renames/<slug>.json`
+ * in its state folder, and reads its result, `rename-<slug>.json` in the
+ * installer's run folder. See src/installer/rename.ts.
+ */
+export const RENAME_PREFIX = "sitesolide-rename";
+export const RENAME_TEMPLATE = `${RENAME_PREFIX}@.service`;
+export const RENAMES_FOLDER = "renames";
+
+/** The result's file name, in INSTALLER_RUN_FOLDER. */
+export function renameResultName(slug: string): string {
+  return `rename-${slug}.json`;
+}
+
+/** What the steward asks: `slug` renamed `to`, asked at `requestedAt` by `actor`. */
+export type RenameRequest = { slug: string; to: string; requestedAt: number; actor: string };
+
+export type RenameResult = {
+  slug: string;
+  to: string;
+  /** The request it answers, so that the steward never takes an earlier run's result for this one. */
+  requestedAt: number;
+  state: "running" | "succeeded" | "failed";
+  startedAt: number;
+  finishedAt: number | null;
+  log: string[];
+  error: { code: string; message: string } | null;
+  /** The project's new address, once renamed. */
+  url: string | null;
+};

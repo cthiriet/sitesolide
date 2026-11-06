@@ -41,7 +41,12 @@ export type ControlSteward = {
   /** A file of the store set, its bytes in base64. */
   storeSetFile: (requested: { bearer: string } & StoreFileRequest) => Promise<Response>;
   storeRemoveFile: (requested: { bearer: string } & StoreFileRemoveRequest) => Promise<Response>;
+  /** A project renamed by the owner, unlocked: the steward waits on the machine's run. */
+  rename: (requested: { token: string; slug: string; to: string }) => Promise<Response>;
 };
+
+/** How long a rename may take on the machine, under the 255 seconds Bun lets a request wait. */
+export const RENAME_TIMEOUT_MS = 250_000;
 
 /**
  * Every control route answers within seconds: the installer is started without
@@ -76,6 +81,7 @@ export function localControlSteward(socket: string, timeoutMs = CONTROL_TIMEOUT_
     storeGenerate: (requested) => call("POST", "/control/store/generate", requested, longMs),
     storeSetFile: (requested) => call("PUT", "/control/store/file", requested, longMs),
     storeRemoveFile: (requested) => call("DELETE", "/control/store/file", requested, longMs),
+    rename: (requested) => call("POST", "/control/rename", requested, RENAME_TIMEOUT_MS),
   };
 }
 

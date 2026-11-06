@@ -79,6 +79,7 @@ import {
   entriesOf,
   findEntry,
   forgetProject as dropProject,
+  renameProject as moveProject,
   dashboardPeople,
   isDashboardPerson,
   kindOf,
@@ -99,7 +100,7 @@ import type { AccessSystem } from "./system";
 
 /** What the journal records of access: the actor this steward verified, never one a request named. */
 export type AccessEvent = {
-  operation: "access.add" | "access.change" | "access.remove" | "people.create" | "project.create" | "project.remove";
+  operation: "access.add" | "access.change" | "access.remove" | "people.create" | "project.create" | "project.remove" | "project.rename";
   result: "ok" | "rejects";
   actor: string;
   /** The person the event is about, when it is an email. */
@@ -443,6 +444,8 @@ export type AccessRoutes = {
    * or the refusal.
    */
   forgetProject: (slug: string, actor: string) => Promise<number | Response>;
+  /** A project renamed on the machine: its entries moved to the new slug, journaled. The number moved, or the refusal. */
+  renameProject: (from: string, to: string, actor: string) => Promise<number | Response>;
 };
 
 /** The hash a password access is found by: SHA-256 of the password, as the portal computes it. */
@@ -879,6 +882,21 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
     return answer;
   }
 
+  /**
+   * A project renamed on the machine (src/installer/rename.ts): its people
+   * keep their roles under the new name, journaled once, under the old
+   * name with the new one in the detail. Returns how many entries moved.
+   */
+  async function renameProject(from: string, to: string, actor: string): Promise<number | Response> {
+    if (!isValidSlug(from) || !isValidSlug(to)) return fail("invalid", "slug: a project's slug, lowercase letters, digits and dashes");
+    return store.change<number>(async (registry) => {
+      const result = moveProject(registry, from, to);
+      await journal({ operation: "project.rename", result: "ok", actor, member: null, slug: from, detail: `renamed ${to}${result.moved === 0 ? "" : `, its ${result.moved} ${result.moved === 1 ? "person" : "people"} with access kept`}` });
+      console.log(`access: ${from} renamed ${to}, ${result.moved} entr${result.moved === 1 ? "y" : "ies"} moved`);
+      return { registry: result.registry, value: result.moved };
+    });
+  }
+
   /** A token's granter, its person's role on the project read from the registry in hand. */
   function asToken(granter: Granter, slug: string): (registry: Registry) => Promise<Granter> {
     return async (registry) => (granter.kind === "token" && granter.email !== null ? { ...granter, role: findEntry(registry, slug, granter.email)?.role ?? null } : granter);
@@ -916,5 +934,6 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
     },
     widen,
     forgetProject,
+    renameProject,
   };
 }

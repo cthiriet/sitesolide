@@ -187,6 +187,8 @@ export type Operation =
   | "project.create"
   // A project removed from the machine: the name its token owned, free again.
   | "project.remove"
+  // A project renamed on the machine: the old slug, the new one in the detail.
+  | "project.rename"
   // A value drawn on the machine into a project's store, never shown: the
   // name alone is journaled.
   | "generate";

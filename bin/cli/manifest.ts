@@ -83,6 +83,12 @@ export type ServiceBackup = {
 /** What a repository declares in order to be deployable. */
 export type Manifest = {
   slug: string;
+  /**
+   * The names the project carried before a rename, most recent last: not
+   * written by hand. The machine writes it when the project is renamed, and
+   * `deploy` makes the repository follow, see bin/cli/rename.ts.
+   */
+  formerSlugs?: string[];
   description?: string;
   /** Where the code lives, when not beside the manifest, see isSourcePath. */
   source?: string;
@@ -130,6 +136,7 @@ export type Manifest = {
  */
 export const KNOWN_KEYS = [
   "slug",
+  "formerSlugs",
   "description",
   "source",
   "publicDir",
@@ -1013,6 +1020,28 @@ export function readManifest(raw: string): { manifest?: Manifest; errors: string
  * already taken and a port already listened to, are measured on the machine: a
  * local registry would lie from the first deployment made from somewhere else.
  */
+/** How many former names a manifest keeps: a project renamed more often forgets the oldest. */
+export const MAX_FORMER_SLUGS = 20;
+
+/**
+ * Why a name cannot be a project's slug, null when it can: the shape, then
+ * the names the machine keeps for itself. `validate()` and a rename say the
+ * same thing (bin/cli/rename.ts).
+ */
+export function slugRefusal(slug: unknown): string | null {
+  if (typeof slug !== "string" || !isValidSlug(slug)) {
+    return "lowercase letters, digits and dashes, no dot, no leading or trailing dash";
+  }
+  // Without this refusal, the deployment SUCCEEDS: it creates
+  // /srv/sites/landing and publishes a duplicate of the landing that the
+  // wildcard block serves straight away.
+  if (slug === "landing") return "landing is reserved for the site on the bare domain, which deploy does not handle";
+  // Its snapshots would mix with those of the machine's own state.
+  if (slug === MACHINE_FOLDER) return `${MACHINE_FOLDER} is reserved for the backups of the machine's own state: pick another`;
+  if (isSystemName(slug)) return `${slug} is a name the machine already uses, a system service, the landing's www or the folder name public: pick another`;
+  return null;
+}
+
 export function validate(manifest: Manifest, zone = servedZone()): string[] {
   const errors: string[] = [];
   const isApplication = isApp(manifest);
@@ -1025,20 +1054,18 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
     }
   }
 
-  if (typeof manifest.slug !== "string" || !isValidSlug(manifest.slug)) {
-    errors.push(
-      "slug: lowercase letters, digits and dashes, no dot, no leading or trailing dash",
-    );
-  } else if (manifest.slug === "landing") {
-    // Without this refusal, the deployment SUCCEEDS: it creates
-    // /srv/sites/landing and publishes a duplicate of the landing that the
-    // wildcard block serves straight away.
-    errors.push("slug: landing is reserved for the site on the bare domain, which deploy does not handle");
-  } else if (manifest.slug === MACHINE_FOLDER) {
-    // Its snapshots would mix with those of the machine's own state.
-    errors.push(`slug: ${MACHINE_FOLDER} is reserved for the backups of the machine's own state: pick another`);
-  } else if (isSystemName(manifest.slug)) {
-    errors.push(`slug: ${manifest.slug} is a name the machine already uses, a system service, the landing's www or the folder name public: pick another`);
+  const slugError = slugRefusal(manifest.slug);
+  if (slugError !== null) errors.push(`slug: ${slugError}`);
+
+  if (manifest.formerSlugs !== undefined) {
+    const former = manifest.formerSlugs as unknown;
+    if (!Array.isArray(former) || former.length === 0 || former.length > MAX_FORMER_SLUGS) {
+      errors.push(`formerSlugs: a list of 1 to ${MAX_FORMER_SLUGS} names, written by the machine when the project is renamed, or absent`);
+    } else if (!former.every((name) => typeof name === "string" && isValidSlug(name))) {
+      errors.push("formerSlugs: each one a slug, lowercase letters, digits and dashes");
+    } else if (new Set(former).size !== former.length || former.includes(manifest.slug)) {
+      errors.push("formerSlugs: each name once, and never the slug itself");
+    }
   }
 
   if (manifest.description !== undefined) {
@@ -1787,4 +1814,48 @@ export function setDomainActive(raw: string, active: boolean): string {
   }
   (domain as Record<string, unknown>).active = active;
   return `${JSON.stringify(parsed, null, 2)}\n`;
+}
+
+/**
+ * The manifest rewritten under a new slug, the one it had added to
+ * `formerSlugs`, which follows `slug`: a rename on the machine
+ * (bin/cli/rename.ts), and `deploy` making the repository follow it. A name
+ * already among the former ones, the project renamed back, leaves the list;
+ * the oldest go beyond MAX_FORMER_SLUGS. Every other key stays as it is, in
+ * its order.
+ */
+export function setSlug(raw: string, slug: string): string {
+  const parsed = readObject(raw);
+  const from = parsed.slug;
+  if (typeof from !== "string") throw new Error("sitesolide.json has no slug");
+  if (from === slug) return `${JSON.stringify(parsed, null, 2)}\n`;
+  const kept = Array.isArray(parsed.formerSlugs) ? parsed.formerSlugs.filter((name): name is string => typeof name === "string" && name !== slug && name !== from) : [];
+  const former = [...kept, from].slice(-MAX_FORMER_SLUGS);
+  const ordered: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (key === "formerSlugs") continue;
+    if (key === "slug") {
+      ordered.slug = slug;
+      ordered.formerSlugs = former;
+      continue;
+    }
+    ordered[key] = value;
+  }
+  return `${JSON.stringify(ordered, null, 2)}\n`;
+}
+
+/**
+ * The manifest with the machine's `formerSlugs`, the list a rename wrote
+ * there: the machine is its source of truth, as for `lock`, and `deploy`
+ * makes the repository follow. Absent or empty, the key goes.
+ */
+export function setFormerSlugs(raw: string, former: readonly string[] | undefined): string {
+  const parsed = readObject(raw);
+  const ordered: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (key === "formerSlugs") continue;
+    ordered[key] = value;
+    if (key === "slug" && former !== undefined && former.length > 0) ordered.formerSlugs = [...former];
+  }
+  return `${JSON.stringify(ordered, null, 2)}\n`;
 }

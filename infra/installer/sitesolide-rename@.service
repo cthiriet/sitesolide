@@ -1,0 +1,89 @@
+# The rename: one project's slug changed on the machine, everything it names
+# moved, one rename per start. See dashboard/src/installer/rename.ts.
+#
+#   systemctl start sitesolide-rename@nis2.service
+#   cat /run/sitesolide-installer/rename-nis2.json
+#
+# One template, the current slug alone as the instance, the new one in the
+# request the steward writes first, /var/lib/sitesolide-steward/renames/<slug>.json.
+# Only the steward starts it, for the owner, from the dashboard or from
+# `sitesolide rename` over SSH. It never activates by itself: no [Install], no
+# timer. Started by hand without a fresh request, it does nothing.
+#
+# The same installer.js as sitesolide-installer@.service, with `--rename`:
+# renaming a project's account, moving its folders, laying its units and
+# block and reloading Caddy are each root on the machine, as a deployment's
+# are. It runs no code of the project's, reads no archive, and every unit and
+# block it writes comes from the generators `sitesolide deploy` uses.
+#
+# NEVER `caddy stop` nor `caddy start` in what it launches: only
+# `systemctl reload caddy` applies a configuration (CLAUDE.md, Production).
+#
+# Placed by bin/deploy-installer.sh, never by `sitesolide deploy`.
+
+[Unit]
+Description=Rename of %i
+RequiresMountsFor=/srv/sites /etc/caddy
+
+[Service]
+Type=oneshot
+# The served zone, which the unit and block generators write and the probes
+# need: the same file Caddy is given.
+EnvironmentFile=/etc/caddy/sitesolide.env
+EnvironmentFile=/etc/sitesolide-installer.env
+ExecStart=/usr/local/bin/bun /usr/local/lib/sitesolide/installer.js --rename %n
+
+# Stopping the services, the moves, a validation, a reload, the services
+# started and every site probed, a first certificate under manual DNS
+# included, then the same way back: ten minutes bound the worst. The steward
+# waits on it.
+TimeoutStartSec=10min
+TimeoutStopSec=30s
+
+# The result, beside the installer's: the steward reads it there.
+RuntimeDirectory=sitesolide-installer
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+UMask=0022
+
+# CAP_CHOWN and CAP_FOWNER: the manifest keeps its owner and mode when it is
+# rewritten. CAP_DAC_OVERRIDE: /srv/sites/<slug> belongs to the deployment
+# account, and the stores to root in 0700 folders. CAP_DAC_READ_SEARCH: the
+# project's folders are read across accounts. CAP_AUDIT_WRITE: usermod and
+# groupmod report to the audit subsystem. systemctl asks for none.
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_AUDIT_WRITE
+
+# Writing: the sites, /etc (usermod and groupmod rewrite passwd, group,
+# shadow and gshadow by renaming in /etc itself; the units and their
+# drop-ins; /etc/caddy/sites and the domain table), the gatekeeper's folder,
+# where the Caddy lock and the backup of the slug live, and the projects'
+# stores and their previous versions, moved under the new name.
+ProtectSystem=strict
+ReadWritePaths=/srv/sites /etc /run/sitesolide-gatekeeper -/var/log/lastlog -/var/log/faillog
+ReadOnlyPaths=/etc/sitesolide
+ReadWritePaths=-/etc/sitesolide/projects -/var/lib/sitesolide-steward/precedents/projects
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateIPC=true
+
+# The loopback alone, for the probes towards 127.0.0.1:443.
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+MemoryMax=256M

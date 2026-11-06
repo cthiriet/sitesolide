@@ -482,6 +482,7 @@ const OPERATION_NAMES: Record<Operation, string> = {
   "token.revoke": "Revoke token",
   "project.create": "Create project",
   "project.remove": "Remove project",
+  "project.rename": "Rename project",
   generate: "Generate",
   // Written by the steward before projects kept their secrets in their store
   // alone, and still read from the journals that carry them.

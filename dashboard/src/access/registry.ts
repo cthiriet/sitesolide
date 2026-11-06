@@ -441,6 +441,18 @@ export function forgetProject(registry: Registry, slug: string): { registry: Reg
   return dropped.length === 0 ? { registry, dropped } : { registry: withEntries(registry, slug, []), dropped };
 }
 
+/**
+ * A project renamed on the machine: its entries move to the new slug, so
+ * that the same people keep the same roles under the new name, and the
+ * portal's projection, by host, follows. Whatever the new name held, left
+ * by a removal that stopped half way, is replaced. Returns how many moved.
+ */
+export function renameProject(registry: Registry, from: string, to: string): { registry: Registry; moved: number } {
+  const entries = entriesOf(registry, from);
+  if (entries.length === 0 && entriesOf(registry, to).length === 0) return { registry, moved: 0 };
+  return { registry: withEntries(withEntries(registry, from, []), to, entries), moved: entries.length };
+}
+
 // --- the portal's projection ---------------------------------------------------------
 
 /**

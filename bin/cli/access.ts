@@ -529,7 +529,8 @@ export type OwnerWritePath =
   | "/restart"
   | "/general"
   | "/tokens/claim"
-  | "/tokens/project";
+  | "/tokens/project"
+  | "/control/rename";
 
 /**
  * How long curl waits, in seconds, for the routes not given the thirty of
@@ -538,7 +539,7 @@ export type OwnerWritePath =
  * gatekeeper, up to ninety seconds: both are given longer. The release of a
  * removed project's name comes once the project is gone, and is given less.
  */
-const WRITE_SECONDS: Partial<Record<OwnerWritePath, number>> = { "/restart": 120, "/general": 240, "/tokens/project": 10 };
+const WRITE_SECONDS: Partial<Record<OwnerWritePath, number>> = { "/restart": 120, "/general": 240, "/tokens/project": 10, "/control/rename": 270 };
 
 /** A change, the JSON body on standard input: no address of the request, nor any value, ever goes through a shell. */
 export function ownerWriteCommand(method: "PUT" | "DELETE" | "POST" | "PATCH", path: OwnerWritePath): string {
@@ -672,6 +673,34 @@ export type GeneralAnswer = {
   /** The code in force when the site opens with one: the steward read it back from the machine. */
   code: { code: string; url: string | null } | null;
 };
+
+/** A rename as the steward answered it: the new address and the machine's log. */
+export type RenameAnswer = { slug: string; to: string; url: string; log: string[] };
+
+/**
+ * A project renamed, over the owner's socket: the steward runs the machine's
+ * rename and waits on it, then re-keys its registries. A refusal carries the
+ * run's log in its details, and says nothing of what was changed: a failed
+ * rename puts everything back, which its log says.
+ */
+export async function sshRename(run: RunOnMachine, slug: string, to: string): Promise<Reading<RenameAnswer>> {
+  const done = await run(ownerWriteCommand("POST", "/control/rename"), JSON.stringify({ slug, to }));
+  const read = await askSteward(async () => done, "", undefined, { outdated: "the steward on the server cannot rename a project yet: run sitesolide upgrade first", unchanged: false });
+  if (!read.ok) {
+    const answer = readCurlAnswer(done.output);
+    let details: string[] = [];
+    try {
+      const body = answer === null ? null : (JSON.parse(answer.body) as { details?: unknown });
+      if (Array.isArray(body?.details)) details = body.details.filter((line): line is string => typeof line === "string");
+    } catch {
+      // No log to quote.
+    }
+    return { ok: false, failure: { ...read.failure, details: [...(read.failure.details ?? []), ...details] } };
+  }
+  const { url, log } = read.value;
+  if (typeof url !== "string" || !Array.isArray(log)) return unreadable("answer");
+  return { ok: true, value: { slug, to, url, log: log.filter((line): line is string => typeof line === "string") } };
+}
 
 /**
  * The owner's way to a site's general access: root on the machine asks the

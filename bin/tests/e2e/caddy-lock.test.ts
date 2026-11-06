@@ -359,8 +359,9 @@ describe("sitesolide deploy takes the lock before its first deposit", () => {
     expect(r.error).toContain("port already taken on the server, by a deployment that ran meanwhile");
     expect(r.error).toContain("port 3044 is already declared by project sample-rival");
     const logs = vm.logs();
-    // Read once before the build, then again under the lock, where it decides.
-    expect(logs.filter((line) => line === "READ *")).toHaveLength(2);
+    // Read once for a renamed project, the machine not carrying this one,
+    // once before the build, then again under the lock, where it decides.
+    expect(logs.filter((line) => line === "READ *")).toHaveLength(3);
     expect(logs.indexOf("LOCK take deploy")).toBeLessThan(logs.lastIndexOf("READ *"));
     // Never deposited; read once, for the units its previous version made.
     expect(logs.some((line) => line.includes("/srv/sites/sample-race/sitesolide.json") && !line.startsWith("FILE "))).toBe(false);
@@ -634,8 +635,9 @@ describe("sitesolide deploy leaves the other sites' blocks alone", () => {
     expect(existsSync(join(folder, "built"))).toBe(true);
     // Its manifest is read with every other one, for the ports it declares;
     // its block is not.
-    // The claim on its name, whether a token holds it, the machine not carrying it.
-    expect(vm.logs()).toEqual(["READ sample-door", "UNITS sample-door", "READ *", "SECOND-BLOCK", "CLAIM GET sample-door"]);
+    // The claim on its name, whether a token holds it, the machine not carrying
+    // it; and every manifest, for a project renamed since under another name.
+    expect(vm.logs()).toEqual(["READ sample-door", "READ *", "UNITS sample-door", "READ *", "SECOND-BLOCK", "CLAIM GET sample-door"]);
   });
 
   test("the site in progress, whose door the dashboard changed, follows it", async () => {
@@ -660,8 +662,9 @@ describe("sitesolide deploy leaves the other sites' blocks alone", () => {
       cli: join(repo, "bin", "sitesolide.ts"),
     });
     expect(r.code).toBe(0);
-    // Its own door, and whether a token holds its name, the machine not carrying it.
-    expect(vm.logs()).toEqual(["READ sample-static", "CLAIM GET sample-static"]);
+    // Its own door, every manifest for a project renamed since, and whether
+    // a token holds its name, the machine not carrying it.
+    expect(vm.logs()).toEqual(["READ sample-static", "READ *", "CLAIM GET sample-static"]);
   });
 });
 
@@ -771,5 +774,22 @@ describe("bin/deploy-caddy.sh checks every site but the one whose block it remov
     expect(r.output).toContain(`https://${CMS.slug}.${TEST_ZONE}/`);
     expect(r.output).not.toContain(`https://${TOOL.slug}.${TEST_ZONE}/`);
     expect(r.error).toContain("1 address(es) no longer answer");
+  });
+});
+
+describe("sitesolide deploy of a project renamed on the server", () => {
+  test("a checkout under the former name follows it, rather than create the project again", async () => {
+    vm = createFakeVm();
+    vm.writeManifest("sample-renamed", text({ slug: "sample-renamed", formerSlugs: ["sample-static"], publicDir: "public" }));
+    const repo = testRepo([]);
+    const r = await run(project({ slug: "sample-static", publicDir: "public" }), ["deploy", "--dry-run"], {
+      vm,
+      cli: join(repo, "bin", "sitesolide.ts"),
+    });
+    expect(r.code).toBe(0);
+    expect(r.all).toContain("sample-static was renamed sample-renamed on the server: this deployment goes to sample-renamed");
+    expect(r.all).toContain('with "slug": "sample-renamed"');
+    // The deployment starts again under the new name, whose door it reads.
+    expect(vm.logs()).toContain("READ sample-renamed");
   });
 });

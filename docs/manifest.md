@@ -55,7 +55,9 @@ scheduled service, is declared under [`services`](#services).
 
 The project's name, and the only one it has. It becomes a DNS label
 (`<slug>.<zone>`), a directory (`/srv/sites/<slug>`), a system account
-(`site-<slug>`) and, for an app, a systemd unit.
+(`site-<slug>`) and, for an app, a systemd unit. It changes with a rename, on
+the machine, which moves all of that: see
+[docs/commands.md](commands.md#renaming-a-project).
 
 Lowercase letters, digits and hyphens, not starting or ending with a hyphen, 63
 characters at most. `landing` is refused: it is reserved for the landing an
@@ -75,6 +77,17 @@ lives in `/lib/systemd/system`. For the names no list foresees, `deploy` asks
 systemd itself before writing anything, and stops when it already knows a unit of
 that name that deploy did not write and that does not serve
 `/srv/sites/<slug>`. `--force` does not lift that refusal.
+
+### `formerSlugs`
+
+Not written by hand. The names the project had before it was renamed, the
+most recent last: the machine writes it when the project is renamed, from the
+dashboard or with `sitesolide rename`, and `deploy` makes the repository
+follow, as for `lock`. A deployment from a checkout that still carries one of
+these names as its `slug` goes to the renamed project and rewrites its
+`sitesolide.json`, rather than create the project again under its old name.
+No other project may take a name listed here. See
+[docs/commands.md](commands.md#renaming-a-project).
 
 ### `description`
 
