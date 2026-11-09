@@ -1,8 +1,8 @@
 # The rename: one project's slug changed on the machine, everything it names
 # moved, one rename per start. See dashboard/src/installer/rename.ts.
 #
-#   systemctl start sitesolide-rename@nis2.service
-#   cat /run/sitesolide-installer/rename-nis2.json
+#   systemctl start sitesolide-rename@oldsite.service
+#   cat /run/sitesolide-installer/rename-oldsite.json
 #
 # One template, the current slug alone as the instance, the new one in the
 # request the steward writes first, /var/lib/sitesolide-steward/renames/<slug>.json.

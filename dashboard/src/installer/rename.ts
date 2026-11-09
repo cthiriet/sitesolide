@@ -2,8 +2,8 @@
  * A project renamed on the machine: everything its slug names moved to the
  * new one, in one run under the Caddy lock, put back at the first failure.
  *
- *   systemctl start sitesolide-rename@nis2.service
- *   cat /run/sitesolide-installer/rename-nis2.json
+ *   systemctl start sitesolide-rename@oldsite.service
+ *   cat /run/sitesolide-installer/rename-oldsite.json
  *
  * The steward asks for it, from the dashboard or from `sitesolide rename`
  * over the owner's SSH, after writing the request it reads; it re-keys its

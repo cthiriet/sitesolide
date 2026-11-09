@@ -840,7 +840,7 @@ describe("secrets, validation", () => {
     expect(refusals({ ...APP, secrets: ["budget.env", "API_KEY"] }, ["budget.env"])).toEqual([
       "secrets: entry 1 is not a variable name: letters, digits and underscores, not starting with a digit, 128 characters at most",
     ]);
-    expect(refusals({ ...APP, secrets: ["API_KEY", "budget-stripe.env", "nis2-stats.env"] })).toHaveLength(2);
+    expect(refusals({ ...APP, secrets: ["API_KEY", "budget-stripe.env", "oldsite-stats.env"] })).toHaveLength(2);
   });
 
   test("V4: runtime names have a variable's shape, and are never quoted when they have not", () => {

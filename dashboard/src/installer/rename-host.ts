@@ -130,7 +130,7 @@ export function createRenameHost(config: RenameHostConfig): RenameHost {
         if (!name.startsWith(`${slug}.`) || !(name.endsWith(".service") || name.endsWith(".timer"))) continue;
         const unit = isTimerUnit(name) ? name : name.slice(0, -".service".length);
         // `<slug>.<service>` and its timer: a dot more would be another
-        // project's, `nis2.example` being no service of `nis2` but a slug
+        // project's, `oldsite.example` being no service of `oldsite` but a slug
         // never has a dot either.
         if (/^[a-z0-9-]+\.[a-z0-9-]+(\.timer)?$/.test(unit)) units.push(unit);
       }

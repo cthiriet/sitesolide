@@ -7,12 +7,12 @@ describe("the rename dialog", () => {
   })
 
   test("says what is wrong with a name before asking the server", () => {
-    expect(renameFormError("nis2", "")).toBe("Type the new name.")
-    expect(renameFormError("nis2", "nis2")).toContain("already has that name")
-    expect(renameFormError("nis2", "cyber_solide")).toContain("Lowercase letters")
-    expect(renameFormError("nis2", "-cyber")).toContain("Lowercase letters")
-    expect(renameFormError("nis2", "a".repeat(64))).toContain("63")
-    expect(renameFormError("nis2", "cybersolide")).toBeNull()
+    expect(renameFormError("oldsite", "")).toBe("Type the new name.")
+    expect(renameFormError("oldsite", "oldsite")).toContain("already has that name")
+    expect(renameFormError("oldsite", "cyber_solide")).toContain("Lowercase letters")
+    expect(renameFormError("oldsite", "-cyber")).toContain("Lowercase letters")
+    expect(renameFormError("oldsite", "a".repeat(64))).toContain("63")
+    expect(renameFormError("oldsite", "cybersolide")).toBeNull()
   })
 
   test("keeps the server's words, a slug at their start included", () => {

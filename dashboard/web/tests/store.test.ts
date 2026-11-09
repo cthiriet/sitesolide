@@ -335,8 +335,8 @@ describe("the log of a store", () => {
     expect(operationParts(merged)).toEqual({ verb: "Merge into the store", object: "cms", kind: "project" })
     expect(operationOutcome(merged)).toEqual({ tone: "ok", text: "2 merged from a.env, b.env" })
     expect(operationOutcome({ ...merged, result: "rejects", detail: "invalid" })).toEqual({ tone: "attention", text: "Refused: invalid" })
-    const retired = logEntry({ operation: "retire", file: "nis2-ses.env", variable: null })
-    expect(operationParts(retired)).toEqual({ verb: "Retire", object: "nis2-ses.env", kind: "file" })
+    const retired = logEntry({ operation: "retire", file: "oldsite-ses.env", variable: null })
+    expect(operationParts(retired)).toEqual({ verb: "Retire", object: "oldsite-ses.env", kind: "file" })
     expect(operationFile(retired)).toBeNull()
   })
 

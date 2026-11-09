@@ -17,7 +17,7 @@ import { APP, createBench, deploy, PUBLIC, renameHost } from "./rename-bench";
 
 test("finalManifest drops a token's disabled: true", () => {
   const out = finalManifest(
-    { deployment: "0123456789abcdef01234567", slug: "nis2", requestedAt: Date.now(), token: { id: "aaaaaaaaaaaa", email: null, member: null }, scope: PUBLIC, creating: true, manifest: JSON.stringify({ ...APP, disabled: true }) } as never,
+    { deployment: "0123456789abcdef01234567", slug: "oldsite", requestedAt: Date.now(), token: { id: "aaaaaaaaaaaa", email: null, member: null }, scope: PUBLIC, creating: true, manifest: JSON.stringify({ ...APP, disabled: true }) } as never,
     new Map(),
   );
   expect(out.manifest.disabled).toBeUndefined();
@@ -29,14 +29,14 @@ test("deployed with disabled: true by a token, the machine still reads the site 
     probe: (host, _path, bench) => (isDisabledBlock(bench.served.get(host.slice(0, -(ZONE.length + 1))) ?? null) ? { code: 503, door: false, body: "" } : null),
   });
   await deploy(b, { ...APP, disabled: true });
-  const manifest = readManifest(readFileSync(join(b.sites, "nis2", "sitesolide.json"), "utf8")).manifest!;
+  const manifest = readManifest(readFileSync(join(b.sites, "oldsite", "sitesolide.json"), "utf8")).manifest!;
   expect(manifest.disabled).toBeUndefined();
   // Its own block, not the block of a site off: it serves.
-  const block = readFileSync(join(b.blocks, "nis2.caddy"), "utf8");
+  const block = readFileSync(join(b.blocks, "oldsite.caddy"), "utf8");
   expect(isDisabledBlock(block)).toBe(false);
   expect(block).toContain("reverse_proxy");
-  expect(fixedRefusal("nis2", manifest) ?? "").not.toContain("turned off");
-  const off = await runLifecycle(renameHost(b), { slug: "nis2", action: "disable", requestedAt: Date.now(), actor: "owner" }, { zone: ZONE });
+  expect(fixedRefusal("oldsite", manifest) ?? "").not.toContain("turned off");
+  const off = await runLifecycle(renameHost(b), { slug: "oldsite", action: "disable", requestedAt: Date.now(), actor: "owner" }, { zone: ZONE });
   expect(off).toEqual({ ok: true });
 });
 

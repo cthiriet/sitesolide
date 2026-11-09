@@ -15,8 +15,8 @@ import { commandsOf, createBench as newBench, file, hostOf, stageBundle, ZONE, t
 export const DEPLOYMENT = "0123456789abcdef01234567";
 export const NOW = Date.now();
 export const PUBLIC: Scope = { slugs: [], create: true, outbound: false, domain: true, public: true };
-export const APP = { slug: "nis2", port: 3035, start: "/usr/local/bin/bun run server.ts", publicDir: "public", secrets: ["STRIPE_SECRET_KEY"] };
-export const FILES = [file("app/server.ts", "Bun.serve({})"), file("public/index.html", "<h1>nis2</h1>")];
+export const APP = { slug: "oldsite", port: 3035, start: "/usr/local/bin/bun run server.ts", publicDir: "public", secrets: ["STRIPE_SECRET_KEY"] };
+export const FILES = [file("app/server.ts", "Bun.serve({})"), file("public/index.html", "<h1>oldsite</h1>")];
 
 const benches: Bench[] = [];
 afterEach(() => {

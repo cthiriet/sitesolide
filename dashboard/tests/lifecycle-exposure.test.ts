@@ -19,17 +19,17 @@ import { APP, createBench, DEPLOYMENT, NOW, PUBLIC, renameHost } from "./rename-
 test("a removal sets a restricted app's public/ aside before the reload that drops its door", async () => {
   const b = createBench();
   stageBundle(b, DEPLOYMENT, [file("app/server.ts", "Bun.serve({})"), file("public/index.html", "<h1>restricted</h1>")]);
-  const deployed = await runPipeline(hostOf(b), { deployment: DEPLOYMENT, slug: "nis2", requestedAt: NOW, token: { id: "aaaaaaaaaaaa", email: "", member: null }, scope: PUBLIC, creating: true, manifest: JSON.stringify({ ...APP, portal: true }) }, { zone: ZONE, runFolder: b.run });
+  const deployed = await runPipeline(hostOf(b), { deployment: DEPLOYMENT, slug: "oldsite", requestedAt: NOW, token: { id: "aaaaaaaaaaaa", email: "", member: null }, scope: PUBLIC, creating: true, manifest: JSON.stringify({ ...APP, portal: true }) }, { zone: ZONE, runFolder: b.run });
   expect(deployed.ok).toBe(true);
   b.events.length = 0;
-  expect(readManifest(readFileSync(join(b.sites, "nis2", "sitesolide.json"), "utf8")).manifest!.portal).toBe(true);
-  expect(fragmentIsProtected(readFileSync(join(b.blocks, "nis2.caddy"), "utf8"))).toBe(true);
+  expect(readManifest(readFileSync(join(b.sites, "oldsite", "sitesolide.json"), "utf8")).manifest!.portal).toBe(true);
+  expect(fragmentIsProtected(readFileSync(join(b.blocks, "oldsite.caddy"), "utf8"))).toBe(true);
   const host = renameHost(b);
   const seen: string[] = [];
   const reload = host.machine.reloadCaddy;
   host.machine.reloadCaddy = async (ms) => {
     const answer = await reload(ms);
-    seen.push(`reload: block in service ${existsSync(join(b.blocks, "nis2.caddy"))}, public/index.html on disk ${existsSync(join(b.sites, "nis2", "public", "index.html"))}`);
+    seen.push(`reload: block in service ${existsSync(join(b.blocks, "oldsite.caddy"))}, public/index.html on disk ${existsSync(join(b.sites, "oldsite", "public", "index.html"))}`);
     return answer;
   };
   const probe = host.machine.probe;
@@ -38,10 +38,10 @@ test("a removal sets a restricted app's public/ aside before the reload that dro
     if (seen.length > 0) probesAfterReload++;
     return probe(...args);
   };
-  const outcome = await runLifecycle(host, { slug: "nis2", action: "remove", requestedAt: Date.now(), actor: "owner" }, { zone: ZONE });
+  const outcome = await runLifecycle(host, { slug: "oldsite", action: "remove", requestedAt: Date.now(), actor: "owner" }, { zone: ZONE });
   expect(outcome).toEqual({ ok: true });
   expect(seen[0]).toBe("reload: block in service false, public/index.html on disk false");
-  expect(existsSync(join(b.sites, "nis2"))).toBe(false);
+  expect(existsSync(join(b.sites, "oldsite"))).toBe(false);
 });
 
 import { runRename } from "../src/installer/rename";
@@ -49,9 +49,9 @@ import { runRename } from "../src/installer/rename";
 test("a rename lays the new name's block before it moves a restricted app's folder there", async () => {
   const b = createBench();
   stageBundle(b, DEPLOYMENT, [file("app/server.ts", "Bun.serve({})"), file("public/index.html", "<h1>restricted</h1>")]);
-  const deployed = await runPipeline(hostOf(b), { deployment: DEPLOYMENT, slug: "nis2", requestedAt: NOW, token: { id: "aaaaaaaaaaaa", email: "", member: null }, scope: PUBLIC, creating: true, manifest: JSON.stringify({ ...APP, portal: true }) }, { zone: ZONE, runFolder: b.run });
+  const deployed = await runPipeline(hostOf(b), { deployment: DEPLOYMENT, slug: "oldsite", requestedAt: NOW, token: { id: "aaaaaaaaaaaa", email: "", member: null }, scope: PUBLIC, creating: true, manifest: JSON.stringify({ ...APP, portal: true }) }, { zone: ZONE, runFolder: b.run });
   expect(deployed.ok).toBe(true);
-  writeFileSync(join(b.root, "group"), `${readFileSync(join(b.root, "group"), "utf8")}site-nis2:x:2000:\n`);
+  writeFileSync(join(b.root, "group"), `${readFileSync(join(b.root, "group"), "utf8")}site-oldsite:x:2000:\n`);
   const host = renameHost(b);
   const exposed: string[] = [];
   // At each step after the move, would the wildcard serve /srv/sites/secret-v2/public? Yes while the folder is there and secret-v2.caddy is not.
@@ -62,7 +62,7 @@ test("a rename lays the new name's block before it moves a restricted app's fold
   host.systemctl = async (args, ms) => { look(`systemctl ${args.join(" ")}`); return systemctl(args, ms); };
   host.installUnit = async (unit, text) => { look(`install ${unit}`); return installUnit(unit, text); };
   host.writeManifest = async (...args) => { look("write manifest"); return writeManifest(...args); };
-  const outcome = await runRename(host, { slug: "nis2", to: "secret-v2", requestedAt: Date.now(), actor: "owner" }, { zone: ZONE });
+  const outcome = await runRename(host, { slug: "oldsite", to: "secret-v2", requestedAt: Date.now(), actor: "owner" }, { zone: ZONE });
   expect(outcome.ok).toBe(true);
   expect(exposed).toEqual([]);
   expect(existsSync(join(b.sites, "secret-v2", "public", "index.html"))).toBe(true);

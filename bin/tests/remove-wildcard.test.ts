@@ -23,12 +23,12 @@ afterEach(() => { caddy?.kill(); caddy = undefined; if (folder !== "") rmSync(fo
 
 async function serve(withBlock: boolean, port: number): Promise<void> {
   folder = mkdtempSync(join(tmpdir(), "wildcard-"));
-  mkdirSync(join(folder, "sites", "nis2", "public"), { recursive: true });
-  writeFileSync(join(folder, "sites", "nis2", "public", "index.html"), "members-only page");
+  mkdirSync(join(folder, "sites", "oldsite", "public"), { recursive: true });
+  writeFileSync(join(folder, "sites", "oldsite", "public", "index.html"), "members-only page");
   mkdirSync(join(folder, "caddy-sites"));
   mkdirSync(join(folder, "locks"));
   // The block's presence is all the wildcard's @app looks at.
-  if (withBlock) writeFileSync(join(folder, "caddy-sites", "nis2.caddy"), "# the app's own block\n");
+  if (withBlock) writeFileSync(join(folder, "caddy-sites", "oldsite.caddy"), "# the app's own block\n");
   const wildcard = block(CADDYFILE, "*.{$SITESOLIDE_ZONE} {")
     .replace("*.{$SITESOLIDE_ZONE} {", `http://*.${ZONE}:${port} {`)
     .replace("\timport tls-zone\n", "")
@@ -44,7 +44,7 @@ async function serve(withBlock: boolean, port: number): Promise<void> {
   await waitFor(`http://127.0.0.1:${port}/`);
 }
 
-const get = (port: number) => fetch(`http://127.0.0.1:${port}/`, { headers: { Host: `nis2.${ZONE}:${port}` } });
+const get = (port: number) => fetch(`http://127.0.0.1:${port}/`, { headers: { Host: `oldsite.${ZONE}:${port}` } });
 
 test.skipIf(CADDY === null)("with its block: the wildcard refuses the app's folder", async () => {
   const port = freePort();

@@ -125,12 +125,12 @@ describe("the platform's own files (PLATFORM_FILES)", () => {
       [
         ...entries,
         { folder: "builder", manifest: null },
-        { folder: "nis2", manifest: manifest("nis2", ["nis2.env", "nis2-ses.env"]) },
+        { folder: "oldsite", manifest: manifest("oldsite", ["oldsite.env", "oldsite-ses.env"]) },
         { folder: "dashboard-backup", manifest: manifest("dashboard-backup", ["dashboard-backup.env"]) },
       ],
-      ["cms.env", "cms-webhook.env", "builder-ssh", "nis2.env", "nis2-ses.env", "landing-ses.env", "dashboard-backup.env", "stray.env"],
+      ["cms.env", "cms-webhook.env", "builder-ssh", "oldsite.env", "oldsite-ses.env", "landing-ses.env", "dashboard-backup.env", "stray.env"],
     );
-    for (const folder of ["cms", "builder", "nis2", "dashboard-backup", "test-zone.invalid"]) expect({ folder, files: filesOf(sites, folder) }).toEqual({ folder, files: [] });
+    for (const folder of ["cms", "builder", "oldsite", "dashboard-backup", "test-zone.invalid"]) expect({ folder, files: filesOf(sites, folder) }).toEqual({ folder, files: [] });
     expect(filesOf(sites, "dashboard")).toEqual(["dashboard.env", "dashboard-backup.env"]);
   });
 

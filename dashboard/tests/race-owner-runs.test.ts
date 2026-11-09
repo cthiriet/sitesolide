@@ -18,7 +18,7 @@ import { hostOf, stageBundle, ZONE } from "./installer-bench";
 import { APP, createBench, deploy, FILES, NOW, PUBLIC, renameHost } from "./rename-bench";
 
 const AGAIN = "fedcba9876543210fedcba98";
-const request = (manifest: object): InstallRequest => ({ deployment: AGAIN, slug: "nis2", requestedAt: NOW, token: { id: "aaaaaaaaaaaa", email: "", member: null }, scope: PUBLIC, creating: false, manifest: JSON.stringify(manifest) });
+const request = (manifest: object): InstallRequest => ({ deployment: AGAIN, slug: "oldsite", requestedAt: NOW, token: { id: "aaaaaaaaaaaa", email: "", member: null }, scope: PUBLIC, creating: false, manifest: JSON.stringify(manifest) });
 
 /** The installer's host whose first manifests read is `before`. */
 function staleFirstRead(b: Parameters<typeof hostOf>[0], before: Map<string, string>) {
@@ -39,12 +39,12 @@ test("app: a deployment started before Turn off is refused at the block", async 
   const b = createBench({ probe: (host, _path, bench) => (isDisabledBlock(bench.served.get(host.slice(0, -(ZONE.length + 1))) ?? null) ? { code: 503, door: false, body: "" } : null) });
   await deploy(b);
   const before = await hostOf(b).readManifests();
-  expect((await runLifecycle(renameHost(b), { slug: "nis2", action: "disable", requestedAt: Date.now(), actor: "owner" }, { zone: ZONE })).ok).toBe(true);
-  expect(isDisabledBlock(readFileSync(join(b.blocks, "nis2.caddy"), "utf8"))).toBe(true);
+  expect((await runLifecycle(renameHost(b), { slug: "oldsite", action: "disable", requestedAt: Date.now(), actor: "owner" }, { zone: ZONE })).ok).toBe(true);
+  expect(isDisabledBlock(readFileSync(join(b.blocks, "oldsite.caddy"), "utf8"))).toBe(true);
   b.events.length = 0;
   stageBundle(b, AGAIN, FILES);
   const outcome = await runPipeline(staleFirstRead(b, before), request(APP), { zone: ZONE, runFolder: b.run });
-  const manifest = readManifest(readFileSync(join(b.sites, "nis2", "sitesolide.json"), "utf8")).manifest!;
+  const manifest = readManifest(readFileSync(join(b.sites, "oldsite", "sitesolide.json"), "utf8")).manifest!;
   // Sound for an app: the off block reads as a block edited by hand, and nothing is written.
   expect(outcome).toMatchObject({ ok: false, code: "edited-by-hand" });
   expect(manifest.disabled).toBe(true);
@@ -54,13 +54,13 @@ test("app: a deployment started before a rename is refused on its port", async (
   const b = createBench();
   await deploy(b);
   const before = await hostOf(b).readManifests();
-  expect((await runRename(renameHost(b), { slug: "nis2", to: "cyber", requestedAt: Date.now(), actor: "owner" }, { zone: ZONE })).ok).toBe(true);
+  expect((await runRename(renameHost(b), { slug: "oldsite", to: "cyber", requestedAt: Date.now(), actor: "owner" }, { zone: ZONE })).ok).toBe(true);
   b.events.length = 0;
   stageBundle(b, AGAIN, FILES);
   const outcome = await runPipeline(staleFirstRead(b, before), request(APP), { zone: ZONE, runFolder: b.run });
   // Sound for an app with a port: the port, read again under the lock, collides.
   expect(outcome).toMatchObject({ ok: false, code: "port-taken" });
-  expect(existsSync(join(b.sites, "nis2"))).toBe(false);
+  expect(existsSync(join(b.sites, "oldsite"))).toBe(false);
 });
 
 const offBench = () => createBench({ probe: (host, _path, bench) => (isDisabledBlock(bench.served.get(host.slice(0, -(ZONE.length + 1))) ?? null) ? { code: 503, door: false, body: "" } : null) });
@@ -69,12 +69,12 @@ test("the same race with a changed manifest: refused at the block before any uni
   const b = offBench();
   await deploy(b);
   const before = await hostOf(b).readManifests();
-  expect((await runLifecycle(renameHost(b), { slug: "nis2", action: "disable", requestedAt: Date.now(), actor: "owner" }, { zone: ZONE })).ok).toBe(true);
+  expect((await runLifecycle(renameHost(b), { slug: "oldsite", action: "disable", requestedAt: Date.now(), actor: "owner" }, { zone: ZONE })).ok).toBe(true);
   b.events.length = 0;
   stageBundle(b, AGAIN, FILES);
   const outcome = await runPipeline(staleFirstRead(b, before), request({ ...APP, env: { CHANGED: "1" } }), { zone: ZONE, runFolder: b.run });
   expect(outcome).toMatchObject({ ok: false, code: "edited-by-hand" });
-  expect(b.events).not.toContain("systemctl enable nis2");
+  expect(b.events).not.toContain("systemctl enable oldsite");
 });
 
 test("static: a deployment started before Turn off is refused under the lock, the flag kept", async () => {
