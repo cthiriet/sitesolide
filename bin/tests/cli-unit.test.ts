@@ -856,7 +856,7 @@ describe("install over SSH, in the service's walls", () => {
       '"-p" "TemporaryFileSystem=/srv:ro"',
       '"-p" "BindPaths=/srv/sites/budget/app:/srv/sites/budget/app" "-p" "ReadWritePaths=/srv/sites/budget/app"',
       '"-p" "InaccessiblePaths=-/etc/sitesolide"',
-      '"-p" "IPAddressDeny=localhost link-local multicast 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 fc00::/7"',
+      '"-p" "IPAddressDeny=localhost" "-p" "IPAddressDeny=link-local" "-p" "IPAddressDeny=multicast" "-p" "IPAddressDeny=0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 fc00::/7"',
       '"-p" "IPAddressAllow=127.0.0.53"',
       '"-p" "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK"',
       // The loopback refused, but a port of the machine could still be held
@@ -907,11 +907,25 @@ describe("install over SSH, in the service's walls", () => {
     const line = systemdRunArguments({ ...RUN, network: "public" });
     const network = properties(line).filter((property) => /^(IPAddress|PrivateNetwork|RestrictAddressFamilies)/.test(property));
     expect(network).toEqual([
-      "IPAddressDeny=localhost link-local multicast 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 fc00::/7",
+      "IPAddressDeny=localhost",
+      "IPAddressDeny=link-local",
+      "IPAddressDeny=multicast",
+      "IPAddressDeny=0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 fc00::/7",
       "IPAddressAllow=127.0.0.53",
       "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK",
     ]);
     expect(variables(line).some((variable) => /proxy/i.test(variable))).toBe(false);
+  });
+
+  test("a symbolic word of IPAddressDeny is a property's whole value, the only way systemd-run reads one", () => {
+    for (const network of ["none", "proxy", "public"] as const) {
+      for (const property of properties(systemdRunArguments({ ...RUN, network }))) {
+        const match = /^IPAddress(?:Allow|Deny)=(.*)$/.exec(property);
+        if (match === null) continue;
+        const words = match[1]!.split(" ");
+        if (words.some((word) => ["any", "localhost", "link-local", "multicast"].includes(word))) expect(words).toHaveLength(1);
+      }
+    }
   });
 
   test("proxy: the loopback alone, as a localhost service, its clients pointed at the egress proxy", () => {

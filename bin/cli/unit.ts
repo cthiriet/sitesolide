@@ -9,7 +9,7 @@
  * Pure: returns text, touches nothing.
  */
 import { sameDirectives, usefulDirectives } from "./comparison";
-import { EGRESS_PROXY_PORT, EGRESS_STATUS_PORT, egressUnitLines, parseRange, PRIVATE_DENY, proxyVariables, RESOLVED_STUB } from "./egress";
+import { EGRESS_PROXY_PORT, EGRESS_STATUS_PORT, egressUnitLines, parseRange, PRIVATE_DENY, PRIVATE_RANGES, proxyVariables, RESOLVED_STUB } from "./egress";
 import { CADDY_ADMIN_PORT } from "./loopback";
 import {
   commandErrors,
@@ -1047,7 +1047,18 @@ function networkProperties(network: RunNetwork): string[] {
     case "proxy":
       return ["IPAddressDeny=any", "IPAddressAllow=localhost", families];
     case "public":
-      return [`IPAddressDeny=localhost ${PRIVATE_DENY}`, `IPAddressAllow=${RESOLVED_STUB}`, families];
+      // systemd-run reads a symbolic word (localhost, link-local, multicast)
+      // only when it is the property's whole value, unlike a unit file, which
+      // reads them anywhere in the list: each goes in a property of its own,
+      // and the prefixes together in one more. The properties add up.
+      return [
+        "IPAddressDeny=localhost",
+        "IPAddressDeny=link-local",
+        "IPAddressDeny=multicast",
+        `IPAddressDeny=${PRIVATE_RANGES.join(" ")}`,
+        `IPAddressAllow=${RESOLVED_STUB}`,
+        families,
+      ];
   }
 }
 

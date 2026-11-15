@@ -124,7 +124,7 @@ describe("the confinement asked of systemd-run", () => {
 
   test("install: the network, never the loopback, the staged app/ at its final path, writable", () => {
     const line = systemdRunArguments({ ...run, purpose: "install", network: "public", binds: [{ source: "/srv/sites/shop/.incoming/app", target: "/srv/sites/shop/app" }], workingDirectory: "/srv/sites/shop/app", command: ["/bin/sh", "-s"] }).join(" ");
-    expect(line).toContain("-p IPAddressDeny=localhost link-local multicast 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 fc00::/7");
+    expect(line).toContain("-p IPAddressDeny=localhost -p IPAddressDeny=link-local -p IPAddressDeny=multicast -p IPAddressDeny=0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 fc00::/7");
     expect(line).toContain("-p IPAddressAllow=127.0.0.53");
     expect(line).not.toContain("PrivateNetwork");
     expect(line).toContain("-p BindPaths=/srv/sites/shop/.incoming/app:/srv/sites/shop/app -p ReadWritePaths=/srv/sites/shop/app");
