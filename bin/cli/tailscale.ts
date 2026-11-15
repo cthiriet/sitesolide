@@ -49,12 +49,6 @@ export const AUTH_KEY = /^tskey-[A-Za-z0-9_-]{10,200}$/;
 /** The variable the auth key is read from, Tailscale's own name for it. */
 export const AUTH_KEY_VARIABLE = "TS_AUTHKEY";
 
-/** The interface tailscaled makes: what `--ssh-interface` names to keep ssh on the tailnet alone. */
-export const TAILSCALE_INTERFACE = "tailscale0";
-
-/** Tailscale's package signing key, pinned by fingerprint in bin/cli/pins.ts with the other repositories'. */
-export const TAILSCALE_KEY_FINGERPRINT = APT_KEYS.tailscale.fingerprint;
-
 export const TAILSCALE_KEYRING = APT_KEYS.tailscale.keyring;
 export const TAILSCALE_LIST = "/etc/apt/sources.list.d/tailscale.list";
 

@@ -307,8 +307,3 @@ export function sshRulesRun(port: number, access: SshAccess, reopen = false): st
     ...spellings.map((rule) => `ufw delete allow ${rule} >/dev/null 2>&1 </dev/null || true`),
   ].join("\n");
 }
-
-/** The provider firewall's sources for ssh: the networks, or everywhere. */
-export function providerSources(access: SshAccess): string[] {
-  return access.from.length === 0 ? ["0.0.0.0/0", "::/0"] : [...access.from];
-}

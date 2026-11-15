@@ -116,7 +116,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^sitesolide\.json already exists in /, "the folder already has a manifest: edit it, or delete it first if the inferred one should replace it"],
   [/^sitesolide\.json not found in .*, and none can be inferred/, "write sitesolide.json by hand (docs/manifest.md), or arrange the folder as `details` describe; `sitesolide detect` says what it recognises"],
   [/^sitesolide\.json not found in /, "run `sitesolide detect` in this folder to see the manifest it implies; `sitesolide deploy --yes` writes it and deploys"],
-  [/^sitesolide\.json rejected once the portal/, "fix the keys listed in `details` in sitesolide.json, keeping `portal` as the server has it, then run the same command again"],
+  [/^sitesolide\.json rejected once the general access/, "fix the keys listed in `details` in sitesolide.json, keeping `portal` and `lock` as the server has them, then run the same command again"],
   [/^sitesolide\.json rejected/, "fix the keys listed in `details` in sitesolide.json (docs/manifest.md describes every key), then run the same command again"],
   [/^source leads outside the repository/, "point `source` inside the repository that holds sitesolide.json, or let the owner deploy it from their sites repository; never point it at another folder of this workstation"],
   [/^source not found/, "fix `source` in sitesolide.json: a path relative to the folder holding it, to a folder that exists"],

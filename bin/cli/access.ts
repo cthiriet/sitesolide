@@ -69,9 +69,6 @@ export type AccessTransport = {
 
 // --- what was asked ----------------------------------------------------------------
 
-/** The options `share` takes, and whether one carries a value. */
-export const SHARE_OPTIONS: Readonly<Record<string, boolean>> = { "--expires": true, "--remove": true };
-
 export const SHARE_USAGE = [
   "sitesolide share                 this project's general access and guests",
   "   <email>...                    give them password access to the site, nothing more",
