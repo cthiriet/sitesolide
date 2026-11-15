@@ -195,9 +195,24 @@ then: 24 hours, 7 days (the default), 30 days or none. A token never gives it.
 The sign-in page offers **Sign in with a passkey** once the owner has
 registered one on the dashboard (see
 [dashboard/README.md](../dashboard/README.md#passkeys)). It lets the owner
-in as the owner, `admin`, as the owner's password does; password access and
-company accounts are untouched, and the owner's portal password keeps
-working beside it.
+in as the owner, `admin`, as the owner's password did; password access and
+company accounts are untouched.
+
+**Once a passkey signs in here, the owner's portal password opens
+nothing**, as the dashboard's password stops opening the dashboard. It is
+typed on the origin of every protected site, its own domain included, where
+a hosted site taken over could serve a copy of the sign-in page and collect
+it, and it opens every protected site as `admin`; a passkey answers the
+portal's own origin alone. The form still takes it, for password access,
+which works as before: the owner's password is not even verified, and a
+refusal counts as a failure, as any wrong password does, its message saying
+that the owner signs in with a passkey. "A passkey signs in here" is what
+the sign-in page offers: a projection naming at least one key for the
+portal's relying party. When it names none, none for this zone, or cannot be
+read, the password works as before, so that a steward or a projection gone
+wrong never locks the owner out of every site. Root's removal of the last
+passkey, `sitesolide passkey remove <id>` over SSH, gives the password back
+at the next sign-in, the dashboard's with it.
 
 **The ceremony runs on the portal's own host**, `portal.<zone>`, never on
 the site, the road a company account takes: the site's
@@ -807,9 +822,12 @@ account*, which asks the provider to choose.
 
 ## What the portal does not protect
 
-- The password is typed on every site: an XSS flaw in one of them could capture
-  it. Acceptable as long as those sites share one author. Signing in with the
-  provider types nothing on the site.
+- A password is typed on every site: an XSS flaw in one of them, or a hosted
+  site taken over serving a copy of the sign-in page, could capture it.
+  Signing in with the provider or a passkey types nothing on the site, and
+  once the owner holds a passkey the owner's password opens nothing (see
+  [The owner's passkey](#the-owners-passkey)); a password access, one site's
+  alone, stays exposed that way.
 - A compromised portal opens every restricted site; that is the price of one
   shared sign-in. It gives neither their data, each service staying confined to
   its own directory, nor the customer sites, nor the certificates. Since the

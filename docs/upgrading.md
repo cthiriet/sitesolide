@@ -261,8 +261,10 @@ too. Once a passkey exists, the dashboard's password neither signs in nor
 unlocks. The first one is registered through a one-time link root mints
 over SSH, `sitesolide passkey link`. The dashboard's sign-in failures are
 now counted per client rather than globally, and an owner's session closes
-after twelve hours without a request, within its seven days. Password
-access, company accounts and the portal's own password are unchanged. See
+after twelve hours without a request, within its seven days. Once a passkey
+exists, the portal's own owner password no longer signs in to the
+restricted sites either. Password access and company accounts are
+unchanged. See
 [dashboard/README.md](../dashboard/README.md#passkeys) and
 [portal/README.md](../portal/README.md#the-owners-passkey).
 
@@ -294,7 +296,8 @@ redeployed: every fragment already sends `/_portal/*` to the portal.
 
    Open the printed `https://dashboard.<zone>/#passkey=...` in your own
    browser within fifteen minutes. It registers a passkey and signs you in;
-   from then on the password no longer does.
+   from then on the password no longer does, nor does the portal's owner
+   password on a restricted site's sign-in page.
 3. Register a second passkey, on another device or a security key, from the
    *Server* page, *Passkeys*, which asks for the unlock, now a passkey.
    `sitesolide passkey` lists both.
@@ -304,7 +307,8 @@ redeployed: every fragment already sends `/_portal/*` to the portal.
 **Recovery.** Every passkey lost: `sitesolide passkey link` again, over SSH.
 A link that cannot be used, the browser offering no passkey for instance:
 `sitesolide passkey` for the ids, then `sitesolide passkey remove <id>` for
-each, which gives the dashboard's password back once the last one is gone.
+each, which gives the dashboard's password, and the portal's, back once the
+last one is gone.
 
 **Going back.** The previous release's dashboard signs in with the password
 again, and its steward ignores the registry, which stays on disk, root's;

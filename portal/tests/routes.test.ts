@@ -273,6 +273,32 @@ describe("a password access", () => {
     expect(visit(r, cookie, OTHER).status).toBe(401);
   });
 
+  test("once the owner holds a passkey, the owner's password opens nothing, a password access still does", async () => {
+    const access = accessFolder("routes-passkey-only");
+    access.write(projection({ [HOST]: site("kanban", { passwords: [grant({ id: ACCESS_ID, hash: guestHash(ACCESS_PASSWORD) })] }) }));
+    let checked = 0;
+    let held = true;
+    const r = routes({
+      access: access.reader(),
+      verifyPassword: async (submitted) => (checked++, Bun.password.verify(submitted, hash)),
+      passkeys: { offered: () => held, known: () => false },
+    });
+
+    const refused = await r.signIn(signIn({ motdepasse: PASSWORD }));
+    expect(refused.status).toBe(401);
+    expect(refused.headers.get("set-cookie")).toBeNull();
+    expect(await refused.text()).toInclude("The owner signs in with a passkey.");
+    // Not even verified: no argon2id for a password that cannot open.
+    expect(checked).toBe(0);
+
+    expect((await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD }))).status).toBe(303);
+
+    // Root removed the last passkey: the password opens again.
+    held = false;
+    expect((await r.signIn(signIn({ motdepasse: PASSWORD }))).status).toBe(303);
+    expect(checked).toBe(1);
+  });
+
   test("on another site, its password is worth nothing and counts as a failure", async () => {
     const { r } = withGrant({}, () => START, OTHER);
     const response = await r.signIn(signIn({ motdepasse: ACCESS_PASSWORD }));

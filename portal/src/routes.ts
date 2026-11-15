@@ -287,15 +287,25 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
         }
       }
 
-      if (verifying) {
-        return door(returnTo, 429, "A check is in progress. Try again.", { "Retry-After": "1" });
-      }
-      verifying = true;
-      let ok: boolean;
-      try {
-        ok = options.key !== null && (await options.verifyPassword(submitted));
-      } finally {
-        verifying = false;
+      // Once the owner holds a passkey that signs in here, the owner's
+      // password opens nothing, as on the dashboard: typed on the origin of
+      // every protected site, it is the one secret a hosted site taken over
+      // could phish with a copy of this page, and it opens every site as
+      // admin. Not even verified, and still a failure, so that what was a
+      // guess at an access is counted as before. Root's removal of the last
+      // passkey gives it back (`sitesolide passkey remove`).
+      const passkeyOnly = options.passkeys?.offered() === true;
+      let ok = false;
+      if (!passkeyOnly) {
+        if (verifying) {
+          return door(returnTo, 429, "A check is in progress. Try again.", { "Retry-After": "1" });
+        }
+        verifying = true;
+        try {
+          ok = options.key !== null && (await options.verifyPassword(submitted));
+        } finally {
+          verifying = false;
+        }
       }
 
       if (!ok) {
@@ -307,7 +317,7 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
         // A single message for every cause: wrong password, revoked access,
         // absent or malformed hash. What the portal knows about its own
         // configuration is not learned here.
-        return door(returnTo, 401, "Password refused.");
+        return door(returnTo, 401, passkeyOnly ? "Password refused. The owner signs in with a passkey." : "Password refused.");
       }
 
       attempts.delete(counter);
