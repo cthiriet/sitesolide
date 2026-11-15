@@ -128,7 +128,7 @@ missing. The output is a checklist: `[done]` already there, `[ok]` done now,
 | dashboard-password | `/etc/sitesolide/dashboard.env` exists | `bin/dashboard-password.sh`, which shows the password once |
 | dashboard | `dashboard` active | `sitesolide deploy` in `dashboard/` |
 | steward | `sitesolide-steward` active, its code present | `bin/deploy-steward.sh` |
-| collector | its timer enabled and active | `bin/deploy-collector.sh` |
+| collector | its timer enabled and active, its code present | `bin/deploy-collector.sh` |
 | portal-password | `/etc/sitesolide/portal.env` exists | the `site-portal` account, then the file, site-portal 0600 |
 | portal | `portal` active | `sitesolide deploy` in `portal/` |
 | loopback | the `sitesolide_boucle` table loaded, its unit enabled; behind a tunnel, its line for the connector's account | `bin/deploy-loopback.sh close` |

@@ -262,7 +262,7 @@ bin/deploy-gatekeeper.sh # the only thing that touches Caddy from the machine
 The dashboard first, with its password: it is the one secret the dashboard
 cannot create for itself, since it is what opens it. The steward and the
 collector come right after, because both need the dashboard's account and
-code to exist.
+folders to exist.
 
 ```bash
 bin/dashboard-password.sh    # shows the password once, puts its hash on the machine

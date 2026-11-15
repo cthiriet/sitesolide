@@ -55,14 +55,14 @@ component (active, enabled, its files present), plus:
 | steward | `steward.js`, its unit or the portal relay's two units differ, or it started before the backups' folder existed | `bin/deploy-steward.sh` |
 | shared service | the release in service differs from `api/`, file by file, or its unit does | `bin/deploy-api.sh`, before the dashboard, whose deployment is the first to deposit the Caddyfile, whose certificates its ask endpoint allows |
 | dashboard | `sitesolide deploy --dry-run --compare` finds a difference: a file to send or delete, its manifest, a missing unit, its Caddy block; every new release, whose version its page names | `sitesolide deploy` in `dashboard/` |
-| collector | one of its two units differs | `bin/deploy-collector.sh` |
+| collector | `collector.js`, its unit or its timer differs | `bin/deploy-collector.sh` |
 | gatekeeper | `gatekeeper.js` or one of its templates differs | `bin/deploy-gatekeeper.sh` |
 | installer | `installer.js`, its template or its environment file differs | `bin/deploy-installer.sh` |
 | the Caddyfile | `/etc/caddy/Caddyfile` differs from the release's | `bin/deploy-caddy.sh`, which validates, reloads, verifies and restores on failure |
 | portal | as the dashboard | `sitesolide deploy` in `portal/` |
 | monitor | `monitor.js`, its unit or its timer differs | `bin/deploy-monitor.sh` |
 
-A component built by its script, the steward or the monitor for instance, is
+A component built by its script, the steward, the collector or the monitor for instance, is
 measured by the script itself: `--fingerprint` builds it exactly as it would to
 install it and prints the SHA-256 of every file it would lay, which the check
 compares with `sha256sum` on the machine, the measure the script verifies after
@@ -165,6 +165,61 @@ They begin at 0.14.0: a machine on an earlier release is brought to 0.16
 first, with that release's binary and [its
 notes](https://github.com/cthiriet/sitesolide/blob/v0.16.0/docs/upgrading.md),
 which go back to 0.1; this release converts nothing an earlier one left.
+
+## The collector runs root's own build
+
+**What the release brings.** The collector, the root timer that snapshots the
+machine for the dashboard every minute, no longer runs
+`/srv/sites/dashboard/app/collector.ts`, a file of the tree every deployment
+of the dashboard rewrites, its `install` phase included as `site-dashboard`.
+`bin/deploy-collector.sh` now builds it, as the steward and the monitor are
+built, installs it `root:root 0644` as `/usr/local/lib/sitesolide/collector.js`
+and checks its fingerprint. Its unit is confined like theirs:
+`ProtectSystem=strict`, the dashboard's data folder the one place it writes,
+four capabilities (`CAP_DAC_READ_SEARCH`, `CAP_DAC_OVERRIDE`, `CAP_CHOWN`,
+`CAP_SYS_PTRACE`) rather than all of root's, `SystemCallFilter=@system-service`,
+`AF_UNIX` and `AF_NETLINK` alone, the stores, the steward's state and the DNS
+provider's token hidden. Each project's size is measured within 5 seconds, all
+of them within 20, and one that takes longer reads as unknown rather than
+holding back the snapshot of every project. See
+[dashboard/README.md](../dashboard/README.md#the-web-service-does-not-read-the-machine).
+
+**What `sitesolide upgrade` brings**: the dashboard, then the collector, found
+out of date since `collector.js` is missing. Between the two, for a minute at
+most, the unit in place still runs the copy the new dashboard brought to
+`app/`, which works under it. No project is redeployed.
+
+**The steps, on the owner's workstation:**
+
+1. Install the new CLI, then `sitesolide upgrade --dry-run`, which lists the
+   collector out of date, then `sitesolide upgrade`. The collector's script
+   ends on one run by hand, and stops with its journal if that run fails.
+2. Check the confined unit sees what it saw before; every command reads only:
+
+   ```bash
+   ssh <server> 'systemctl show sitesolide-collector.service -p Result -p ExecMainStatus'
+   ssh <server> 'sudo journalctl -u sitesolide-collector -n 5 -o cat --no-pager'
+   ssh <server> 'sudo systemd-analyze security sitesolide-collector.service | tail -n 1'
+   ```
+
+   `Result=success`, and a summary line `N folders collected`, none `of
+   unknown size` on a quiet machine. Then in the dashboard: every project's
+   size shown, its units' state, and on a site whose services talk to each
+   other, the links under *Services*. A project with no size, or no link where
+   there were some, is a reading the unit's confinement refuses: the journal
+   says which, and the unit's comments say which directive opens what.
+3. Nothing else: the copy of `collector.ts` in `/srv/sites/dashboard/app/`
+   stays, run by nothing.
+
+**If the confined unit fails on this machine**, its timer was already armed:
+the dashboard announces a stale snapshot within two minutes, and every other
+site is untouched. Going back, below, restores the snapshot while the cause is
+looked into.
+
+**Going back.** The previous release's checkout or binary, then
+`bin/deploy-collector.sh` from it, which installs the unit that runs
+`app/collector.ts` again. `/usr/local/lib/sitesolide/collector.js` stays,
+run by nothing; `sudo rm /usr/local/lib/sitesolide/collector.js` removes it.
 
 ## The owner signs in with a passkey
 

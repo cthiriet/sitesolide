@@ -69,7 +69,7 @@ relays to a component that judges for itself what it accepts:
 That is the architectural point, and it fits in one drawing:
 
 ```
-sitesolide-collector.timer  ->  collector.ts (root)  ->  /srv/sites/dashboard/data/state.json
+sitesolide-collector.timer  ->  collector.js (root)  ->  /srv/sites/dashboard/data/state.json
                                                                    | 0600 site-dashboard
                                                     server.ts (site-dashboard, confined)
 ```
@@ -94,6 +94,28 @@ This detour is not excess caution, it is the only path:
 privileged component stays as stupid as possible, and a display rule that
 changes is fixed by an ordinary `sitesolide deploy`, without touching what runs
 as root.
+
+**What runs as root is not in the dashboard's tree.** `collector.ts` and what it
+imports are built into one file by `bin/deploy-collector.sh` and installed
+`root:root 0644` as `/usr/local/lib/sitesolide/collector.js`, its fingerprint
+checked, like the steward's and the monitor's. It used to run from
+`/srv/sites/dashboard/app/`, which every deployment of the dashboard rewrites,
+its `install` phase included as `site-dashboard`: anything that could write
+there ran as root within the minute. The copy of `collector.ts` a deployment
+still carries into `app/` is run by nothing. Its unit keeps four capabilities,
+`CAP_DAC_READ_SEARCH` to read the projects' folders, the lock codes and the
+monitor's status, `CAP_DAC_OVERRIDE` and `CAP_CHOWN` to write the snapshot into
+`data/` and hand it to `site-dashboard`, and `CAP_SYS_PTRACE`, without which
+`ss -p` names no other account's process; the whole system is read-only but
+`data/` (`ProtectSystem=strict`), and the stores, the steward's state and the
+DNS provider's token are hidden from it.
+
+**A project cannot hold the snapshot back.** Measuring a project's size is the
+one reading a project can make long: a tree of millions of names or hard links,
+a mount that no longer answers. Each `du` gets 5 seconds, all of them 20
+together, well inside the unit's 45; one that does not finish is killed and
+that project's size reads as unknown, and once the 20 seconds are spent the
+projects left are not measured at all. The snapshot is written either way.
 
 ## Root writes into a directory it does not own
 
@@ -455,9 +477,8 @@ window, the bench saw it 85 times in ten restarts. The steward therefore
 creates it under a temporary name, gives it the `site-dashboard` group and mode
 `0660`, then renames it: the known name only appears with its permissions.
 
-**Its code does not live in `app/`.** The collector runs from
-`/srv/sites/dashboard/app/`, which every `sitesolide deploy` replaces. For a
-root daemon that writes secrets, updating stays a deliberate act:
+**Its code does not live in `app/`**, which every `sitesolide deploy`
+replaces. For a root daemon that writes secrets, updating stays a deliberate act:
 `bin/deploy-steward.sh` builds `steward.ts` into one file with
 `bun build --target=bun`, installs it as `root:root 0644` under
 `/usr/local/lib/sitesolide/`, places the unit and restarts only it. **A rule
@@ -2132,8 +2153,10 @@ bin/deploy-loopback.sh close        # then closed to all but root and caddy
   `ADMIN_MODE=observe` first counts who reaches it, without reopening the
   service ports already closed, then `close` refuses the others.
 
-`bin/deploy-collector.sh` runs once, on a new machine, after `deploy`: it
-refuses to place a timer whose script is not yet on the machine.
+`bin/deploy-collector.sh` runs after `deploy`, which makes the data folder the
+snapshot is written into: it builds and installs the collector, checks its
+fingerprint, `644 root:root` permissions and `systemd-analyze verify`, runs it
+once by hand, and only then arms the timer.
 
 **Shared code travels through `borrowed/`.** The rsync carries only that
 directory: an `import "../../api/src/locks"` works on your workstation and makes
@@ -2142,13 +2165,14 @@ before every build, and before every build of the steward and the gatekeeper,
 which embed them: the gatekeeper embeds the CLI's block generator. [tests/borrowed.test.ts](tests/borrowed.test.ts) refuses any
 import that reaches above the project.
 
-**Updating.** The collector's code travels with the application and updates on an
-ordinary `sitesolide deploy`. The steward's and the gatekeeper's do not:
+**Updating.** Only the relay and the page travel with the application and update
+on an ordinary `sitesolide deploy`. What runs as root does not:
 
 | What changes | The command |
 |---|---|
 | `steward.ts`, `src/secrets/`, `infra/steward/`, `portal/src/sharing.ts` | `bin/deploy-steward.sh` |
 | `gatekeeper.ts`, `src/gatekeeper/`, `infra/gatekeeper/`, `bin/cli/fragment.ts`, `bin/cli/portal.ts` | `bin/deploy-gatekeeper.sh` |
+| `collector.ts` and what it imports: `src/links.ts`, `src/monitor.ts`, `src/secrets/system.ts`, `src/state.ts`, and the `bin/cli/` modules it borrows, `manifest.ts` and `unit.ts` first; `infra/collector/` | `bin/deploy-collector.sh`; `src/state.ts` and `src/monitor.ts` `sitesolide deploy` too, the page reading them |
 | `src/control/steward.ts`, `src/control/system.ts`, `src/control/tokens.ts`, `src/control/policy.ts` | `bin/deploy-steward.sh` |
 | `src/control/secrets.ts`, which both read | `bin/deploy-steward.sh` and `sitesolide deploy` |
 | `src/access/` (but its web routes, `routes.ts` and `client.ts`), `src/people/steward.ts`, `sessions.ts`, `system.ts`, `actions.ts`, `powers.ts`, `unlocks.ts`, `tokens.ts`, `portal.ts`, `infra/steward/sitesolide-portal-relay.*`, `portal/src/assertion.ts`, `portal/src/access.ts` | `bin/deploy-steward.sh`; the last two `sitesolide deploy` in `portal/` too |
