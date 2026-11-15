@@ -24,6 +24,7 @@ import {
   isLive,
   lastUsed,
   liveReach,
+  reachesEveryProject,
   madeFor,
   permissionChips,
   projectChips,
@@ -84,7 +85,8 @@ function More({ count, title }: { count: number; title: string }) {
 const reachText = (reach: readonly Reach[]) => reach.map(({ slug, detail }) => (detail === null ? slug : `${slug} (${detail})`)).join(", ")
 
 /** A revoked or expired token's cells are history: muted, whatever they say. */
-function ProjectsCell({ reach, ended }: { reach: readonly Reach[]; ended: boolean }) {
+function ProjectsCell({ reach, every, ended }: { reach: readonly Reach[]; every: boolean; ended: boolean }) {
+  if (every) return <span className={cn(ended && "text-muted-foreground")}>Every project</span>
   if (reach.length === 0) return <span className="text-muted-foreground">No project yet</span>
   const { shown, more } = projectChips(reach)
   return (
@@ -140,7 +142,7 @@ function columns({ now, open }: { now: number; open: (token: TokenView) => void 
       head: "Projects",
       width: "minmax(130px,1fr)",
       slot: "meta",
-      cell: (token) => <ProjectsCell reach={liveReach(token)} ended={!isLive(token, now)} />,
+      cell: (token) => <ProjectsCell reach={liveReach(token)} every={reachesEveryProject(token)} ended={!isLive(token, now)} />,
     },
     {
       key: "permissions",
@@ -227,7 +229,9 @@ function TokenDetails({ token, now, onRevoke }: { token: TokenView; now: number;
       <SheetFacts facts={facts} />
 
       <SheetSection title="Projects it may deploy">
-        {reach.length === 0 ? (
+        {reachesEveryProject(token) ? (
+          <p>Every project on the server, those to come included.</p>
+        ) : reach.length === 0 ? (
           <p className="text-muted-foreground">No project yet.</p>
         ) : (
           <ul className="divide-y divide-divider">

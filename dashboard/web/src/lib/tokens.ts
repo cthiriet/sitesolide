@@ -255,6 +255,11 @@ export function firstTokenField(errors: TokenErrors): TokenField | null {
 /** A project a token reaches, and what the sheet says beside it: "created" for those it created. */
 export type Reach = { slug: string; detail: string | null }
 
+/** Does a token deploy every project, as the owner: its scope's `slugs` is then empty, which says nothing of its reach. */
+export function reachesEveryProject(token: Pick<TokenView, "scope">): boolean {
+  return token.scope.all === true
+}
+
 /** Where a token deploys: each project it created or was given. */
 export function liveReach(token: Pick<TokenView, "owned" | "scope">): Reach[] {
   return reachedProjects(token).map(({ slug, how }) => ({ slug, detail: how === "created" ? "created" : null }))
@@ -319,10 +324,12 @@ export function tokenSummary({
   permissions: readonly Exclude<PermissionKey, "create">[]
   expiryDays: number | null
 }): string {
-  const names = slugs.length === 0 ? null : slugs.length <= 2 ? slugs.join(" and ") : `${slugs.length} projects`
-  const deploys = names === null ? (create ? "Deploys the new projects it creates" : "Deploys nothing yet") : `Deploys ${names}${create ? " and new projects" : ""}`
   const choice = EXPIRY_CHOICES.find((one) => one.days === expiryDays)
   const expires = expiryDays === null ? "never expires" : `expires in ${choice?.label ?? `${expiryDays} days`}`
+  // Every project, as the owner: every permission comes with it, the projects ticked or not.
+  if (permissions.includes("all")) return `Deploys every project as you, with every permission, ${expires}.`
+  const names = slugs.length === 0 ? null : slugs.length <= 2 ? slugs.join(" and ") : `${slugs.length} projects`
+  const deploys = names === null ? (create ? "Deploys the new projects it creates" : "Deploys nothing yet") : `Deploys ${names}${create ? " and new projects" : ""}`
   const ordered = PERMISSION_ORDER.filter((key): key is Exclude<PermissionKey, "create"> => key !== "create" && permissions.includes(key as Exclude<PermissionKey, "create">))
   const phrases = ordered.map((key) => PERMISSION_WORDS[key].phrase)
   const extra = phrases.length === 0 ? "no extra permission" : `with ${phrases.length === 1 ? phrases[0] : `${phrases.slice(0, -1).join(", ")} and ${phrases.at(-1)}`}`

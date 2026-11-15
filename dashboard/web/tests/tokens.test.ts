@@ -19,6 +19,7 @@ import {
   splitTokens,
   tokenPermissions,
   liveReach,
+  reachesEveryProject,
   requestScope,
   STEWARD_PREDATES_SECRETS,
   tokenMatches,
@@ -238,5 +239,20 @@ describe("the dialog's summary", () => {
     expect(tokenSummary({ slugs: ["cms"], create: false, permissions: ["domain", "outbound", "public"], expiryDays: 30 })).toBe(
       "Deploys cms, expires in 30 days, with public sites, a domain and outbound network.",
     )
+  })
+
+  test("every project: no project names, no list of the permissions it carries", () => {
+    // As the dialog builds it: every permission held, the projects ticked before left in `slugs`.
+    expect(tokenSummary({ slugs: ["cms"], create: true, permissions: ["all", "public", "secrets", "domain", "outbound"], expiryDays: 90 })).toBe(
+      "Deploys every project as you, with every permission, expires in 90 days.",
+    )
+    expect(tokenSummary({ slugs: [], create: true, permissions: ["all"], expiryDays: null })).toBe("Deploys every project as you, with every permission, never expires.")
+  })
+})
+
+describe("a token that deploys every project", () => {
+  test("is told by its scope, its empty list of projects meaning nothing", () => {
+    expect(reachesEveryProject({ scope: { ...SCOPE, all: true } })).toBe(true)
+    expect(reachesEveryProject({ scope: SCOPE })).toBe(false)
   })
 })
