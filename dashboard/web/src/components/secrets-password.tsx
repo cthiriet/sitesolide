@@ -295,7 +295,7 @@ function PasswordForm({
           setConfirmation("")
           return onChange(typeof result.body.password === "string" ? result.body.password : null)
         }
-        if (result.status === -1 || result.status === 0) return setFormError(ceremonyMessage(result.status, null))
+        if (result.status <= 0) return setFormError(ceremonyMessage(result.status, null))
         const message = onRefusal(refusalOf(result.status, result.body))
         if (message !== null) setFormError(message)
       } finally {

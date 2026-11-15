@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { signInRefusal } from "../src/lib/signin"
-import { NO_PASSKEYS, ceremonyMessage, creationOptions, fromB64url, linkFromHash, ownerPasskeys, requestOptions, toB64url } from "../src/lib/webauthn"
+import { ALREADY_REGISTERED, NO_PASSKEYS, PROMPT_CLOSED, browserRefusal, ceremonyMessage, creationOptions, fromB64url, linkFromHash, ownerPasskeys, requestOptions, toB64url } from "../src/lib/webauthn"
 
 describe("the page's half of a passkey ceremony", () => {
   test("base64url goes both ways, without padding", () => {
@@ -55,6 +55,19 @@ describe("the page's half of a passkey ceremony", () => {
 
   test("a refusal says what to do", () => {
     expect(ceremonyMessage(-1, null)).toContain("prompt was closed")
+    expect(ceremonyMessage(ALREADY_REGISTERED, null)).toBe("This device already holds one of your passkeys.")
+  })
+
+  test("the browser's refusal: a device that holds a passkey already is not a prompt closed", () => {
+    // excludeCredentials: Chrome refuses to register a second key on the device with InvalidStateError.
+    expect(browserRefusal(new DOMException("already registered", "InvalidStateError"))).toBe(ALREADY_REGISTERED)
+    expect(browserRefusal(new DOMException("cancelled", "NotAllowedError"))).toBe(PROMPT_CLOSED)
+    expect(browserRefusal(new TypeError("bad options"))).toBe(PROMPT_CLOSED)
+    expect(browserRefusal("odd")).toBe(PROMPT_CLOSED)
+    expect(ceremonyMessage(browserRefusal(new DOMException("", "InvalidStateError")), null)).toContain("already holds")
+  })
+
+  test("a refusal of the server says what to do", () => {
     expect(ceremonyMessage(429, { error: "too-many-attempts", wait: 12 })).toBe("Too many attempts. Try again in 12 s.")
     expect(ceremonyMessage(423, null)).toBe("Unlock first.")
     expect(signInRefusal(403, { error: "passkey-only" }).message).toBe("This dashboard signs in with a passkey.")

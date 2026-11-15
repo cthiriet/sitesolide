@@ -183,7 +183,7 @@ function PasskeyUnlockForm({
     try {
       const result = await unlockWithPasskey()
       if (result.ok && typeof result.body.until === "number") return onUnlocked(result.body.until)
-      if (result.status === -1 || result.status === 0) return setError(ceremonyMessage(result.status, null))
+      if (result.status <= 0) return setError(ceremonyMessage(result.status, null))
       const message = onRefusal(refusalOf(result.status, result.body))
       if (message !== null) setError(message)
     } finally {

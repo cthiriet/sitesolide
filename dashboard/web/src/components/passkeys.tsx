@@ -65,7 +65,7 @@ export function PasskeysPanel() {
         return void (await load())
       }
       if (result.status === 423) return secrets.setUnlockedUntil(null)
-      setProblem(result.status === -1 || result.status === 0 ? ceremonyMessage(result.status, null) : (actions.refusal(refusalOf(result.status, result.body)) ?? ""))
+      setProblem(result.status <= 0 ? ceremonyMessage(result.status, null) : (actions.refusal(refusalOf(result.status, result.body)) ?? ""))
     } finally {
       setBusy(false)
     }

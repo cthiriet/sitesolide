@@ -99,9 +99,25 @@ export function registrationJson(credential: PublicKeyCredential): Record<string
 export type CeremonyFailure = { error: string; message?: string; wait?: number }
 type Asked = { challengeId: string; publicKey: Options }
 
+/**
+ * The statuses of a ceremony the browser ended before any request: closed or
+ * refused (-1), or a device that already holds one of the owner's passkeys,
+ * which `excludeCredentials` makes the browser refuse to register again (-2).
+ * 0 is the network's. Every one of them at or below 0.
+ */
+export const PROMPT_CLOSED = -1
+export const ALREADY_REGISTERED = -2
+
+/** The browser's refusal of `navigator.credentials`, as a ceremony's status. */
+export function browserRefusal(error: unknown): number {
+  const name = typeof error === "object" && error !== null && "name" in error ? String(error.name) : ""
+  return name === "InvalidStateError" ? ALREADY_REGISTERED : PROMPT_CLOSED
+}
+
 /** What a refused ceremony says, in words. The browser's own cancellation is not an error to dwell on. */
 export function ceremonyMessage(status: number, body: CeremonyFailure | null): string {
-  if (status === -1) return "The passkey prompt was closed. Try again when ready."
+  if (status === ALREADY_REGISTERED) return "This device already holds one of your passkeys."
+  if (status === PROMPT_CLOSED) return "The passkey prompt was closed. Try again when ready."
   if (status === 0) return "Can't reach the dashboard. Check your connection."
   if (status === 429) return `Too many attempts. Try again in ${Math.max(1, Math.ceil(body?.wait ?? 1))} s.`
   if (status === 423 || body?.error === "locked") return "Unlock first."
@@ -112,7 +128,8 @@ export type Ceremony<T> = { ok: true; status: number; body: T } | { ok: false; s
 
 /**
  * Asks the steward for a challenge, has the browser sign it, and posts the
- * result. Status -1: the person closed the prompt, or the browser refused.
+ * result. Status -1: the person closed the prompt, or the browser refused;
+ * -2: the device already holds one of the owner's passkeys.
  */
 async function ceremony<T>(
   challenge: Record<string, unknown>,
@@ -125,10 +142,10 @@ async function ceremony<T>(
   let credential: Credential | null
   try {
     credential = await run(asked.body.publicKey)
-  } catch {
-    return { ok: false, status: -1, body: null }
+  } catch (error) {
+    return { ok: false, status: browserRefusal(error), body: null }
   }
-  if (credential === null) return { ok: false, status: -1, body: null }
+  if (credential === null) return { ok: false, status: PROMPT_CLOSED, body: null }
   const answered = await post(asked.body.challengeId, serialise(credential as PublicKeyCredential))
   if (answered.status === 200 && answered.body !== null) return { ok: true, status: 200, body: answered.body as T }
   return { ok: false, status: answered.status, body: (answered.body as CeremonyFailure | null) ?? null }
