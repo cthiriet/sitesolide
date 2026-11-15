@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { DATA_DIR } from "../src/config";
-import { TOLERATED_FAILURES, INITIAL_BACKOFF_MS } from "../src/auth";
+import { TOLERATED_FAILURES, INITIAL_BACKOFF_MS, createClientLimiter, type ClientLimiter } from "../src/auth";
 import { createRoutes, type Store, type Options } from "../src/routes";
-import { tokenHash, type Session } from "../src/sessions";
+import { OWNER_IDLE_MS, tokenHash, type Session } from "../src/sessions";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -17,15 +17,11 @@ const NOW = 1_756_400_000_000;
 const PASSWORD = "a password drawn at random";
 
 /** An in-memory store: the routes need no database to be judged. */
-function createStore(): Store & { sessions: Map<string, Session>; attempts: { failures: number; lastAt: number } } {
+function createStore(): Store & { sessions: Map<string, Session> } {
   const sessions = new Map<string, Session>();
-  const state = { attempts: { failures: 0, lastAt: 0 } };
 
   return {
     sessions,
-    get attempts() {
-      return state.attempts;
-    },
     async openSession(now) {
       const token = `token-${sessions.size}`;
       sessions.set(await tokenHash(token), {
@@ -49,19 +45,36 @@ function createStore(): Store & { sessions: Map<string, Session>; attempts: { fa
     purgeSessions(before) {
       for (const [key, session] of sessions) if (session.createdAt < before) sessions.delete(key);
     },
-    readAttempts() {
-      return state.attempts;
+  };
+}
+
+/** The per-client limiter, its failures counted for the tests. */
+function countingLimiter(): ClientLimiter & { failures: Map<string, number> } {
+  const inner = createClientLimiter();
+  const failures = new Map<string, number>();
+  return {
+    failures,
+    wait: (client, now) => inner.wait(client, now),
+    failed(client, now) {
+      failures.set(client, (failures.get(client) ?? 0) + 1);
+      inner.failed(client, now);
     },
-    setAttempts(failures, lastAt) {
-      state.attempts = { failures, lastAt };
+    succeeded(client) {
+      failures.delete(client);
+      inner.succeeded(client);
     },
   };
 }
 
 let hash = "";
 let store: ReturnType<typeof createStore>;
+let limiter: ReturnType<typeof countingLimiter>;
 let routes: ReturnType<typeof createRoutes>;
 let clock = NOW;
+
+const STRANGER = "203.0.113.66";
+const OWNER = "198.51.100.7";
+const failuresOf = (client = OWNER) => limiter.failures.get(client) ?? 0;
 
 function options(remaining: Partial<Options> = {}): Options {
   return {
@@ -70,15 +83,18 @@ function options(remaining: Partial<Options> = {}): Options {
     online: true,
     sessionDurationMs: 7 * 24 * 3600 * 1000,
     stateFile: "/nonexistent/state.json",
+    limiter,
     ...remaining,
   };
 }
 
-function signIn(body: unknown, origin: string | null = PUBLIC_URL): Request {
+function signIn(body: unknown, origin: string | null = PUBLIC_URL, from = OWNER): Request {
   return new Request(`${PUBLIC_URL}/api/signin`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      // Caddy appends the address it saw: the last entry is the one counted.
+      "X-Forwarded-For": `10.0.0.1, ${from}`,
       ...(origin === null ? {} : { Origin: origin }),
     },
     body: JSON.stringify(body),
@@ -89,8 +105,10 @@ beforeEach(async () => {
   if (hash === "") hash = await Bun.password.hash(PASSWORD, "argon2id");
   clock = NOW;
   store = createStore();
+  limiter = countingLimiter();
   routes = createRoutes(store, options(), () => clock);
 });
+
 
 describe("sign-in", () => {
   test("a missing origin is refused before any attempt", async () => {
@@ -98,7 +116,7 @@ describe("sign-in", () => {
     expect(response.status).toBe(403);
     // Nothing was counted: otherwise a third-party page would shut the door
     // on the real user with failed attempts made in their name.
-    expect(store.attempts.failures).toBe(0);
+    expect(failuresOf()).toBe(0);
   });
 
   test("another origin is refused", async () => {
@@ -109,7 +127,7 @@ describe("sign-in", () => {
   test("a missing password is a 400, not a counted failure", async () => {
     const response = await routes.signIn(signIn({}));
     expect(response.status).toBe(400);
-    expect(store.attempts.failures).toBe(0);
+    expect(failuresOf()).toBe(0);
   });
 
   test("a body far larger than any password is refused without being read whole", async () => {
@@ -142,7 +160,7 @@ describe("sign-in", () => {
     const response = await routes.signIn(flooding);
     expect(response.status).toBe(413);
     expect(pulled).toBeLessThan(4 * MIB);
-    expect(store.attempts.failures).toBe(0);
+    expect(failuresOf()).toBe(0);
 
     // Announced too long, it is not read at all.
     const announced = new Request(`${PUBLIC_URL}/api/signin`, {
@@ -157,24 +175,44 @@ describe("sign-in", () => {
     const response = await routes.signIn(signIn({ password: "wrong" }));
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: "refused" });
-    expect(store.attempts.failures).toBe(1);
+    expect(failuresOf()).toBe(1);
   });
 
   test("the right password sets a session cookie and resets the counter to zero", async () => {
-    store.setAttempts(2, NOW);
+    limiter.failed(OWNER, NOW);
+    limiter.failed(OWNER, NOW);
     const response = await routes.signIn(signIn({ password: PASSWORD }));
     expect(response.status).toBe(200);
     expect(response.headers.get("set-cookie")).toContain("__Host-session=");
     expect(response.headers.get("set-cookie")).toContain("HttpOnly");
-    expect(store.attempts.failures).toBe(0);
+    expect(failuresOf()).toBe(0);
     expect(store.sessions.size).toBe(1);
   });
 
   test("past the tolerated failures, even the right password waits", async () => {
-    store.setAttempts(TOLERATED_FAILURES + 1, NOW);
+    for (let i = 0; i <= TOLERATED_FAILURES; i += 1) limiter.failed(OWNER, NOW);
     const response = await routes.signIn(signIn({ password: PASSWORD }));
     expect(response.status).toBe(429);
     expect(response.headers.get("retry-after")).toBe(String(INITIAL_BACKOFF_MS / 1000));
+    expect(store.sessions.size).toBe(0);
+  });
+
+  test("a stranger's wrong passwords make the stranger wait, never the owner", async () => {
+    // A single counter for everyone let anyone on the Internet keep the
+    // owner out for an hour at a time.
+    for (let i = 0; i < 20; i += 1) await routes.signIn(signIn({ password: "wrong" }, PUBLIC_URL, STRANGER));
+    expect((await routes.signIn(signIn({ password: PASSWORD }, PUBLIC_URL, STRANGER))).status).toBe(429);
+    expect((await routes.signIn(signIn({ password: PASSWORD }))).status).toBe(200);
+  });
+
+  test("once the owner holds a passkey, the password signs nobody in, and is not even read", async () => {
+    let asked = 0;
+    const passkeyOnly = createRoutes(store, options({ passwordSignIn: async () => (asked++, false) }), () => clock);
+    const response = await passkeyOnly.signIn(signIn({ password: PASSWORD }));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: "passkey-only" });
+    expect(asked).toBe(1);
+    expect(failuresOf()).toBe(0);
     expect(store.sessions.size).toBe(0);
   });
 
@@ -187,20 +225,22 @@ describe("sign-in", () => {
     const statuses = responses.map((response) => response.status);
     expect(statuses.filter((status) => status === 401)).toHaveLength(TOLERATED_FAILURES + 1);
     expect(statuses.filter((status) => status === 429)).toHaveLength(10 - (TOLERATED_FAILURES + 1));
-    expect(store.attempts.failures).toBe(TOLERATED_FAILURES + 1);
+    expect(failuresOf()).toBe(TOLERATED_FAILURES + 1);
   });
 
   test("an attempt that throws does not block the queue", async () => {
-    const fragile = createStore();
     let first = true;
-    fragile.readAttempts = () => {
-      if (first) {
-        first = false;
-        throw new Error("database unavailable");
-      }
-      return { failures: 0, lastAt: 0 };
+    const fragile: ClientLimiter = {
+      ...createClientLimiter(),
+      wait: () => {
+        if (first) {
+          first = false;
+          throw new Error("database unavailable");
+        }
+        return 0;
+      },
     };
-    const withFailure = createRoutes(fragile, options(), () => clock);
+    const withFailure = createRoutes(store, options({ limiter: fragile }), () => clock);
     await expect(withFailure.signIn(signIn({ password: PASSWORD }))).rejects.toThrow("database unavailable");
     expect((await withFailure.signIn(signIn({ password: PASSWORD }))).status).toBe(200);
   });
@@ -241,6 +281,19 @@ describe("state", () => {
   test("an expired session is closed, not merely refused", async () => {
     const cookie = await withSession();
     clock = NOW + 8 * 24 * 3600 * 1000;
+    expect((await routes.state(request(cookie))).status).toBe(401);
+    expect(store.sessions.size).toBe(0);
+  });
+
+  test("the owner's session left unused for its idle time is closed, one in use lives on", async () => {
+    routes = createRoutes(store, options({ ownerIdleMs: OWNER_IDLE_MS }), () => clock);
+    const cookie = await withSession();
+    // Used every few hours: alive past the idle time counted from sign-in.
+    for (let hours = 4; hours <= 20; hours += 4) {
+      clock = NOW + hours * 3600 * 1000;
+      expect((await routes.state(request(cookie))).status).toBe(200);
+    }
+    clock += OWNER_IDLE_MS;
     expect((await routes.state(request(cookie))).status).toBe(401);
     expect(store.sessions.size).toBe(0);
   });

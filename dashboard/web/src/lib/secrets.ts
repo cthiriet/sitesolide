@@ -488,6 +488,11 @@ const OPERATION_NAMES: Record<Operation, string> = {
   // alone, and still read from the journals that carry them.
   migrate: "Merge into the store",
   retire: "Retire",
+  "passkey.add": "Register a passkey",
+  "passkey.remove": "Remove a passkey",
+  "passkey.link": "Passkey registration link",
+  "passkey.signin": "Sign in with a passkey",
+  "passkey.signin_failed": "Passkey sign-in refused",
 }
 
 /**

@@ -191,7 +191,14 @@ export type Operation =
   | "project.rename"
   // A value drawn on the machine into a project's store, never shown: the
   // name alone is journaled.
-  | "generate";
+  | "generate"
+  // The owner's passkeys: one registered or removed, a one-time registration
+  // link minted by root over SSH, and the owner's sign-in with one.
+  | "passkey.add"
+  | "passkey.remove"
+  | "passkey.link"
+  | "passkey.signin"
+  | "passkey.signin_failed";
 
 export type OperationResult = "ok" | "rejects" | "failure";
 
@@ -306,7 +313,8 @@ export type Failure = { error: ErrorCode; message: string; wait?: number };
 // Any error returns `Failure`.
 
 export type WithToken = { token: string };
-export type UnlockRequest = { password: string };
+/** The password while the owner holds no passkey, or a fresh assertion of one, which the steward verifies. */
+export type UnlockRequest = { password: string } | { challengeId: string; credential: unknown };
 export type ProjectRequest = WithToken & { slug: string };
 export type FileRequest = ProjectRequest & { file: string };
 export type VariableRequest = FileRequest & { variable: string };

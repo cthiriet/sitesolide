@@ -49,6 +49,7 @@ import type {
   Failure,
   DashboardUnlockResponse,
   DashboardResponse,
+  UnlockRequest,
   WithoutToken,
 } from "./protocol";
 
@@ -487,10 +488,22 @@ export function createSecretsRoutes(dependencies: SecretsDependencies, clock: ()
 
       const body = await readBody(req);
       if (body === null) return unreadableBody();
-      const password = body.password;
-      if (!isAcceptableSubmission(password)) return error(400, "invalid", "Password missing or too long.");
+      // A passkey's assertion, the steward verifying it against the owner's
+      // registry, or the password while the owner holds none: the steward
+      // refuses the password once a passkey exists.
+      let requested: UnlockRequest;
+      let secrets: string[] = [];
+      if (body.credential !== undefined) {
+        if (typeof body.challengeId !== "string") return error(400, "invalid", "Missing or non-text field: challengeId.");
+        requested = { challengeId: body.challengeId, credential: body.credential };
+      } else {
+        const password = body.password;
+        if (!isAcceptableSubmission(password)) return error(400, "invalid", "Password missing or too long.");
+        requested = { password };
+        secrets = [password];
+      }
 
-      const received = await reach(() => steward.unlock({ password }), null, [password]);
+      const received = await reach(() => steward.unlock(requested), null, secrets);
       if (received.kind !== "received" || received.status < 200 || received.status >= 300) return relay(received);
 
       const token = received.body?.token;

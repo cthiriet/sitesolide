@@ -17,16 +17,20 @@ import { servePublic } from "./src/public";
 import {
   applyRotation,
   closeSession,
-  readAttempts,
   readSession,
   openSession,
   recordSession,
-  setAttempts,
   purgeSessions,
   touchSession,
+  closeOtherOwnerSessions,
+  readOwnerPasskeys,
+  writeOwnerPasskeys,
 } from "./src/database";
-import { createSessionReader, createRoutes, ownerSessions } from "./src/routes";
-import { isMemberSession } from "./src/sessions";
+import { createSessionReader, createRoutes, ownerSessionOpener, ownerSessions } from "./src/routes";
+import { isMemberSession, OWNER_IDLE_MS } from "./src/sessions";
+import { localPasskeySteward } from "./src/passkeys/client";
+import { createPasskeyRoutes } from "./src/passkeys/routes";
+import { createPasskeyState } from "./src/passkeys/state";
 import { localDashboardPortal, localMembersSteward } from "./src/people/client";
 import { createIdentityResolver } from "./src/people/identity";
 import { createSignInLimiter } from "./src/people/limiter";
@@ -78,8 +82,6 @@ const store = {
   touchSession,
   closeSession,
   purgeSessions,
-  readAttempts,
-  setAttempts,
 };
 
 // One reader for every session, the owner's and the members'; the owner's
@@ -89,6 +91,8 @@ const sessionReader = createSessionReader(store, {
   online: ONLINE,
   sessionDurationMs: SESSION_DURATION_MS,
   memberSessionDurationMs: MEMBER_SESSION_DURATION_MS,
+  // Twelve hours unused and the owner signs in again, whatever is left of the week.
+  ownerIdleMs: OWNER_IDLE_MS,
 });
 const ownerReader = ownerSessions(sessionReader);
 
@@ -134,6 +138,26 @@ setInterval(() => void tracker.tick(), 3_000);
 // The people who sign in: with the portal's provider, the steward opens their
 // sessions and judges their writes, and this process shows each of them
 // their own projects. See src/people/.
+// The owner's passkeys: every ceremony verified by the steward, which keeps
+// the registry; once one exists, the password signs nobody in. See
+// src/passkeys/.
+const passkeySteward = localPasskeySteward(STEWARD_SOCKET);
+const passkeyState = createPasskeyState({
+  steward: passkeySteward,
+  passwordConfigured: PASSWORD_HASH !== "",
+  readRemembered: readOwnerPasskeys,
+  remember: writeOwnerPasskeys,
+});
+const passkeys = createPasskeyRoutes({
+  publicUrl: PUBLIC_URL,
+  steward: passkeySteward,
+  session: ownerReader,
+  tokens: unlockTokens,
+  openOwnerSession: ownerSessionOpener(store, { online: ONLINE, sessionDurationMs: SESSION_DURATION_MS, memberSessionDurationMs: MEMBER_SESSION_DURATION_MS }),
+  closeOtherOwnerSessions,
+  state: passkeyState,
+});
+
 const membersSteward = localMembersSteward(STEWARD_SOCKET);
 const identity = createIdentityResolver({ session: sessionReader, online: ONLINE, steward: membersSteward, closeSession });
 // A member's own unlock tokens, by session hash: never the owner's store,
@@ -143,6 +167,7 @@ const members = createMembersRoutes({
   publicUrl: PUBLIC_URL,
   online: ONLINE,
   passwordConfigured: PASSWORD_HASH !== "",
+  passkeys: passkeyState.offer,
   zone: ZONE,
   steward: membersSteward,
   portal: localDashboardPortal(PORTAL_URL),
@@ -180,6 +205,8 @@ const routes = createRoutes(store, {
   sessionDurationMs: SESSION_DURATION_MS,
   memberSessionDurationMs: MEMBER_SESSION_DURATION_MS,
   stateFile: STATE_FILE,
+  ownerIdleMs: OWNER_IDLE_MS,
+  passwordSignIn: passkeyState.passwordSignIn,
   missingSecrets: () => readMissingSecrets(listing),
   forgetUnlock: secrets.forgetUnlock,
   roles: members.roles,
@@ -293,6 +320,13 @@ const server = Bun.serve({
     "/api/session": { GET: members.session },
     "/api/signin": { POST: routes.signIn },
     "/api/signout": { POST: routes.signOut },
+    // The owner's passkeys, every ceremony relayed to the steward. A member
+    // has none: `owner()` answers them 403 where a session is needed.
+    "/api/passkeys": { GET: owner(passkeys.list) },
+    "/api/passkeys/challenge": { POST: owner(passkeys.challenge) },
+    "/api/passkeys/signin": { POST: passkeys.signIn },
+    "/api/passkeys/register": { POST: owner(passkeys.register) },
+    "/api/passkeys/credential": { DELETE: owner(passkeys.remove) },
     "/api/state": { GET: routes.state },
     // A project's general access and people with access, for the owner and its
     // Admins, and the machine's People, the owner's: the steward judges.

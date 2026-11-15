@@ -165,8 +165,6 @@ function createStore(): Store & { sessions: Map<string, Session> } {
       sessions.delete(hash);
     },
     purgeSessions() {},
-    readAttempts: () => ({ failures: 0, lastAt: 0 }),
-    setAttempts() {},
   };
 }
 

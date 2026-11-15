@@ -3,7 +3,7 @@
  * tests create as many of them as they have cases to cover, without opening a
  * port or a database. The server, for its part, creates only one.
  */
-import { remainingWait, isPasswordValid, isAcceptableSubmission } from "./auth";
+import { clientKey, createClientLimiter, isPasswordValid, isAcceptableSubmission, type ClientLimiter } from "./auth";
 import { read, type Reading } from "./read";
 import type { StoreMissing } from "../borrowed/store-protocol";
 import { withMissingSecrets } from "./state";
@@ -26,8 +26,6 @@ export type Store = {
   closeSession: (hash: string) => void;
   /** The owner's sessions opened before `before`, a member's before `memberBefore`. */
   purgeSessions: (before: number, memberBefore?: number) => void;
-  readAttempts: () => { failures: number; lastAt: number };
-  setAttempts: (failures: number, lastAt: number) => void;
 };
 
 export type Options = {
@@ -63,6 +61,19 @@ export type Options = {
    * forget.
    */
   forgetUnlock?: (sessionHash: string) => Promise<void>;
+  /**
+   * Does the password still sign the owner in? Not once a passkey exists
+   * (src/passkeys/state.ts): root's registration link is the way back in.
+   * Absent, it does.
+   */
+  passwordSignIn?: () => Promise<boolean>;
+  /** The failures counted per client; one of its own otherwise. */
+  limiter?: ClientLimiter;
+  /**
+   * How long an owner's session stays open with nobody using it. Absent, as
+   * long as it lives.
+   */
+  ownerIdleMs?: number;
 };
 
 /** Beyond that, the last visit is rewritten. Below it, a page that refreshes
@@ -148,7 +159,7 @@ async function readSignInBody(req: Request): Promise<{ body: unknown } | "too-la
  */
 export function createSessionReader(
   store: Pick<Store, "readSession" | "touchSession" | "closeSession">,
-  options: Pick<Options, "online" | "sessionDurationMs" | "memberSessionDurationMs">,
+  options: Pick<Options, "online" | "sessionDurationMs" | "memberSessionDurationMs" | "ownerIdleMs">,
 ): SessionReader {
   return async (req, now) => {
     const token = readCookie(req.headers.get("cookie"), options.online);
@@ -157,7 +168,7 @@ export function createSessionReader(
     const found = await store.readSession(token);
     if (found === null) return null;
 
-    if (!isSessionAlive(found, options.sessionDurationMs, now, options.memberSessionDurationMs)) {
+    if (!isSessionAlive(found, options.sessionDurationMs, now, options.memberSessionDurationMs, options.ownerIdleMs)) {
       store.closeSession(found.hash);
       return null;
     }
@@ -181,8 +192,25 @@ export function ownerSessions(reader: SessionReader): SessionReader {
   };
 }
 
+/**
+ * The owner's session opened, the expired ones purged first, and the answer
+ * that sets its cookie: what a password and a passkey sign-in both end on.
+ */
+export function ownerSessionOpener(
+  store: Pick<Store, "openSession" | "purgeSessions">,
+  options: Pick<Options, "online" | "sessionDurationMs" | "memberSessionDurationMs">,
+): (now: number) => Promise<Response> {
+  return async (now) => {
+    store.purgeSessions(now - options.sessionDurationMs, now - (options.memberSessionDurationMs ?? options.sessionDurationMs));
+    const token = await store.openSession(now);
+    return Response.json({ open: true }, { headers: { "Set-Cookie": setCookie(token, options.online, options.sessionDurationMs), ...NO_CACHE } });
+  };
+}
+
 export function createRoutes(store: Store, options: Options, clock: () => number = Date.now): Routes {
   const session = createSessionReader(store, options);
+  const limiter = options.limiter ?? createClientLimiter();
+  const openOwnerSession = ownerSessionOpener(store, options);
 
   /**
    * The password attempts go through one by one, from the reading of the
@@ -227,11 +255,16 @@ export function createRoutes(store: Store, options: Options, clock: () => number
 
     async signIn(req) {
       // The only check that exists before there is a session. Without it, any
-      // page at all could aim at this endpoint and, through failed attempts
-      // made in the visitor's name, shut the door on the real user for an
-      // hour: the failure counter is global.
+      // page at all could aim at this endpoint and make failed attempts in the
+      // visitor's name.
       if (!isAcceptableOrigin(req.headers.get("origin"), options.publicUrl)) {
         return Response.json({ error: "origin-refused" }, { status: 403 });
+      }
+
+      // Once the owner holds a passkey, the password signs nobody in: asked
+      // before the body is read, it costs no verification either.
+      if (options.passwordSignIn !== undefined && !(await options.passwordSignIn())) {
+        return Response.json({ error: "passkey-only", message: "This dashboard signs in with a passkey." }, { status: 403 });
       }
 
       const read = await readSignInBody(req);
@@ -243,12 +276,15 @@ export function createRoutes(store: Store, options: Options, clock: () => number
         return Response.json({ error: "no-password" }, { status: 400 });
       }
 
+      // Per client, the address Caddy saw: a stranger's wrong passwords make
+      // that stranger wait, never the owner.
+      const client = clientKey(req.headers.get("x-forwarded-for"));
+
       return oneAtATime(async () => {
         // The time is re-read once its turn has come: the wait of an attempt
         // in the queue must not shorten the rate limiting of the next one.
         const now = clock();
-        const attempts = store.readAttempts();
-        const wait = remainingWait(attempts.failures, attempts.lastAt, now);
+        const wait = limiter.wait(client, now);
         if (wait > 0) {
           return Response.json(
             { error: "too-many-attempts", wait: Math.ceil(wait / 1000) },
@@ -257,21 +293,15 @@ export function createRoutes(store: Store, options: Options, clock: () => number
         }
 
         if (!(await isPasswordValid(submitted, options.hash))) {
-          store.setAttempts(attempts.failures + 1, now);
+          limiter.failed(client, now);
           // A single message for every cause: wrong password, missing hash,
           // malformed hash. What the service knows of its own configuration is
           // not learned here.
           return Response.json({ error: "refused" }, { status: 401 });
         }
 
-        store.setAttempts(0, 0);
-        store.purgeSessions(now - options.sessionDurationMs, now - (options.memberSessionDurationMs ?? options.sessionDurationMs));
-        const token = await store.openSession(now);
-
-        return Response.json(
-          { open: true },
-          { headers: { "Set-Cookie": setCookie(token, options.online, options.sessionDurationMs) } },
-        );
+        limiter.succeeded(client);
+        return openOwnerSession(now);
       });
     },
 

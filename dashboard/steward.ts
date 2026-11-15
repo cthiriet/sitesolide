@@ -43,6 +43,7 @@ import { CODES_FILE as LOCK_CODES_FILE, FRAGMENT_NAME, LOCKS_DIR } from "./borro
 import { createBackupReader } from "./src/backup/reader";
 import { createMembersSystem } from "./src/people/system";
 import { createAccessSystem } from "./src/access/system";
+import { createPasskeySystem } from "./src/passkeys/system";
 import type { LeavingToken } from "./src/access/protocol";
 import { OWNER_SOCKET, PORTAL_KEY_FOLDER } from "./src/people/protocol";
 import { PORTAL_RELAY_SOCKET, relayedPortal } from "./src/people/portal";
@@ -190,7 +191,25 @@ const handler = createSteward(system, {
     revokeTokens: (email, actor) => revokeMemberTokens(email, actor),
     tokensOf: (email) => memberTokens(email),
   },
+  // The owner's passkeys: the registry in the state folder, root's, and the
+  // projection of their public keys laid for the portal beside the access
+  // projection. See src/passkeys/.
+  passkeys: {
+    system: createPasskeySystem({
+      stateFolder: STATE_FOLDER,
+      portalKeyFolder: PORTAL_KEY_DIR,
+      groupsFile: GROUPS_FILE,
+      portalGroup: OWNERS === "" ? "" : PORTAL_GROUP,
+    }),
+    zone: process.env.SITESOLIDE_ZONE ?? "",
+    // For a workstation's test tree alone, where the dashboard runs on another origin.
+    ...(process.env.PASSKEY_ORIGIN === undefined ? {} : { origin: process.env.PASSKEY_ORIGIN }),
+  },
 });
+
+// The passkey registry read, its projection for the portal written again:
+// the portal reads it from the next request on.
+await handler.startPasskeys().catch((e: unknown) => console.error(`steward: passkeys not started (${(e as Error).name})`));
 
 // The key pair, laid now if it is missing: the portal reads its half at every
 // sign-in, and needs no restart for it. A portal not deployed yet is said, and

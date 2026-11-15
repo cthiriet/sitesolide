@@ -91,6 +91,11 @@ const BORROWINGS = [
   // The door page of a site that opens with a code: the gatekeeper writes it
   // from the template the portal's sign-in page shares.
   "portal/src/page.ts",
+  // The owner's passkeys: the steward verifies the dashboard's ceremonies
+  // with the portal's own verifier, and writes the projection of their
+  // public keys that the portal reads, both with this one copy.
+  "portal/src/webauthn.ts",
+  "portal/src/passkeys.ts",
 ];
 
 /** The header of every copied module. */

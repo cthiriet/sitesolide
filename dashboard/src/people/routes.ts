@@ -33,7 +33,7 @@ import type { Identity, IdentityResolver } from "./identity";
 import { readMemberIdentity } from "./identity";
 import type { SignInLimiter } from "./limiter";
 import type { Restriction } from "../audit/merge";
-import type { Roles } from "./protocol";
+import type { PasskeyOffer, Roles } from "./protocol";
 
 type Handler = (req: Request) => Promise<Response>;
 
@@ -42,6 +42,8 @@ export type MembersRoutesDependencies = {
   online: boolean;
   /** Is a password hash in place? The sign-in page says so when it is not. */
   passwordConfigured: boolean;
+  /** Whether the owner holds a passkey, and so whether the password still signs in (src/passkeys/state.ts). Absent: no passkey. */
+  passkeys?: () => Promise<PasskeyOffer>;
   /** The zone the server serves, named on the sign-in page; empty when the service was started without one. */
   zone?: string;
   steward: MembersSteward;
@@ -254,6 +256,7 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
         identity: resolved === null ? null : identityView(resolved.identity),
         sso: await ssoOffer(now),
         zone: dependencies.zone === undefined || dependencies.zone === "" ? null : dependencies.zone,
+        passkeys: dependencies.passkeys === undefined ? { registered: false, passwordSignIn: dependencies.passwordConfigured } : await dependencies.passkeys(),
       });
     },
 

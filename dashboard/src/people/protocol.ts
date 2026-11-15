@@ -123,4 +123,11 @@ export type SsoOffer = { offered: boolean; providerName: string | null };
  * password, so that whoever runs a test install beside production sees
  * which server it goes to. The dashboard's own address already carries it.
  */
-export type SessionResponse = { open: boolean; configured: boolean; identity: IdentityView | null; sso: SsoOffer; zone: string | null };
+/**
+ * `passkeys`: whether the owner holds one, and whether the password still
+ * signs in. Once a passkey exists, it does not: the page offers the passkey
+ * alone, and root's registration link is the way back in.
+ */
+export type PasskeyOffer = { registered: boolean; passwordSignIn: boolean };
+
+export type SessionResponse = { open: boolean; configured: boolean; identity: IdentityView | null; sso: SsoOffer; zone: string | null; passkeys: PasskeyOffer };

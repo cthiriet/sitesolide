@@ -252,6 +252,7 @@ type StewardOperation = Exclude<
   | `member.${string}`
   | `access.${string}`
   | `dashboard.${string}`
+  | `passkey.${string}`
   | "people.create"
   | "sharing"
   | "guest.create"
@@ -496,6 +497,18 @@ export function auditWords(row: AuditRow, timeZone?: string): AuditWords {
       return { summary: "Dashboard sign-in refused", note: word(MEMBER_REFUSALS, text(detail.note)), tone: "attention" }
     case "dashboard.signout":
       return { summary: "Signed out of the dashboard", note: null, tone: "neutral" }
+    case "passkey.add":
+      if (text(detail.result) === "rejects") return { summary: "Tried to register a passkey", note: text(detail.note), tone: "attention" }
+      return { summary: "Registered a passkey", note: text(detail.note), tone: "neutral" }
+    case "passkey.remove":
+      if (text(detail.result) === "rejects") return { summary: "Tried to remove a passkey", note: text(detail.note), tone: "attention" }
+      return { summary: "Removed a passkey", note: text(detail.note), tone: "neutral" }
+    case "passkey.link":
+      return { summary: "Made a one-time link to register a passkey", note: text(detail.note), tone: "neutral" }
+    case "passkey.signin":
+      return { summary: "Signed in to the dashboard with a passkey", note: text(detail.note), tone: "neutral" }
+    case "passkey.signin_failed":
+      return { summary: "Passkey sign-in refused", note: text(detail.note), tone: "attention" }
     // Rows written before the access registry, in today's words.
     case "member.invite":
       if (text(detail.result) === "rejects") return { summary: "Tried to give someone a role", note: roleNote(text(detail.note)), tone: "attention" }

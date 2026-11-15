@@ -172,6 +172,12 @@ export const STEWARD_ACTIONS: Readonly<Record<string, string>> = {
   "token.revoke": "token.revoke",
   "project.create": "project.create",
   "project.remove": "project.remove",
+  // The owner's passkeys, under their own names.
+  "passkey.add": "passkey.add",
+  "passkey.remove": "passkey.remove",
+  "passkey.link": "passkey.link",
+  "passkey.signin": "passkey.signin",
+  "passkey.signin_failed": "passkey.signin_failed",
 };
 
 /**

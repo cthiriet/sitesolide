@@ -1,5 +1,5 @@
 /**
- * The service's database: the sessions, a failure counter, and nothing else.
+ * The service's database: the sessions, a few settings, and nothing else.
  *
  * What the machine carries is not here and never will be: that state lives in
  * the snapshot the collector rewrites every minute, and confusing it with kept
@@ -38,17 +38,18 @@ export const SCHEMA = [
      identity  TEXT NOT NULL DEFAULT 'owner'
    )`,
 
-  // A single row, for ever. The rate limiting is global and not per address:
-  // see src/auth.ts.
+  // A single row, read by nothing since the sign-in counts its failures per
+  // client, in memory (src/auth.ts): kept so that a database is never
+  // altered on the way. An empty table costs nothing.
   `CREATE TABLE IF NOT EXISTS essais (
      id     INTEGER PRIMARY KEY CHECK (id = 1),
      echecs INTEGER NOT NULL,
      dernier_a INTEGER NOT NULL
    )`,
 
-  // What the service remembers from one startup to the next. A single key
-  // lives there today, the hash of the password in force, and it is the one
-  // that makes the sessions fall the day it changes.
+  // What the service remembers from one startup to the next: the hash of the
+  // password in force, which makes the sessions fall the day it changes, and
+  // whether the owner was last seen holding a passkey.
   `CREATE TABLE IF NOT EXISTS reglages (
      cle    TEXT PRIMARY KEY,
      valeur TEXT NOT NULL
@@ -89,9 +90,6 @@ const queries = {
   purgeSessions: base.query<undefined, [number, number]>(
     "DELETE FROM sessions WHERE (identity = 'owner' AND cree_a < ?) OR (identity <> 'owner' AND cree_a < ?)",
   ),
-  attempts: base.query<{ failures: number; lastAt: number }, []>(
-    "SELECT echecs AS failures, dernier_a AS lastAt FROM essais WHERE id = 1",
-  ),
   setting: base.query<{ value: string }, [string]>(
     "SELECT valeur AS value FROM reglages WHERE cle = ?",
   ),
@@ -102,11 +100,7 @@ const queries = {
   // The owner's only: a member's session does not rest on the owner's password.
   clearSessions: base.query<undefined, []>("DELETE FROM sessions WHERE identity = 'owner'"),
   countOwnerSessions: base.query<{ n: number }, []>("SELECT count(*) AS n FROM sessions WHERE identity = 'owner'"),
-
-  setAttempts: base.query<undefined, [number, number]>(
-    `INSERT INTO essais (id, echecs, dernier_a) VALUES (1, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET echecs = excluded.echecs, dernier_a = excluded.dernier_a`,
-  ),
+  closeOtherOwnerSessions: base.query<undefined, [string]>("DELETE FROM sessions WHERE identity = 'owner' AND empreinte <> ?"),
 };
 
 /** The owner's session, its token drawn here. */
@@ -143,13 +137,25 @@ export function purgeSessions(before: number, memberBefore: number = before): vo
   queries.purgeSessions.run(before, memberBefore);
 }
 
-export function readAttempts(): { failures: number; lastAt: number } {
-  const row = queries.attempts.get();
-  return row === null ? { failures: 0, lastAt: 0 } : { failures: row.failures, lastAt: row.lastAt };
+/** Every session of the owner's but this one: a passkey removed signs out whoever else held it. */
+export function closeOtherOwnerSessions(keptHash: string): void {
+  queries.closeOtherOwnerSessions.run(keptHash);
 }
 
-export function setAttempts(failures: number, lastAt: number): void {
-  queries.setAttempts.run(failures, lastAt);
+/**
+ * Whether the owner was last seen holding a passkey, kept for when the
+ * steward does not answer: the password stays refused rather than coming
+ * back the moment the steward is down.
+ */
+export const OWNER_PASSKEYS_KEY = "owner_passkeys";
+
+export function readOwnerPasskeys(): boolean | null {
+  const value = queries.setting.get(OWNER_PASSKEYS_KEY)?.value ?? null;
+  return value === null ? null : value === "1";
+}
+
+export function writeOwnerPasskeys(registered: boolean): void {
+  queries.setSetting.run(OWNER_PASSKEYS_KEY, registered ? "1" : "0");
 }
 
 /* --- password rotation ---------------------------------------------------- */

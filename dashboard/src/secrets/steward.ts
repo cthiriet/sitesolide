@@ -155,6 +155,8 @@ import { portalReading, type PortalAdmin } from "../people/portal";
 import { createAccessRoutes, createAccessStore, type AccessRoutes, type AccessStore } from "../access/steward";
 import type { AccessSystem } from "../access/system";
 import { GENERAL_ACCESSES, type GeneralResponse, type GeneralView, type LeavingToken } from "../access/protocol";
+import { createPasskeySteward, type PasskeySteward } from "../passkeys/steward";
+import type { PasskeySystem } from "../passkeys/system";
 
 export type StewardOptions = {
   secretsFolder: string;
@@ -237,6 +239,17 @@ export type StewardOptions = {
    * effect under the owner's project, and the answer names them. Read alone.
    */
   ownerStoreClaimed?: (slug: string) => Promise<boolean>;
+  /**
+   * The owner's passkeys, see src/passkeys/steward.ts: their registry, the
+   * dashboard's ceremonies verified here, root's registration link. Absent,
+   * their routes do not exist and the password unlocks as before.
+   */
+  passkeys?: {
+    system: PasskeySystem;
+    zone: string;
+    /** The one origin the dashboard's ceremonies may run on; absent, `https://dashboard.<zone>`. */
+    origin?: string;
+  };
 };
 
 /**
@@ -260,6 +273,8 @@ export type StewardHandler = Handler & {
    * point starts it and does not wait. Resolves once the registry is there.
    */
   startAccess: () => Promise<void>;
+  /** The passkey registry read, the portal's projection of it written again: at startup. */
+  startPasskeys: () => Promise<void>;
   /** A project removed from the machine: its people with access dropped (src/access/steward.ts); null without them. */
   forgetProjectAccess: AccessRoutes["forgetProject"] | null;
   renameProjectAccess: AccessRoutes["renameProject"] | null;
@@ -552,6 +567,22 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   // --- Reading the body ------------------------------------------------------
 
   const readBody = (req: Request, fields: string[], max = MAX_BODY_BYTES): Promise<Body | Response> => readJsonBody(req, fields, max, bodyTimeoutMs);
+
+  // --- The owner's passkeys --------------------------------------------------
+
+  // Their routes are src/passkeys/steward.ts's; the unlock token, the body
+  // and the journal are this steward's own, handed over.
+  const passkeys: PasskeySteward | null =
+    options.passkeys === undefined
+      ? null
+      : createPasskeySteward({
+          system: options.passkeys.system,
+          zone: options.passkeys.zone,
+          ...(options.passkeys.origin === undefined ? {} : { origin: options.passkeys.origin }),
+          readBody: (req, fields) => readBody(req, fields),
+          isUnlocked: (token) => isValidToken(state, token, system.now()),
+          journal: (event) => writeLog(event.operation, event.result, null, event.detail === null ? null : bounded(event.detail)),
+        });
 
   /**
    * The body, then the token, before all the rest: without a token, nothing is
@@ -1116,15 +1147,41 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return null;
   }
 
+  /**
+   * An unlock with a passkey: a fresh assertion, the user verified, checked
+   * by the passkey routes against the owner's registry. Its own bounds, not
+   * the password's counter: a failed assertion costs no argon2id.
+   */
+  async function unlockWithPasskey(body: Body): Promise<Response> {
+    if (passkeys === null) return error("not-found", "passkeys are not offered on this server");
+    const checked = await passkeys.unlock(body);
+    if (!checked.ok) return checked.response;
+    const accepted = await attemptAccepted(state, system.now(), options.random);
+    state = accepted.state;
+    await writeLog("unlock", "ok", null, "passkey");
+    const response: UnlockResponse = { token: accepted.token, expiresAt: accepted.expiresAt };
+    return Response.json(response);
+  }
+
   async function unlock(req: Request): Promise<Response> {
     await rateLimitReread;
-    // Before reading the body, like the dashboard's sign-in: a rate-limited
-    // attempt costs nothing, not even the reading of its request.
+    const body = await readBody(req, ["password", "challengeId", "credential"]);
+    if (body instanceof Response) return body;
+    if (body.credential !== undefined) return unlockWithPasskey(body);
+
+    // Once the owner holds a passkey, the password no longer unlocks: a
+    // password leaked or guessed opens nothing, and root's registration link
+    // is the way back in. A registry that cannot be read counts as one.
+    if (passkeys !== null && (await passkeys.count()) !== 0) {
+      await writeLog("unlock", "rejects", null, "password refused: the owner has a passkey");
+      return error("out-of-scope", "the dashboard unlocks with a passkey on this server, not with the password");
+    }
+
+    // Before the queue, like the dashboard's sign-in: a rate-limited attempt
+    // costs no verification.
     const remaining = wait(state, system.now());
     if (remaining > 0) return tooManyAttempts(remaining);
 
-    const body = await readBody(req, ["password"]);
-    if (body instanceof Response) return body;
     const submitted = body.password;
     if (!isAcceptableSubmission(submitted)) return error("invalid", "password missing or too long");
 
@@ -2621,6 +2678,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     ...(members?.dashboard ?? {}),
     ...(access?.dashboard ?? {}),
     ...memberActions,
+    ...(passkeys?.dashboard ?? {}),
     "/projects": { GET: listProjects },
     "/log": { GET: readLog },
     "/unlock": { POST: unlock },
@@ -2649,9 +2707,11 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       ...storeRoutes(true),
       "/general": { POST: ownerGeneral },
       "/restart": { POST: ownerRestart },
+      ...(passkeys?.owner ?? {}),
     }),
     ensureMemberKeys: async () => (members === null ? null : members.ensureKeys()),
     startAccess: async () => accessStore?.start(),
+    startPasskeys: async () => passkeys?.start(),
     forgetProjectAccess: access?.forgetProject ?? null,
     renameProjectAccess: access?.renameProject ?? null,
     memberAuthority:

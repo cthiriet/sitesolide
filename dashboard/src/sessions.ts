@@ -69,11 +69,20 @@ export function isMemberSession(session: Session): boolean {
 }
 
 /**
- * `durationMs` is the owner's; a member's session lasts `memberDurationMs`,
- * half a day, whatever the owner's is.
+ * How long the owner's session stays open with nobody using it: a laptop
+ * left signed in for the weekend is signed out on Monday, whatever is left of
+ * its week. A page left open keeps it alive, its refreshes touching it.
  */
-export function isSessionAlive(session: Session, durationMs: number, now: number, memberDurationMs: number = durationMs): boolean {
-  return now - session.createdAt < (isMemberSession(session) ? memberDurationMs : durationMs);
+export const OWNER_IDLE_MS = 12 * 3600 * 1000;
+
+/**
+ * `durationMs` is the owner's; a member's session lasts `memberDurationMs`,
+ * half a day, whatever the owner's is. `ownerIdleMs`: the owner's closes
+ * too once unused that long, `seenAt` being rewritten every minute of use.
+ */
+export function isSessionAlive(session: Session, durationMs: number, now: number, memberDurationMs: number = durationMs, ownerIdleMs: number = Infinity): boolean {
+  if (isMemberSession(session)) return now - session.createdAt < memberDurationMs;
+  return now - session.createdAt < durationMs && now - session.seenAt < ownerIdleMs;
 }
 
 /**

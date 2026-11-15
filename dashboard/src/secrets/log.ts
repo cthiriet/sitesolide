@@ -54,6 +54,11 @@ export const OPERATIONS: Operation[] = [
   "generate",
   "migrate",
   "retire",
+  "passkey.add",
+  "passkey.remove",
+  "passkey.link",
+  "passkey.signin",
+  "passkey.signin_failed",
 ];
 
 /**
@@ -377,6 +382,10 @@ export const ACCESS_OPERATIONS: ReadonlySet<Operation> = new Set<Operation>([
   "sharing",
   "guest.create",
   "guest.revoke",
+  // Who can sign in as the owner: kept as long as who let whom in.
+  "passkey.add",
+  "passkey.remove",
+  "passkey.link",
 ]);
 
 /** How long a change of access is kept: the portal's audit kept them as long. */
