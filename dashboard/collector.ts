@@ -233,15 +233,75 @@ async function readUnit(name: string, asked: readonly string[] = PROPERTIES): Pr
 }
 
 /**
- * The size of the directory in bytes. `-x` so as not to cross a mount point:
- * this figure is read every minute, and the collector's unit already pays for
- * it in Nice and in IOSchedulingClass=idle.
+ * How long one project's measure may take, and every project's together.
+ *
+ * `du` runs as root over a tree its project fills as it likes: millions of
+ * names, hard links by the million that `du` has to remember, a mount it
+ * cannot leave. Unbounded, one such project held the whole pass past the
+ * unit's TimeoutStartSec, systemd killed it before the snapshot was written,
+ * and the dashboard stayed frozen for every project, at every pass. Each
+ * measure is therefore given a few seconds, and all of them a share of the
+ * unit's 45 that leaves room for everything read after; a measure that does
+ * not finish in time is killed and its project's size reads as unknown, null,
+ * never as a figure.
+ *
+ * In milliseconds; read from the environment for the tests alone, the unit
+ * sets neither.
  */
-async function folderBytes(folder: string): Promise<number | null> {
-  const output = await $`du -sxb ${folder}`.nothrow().quiet();
-  if (output.exitCode !== 0) return null;
-  const value = Number(output.stdout.toString().split(/\s+/)[0]);
-  return Number.isFinite(value) ? value : null;
+const MEASURE_TIMEOUT_MS = positiveNumber(process.env.MEASURE_TIMEOUT_MS ?? "5000", 5000);
+const MEASURE_BUDGET_MS = positiveNumber(process.env.MEASURE_BUDGET_MS ?? "20000", 20_000);
+
+function positiveNumber(raw: string, fallback: number): number {
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+/**
+ * The size of the directory in bytes, or null when it is not known within
+ * `deadline`, a timestamp: past it, nothing is started.
+ *
+ * `-x` so as not to cross a mount point, a project's own FUSE mount or a bind
+ * of something larger. The collector's unit already pays for it in Nice and
+ * IOSchedulingClass=idle; the timeout below bounds what it may cost.
+ *
+ * `timeout` kills `du` with SIGKILL once its time is up. A `du` stuck in the
+ * kernel, on a mount that no longer answers, may outlive even that: the race
+ * with a timer of its own stops waiting for it all the same, and the end of
+ * the pass, then systemd stopping the unit's control group, takes it away.
+ */
+async function folderBytes(folder: string, deadline: number): Promise<number | null> {
+  const allowed = Math.min(MEASURE_TIMEOUT_MS, deadline - Date.now());
+  if (allowed <= 0) return null;
+
+  let child: Bun.Subprocess<"ignore", "pipe", "ignore">;
+  try {
+    child = Bun.spawn(["du", "-sxb", "--", folder], { stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: allowed, killSignal: "SIGKILL" });
+  } catch {
+    return null;
+  }
+
+  const measured = (async (): Promise<number | null> => {
+    const [output, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+    if (code !== 0) return null;
+    const value = Number(output.split(/\s+/)[0]);
+    return Number.isFinite(value) ? value : null;
+  })();
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const abandoned = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), allowed + 1000);
+  });
+  try {
+    return await Promise.race([measured, abandoned]);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+      child.unref();
+    }
+  }
 }
 
 /** The ports listening on the loopback, to confront with the declared port. */
@@ -467,6 +527,8 @@ async function otherUnits(manifest: string | null): Promise<Record<string, RawUn
 async function collect(): Promise<Raw> {
   const folders: RawFolder[] = [];
   const earlier = await previousReading();
+  // Every measure together: past it, the projects left read as unknown.
+  const measuresEnd = Date.now() + MEASURE_BUDGET_MS;
 
   for (const entry of readdirSync(SITES_DIR, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -486,7 +548,7 @@ async function collect(): Promise<Raw> {
       manifest: content,
       unit: await readUnit(unitOf(entry.name)),
       units: await otherUnits(content),
-      bytes: await folderBytes(root),
+      bytes: await folderBytes(root, measuresEnd),
       deployed,
     });
   }
@@ -554,4 +616,8 @@ function writeSnapshot(raw: Raw): void {
 const raw = await collect();
 await $`mkdir -p ${dirname(STATE_FILE)}`.nothrow().quiet();
 writeSnapshot(raw);
-console.log(`${raw.folders.length} folders collected → ${STATE_FILE}`);
+const unknown = raw.folders.filter((folder) => folder.bytes === null).length;
+console.log(`${raw.folders.length} folders collected${unknown > 0 ? `, ${unknown} of unknown size` : ""} → ${STATE_FILE}`);
+// A measure abandoned on a mount that no longer answers must not hold the
+// pass open until the unit's timeout: the snapshot is written, the pass is over.
+process.exit(0);

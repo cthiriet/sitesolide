@@ -55,8 +55,11 @@ beforeEach(() => {
   writeFileSync(VICTIM, "untouched");
 });
 
-/** One pass of the collector; the snapshot it wrote. `path` goes before the PATH, for a fake command. */
-async function collect(path: string | null = null): Promise<Raw> {
+/**
+ * One pass of the collector; the snapshot it wrote. `path` goes before the
+ * PATH, for a fake command; `extra` adds to the environment.
+ */
+async function collect(path: string | null = null, extra: Record<string, string> = {}): Promise<Raw> {
   const child = Bun.spawn([process.execPath, "run", COLLECTOR], {
     env: {
       PATH: `${path === null ? "" : `${path}:`}${process.env.PATH ?? "/usr/bin:/bin"}`,
@@ -68,6 +71,7 @@ async function collect(path: string | null = null): Promise<Raw> {
       DOMAINS_FILE: join(D, "domaines.map"),
       BLOCKS_FOLDER: join(D, "blocks"),
       MONITOR_FILE: join(MONITOR, "status.json"),
+      ...extra,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -306,4 +310,52 @@ describe("the links between processes", () => {
       { from: "lab.api.service", port: 3050, open: 0, seen: hourAgo },
     ]);
   });
+});
+
+/**
+ * A `du` that answers at once for most folders and never for those named
+ * `stuck-*`, as on a tree of millions of names or a mount that no longer
+ * answers, and leaves a line in `calls` for every folder it was asked about.
+ * It ignores SIGTERM, as a process the kernel holds would: only SIGKILL ends it.
+ */
+function fakeDu(calls: string): string {
+  const bin = join(D, "bin-du");
+  mkdirSync(bin, { recursive: true });
+  const script = [
+    "#!/bin/sh",
+    'folder="$3"',
+    `printf '%s\\n' "$folder" >> '${calls}'`,
+    'case "$folder" in',
+    "  */stuck-*) trap '' TERM; while :; do sleep 1; done ;;",
+    '  *) printf "1234\\t%s\\n" "$folder" ;;',
+    "esac",
+    "",
+  ].join("\n");
+  writeFileSync(join(bin, "du"), script, { mode: 0o755 });
+  return bin;
+}
+
+describe("the size of each project, measured within a bound", () => {
+  test("a measure that does not end in time reads as unknown, and the others and the snapshot go on", async () => {
+    mkdirSync(join(SITES, "stuck-a"), { recursive: true });
+    const calls = join(D, "du-calls");
+    const started = Date.now();
+    const raw = await collect(fakeDu(calls), { MEASURE_TIMEOUT_MS: "300", MEASURE_BUDGET_MS: "10000" });
+    expect(Date.now() - started).toBeLessThan(10_000);
+    const bytes = Object.fromEntries(raw.folders.map((folder) => [folder.slug, folder.bytes]));
+    expect(bytes).toEqual({ dashboard: 1234, shop: 1234, "stuck-a": null });
+    // Called with -x, and with the folder after "--".
+    expect(readFileSync(calls, "utf8").split("\n").filter(Boolean).sort()).toEqual(["dashboard", "shop", "stuck-a"].map((slug) => join(SITES, slug)));
+  }, 30_000);
+
+  test("past the budget of every measure together, nothing more is started", async () => {
+    for (const slug of ["stuck-a", "stuck-b", "stuck-c"]) mkdirSync(join(SITES, slug), { recursive: true });
+    const calls = join(D, "du-calls");
+    const raw = await collect(fakeDu(calls), { MEASURE_TIMEOUT_MS: "400", MEASURE_BUDGET_MS: "600" });
+    const stuck = raw.folders.filter((folder) => folder.slug.startsWith("stuck-"));
+    expect(stuck.map((folder) => folder.bytes)).toEqual([null, null, null]);
+    // The first two ran out the budget between them; the third was never measured.
+    const asked = readFileSync(calls, "utf8").split("\n").filter((line) => line.includes("stuck-"));
+    expect(asked.length).toBeLessThan(3);
+  }, 30_000);
 });

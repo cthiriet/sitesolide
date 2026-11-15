@@ -31,7 +31,10 @@ Nice=10
 IOSchedulingClass=idle
 
 # A snapshot that drags on is a failed snapshot: the next one arrives in one
-# minute, and two collectors at once have nothing to bring each other.
+# minute, and two collectors at once have nothing to bring each other. The
+# measures of the projects' sizes, the one reading a project can make long,
+# stop at 5 seconds each and 20 together (collector.ts, MEASURE_TIMEOUT_MS
+# and MEASURE_BUDGET_MS), so that the snapshot is written well before this.
 TimeoutStartSec=45
 
 # Confinement of what runs as root. It reads /srv and /etc/caddy, and writes
@@ -61,4 +64,9 @@ RestrictNamespaces=true
 RestrictSUIDSGID=true
 RestrictRealtime=true
 LockPersonality=true
+# A `du` over millions of hard links remembers every one of them, and is the
+# process the kernel kills first if this ceiling is reached. With
+# OOMPolicy=continue the pass goes on without it, that project's size unknown,
+# rather than the whole unit stopping before the snapshot is written.
 MemoryMax=192M
+OOMPolicy=continue
