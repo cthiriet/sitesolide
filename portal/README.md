@@ -192,9 +192,10 @@ then: 24 hours, 7 days (the default), 30 days or none. A token never gives it.
 
 ## The owner's passkey
 
-The sign-in page offers **Sign in with a passkey** once the owner has
+The sign-in page leads with **Sign in with a passkey** once the owner has
 registered one on the dashboard (see
-[dashboard/README.md](../dashboard/README.md#passkeys)). It lets the owner
+[dashboard/README.md](../dashboard/README.md#passkeys)), the password
+following under *Were you given a password?* for guests. It lets the owner
 in as the owner, `admin`, as the owner's password did; password access and
 company accounts are untouched.
 
@@ -742,6 +743,20 @@ password: a link, not a form, since the flow leaves for the portal's own host
 and the CSP's `form-action 'self'` would refuse a form's redirect there. To
 someone signed in who has no access to the site, it says so, with *Use another
 account*, which asks the provider to choose.
+
+Once a passkey is offered (see [The owner's passkey](#the-owners-passkey)),
+the owner's password opens nothing here, and the page says so by its order:
+*Sign in with a passkey* is the primary button, with a key drawn inline;
+*Sign in with ...* follows in a quiet button when a provider is configured;
+then, below a divider, the password under *Were you given a password?*,
+beside a quiet *Enter*, for guests. The passkey's button is a link to the
+site's `/_portal/passkey`, for the same reason as the provider's: it
+redirects to the portal's own host, where the ceremony runs. The password
+is not folded behind a disclosure, since a guest who finds no field reads
+the page as closed to them, and it is not focused, so as not to invite the
+owner's. A refused password answers under its field, focused again; every
+other message, the passkey's or the account's, leads the card. Without a
+passkey offered the page is the one above, unchanged.
 
 ## What surprises people
 
