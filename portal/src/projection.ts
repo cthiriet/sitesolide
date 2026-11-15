@@ -22,6 +22,7 @@
  * until the steward writes again.
  */
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
+import { basename } from "node:path";
 import {
   EMPTY_PROJECTION,
   PROJECTION_MAX_BYTES,
@@ -66,7 +67,7 @@ export const READ_RETRY_MS = 3_000;
  * its rights are repaired (the change time). Read without following a link:
  * a link in its place is no projection, dangling or not.
  */
-function identityOf(path: string): string | null {
+export function identityOf(path: string): string | null {
   try {
     const info = lstatSync(path);
     return `${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
@@ -88,18 +89,18 @@ function errorName(error: unknown): string {
   return typeof code === "string" ? code : error instanceof Error ? error.name : "unknown";
 }
 
-export function readText(path: string): Read {
+export function readText(path: string, max: number = PROJECTION_MAX_BYTES): Read {
   let fd: number;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (error) {
     // A link in its place is refused by O_NOFOLLOW: no projection, whatever comes.
-    return errorName(error) === "ELOOP" ? { refused: "access.json is a link" } : { failed: errorName(error) };
+    return errorName(error) === "ELOOP" ? { refused: `${basename(path)} is a link` } : { failed: errorName(error) };
   }
   try {
     const info = fstatSync(fd);
-    if (!info.isFile()) return { refused: "access.json is not a plain file" };
-    if (info.size > PROJECTION_MAX_BYTES) return { refused: "access.json is larger than a projection ever is" };
+    if (!info.isFile()) return { refused: `${basename(path)} is not a plain file` };
+    if (info.size > max) return { refused: `${basename(path)} is larger than a projection ever is` };
     const buffer = new Uint8Array(info.size + 1);
     let done = 0;
     while (done <= info.size) {
@@ -112,7 +113,7 @@ export function readText(path: string): Read {
     try {
       return { text: new TextDecoder("utf-8", { fatal: true }).decode(buffer.slice(0, done)) };
     } catch {
-      return { refused: "access.json is not UTF-8" };
+      return { refused: `${basename(path)} is not UTF-8` };
     }
   } catch (error) {
     return { failed: errorName(error) };

@@ -11,6 +11,8 @@ import { handoffStore } from "./src/handoff";
 import { createProvider, readSettings } from "./src/oidc";
 import { createRoutes } from "./src/routes";
 import { createSso } from "./src/sso";
+import { createPasskeyReader, createPasskeySignIn, passkeyPlace } from "./src/passkey-signin";
+import { PASSKEYS_FILE } from "./src/passkeys";
 
 /**
  * The draw that signs the cookies, created at the first start in the data
@@ -59,7 +61,21 @@ const access = createAccessReader({ file: process.env.ACCESS_FILE ?? PROJECTION_
 const reading = access.state();
 console.log(`access: read from ${reading.reading === "steward" ? "the steward's projection" : "nowhere: only the owner's password and the admin emails open a site"}`);
 
+// The owner's passkeys, the public halves the steward projects, and where
+// their ceremony runs: the portal's own host, under the zone. See
+// src/passkey-signin.ts.
+const place = passkeyPlace(PUBLIC_URL, process.env.PASSKEY_RP_ID);
+const passkeys = createPasskeyReader({ file: process.env.PASSKEYS_FILE ?? PASSKEYS_FILE });
+console.log(place === null ? "passkeys not offered: the portal's address does not start with portal." : `passkeys: ceremonies on ${place.origin}, for ${place.rpId}`);
+
+// One store of codes for the sites, the dashboard and the owner's passkey:
+// a code says which it was minted for, and is redeemed for nothing else.
+const handoffs = handoffStore();
+
+const passkeySignIn = createPasskeySignIn({ key, online: ONLINE, place, passkeys, handoffs, audit, cookieDurationS: COOKIE_DURATION_S });
+
 const routes = createRoutes({
+  passkeys: { offered: passkeySignIn.offered, known: (ref) => passkeys.byRef(ref) !== null },
   key,
   verifyPassword: (submitted) => isPasswordValid(submitted, PASSWORD_HASH),
   online: ONLINE,
@@ -69,9 +85,6 @@ const routes = createRoutes({
   audit,
 });
 
-// One store of codes for the sites and the dashboard: a code says which it
-// was minted for, and is redeemed for nothing else.
-const handoffs = handoffStore();
 
 const sso = createSso({
   key,
@@ -82,6 +95,7 @@ const sso = createSso({
   audit,
   handoffs,
   dashboardOrigin: dashboard,
+  passkeyOffered: passkeySignIn.offered,
 });
 
 const dashboardAdmin = createDashboardAdmin({
@@ -120,6 +134,15 @@ const server = Bun.serve({
     "/oidc/start": { GET: sso.start },
     "/oidc/callback": { GET: sso.callback },
     "/oidc/signout": { GET: sso.signOut },
+
+    // The owner's passkey: the first two on the protected site, the last
+    // three on the portal's own host, where the ceremony runs. See
+    // src/passkey-signin.ts.
+    "/_portal/passkey": { GET: passkeySignIn.begin },
+    "/_portal/passkey/complete": { GET: passkeySignIn.complete },
+    "/passkey": { GET: passkeySignIn.page },
+    "/passkey/options": { POST: passkeySignIn.options },
+    "/passkey/verify": { POST: passkeySignIn.verify },
 
     // Never relayed by Caddy: see src/admin.ts.
     "/admin/access": { GET: admin.access },

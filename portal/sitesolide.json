@@ -9,7 +9,10 @@
     "/sante",
     "/oidc/start",
     "/oidc/callback",
-    "/oidc/signout"
+    "/oidc/signout",
+    "/passkey",
+    "/passkey/options",
+    "/passkey/verify"
   ],
   "env": {
     "NODE_ENV": "production",

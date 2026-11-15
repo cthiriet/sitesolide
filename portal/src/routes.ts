@@ -3,7 +3,7 @@
  * tests create as many as they have cases, with no port and no disk. The
  * server, for its part, creates only one.
  */
-import { remainingWait, isAcceptableSubmission } from "../borrowed/auth";
+import { clientKey, remainingWait, isAcceptableSubmission } from "../borrowed/auth";
 import { grantActor, grantExpiration, type PasswordGrant, type Role } from "./access";
 import { recordQuietly, type AuditStore, type NewEvent } from "./database";
 import { issueSignOut, IDENTITY_DURATION_S, OWNER_SIGN_OUT } from "./handoff";
@@ -47,6 +47,12 @@ export type Options = {
   settings?: Settings | null;
   /** Absent: nothing is recorded. */
   audit?: AuditStore;
+  /**
+   * The owner's passkeys (src/passkey-signin.ts): whether the sign-in page
+   * offers one, and whether the passkey a cookie names is still registered.
+   * Absent: none offered, and a passkey's cookie opens nothing.
+   */
+  passkeys?: { offered: () => boolean; known: (ref: string) => boolean };
 };
 
 /** What the sign-in page says to someone who has no access to this site. */
@@ -82,15 +88,19 @@ export const QUIET_PERIOD_MS = 24 * 60 * 60 * 1000;
 
 export function createRoutes(options: Options, clock: () => number = Date.now): Routes {
   /**
-   * The rate limiting, in memory and per host. Not per address: an attacker who
-   * changes address would bypass a per IP counter for free. Per host rather
-   * than global ever since guests type their own password: whoever gets it
-   * wrong on one site does not slow the owner down on another. What the
-   * attacker gains from it, one more attempt per site, weighs nothing against
-   * passwords drawn over 92 bits and more.
+   * The rate limiting, in memory, per site and per client within it
+   * (`clientKey`: the address Caddy saw, an IPv6 address by its /64). Per
+   * site ever since guests type their own password: whoever gets it wrong on
+   * one site does not slow the owner down on another. Per client since a
+   * counter for the whole site let anyone who sent wrong passwords keep the
+   * owner and every guest out of it for an hour at a time, for as long as
+   * they cared to. What a guesser with many addresses gains, three tries per
+   * address before the wait, weighs nothing against passwords drawn over 92
+   * bits, and the owner can sign in with a passkey instead.
    *
    * A restart resets it to zero, which gives nothing more to whoever is trying
-   * their luck, for the same reason.
+   * their luck, for the same reason. Bounded: past ten thousand clients, those
+   * whose wait is over are forgotten.
    */
   const attempts = new Map<string, { failures: number; lastAt: number }>();
 
@@ -121,7 +131,7 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
     // The provider is offered only where a cookie could follow: a portal with
     // no hash signs nothing, an identity no more than a password.
     const sso = settings === null || options.key === null ? null : { providerName: settings.providerName, chooseAccount };
-    return new Response(signInPage(returnTo, message, sso), {
+    return new Response(signInPage(returnTo, message, sso, options.passkeys?.offered() ?? false), {
       status,
       headers: { ...doorHeaders(), ...headers },
     });
@@ -192,6 +202,9 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       } else if (bearer.guest !== null) {
         if (options.access.passwordById(site, bearer.guest, now) === null) return door(returnTo, 401, "This access is no longer valid.");
         role = "visitor";
+      } else if (bearer.passkey !== undefined) {
+        // The owner, by a passkey: still registered, or this cookie is done.
+        if (options.passkeys === undefined || !options.passkeys.known(bearer.passkey)) return door(returnTo, 401, "This passkey is no longer registered.");
       }
 
       if (!isAcceptableRequest(method, req.headers.get("origin"), host, options.online, isWebSocketHandshake(req.headers))) {
@@ -231,7 +244,10 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       // guest's included, wait up to an hour, for good. An attacker who waits
       // a day between bursts gets four tries a day, fewer than the hour's
       // wait already lets through.
-      const kept = attempts.get(site);
+      // And by client within the site: counted for the site alone, anyone who
+      // sent wrong passwords kept the owner out of it for an hour at a time.
+      const counter = `${site}|${clientKey(req.headers.get("x-forwarded-for"))}`;
+      const kept = attempts.get(counter);
       const record = kept === undefined || now - kept.lastAt >= QUIET_PERIOD_MS ? { failures: 0, lastAt: 0 } : kept;
       const wait = remainingWait(record.failures, record.lastAt, now);
       if (wait > 0) {
@@ -279,7 +295,8 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       }
 
       if (!ok) {
-        attempts.set(site, { failures: record.failures + 1, lastAt: now });
+        if (attempts.size >= 10_000) for (const [key, one] of attempts) if (now - one.lastAt >= QUIET_PERIOD_MS || remainingWait(one.failures, one.lastAt, now) === 0) attempts.delete(key);
+        attempts.set(counter, { failures: record.failures + 1, lastAt: now });
         // The rate limiting above bounds these writes: a stranger hammering
         // one site writes a row per attempt it is allowed, not per request.
         audit({ actor: "anonymous", action: "portal.signin_failed", target: host, detail: { method: "password" } }, now);
@@ -289,7 +306,7 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
         return door(returnTo, 401, "Password refused.");
       }
 
-      attempts.delete(site);
+      attempts.delete(counter);
       audit({ actor: "owner", action: "portal.signin", target: host, detail: { method: "password" } }, now);
       const expiration = nowS + options.cookieDurationS;
       return open(returnTo, issueToken(options.key!, host, expiration), options.cookieDurationS);

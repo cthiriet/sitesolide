@@ -145,9 +145,11 @@ export function isBinding(value: unknown): value is string {
  * Who the sign-in is for. `site`: a protected site, whose own cookie the code
  * is redeemed for, on that site. `dashboard`: the machine's dashboard, which
  * is never behind the portal and redeems its code over the loopback for a
- * signed identity assertion, see src/dashboard.ts.
+ * signed identity assertion, see src/dashboard.ts. `owner`: the owner signed
+ * in with a passkey on the portal's host (src/passkey-signin.ts), redeemed on
+ * that site for the owner's cookie alone, never for a person's.
  */
-export type Audience = "site" | "dashboard";
+export type Audience = "site" | "dashboard" | "owner";
 
 export type Flow = {
   /** The protected site, as Caddy announced it when the flow began; or the dashboard's host. */
@@ -297,6 +299,8 @@ export type Handoff = {
   audience: Audience;
   /** The provider was made to ask again, and said so in its ID token: see `Flow.reauth`. */
   reauth: boolean;
+  /** For the `owner` audience: the reference of the passkey that signed (src/passkeys.ts). */
+  passkey?: string;
 };
 
 export type Redemption =

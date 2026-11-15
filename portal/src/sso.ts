@@ -95,6 +95,8 @@ export type SsoOptions = {
    * no dashboard flow can then be sealed (src/dashboard.ts).
    */
   dashboardOrigin?: string | null;
+  /** Is the owner's passkey offered on the sign-in page (src/passkey-signin.ts)? Absent, no. */
+  passkeyOffered?: () => boolean;
 };
 
 export type SsoRoutes = {
@@ -186,7 +188,7 @@ export function createSso(options: SsoOptions, clock: () => number = Date.now): 
   /** The sign-in page on the site, with the provider offered: the way back from every refusal there. */
   function door(returnTo: string, status: number, message: string, cookies: string[], chooseAccount = false): Response {
     const sso = options.settings === null ? null : { providerName: options.settings.providerName, chooseAccount };
-    return new Response(signInPage(returnTo, message, sso), { status, headers: headers(cookies, doorHeaders()) });
+    return new Response(signInPage(returnTo, message, sso, options.passkeyOffered?.() ?? false), { status, headers: headers(cookies, doorHeaders()) });
   }
 
   /** A page on the portal's own host, with the way back to the site when the flow names it. */

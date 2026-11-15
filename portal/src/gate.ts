@@ -36,6 +36,7 @@
  * the guests' included, and erasing the draw does too.
  */
 import { isAccessId, type Role } from "./access";
+import { isPasskeyRef } from "./passkeys";
 import { cleanEmail } from "./sharing";
 
 /** Size of the draw kept in the data folder. */
@@ -153,12 +154,35 @@ export function issueIdentityToken(key: Uint8Array, host: string, expiration: nu
   return `${expiration}.${IDENTITY_MARK}.${payload}.${signIdentity(key, host, expiration, payload)}`;
 }
 
+/** The piece that names the fourth form, the owner signed in with a passkey. */
+const PASSKEY_MARK = "pk";
+
+/**
+ * The owner's cookie when a passkey opened it: the owner's, as the first
+ * form, with the passkey's reference (src/passkeys.ts) signed in. The gate
+ * looks the reference up in the steward's projection of passkeys on every
+ * request, so that a passkey removed closes every site it opened at the
+ * next request, as a password access removed does. The literal `pk` keeps it
+ * apart from the identity form, which also has four pieces.
+ */
+function signPasskey(key: Uint8Array, host: string, expiration: number, ref: string): string {
+  const hmac = new Bun.CryptoHasher("sha256", key);
+  hmac.update(`${host}|${expiration}|${PASSKEY_MARK}|${ref}`);
+  return hmac.digest("base64url");
+}
+
+export function issuePasskeyToken(key: Uint8Array, host: string, expiration: number, ref: string): string {
+  return `${expiration}.${PASSKEY_MARK}.${ref}.${signPasskey(key, host, expiration, ref)}`;
+}
+
 /**
  * Who carries a valid token: the owner, the named guest access, or, with
  * `identity`, someone the identity provider vouched for. `guest` stays the
- * field it was, so that the owner still reads `{ guest: null }`.
+ * field it was, so that the owner still reads `{ guest: null }`; `passkey`
+ * names the owner's passkey when one opened the cookie, which the gate
+ * checks is still registered.
  */
-export type Bearer = { guest: string | null; identity?: Identity };
+export type Bearer = { guest: string | null; identity?: Identity; passkey?: string };
 
 /**
  * Does the token open this host, right now, and for whom?
@@ -187,10 +211,19 @@ export function readToken(
   if (!/^[0-9]{1,12}$/.test(rawExpiration)) return null;
 
   const expiration = Number(rawExpiration);
-  const longest = parts.length === 4 ? identityDurationS : durationS;
+  const longest = parts.length === 4 && parts[1] !== PASSKEY_MARK ? identityDurationS : durationS;
   if (expiration <= nowS || expiration > nowS + longest) return null;
 
   const received = Buffer.from(parts[parts.length - 1]!);
+
+  if (parts.length === 4 && parts[1] === PASSKEY_MARK) {
+    // The owner's form: the owner's thirty days, not an identity's day.
+    const ref = parts[2]!;
+    if (!isPasskeyRef(ref)) return null;
+    const expected = Buffer.from(signPasskey(key, host, expiration, ref));
+    if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) return null;
+    return { guest: null, passkey: ref };
+  }
 
   if (parts.length === 4) {
     if (parts[1] !== IDENTITY_MARK) return null;

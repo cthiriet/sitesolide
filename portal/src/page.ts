@@ -467,7 +467,14 @@ ${form}${footer === "" ? "" : `\n${footer}`}
  * The host name no longer appears in it: the address bar already shows it, and
  * the page of a closed site has no business saying more than the lock's one.
  */
-export function signInPage(returnTo: string, message = "", sso: SsoOffer | null = null): string {
+export function signInPage(returnTo: string, message = "", sso: SsoOffer | null = null, passkey = false): string {
+  // The owner's passkey, a link as the provider's: the ceremony runs on the
+  // portal's own host, under the zone every passkey is registered for, and
+  // the browser comes back with a code (src/passkey-signin.ts). Offered only
+  // once the owner has registered one.
+  const passkeyHtml = passkey
+    ? `\n    <p class="another"><a href="${escapeHtml(`/_portal/passkey?${new URLSearchParams({ retour: returnTo })}`)}">Sign in with a passkey</a></p>`
+    : "";
   // Without a provider, every message is the password's and sits under its
   // field. With one, most are the account's (not let in, expired, not
   // available), and they lead the card rather than redden the password.
@@ -478,7 +485,7 @@ export function signInPage(returnTo: string, message = "", sso: SsoOffer | null 
       <label for="motdepasse">Password</label>
       <input id="motdepasse" name="motdepasse" type="password" autocomplete="current-password" required${sso === null ? " autofocus" : ""}>${alertHtml}
       <button type="submit">Enter</button>
-    </form>`;
+    </form>${passkeyHtml}`;
   if (sso === null) {
     return template({ title: "This site is private.", text: "Enter your password.", form: passwordForm });
   }
@@ -513,6 +520,23 @@ export function portalPage(title: string, message: string, back: { href: string;
     title: escapeHtml(title),
     text: escapeHtml(message),
     form: back === null ? "" : `    <a class="sso" href="${escapeHtml(back.href)}">${escapeHtml(back.label)}</a>`,
+  });
+}
+
+/**
+ * The owner's passkey sign-in, on the portal's own host: one button, since a
+ * browser asks for a passkey only after a gesture, and the script that runs
+ * the ceremony, allowed by its hash alone (src/passkey-signin.ts). The
+ * sealed flow travels in an attribute, escaped, never in the script.
+ */
+export function passkeyPage(flow: string, script: string, back: { href: string; label: string } | null): string {
+  const backHtml = back === null ? "" : `\n    <p class="another"><a href="${escapeHtml(back.href)}">${escapeHtml(back.label)}</a></p>`;
+  return template({
+    title: "Sign in with a passkey.",
+    text: "Use a passkey you registered on the dashboard. It lets you in as the owner.",
+    form: `    <button type="button" id="passkey" data-flow="${escapeHtml(flow)}">Continue with a passkey</button>
+    <p class="alert notice" id="passkey-error" role="alert" hidden></p>${backHtml}
+    <script>${script}</script>`,
   });
 }
 
