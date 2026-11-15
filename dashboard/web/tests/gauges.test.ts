@@ -1,7 +1,5 @@
 import { describe, expect, test } from "bun:test"
 import {
-  BAR_CLASSES,
-  THRESHOLD_POSITIONS,
   WARNING_THRESHOLD,
   CRITICAL_THRESHOLD,
   level,
@@ -67,47 +65,20 @@ describe("load share", () => {
 })
 
 describe("gauge colour", () => {
-  test("below the first threshold, the bar takes the accent rather than a tone", () => {
+  test("below the first threshold, the bar stays normal", () => {
     expect(level(0)).toBe("normal")
     expect(level(WARNING_THRESHOLD - 1)).toBe("normal")
-    expect(BAR_CLASSES[level(WARNING_THRESHOLD - 1)]).toContain("bg-primary")
   })
 
-  test("at the first threshold it turns to attention, at the second to error", () => {
-    expect(BAR_CLASSES[level(WARNING_THRESHOLD)]).toContain("bg-attention")
-    expect(BAR_CLASSES[level(CRITICAL_THRESHOLD - 1)]).toContain("bg-attention")
-    expect(BAR_CLASSES[level(CRITICAL_THRESHOLD)]).toContain("destructive")
-    expect(BAR_CLASSES[level(150)]).toContain("destructive")
+  test("at the first threshold it warns, at the second it is critical", () => {
+    expect(level(WARNING_THRESHOLD)).toBe("warn")
+    expect(level(CRITICAL_THRESHOLD - 1)).toBe("warn")
+    expect(level(CRITICAL_THRESHOLD)).toBe("critical")
+    expect(level(150)).toBe("critical")
   })
 
   test("a missing measurement stays neutral", () => {
     expect(level(null)).toBe("normal")
-  })
-
-  /**
-   * The colour is set by an arbitrary variant aimed at the indicator's
-   * data-slot. Tailwind only generates these classes if it reads them spelled
-   * out in the source: building them piece by piece would hide them from it,
-   * and the bar would be transparent without anything failing.
-   */
-  test("every class is spelled out in full, so that Tailwind sees it", async () => {
-    const source = await Bun.file(new URL("../src/lib/gauges.ts", import.meta.url)).text()
-    for (const cssClass of Object.values(BAR_CLASSES)) {
-      expect(cssClass).toStartWith("[&_[data-slot=progress-indicator]]:bg-")
-      expect(source).toContain(`"${cssClass}"`)
-    }
-  })
-})
-
-describe("thresholds engraved on the track", () => {
-  /** The machine strip ticks every gauge at the thresholds: the position has to follow the constant. */
-  test("one position per threshold, following its value, spelled out in full", async () => {
-    const source = await Bun.file(new URL("../src/lib/gauges.ts", import.meta.url)).text()
-    expect(THRESHOLD_POSITIONS.map(({ threshold }) => threshold)).toEqual([WARNING_THRESHOLD, CRITICAL_THRESHOLD])
-    for (const { threshold, position } of THRESHOLD_POSITIONS) {
-      expect(position).toBe(`left-[${threshold}%]`)
-      expect(source).toContain(`"${position}"`)
-    }
   })
 })
 

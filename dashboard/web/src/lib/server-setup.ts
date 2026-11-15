@@ -47,10 +47,6 @@ export type GuideId = "heartbeat" | "webhook" | "offsite"
 
 export const GUIDE_ROWS: readonly GuideId[] = ["heartbeat", "webhook", "offsite"]
 
-export function isGuide(id: RowId): id is GuideId {
-  return (GUIDE_ROWS as readonly string[]).includes(id)
-}
-
 export type RowSpec = {
   id: RowId
   /** The row's name, the catalogue's label: "Heartbeat". */

@@ -22,7 +22,6 @@ import {
   restoreSummary,
   storeFileOffer,
   storeFileState,
-  storeFileSummary,
   storeMissing,
   storePending,
   storeVariableOffer,
@@ -35,9 +34,7 @@ import {
   fileProblems,
   operationOutcome,
   operationParts,
-  operationFile,
   pendingFiles,
-  pendingPhrase,
   pendingVariables,
   projectProblems,
   secretsBySite,
@@ -168,13 +165,6 @@ describe("a file of the store", () => {
     expect(storeFileOffer(storeView(), storeFile({ state: "missing", reason: "empty" }))).toEqual({ upload: true, remove: true })
   })
 
-  test("its size only when the steward gave it, which it does to the owner alone", () => {
-    expect(storeFileSummary({ bytes: 2_300, modifiedAt: NOW - 3 * HOUR }, NOW)).toBe("2.2 KB, changed 3h ago")
-    expect(storeFileSummary({ bytes: null, modifiedAt: NOW - 3 * HOUR }, NOW)).toBe("changed 3h ago")
-    expect(storeFileSummary({ bytes: 0, modifiedAt: null }, NOW)).toBe("Empty")
-    expect(storeFileSummary({ bytes: null, modifiedAt: null }, NOW)).toBe("")
-  })
-
   test("any bytes go in base64, whatever their size, as Buffer would encode them", () => {
     const random = crypto.getRandomValues(new Uint8Array(70_000))
     expect(encodeBase64(random)).toBe(Buffer.from(random).toString("base64"))
@@ -209,10 +199,6 @@ describe("the restart a change waits for", () => {
     })
     expect(pendingFiles(project)).toEqual(["tls.key"])
     expect(pendingVariables(project)).toBe(true)
-    expect(pendingPhrase(["gcp.json", "tls.key"], true)).toBe("the variables on the server, gcp.json and tls.key")
-    expect(pendingPhrase([], true)).toBe("the variables on the server")
-    expect(pendingPhrase(["portal.env"], false)).toBe("portal.env")
-    expect(pendingPhrase([], false)).toBe("")
   })
 })
 
@@ -317,14 +303,12 @@ describe("the log of a store", () => {
   test("a value generated names its variable in the store; never a value", () => {
     const entry = logEntry({ operation: "generate", file: "store", variable: "SESSION_SECRET" })
     expect(operationParts(entry)).toEqual({ verb: "Generate", object: "SESSION_SECRET", kind: "variable" })
-    expect(operationFile(entry)).toBe("store")
   })
 
   test("a file of the store set, removed, and the store made", () => {
     expect(operationParts(logEntry({ operation: "replace", file: "store/gcp.json", variable: null }))).toEqual({ verb: "Replace", object: "gcp.json", kind: "file" })
     const removed = logEntry({ operation: "remove", file: "store/gcp.json", variable: null })
     expect(operationParts(removed)).toEqual({ verb: "Remove", object: "gcp.json", kind: "file" })
-    expect(operationFile(removed)).toBe("store")
     expect(operationParts(logEntry({ operation: "create", file: "store", variable: null }))).toEqual({ verb: "Create", object: "store", kind: "file" })
     // A variable removed from the store stays a variable.
     expect(operationParts(logEntry({ operation: "remove", file: "store", variable: "A" }))).toEqual({ verb: "Remove", object: "A", kind: "variable" })
@@ -337,7 +321,6 @@ describe("the log of a store", () => {
     expect(operationOutcome({ ...merged, result: "rejects", detail: "invalid" })).toEqual({ tone: "attention", text: "Refused: invalid" })
     const retired = logEntry({ operation: "retire", file: "oldsite-ses.env", variable: null })
     expect(operationParts(retired)).toEqual({ verb: "Retire", object: "oldsite-ses.env", kind: "file" })
-    expect(operationFile(retired)).toBeNull()
   })
 
   test("an operation the page does not know is shown by its own word, not dropped", () => {

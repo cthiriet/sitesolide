@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
   UNREACHABLE,
-  LOG_MAX,
   PENDING_LABEL,
   BUSY,
   RESTART_SCALE_MS,
@@ -11,7 +10,6 @@ import {
   withSecrets,
   clockOffset,
   splitReason,
-  latestOperations,
   cutsTheDashboard,
   unlockStatus,
   systemdState,
@@ -20,12 +18,10 @@ import {
   generateToken,
   operationOutcome,
   refusalOf,
-  operationFile,
   readService,
   readVerdict,
   fileOffer,
   variableOffer,
-  siteOperations,
   operationParts,
   fileProblems,
   projectProblems,
@@ -455,36 +451,17 @@ describe("waiting for a restart", () => {
 })
 
 describe("log", () => {
-  test("the twenty most recent, the most recent first", () => {
-    const entries = Array.from({ length: 30 }, (_, index) => logEntry({ a: NOW + index }))
-    const latest = latestOperations(entries)
-    expect(latest).toHaveLength(LOG_MAX)
-    expect(latest[0]?.a).toBe(NOW + 29)
-    expect(latest.at(-1)?.a).toBe(NOW + 10)
-  })
-
-  test("at equal dates, the steward's order, without touching the list received", () => {
-    const entries = [logEntry({ variable: "A" }), logEntry({ variable: "B" })]
-    expect(latestOperations(entries).map((entry) => entry.variable)).toEqual(["A", "B"])
-    expect(latestOperations([], 20)).toEqual([])
-  })
-
   test("every operation names its object, and the location does not repeat it", () => {
     expect(operationParts(logEntry({ operation: "set" }))).toEqual({ verb: "Set", object: "CMS_TOKEN", kind: "variable" })
-    expect(operationFile(logEntry({ operation: "set" }))).toBe("store")
-    expect(operationFile(logEntry({ operation: "set", slug: "portal", file: "portal.env" }))).toBe("portal.env")
     expect(operationParts(logEntry({ operation: "read" }))).toMatchObject({ verb: "Read", object: "CMS_TOKEN" })
     expect(operationParts(logEntry({ operation: "remove" }))).toMatchObject({ verb: "Remove", object: "CMS_TOKEN" })
     const platform = { slug: "portal", file: "portal.env", variable: null }
     expect(operationParts(logEntry({ operation: "create", ...platform }))).toMatchObject({ verb: "Create", object: "portal.env" })
-    expect(operationFile(logEntry({ operation: "create", ...platform }))).toBeNull()
     expect(operationParts(logEntry({ operation: "restore", ...platform }))).toMatchObject({ verb: "Restore", object: "portal.env" })
     expect(operationParts(logEntry({ operation: "restart", file: null, variable: null }))).toMatchObject({
       verb: "Restart",
       object: "cms",
     })
-    expect(operationFile(logEntry({ operation: "restart", file: null, variable: null }))).toBeNull()
-    expect(operationFile(logEntry({ operation: "set", slug: "", file: "" }))).toBeNull()
   })
 
   test("the access registry's operations and the dashboard's sign-ins are named, with no object of their own", () => {
@@ -499,32 +476,27 @@ describe("log", () => {
       ["dashboard.signout", "Sign out"],
     ] as const) {
       expect(operationParts(logEntry({ operation }))).toEqual({ verb, object: null, kind: null })
-      expect(operationFile(logEntry({ operation }))).toBeNull()
     }
   })
 
   test("replacing a file, changing a password, changing general access", () => {
     const replacement = logEntry({ operation: "replace", file: "builder-ssh", variable: null, slug: "builder" })
     expect(operationParts(replacement)).toEqual({ verb: "Replace", object: "builder-ssh", kind: "file" })
-    expect(operationFile(replacement)).toBeNull()
 
     const password = logEntry({ operation: "password", slug: "portal", file: "portal.env", variable: "PASSWORD_HASH" })
     expect(operationParts(password)).toEqual({ verb: "Change password", object: "PASSWORD_HASH", kind: "variable" })
-    expect(operationFile(password)).toBe("portal.env")
 
     const portal = logEntry({ operation: "portal", slug: "wheels", file: null, variable: null })
     expect(operationParts(portal)).toEqual({ verb: "Change general access", object: "wheels", kind: "project" })
     expect(operationParts({ ...portal, detail: "on, ok" }).verb).toBe("Restrict")
     expect(operationParts({ ...portal, detail: "off, failure" }).verb).toBe("Make public")
     expect(operationParts({ ...portal, detail: "code, ok" }).verb).toBe("Use a code")
-    expect(operationFile(portal)).toBeNull()
     // A new code: the site is its object, the code never part of it.
     expect(operationParts(logEntry({ operation: "code", slug: "wheels", file: null, variable: null, detail: "renew, ok" }))).toEqual({ verb: "New code", object: "wheels", kind: "project" })
   })
 
   test("an unlock has no object", () => {
     const entry = logEntry({ operation: "unlock", slug: null, file: null, variable: null })
-    expect(operationFile(entry)).toBeNull()
     expect(operationParts(entry)).toEqual({ verb: "Unlock changes", object: null, kind: null })
     expect(operationParts({ ...entry, operation: "lock" })).toEqual({ verb: "Lock changes", object: null, kind: null })
   })
@@ -587,15 +559,6 @@ describe("log", () => {
     expect(operationOutcome(logEntry({ operation: "portal", result: "failure", detail: "on, failure" }))).toEqual({ tone: "error", text: "Failed" })
     expect(operationOutcome(logEntry({ operation: "portal", result: "rejects", detail: "on, rejects" }))).toEqual({ tone: "attention", text: "Refused" })
     expect(operationOutcome(logEntry({ operation: "code", result: "failure", detail: "renew, failure" }))).toEqual({ tone: "error", text: "Failed" })
-  })
-
-  test("a site's log does not show another site, even if the relay returned it", () => {
-    const entries = [
-      logEntry({ slug: "cms" }),
-      logEntry({ slug: "calendar" }),
-      logEntry({ operation: "unlock", slug: null, file: null, variable: null }),
-    ]
-    expect(siteOperations(entries, "cms").map((entry) => entry.slug)).toEqual(["cms", null])
   })
 
   test("a refusal and a failure state their reason, an unknown reason is shown as it is", () => {

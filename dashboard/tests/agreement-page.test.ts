@@ -12,7 +12,6 @@ import { generateUnit } from "../borrowed/unit";
 import { readConfig } from "../../monitor/src/config";
 import { alertUrl, webhookFormat } from "../../monitor/src/notify";
 import { buildStatus } from "../../monitor/src/status";
-import { downServices } from "../web/src/lib/sidebar";
 import { PEAK_WARNING_SHARE, serviceLevel } from "../web/src/lib/gauges";
 import {
   ALERTS_UNDELIVERED_LABEL,
@@ -212,7 +211,6 @@ describe("the page and the server say the same thing", () => {
     for (const site of apps) {
       expect([site.slug, serviceState(site).tone === "error"]).toEqual([site.slug, fallen(site)]);
     }
-    expect(downServices(SITES, NOW)).toBe(apps.filter(fallen).length);
   });
 
   /** The memory bar turns amber exactly when the list of discrepancies flags the peak. */
@@ -338,7 +336,6 @@ describe("a project's services, on their rows and in the discrepancies", () => {
       expect([site.slug, serviceState(site).tone === "error"]).toEqual([site.slug, stopped(site.slug)]);
     }
     expect(serviceState(snapshot.sites.find((site) => site.slug === "armed")!)).toEqual({ tone: "ok", label: "Scheduled" });
-    expect(downServices(snapshot.sites, NOW)).toBe(1);
   });
 });
 

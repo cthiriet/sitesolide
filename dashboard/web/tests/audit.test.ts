@@ -4,7 +4,6 @@ import {
   SOURCES,
   activityDays,
   activityKeep,
-  activityUrl,
   actorLabel,
   auditQuery,
   auditWords,
@@ -21,7 +20,6 @@ import {
   keyWords,
   mergeStatuses,
   refreshRows,
-  sourceWords,
   toCsv,
   toJsonLines,
   windowNote,
@@ -37,15 +35,6 @@ function row(partial: Partial<AuditRow> = {}): AuditRow {
 describe("the sources", () => {
   test("every source the server knows, in its order", () => {
     expect(SOURCES.map((source) => source.key)).toEqual(["dashboard", "portal", "egress", "backups", "steward"])
-  })
-
-  test("each state in a word and a tone, red for a source that can't be read alone", () => {
-    const status = (partial: Partial<SourceStatus>): SourceStatus => ({ name: "portal", state: "ok", message: null, window: null, ...partial })
-    expect(sourceWords(status({}))).toEqual({ word: "Read", tone: "ok" })
-    expect(sourceWords(status({ window: 50 }))).toEqual({ word: "Latest 50", tone: "ok" })
-    expect(sourceWords(status({ state: "unavailable" }))).toEqual({ word: "Can't read", tone: "error" })
-    expect(sourceWords(status({ state: "outdated" }))).toEqual({ word: "Needs updating", tone: "attention" })
-    expect(sourceWords(status({ state: "not-installed" }))).toEqual({ word: "Not installed", tone: "neutral" })
   })
 
   test("the sources read only to their latest entries are named once their end is reached", () => {
@@ -277,8 +266,6 @@ describe("a row in words", () => {
     expect(readActivity(params)).toEqual({ source: "steward", action: "access", target: "cms", type: "access", since: "7d" })
     expect(readActivity(new URLSearchParams("source=nowhere&type=everything"))).toEqual({})
     expect(readActivity(new URLSearchParams("q=%20alice%20&since=2026-10-21&until=2026-10-23"))).toEqual({ query: "alice", since: "2026-10-21", until: "2026-10-23" })
-    expect(activityUrl({ action: "access", target: "cms" })).toBe("/activity/?action=access&target=cms")
-    expect(activityUrl({})).toBe("/activity/")
   })
 
   test("a range's end is kept only after a start that is a day, and not before it", () => {

@@ -6,7 +6,7 @@
 import { plural } from "./format"
 import type { MachinePage, Section } from "./pages"
 import { fileProblems } from "./secrets"
-import { siteAccess, serviceSummaryOf } from "./sites"
+import { siteAccess } from "./sites"
 import type { Tone } from "./tones"
 import type { Discrepancy, PortalView, ProjectView, Site } from "./types"
 
@@ -54,11 +54,6 @@ export function sidebarShortcut(agent: string): string {
  * is not set).
  */
 export type Indicator = { count: number; tone: Tone; label: string; dot?: boolean }
-
-/** An app service that is not running, as the site's row shows it in red. */
-export function downServices(sites: readonly Site[], now: number): number {
-  return sites.filter((site) => site.type === "app" && serviceSummaryOf(site, now).kind === "stopped").length
-}
 
 /** The discrepancy count, in error if there is one, in attention otherwise. Nothing with no discrepancy. */
 function discrepancyIndicator(discrepancies: readonly Discrepancy[] | null): Indicator | null {

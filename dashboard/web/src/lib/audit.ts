@@ -8,7 +8,7 @@
  * detail is data from a component, rendered as text and never as markup.
  */
 import { callApi } from "./api"
-import { historyUrl, readHistory, serverAction, sinceStart, type HistoryFilter } from "./history"
+import { readHistory, serverAction, sinceStart, type HistoryFilter } from "./history"
 import { capitalise, dateTime, plural } from "./format"
 import { QUERY_PARAM } from "./list-state"
 import { normalize, queryWords } from "./search"
@@ -31,20 +31,6 @@ export const SOURCES: readonly SourceEntry[] = [
 
 export function sourceLabel(source: AuditSource): string {
   return SOURCES.find((entry) => entry.key === source)?.label ?? source
-}
-
-/** A source's state in a word and a tone: what the strip at the top of the page says. */
-export function sourceWords(status: SourceStatus): { word: string; tone: Tone } {
-  switch (status.state) {
-    case "ok":
-      return status.window === null ? { word: "Read", tone: "ok" } : { word: `Latest ${status.window}`, tone: "ok" }
-    case "unavailable":
-      return { word: "Can't read", tone: "error" }
-    case "outdated":
-      return { word: "Needs updating", tone: "attention" }
-    case "not-installed":
-      return { word: "Not installed", tone: "neutral" }
-  }
 }
 
 /**
@@ -125,9 +111,6 @@ export function serverKey(filter: ActivityFilter): string {
   const { query: _query, ...server } = filter
   return JSON.stringify(server)
 }
-
-/** The Activity page's address, narrowed: the History links' contract, lib/history.ts. */
-export const activityUrl = historyUrl
 
 /** Midnight of a `yyyy-mm-dd` day in the browser's time zone, `days` later. */
 function midnight(day: string, days = 0): Date {

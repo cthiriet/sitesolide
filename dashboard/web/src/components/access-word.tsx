@@ -1,24 +1,10 @@
-import type { ReactNode } from "react"
-import { ArrowUpRight, Check, Copy, Globe, KeyRound, Lock, type LucideIcon } from "lucide-react"
+import { ArrowUpRight, Check, Copy, KeyRound } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { CopyFallback, useCopy } from "@/components/copy"
-import { Status } from "@/components/page"
-import { siteAccess } from "@/lib/sites"
-import type { Site } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /** The landing page's chip: 20 px, the hairline, the cell's surface, a 12 px word. */
 export const CHIP = "inline-flex h-5 shrink-0 items-center gap-1.5 rounded-md border bg-cell px-1.5 text-xs font-medium whitespace-nowrap"
-
-/** A general access as a chip, with its glyph: the landing page's access badges. */
-function AccessChip({ icon: Icon, title, className, children }: { icon: LucideIcon; title?: string; className?: string; children: ReactNode }) {
-  return (
-    <span title={title} className={cn(CHIP, "h-6 px-2", className)}>
-      <Icon aria-hidden="true" className="size-3 shrink-0" strokeWidth={2.25} />
-      {children}
-    </span>
-  )
-}
 
 /**
  * An email that breaks right after its @ when the line is too narrow,
@@ -96,44 +82,4 @@ export function CodeChip({
       )}
     </span>
   )
-}
-
-const PUBLIC = "Anyone with the address can open the site"
-
-/**
- * A site's general access, in an inventory row. A disagreement between the
- * manifest and what is running is said in red, and spelled out in the
- * discrepancies and on the site's Overview.
- */
-export function AccessWord({ site, large = false }: { site: Pick<Site, "slug" | "portal" | "lock">; large?: boolean }) {
-  const access = siteAccess(site)
-  switch (access.kind) {
-    case "code":
-      return (
-        <span className="grid justify-items-start gap-1.5">
-          <AccessChip icon={KeyRound} className="text-secondary-foreground">
-            Anyone with the code
-          </AccessChip>
-          {access.code !== null && <CodeChip slug={site.slug} code={access.code} url={access.url} large={large} />}
-        </span>
-      )
-    case "portal":
-      return (
-        <AccessChip icon={Lock} className="text-foreground">
-          Restricted
-        </AccessChip>
-      )
-    case "open":
-      return (
-        <AccessChip icon={Globe} title={PUBLIC} className="text-muted-foreground">
-          Public
-        </AccessChip>
-      )
-    case "mismatch":
-      return (
-        <Status tone="error" className="whitespace-normal">
-          {access.label}
-        </Status>
-      )
-  }
 }

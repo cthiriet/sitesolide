@@ -12,7 +12,6 @@
  * row that shows it.
  */
 import { MISSING_SECRET_SEVERITY, storeMissing } from "../../../borrowed/store-protocol"
-import { ago, size } from "./format"
 import { severityTone, type Tone } from "./tones"
 import type { GenerateFormat, ProjectView, StoreChangeResponse, StoreFileView, StoreRestoreResponse, StoreVariableView, StoreView } from "./types"
 
@@ -150,17 +149,6 @@ export function storeFileState(file: Pick<StoreFileView, "state" | "reason" | "d
     case "unmanaged":
       return { text: "Unmanaged", tone: "attention" }
   }
-}
-
-/**
- * "2.1 kB, changed 3h ago": its size only when the steward gave it, which it
- * does to the owner alone, and an empty file said as such.
- */
-export function storeFileSummary(file: Pick<StoreFileView, "bytes" | "modifiedAt">, serverNow: number): string {
-  const pieces: string[] = []
-  if (file.bytes !== null) pieces.push(file.bytes === 0 ? "Empty" : size(file.bytes))
-  if (file.modifiedAt !== null) pieces.push(`changed ${ago(serverNow - file.modifiedAt)}`)
-  return pieces.join(", ")
 }
 
 /**

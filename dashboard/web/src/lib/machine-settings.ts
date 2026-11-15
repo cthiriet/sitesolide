@@ -214,11 +214,6 @@ export function settingsOf(group: SettingGroup): MachineSetting[] {
   return SETTINGS.filter((setting) => setting.group === group)
 }
 
-/** The setting a variable of a platform file belongs to, null for a variable no setting names. */
-export function settingOfVariable(slug: string, file: string, variable: string): MachineSetting | null {
-  return SETTINGS.find((setting) => setting.slug === slug && setting.file === file && setting.variables.some((one) => one.name === variable)) ?? null
-}
-
 /**
  * What a change to a file ends on when no restart applies it, or null when one
  * does. For a file this catalogue does not know, that nothing applies it by

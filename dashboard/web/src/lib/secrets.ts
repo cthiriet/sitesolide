@@ -28,9 +28,6 @@ import type {
 /** A revealed value masks itself again after this delay. */
 export const REVEAL_MS = 30_000
 
-/** The log shows the last twenty operations. */
-export const LOG_MAX = 20
-
 /** A generated token: 32 bytes, that is 256 bits, 43 characters in base64url. */
 export const TOKEN_BYTES = 32
 
@@ -243,13 +240,6 @@ export function pendingVariables(project: ProjectView): boolean {
   return project.store !== null && storePending(project.store, project.service?.startedAt ?? null).variables
 }
 
-/** "The variables on the server and gcp.json", "portal.env": what a restart applies, in one phrase. */
-export function pendingPhrase(files: readonly string[], variables: boolean): string {
-  const pieces = [...(variables ? ["the variables on the server"] : []), ...files]
-  if (pieces.length <= 1) return pieces.join("")
-  return `${pieces.slice(0, -1).join(", ")} and ${pieces[pieces.length - 1]}`
-}
-
 // --- What is wrong in a project ------------------------------------------------
 
 export type Problem =
@@ -427,25 +417,6 @@ export function cutsTheDashboard(verdict: Pick<RestartVerdict, "kind">): boolean
 
 // --- The log -------------------------------------------------------------------
 
-/**
- * The latest operations, the most recent first. The steward already returns
- * them in that order; the sort keeps the page right should that change, and at
- * equal dates the received order is preserved.
- */
-export function latestOperations(entries: readonly LogEntry[], max = LOG_MAX): LogEntry[] {
-  return [...entries].sort((a, b) => b.a - a.a).slice(0, Math.max(0, max))
-}
-
-/**
- * A site's log. The steward already filters by `?slug=`; an entry naming
- * another site is still not displayed, should an older relay return everything.
- * An entry with no site, an unlock, stays: the steward returned it for this
- * site.
- */
-export function siteOperations(entries: readonly LogEntry[], slug: string): LogEntry[] {
-  return entries.filter((entry) => entry.slug === null || entry.slug === slug)
-}
-
 const OPERATION_NAMES: Record<Operation, string> = {
   unlock: "Unlock changes",
   lock: "Lock changes",
@@ -553,24 +524,6 @@ export function operationParts(entry: LogEntry): OperationParts {
       return { verb, object: entry.slug, kind: entry.slug === null ? null : "project" }
     default:
       return { verb, object: null, kind: null }
-  }
-}
-
-/** The file the operation applied to, when the label does not name it already. */
-export function operationFile(entry: LogEntry): string | null {
-  switch (entry.operation) {
-    case "read":
-    case "set":
-    case "remove":
-    case "password":
-    case "generate":
-      // `store`, or `store/<name>` for a file of it removed: the place, the
-      // label naming the file already.
-      return storeFileOf(entry.file) !== null ? STORE_PLACE : entry.file === "" ? null : entry.file
-    case "migrate":
-      return STORE_PLACE
-    default:
-      return null
   }
 }
 

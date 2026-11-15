@@ -11,7 +11,6 @@ import {
   heartbeatPageHint,
   readingSentence,
   settingById,
-  settingOfVariable,
   settingState,
   settingsOf,
   unrestartedSentence,
@@ -135,13 +134,6 @@ describe("the catalogue", () => {
         seen.set(key, setting.id)
       }
     }
-  })
-
-  test("a variable is found with its setting", () => {
-    expect(settingOfVariable("dashboard", MONITOR_FILE, "HEARTBEAT_URL")?.id).toBe("heartbeat")
-    expect(settingOfVariable("portal", "portal.env", "OIDC_CLIENT_SECRET")).toBeNull()
-    expect(settingOfVariable("portal", "portal.env", "PASSWORD_HASH")?.id).toBe("portal-password")
-    expect(settingOfVariable("dashboard", MONITOR_FILE, "HEARTBEAT_ULR")).toBeNull()
   })
 
   test("the groups hold the settings the page puts under them", () => {

@@ -461,7 +461,7 @@ on screen.
 | `UnlockedPill` | the header's *Unlocked, 9 min* and its x, drawn by `PageHeader` |
 | `HistoryLink` | the header's *History*, Activity narrowed |
 | `Count` | the number beside a title, the landing page's mono chip: `cell`, the hairline, Plex Mono |
-| `CHIP`, `AccessWord` | a 20 or 24 px chip; a site's general access as the landing page's badges, *Restricted* with a lock, *Public* with a globe and quieter, *Anyone with the code* with a key over the code in its well |
+| `CHIP`, `CodeChip` | a 20 or 24 px chip; the preview code in its well, with its copy and open buttons |
 | `ExternalLink` | a site address, underlined at rest, in a new tab; the address in mono |
 | `MachineStrip` | the strip, reserved for the home page: a status line, no panel, load, memory and disk on one 32 px line, each a mono label, a 56 px bar, its figure in its level's colour and, from 56 rem of the line (`@container/strip`), its caption ("1.3 on 6 cores"); each the button of a sort, Load of CPU |
 | `MemoryUsage`, `UsageRing` | a service's memory, or a site's running services' together, the same wherever it shows, the Sites list's Memory column, the Overview's Service panel and Services table, a card on the Services canvas and its sheet: an 18 px ring of it against the limit (`UsageRing`) in the level of the service's own bounds, then the figure, muted in a list and plain among facts, amber from a peak at 80 % of the limit and red past 90 %; "47 of 256 MB" where there is room, "47 MB" in the Sites list; the limit, the share and the peak in its tooltip (`memoryReading` in `lib/sites.ts`) |
@@ -473,9 +473,9 @@ on screen.
 | `serviceWord` | the word and tone of a systemd unit, the same on the home page, the Overview and Secrets; *Scheduled* for the anchor of a project whose every service is scheduled, `active (exited)` |
 | `scheduledWord`, `runLines` | a scheduled service's word, *Waiting* between two runs and never *Down*, and its last and next runs under it |
 
-shadcn components available in `src/components/ui/`: `alert-dialog`, `badge`,
+shadcn components available in `src/components/ui/`: `alert-dialog`,
 `button`, `card`, `dialog`, `dropdown-menu`, `input`, `label`, `popover`,
-`progress`, `select`, `separator`, `sheet`, `sidebar`, `skeleton`, `table`,
+`progress`, `select`, `separator`, `sheet`, `sidebar`, `skeleton`,
 `tooltip`. The sheet's scrim is light and unblurred, a list being read
 beside its sheet.
 Add with `bunx --bun shadcn@latest add <name>`. The Ledger look lives in their

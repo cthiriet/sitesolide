@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
+  correspond,
   isTyping,
-  filterSites,
   queryWords,
   normalize,
   searchShortcut,
@@ -10,6 +10,12 @@ import {
 import { TYPE_LABELS } from "../src/lib/sites"
 import type { Site } from "../src/lib/types"
 import { scheduledService, service, site, siteService } from "./factory"
+
+/** The sites that match, as the list filters them (lib/site-list.ts): every word, in the original order. */
+function filterSites<T extends Site>(sites: T[], query: string): T[] {
+  const words = queryWords(query)
+  return words.length === 0 ? sites : sites.filter((one) => correspond(one, words))
+}
 
 const portal = (exemptions: string[] = []) => ({ wanted: true, installed: true, exemptions })
 

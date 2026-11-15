@@ -124,13 +124,6 @@ export function correspond(site: SearchableSite, words: string[]): boolean {
   return words.every((word) => hash.includes(word))
 }
 
-/** The sites that match, in their original order. With no word, all of them. */
-export function filterSites<T extends SearchableSite>(sites: T[], query: string): T[] {
-  const words = queryWords(query)
-  if (words.length === 0) return sites
-  return sites.filter((site) => correspond(site, words))
-}
-
 /**
  * The title of the list's empty state when it holds no site outside
  * Platform: a fresh machine, the platform's own projects alone and well.

@@ -27,16 +27,6 @@ export const MEMORY_CRITICAL_SHARE = 0.9
 
 export type Level = "normal" | "warn" | "critical"
 
-/**
- * Where the two thresholds sit on a gauge's track, which the machine strip
- * engraves. Spelled out in full, like every class Tailwind has to generate:
- * tests/gauges.test.ts checks that they follow the thresholds.
- */
-export const THRESHOLD_POSITIONS: readonly { threshold: number; position: string }[] = [
-  { threshold: WARNING_THRESHOLD, position: "left-[70%]" },
-  { threshold: CRITICAL_THRESHOLD, position: "left-[90%]" },
-]
-
 /** The used share, from 0 to 100. A zero or unknown total returns nothing. */
 export function usedShare(free: number | null, total: number | null): number | null {
   if (free === null || total === null || total <= 0) return null
@@ -61,22 +51,6 @@ export function level(percent: number | null): Level {
   if (percent >= CRITICAL_THRESHOLD) return "critical"
   if (percent >= WARNING_THRESHOLD) return "warn"
   return "normal"
-}
-
-/**
- * The indicator's colour, set by a variant aimed at its `data-slot` rather than
- * by editing the component shadcn generated: a `shadcn add --overwrite` would
- * replace it without a word.
- *
- * Below the first threshold the bar takes the accent, petrol, and not a tone:
- * a green bar everywhere would say nothing, and the tones thus stay reserved
- * for what needs a look. The colours are the tokens of styles/global.css, see
- * lib/tones.ts.
- */
-export const BAR_CLASSES: Record<Level, string> = {
-  normal: "[&_[data-slot=progress-indicator]]:bg-primary",
-  warn: "[&_[data-slot=progress-indicator]]:bg-attention",
-  critical: "[&_[data-slot=progress-indicator]]:bg-destructive",
 }
 
 /** A service's memory against its ceiling: the peak warns, the current level alarms. */
