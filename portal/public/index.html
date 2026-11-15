@@ -222,10 +222,10 @@
       text-wrap: pretty;
     }
 
-    .notice + a.sso { margin-top: 16px; }
+    .notice + a.button { margin-top: 16px; }
 
     button,
-    a.sso {
+    a.button {
       grid-column: 1 / -1;
       display: flex;
       align-items: center;
@@ -253,13 +253,13 @@
       transition: transform .12s ease, box-shadow .12s ease, filter .12s ease, border-color .12s ease;
     }
 
-    a.sso { margin-top: 24px; }
+    a.button { margin-top: 24px; }
 
     button:hover,
-    a.sso:hover { filter: brightness(1.06) saturate(1.04); }
+    a.button:hover { filter: brightness(1.06) saturate(1.04); }
 
     button:active,
-    a.sso:active { transform: translateY(1px); box-shadow: var(--sh-btn-press); }
+    a.button:active { transform: translateY(1px); box-shadow: var(--sh-btn-press); }
 
     button:focus-visible,
     a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
@@ -271,21 +271,6 @@
     /* A button straight under the words, with no form around it: the room a
        form would have left. */
     .lede + button { margin-top: 24px; }
-
-    /* A way in that is not the page's first: raised and neutral, as the Enter
-       beside a password that is not the primary action. */
-    a.sso.quiet {
-      margin-top: 8px;
-      color: var(--ink);
-      background: linear-gradient(180deg, var(--raised) 0%, var(--card) 100%);
-      border-color: var(--line-2);
-      box-shadow: var(--sh-btn-2);
-      text-shadow: none;
-    }
-
-    a.sso.quiet:hover { filter: none; border-color: var(--faint); }
-
-    a.sso.quiet:active { box-shadow: var(--sh-btn-2-press); }
 
     /* With another way in, its button is the primary action: the
        password goes on one line beside a raised neutral Enter. */
@@ -327,9 +312,7 @@
 
     .another a { display: inline-flex; align-items: center; min-height: 44px; }
 
-    .another + .or { margin-top: 4px; }
-
-    a:not(.sso) {
+    a:not(.button) {
       color: var(--accent-text);
       text-decoration: underline;
       text-decoration-thickness: 1px;
@@ -338,7 +321,7 @@
       border-radius: 4px;
     }
 
-    a:not(.sso):hover { text-decoration-color: currentColor; }
+    a:not(.button):hover { text-decoration-color: currentColor; }
 
     /* The card's foot: a hairline across the whole card, then who to ask. */
     .help {

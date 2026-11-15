@@ -8,9 +8,8 @@
  * On the portal's own host, always, never on the site. A passkey answers
  * only a page whose host falls under the relying party it was registered
  * for: a site's own domain, `shop.example`, is not under the zone, and no
- * passkey of the zone signs there. The sign-in therefore takes the road a
- * company account takes (src/handoff.ts), the same pieces doing the same
- * work:
+ * passkey of the zone signs there. The sign-in therefore goes through the
+ * portal's host and comes back with a one-time code (src/handoff.ts):
  *
  * ```
  * site /_portal/passkey             binding cookie on the site, the flow sealed for that host
@@ -38,21 +37,19 @@
  *   (src/webauthn.ts). The signature counter is not compared: the portal
  *   keeps none, the registry being root's, and a synced passkey has none
  *   anyway.
- * - **The flow, the binding, the code**: exactly as for a company account.
- *   The flow names the host Caddy announced when it began; the code is
- *   redeemed once, within a minute, on that host, by the browser that holds
- *   the binding, and for the owner's cookie alone (`owner` audience).
+ * - **The flow, the binding, the code**: the flow names the host Caddy
+ *   announced when it began; the code is redeemed once, within a minute, on
+ *   that host, by the browser that holds the binding.
  * - **Bounded per client**: challenges and verifications per minute for each
  *   address Caddy saw, with a far higher ceiling for everyone together, so
  *   that one stranger's flood never keeps the owner out; the challenges in
  *   flight bounded, the failures recorded at most thirty a minute, and the
  *   codes in flight by the handoff store's own bounds.
  *
- * Built around its dependencies, like src/sso.ts.
+ * Built around its dependencies, like src/routes.ts.
  */
 import { clientKey } from "../borrowed/auth";
 import { recordQuietly, type AuditStore, type NewEvent } from "./database";
-import { FLOW_DURATION_S, isAcceptableUrl } from "./oidc";
 import {
   clearCookie,
   cookieName,
@@ -68,7 +65,7 @@ import {
   setCookie,
   unseal,
 } from "./gate";
-import { bindingHash, drawBinding, isBinding, type HandoffStore } from "./handoff";
+import { bindingHash, drawBinding, FLOW_DURATION_S, isBinding, type HandoffStore } from "./handoff";
 import { passkeyPage, portalPage, signInPage } from "./page";
 import { EMPTY_PASSKEYS, PASSKEYS_MAX_BYTES, passkeyRef, readPasskeyProjection, type PasskeyProjection, type ProjectedPasskey } from "./passkeys";
 import { identityOf, readText, READ_RETRY_MS, type Read } from "./projection";
@@ -151,6 +148,28 @@ export function createPasskeyReader(options: PasskeyReaderOptions): PasskeyReade
 }
 
 // --- Where the ceremony runs ----------------------------------------------------
+
+/** RFC 6761 reserves `localhost` and every name under it for the loopback. */
+function isLoopback(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "localhost" || hostname.endsWith(".localhost");
+}
+
+/**
+ * An address a browser may be sent to: HTTPS, or plain HTTP on the loopback
+ * alone, for a workstation. Never a user and password in it, never a
+ * fragment.
+ */
+export function isAcceptableUrl(text: unknown): text is string {
+  if (typeof text !== "string" || text.length > 2048) return false;
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return false;
+  }
+  if (url.username !== "" || url.password !== "" || url.hash !== "") return false;
+  return url.protocol === "https:" || (url.protocol === "http:" && isLoopback(url.hostname));
+}
 
 /**
  * The portal's own origin and the zone, its relying party, from its address,
@@ -298,7 +317,7 @@ export type PasskeySignIn = {
   verify: (req: Request) => Promise<Response>;
 };
 
-/** The binding cookie of a passkey flow on the site, apart from a company account's. */
+/** The binding cookie of a passkey flow on the site. */
 export const PASSKEY_BINDING_SUFFIX = "-passkey";
 
 /**
@@ -314,7 +333,7 @@ export const VERIFICATIONS_PER_MINUTE = 600;
 /** Challenges in flight at once: enough that a flood within the bounds above does not evict the owner's. */
 const CHALLENGES_IN_FLIGHT = 2_000;
 
-/** Failures recorded in the audit per minute, at most, as for a company account. */
+/** Failures recorded in the audit per minute, at most. */
 const FAILURES_PER_MINUTE = 30;
 
 /** The biggest body a ceremony posts: a flow and an assertion fit in a few kilobytes. */
@@ -322,9 +341,6 @@ const MAX_BODY_BYTES = 32 * 1024;
 
 /** What the person reads for any refusal: the reason goes to the audit. */
 const REFUSED = "This passkey can't sign in here. Use a passkey registered on this server's dashboard.";
-
-/** The identity a code of the owner's audience carries: never read, the cookie it opens is the owner's. */
-const OWNER_HANDOFF_IDENTITY = { email: "owner", name: null };
 
 function noStore(extra: Record<string, string> = {}): Record<string, string> {
   return { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", ...extra };
@@ -392,7 +408,7 @@ export function createPasskeySignIn(options: PasskeySignInOptions, clock: () => 
   function door(returnTo: string, status: number, message: string, cookies: string[]): Response {
     const headers = new Headers(noStore(doorHeaders()));
     for (const cookie of cookies) headers.append("Set-Cookie", cookie);
-    return new Response(signInPage(returnTo, message, null, offered()), { status, headers });
+    return new Response(signInPage(returnTo, message, offered()), { status, headers });
   }
 
   /** The flow of a request on the portal's host, with the Origin that must be this host's own. */
@@ -482,21 +498,7 @@ export function createPasskeySignIn(options: PasskeySignInOptions, clock: () => 
         throw error;
       }
 
-      const nowS = Math.floor(now / 1000);
-      const minting = options.handoffs.mint(
-        {
-          host: flow.host,
-          binding: flow.binding,
-          returnTo: flow.returnTo,
-          identity: OWNER_HANDOFF_IDENTITY,
-          sessionExpiry: nowS + options.cookieDurationS,
-          authTime: nowS,
-          audience: "owner",
-          reauth: false,
-          passkey: passkeyRef(stored.id),
-        },
-        now,
-      );
+      const minting = options.handoffs.mint({ host: flow.host, binding: flow.binding, returnTo: flow.returnTo, passkey: passkeyRef(stored.id) }, now);
       if ("refusal" in minting) {
         return minting.refusal === "spent-flow"
           ? json({ error: "spent", message: "This sign-in link was already used. Go back to the site and sign in again." }, 400)
@@ -513,7 +515,7 @@ export function createPasskeySignIn(options: PasskeySignInOptions, clock: () => 
       const now = clock();
       const spent = [clearCookie(online, PASSKEY_BINDING_SUFFIX)];
       const binding = readCookie(req.headers.get("cookie"), cookieName(online, PASSKEY_BINDING_SUFFIX));
-      const redemption = options.handoffs.redeem(new URL(req.url).searchParams.get("code") ?? "", host, binding, now, "owner");
+      const redemption = options.handoffs.redeem(new URL(req.url).searchParams.get("code") ?? "", host, binding, now);
       if ("refusal" in redemption) {
         if (redemption.refusal !== "unknown-code") {
           audit({ actor: "anonymous", action: "portal.signin_failed", target: host, detail: { method: "passkey", reason: redemption.refusal } }, now);
@@ -522,7 +524,7 @@ export function createPasskeySignIn(options: PasskeySignInOptions, clock: () => 
       }
       const { returnTo, passkey } = redemption.handoff;
       // Removed between the ceremony and this redirect: nothing opens.
-      if (passkey === undefined || options.passkeys.byRef(passkey) === null) {
+      if (options.passkeys.byRef(passkey) === null) {
         audit({ actor: "anonymous", action: "portal.signin_failed", target: host, detail: { method: "passkey", reason: "removed-passkey" } }, now);
         return door(returnTo, 401, "This passkey is no longer registered.", spent);
       }

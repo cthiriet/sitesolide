@@ -16,16 +16,13 @@
  *   access entering into the signature. The gate then re-reads the access on
  *   every request: deleting it closes from the next one on, without waiting
  *   for the cookie;
- * - `<expiration>.id.<identity>.<signature>` for someone who signed in with
- *   the identity provider, `<identity>` being their verified email and name
- *   in base64url JSON. The gate then judges them against the site's people
- *   with access on every request, which is what makes removing someone
- *   immediate.
+ * - `<expiration>.pk.<passkey>.<signature>` for the owner signed in with a
+ *   passkey, the passkey's reference entering into the signature. The gate
+ *   looks it up on every request: a passkey removed closes what it opened.
  *
- * The first two are the forms from before identities, unchanged: the cookies
- * in circulation on the machine stay valid. A portal rolled back to an older
- * version refuses the third, four pieces where it expects two or three, and
- * shows the sign-in page.
+ * A cookie of the form a company account once received,
+ * `<expiration>.id.<identity>.<signature>`, opens nothing any more: its
+ * holder meets the sign-in page.
  *
  * It is only worth anything for the host that received it, which the browser
  * already guarantees through the `__Host-` prefix and which the signature
@@ -35,9 +32,8 @@
  * password: changing the password invalidates every cookie in circulation,
  * the guests' included, and erasing the draw does too.
  */
-import { isAccessId, type Role } from "./access";
+import { isAccessId } from "./access";
 import { isPasskeyRef } from "./passkeys";
-import { cleanEmail } from "./sharing";
 
 /** Size of the draw kept in the data folder. */
 export const KEY_BYTES = 32;
@@ -50,8 +46,8 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
  * `Secure`, on `Path=/` and without `Domain`. On plain HTTP it would not even
  * be recorded, hence the second name.
  *
- * `suffix` names the sign-in flow's own cookies, `-sso` for instance, which
- * follow the same rule: `__Host-portal-sso`, never readable by a sibling host.
+ * `suffix` names the passkey flow's own cookie, `-passkey`, which follows the
+ * same rule: `__Host-portal-passkey`, never readable by a sibling host.
  */
 export function cookieName(online: boolean, suffix = ""): string {
   return online ? `__Host-portal${suffix}` : `portal${suffix}`;
@@ -80,81 +76,12 @@ function sign(key: Uint8Array, host: string, expiration: number, guest: string |
   return hmac.digest("base64url");
 }
 
-/**
- * The identity form signs four pieces where the guest's signs three, with the
- * literal `id` between: since neither a host nor an identifier nor a base64url
- * text can carry a `|`, no token of one form is a token of another.
- */
-function signIdentity(key: Uint8Array, host: string, expiration: number, payload: string): string {
-  const hmac = new Bun.CryptoHasher("sha256", key);
-  hmac.update(`${host}|${expiration}|${IDENTITY_MARK}|${payload}`);
-  return hmac.digest("base64url");
-}
-
 export function issueToken(key: Uint8Array, host: string, expiration: number, guest: string | null = null): string {
   const signature = sign(key, host, expiration, guest);
   return guest === null ? `${expiration}.${signature}` : `${expiration}.${guest}.${signature}`;
 }
 
-/** The piece that names the third form. */
-const IDENTITY_MARK = "id";
-
-/** Beyond this, a display name is cut: it travels in a cookie and in a header. */
-export const NAME_MAX = 200;
-
-/** Someone the identity provider vouched for: an email it verified, and a name when it gave one. */
-export type Identity = { email: string; name: string | null };
-
-/**
- * A display name fit for a cookie and a header, or `null`: without a control
- * character, trimmed, cut at `NAME_MAX` characters. A line break in a name
- * would otherwise become a header of its own.
- *
- * Cut on code points, and made well formed: `slice` counts UTF-16 units, and
- * cutting `😀` in half left a lone surrogate, on which `encodeURIComponent`
- * throws. The person whose provider sent that name then got a 500 from
- * `/verifier` on every request of every site. A lone surrogate the provider
- * sent itself becomes U+FFFD the same way.
- */
-export function cleanName(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.toWellFormed().replace(/[\x00-\x1f\x7f]/g, " ").trim();
-  const cleaned = Array.from(trimmed).slice(0, NAME_MAX).join("").trim();
-  return cleaned === "" ? null : cleaned;
-}
-
-function encodeJson(value: unknown): string {
-  return Buffer.from(JSON.stringify(value)).toString("base64url");
-}
-
-function decodeJson(text: string): unknown {
-  if (!/^[A-Za-z0-9_-]{1,4096}$/.test(text)) return null;
-  try {
-    return JSON.parse(Buffer.from(text, "base64url").toString("utf8"));
-  } catch {
-    return null;
-  }
-}
-
-/**
- * An identity read back from JSON, the cookie's or a sealed token's, judged
- * again rather than trusted.
- */
-export function readIdentity(value: unknown): Identity | null {
-  if (typeof value !== "object" || value === null) return null;
-  const { e, n } = value as Record<string, unknown>;
-  const email = cleanEmail(e);
-  if (email === null || email !== e) return null;
-  if (n !== null && (typeof n !== "string" || cleanName(n) !== n)) return null;
-  return { email, name: n };
-}
-
-export function issueIdentityToken(key: Uint8Array, host: string, expiration: number, identity: Identity): string {
-  const payload = encodeJson({ e: identity.email, n: identity.name });
-  return `${expiration}.${IDENTITY_MARK}.${payload}.${signIdentity(key, host, expiration, payload)}`;
-}
-
-/** The piece that names the fourth form, the owner signed in with a passkey. */
+/** The piece that names the passkey's form. */
 const PASSKEY_MARK = "pk";
 
 /**
@@ -163,7 +90,7 @@ const PASSKEY_MARK = "pk";
  * looks the reference up in the steward's projection of passkeys on every
  * request, so that a passkey removed closes every site it opened at the
  * next request, as a password access removed does. The literal `pk` keeps it
- * apart from the identity form, which also has four pieces.
+ * apart from any other form.
  */
 function signPasskey(key: Uint8Array, host: string, expiration: number, ref: string): string {
   const hmac = new Bun.CryptoHasher("sha256", key);
@@ -176,13 +103,11 @@ export function issuePasskeyToken(key: Uint8Array, host: string, expiration: num
 }
 
 /**
- * Who carries a valid token: the owner, the named guest access, or, with
- * `identity`, someone the identity provider vouched for. `guest` stays the
- * field it was, so that the owner still reads `{ guest: null }`; `passkey`
- * names the owner's passkey when one opened the cookie, which the gate
- * checks is still registered.
+ * Who carries a valid token: the owner, or the named guest access. The owner
+ * reads `{ guest: null }`; `passkey` names the owner's passkey when one
+ * opened the cookie, which the gate checks is still registered.
  */
-export type Bearer = { guest: string | null; identity?: Identity; passkey?: string };
+export type Bearer = { guest: string | null; passkey?: string };
 
 /**
  * Does the token open this host, right now, and for whom?
@@ -200,7 +125,6 @@ export function readToken(
   host: string,
   nowS: number,
   durationS: number,
-  identityDurationS: number = durationS,
 ): Bearer | null {
   if (token === null || key === null) return null;
 
@@ -211,29 +135,19 @@ export function readToken(
   if (!/^[0-9]{1,12}$/.test(rawExpiration)) return null;
 
   const expiration = Number(rawExpiration);
-  const longest = parts.length === 4 && parts[1] !== PASSKEY_MARK ? identityDurationS : durationS;
-  if (expiration <= nowS || expiration > nowS + longest) return null;
+  if (expiration <= nowS || expiration > nowS + durationS) return null;
 
   const received = Buffer.from(parts[parts.length - 1]!);
 
-  if (parts.length === 4 && parts[1] === PASSKEY_MARK) {
-    // The owner's form: the owner's thirty days, not an identity's day.
+  if (parts.length === 4) {
+    // The passkey's form; the four pieces of a company account's cookie of
+    // before open nothing.
+    if (parts[1] !== PASSKEY_MARK) return null;
     const ref = parts[2]!;
     if (!isPasskeyRef(ref)) return null;
     const expected = Buffer.from(signPasskey(key, host, expiration, ref));
     if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) return null;
     return { guest: null, passkey: ref };
-  }
-
-  if (parts.length === 4) {
-    if (parts[1] !== IDENTITY_MARK) return null;
-    const payload = parts[2]!;
-    const expected = Buffer.from(signIdentity(key, host, expiration, payload));
-    if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) return null;
-    // Read only once the signature holds: a forged payload never reaches
-    // JSON.parse, and what the portal signed is judged again all the same.
-    const identity = readIdentity(decodeJson(payload));
-    return identity === null ? null : { guest: null, identity };
   }
 
   const guest = parts.length === 3 ? parts[1]! : null;
@@ -245,6 +159,19 @@ export function readToken(
 }
 
 // --- Sealed tokens ---------------------------------------------------------------
+
+function encodeJson(value: unknown): string {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
+function decodeJson(text: string): unknown {
+  if (!/^[A-Za-z0-9_-]{1,4096}$/.test(text)) return null;
+  try {
+    return JSON.parse(Buffer.from(text, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
 
 /**
  * A key for one purpose, drawn from the cookie key: the sign-in flow's tokens
@@ -307,7 +234,7 @@ export function isValidHost(host: string): boolean {
  *
  * - `host` is the browser's: it signs the cookie, checks the Origin, and is
  *   where a sign-in sends back;
- * - `site` is whose people decide: the steward's projection files them under
+ * - `site` is whose accesses decide: the steward's projection files them under
  *   the site's address, and a domain is not one. A preview block announces
  *   its host alone, which is both.
  *
@@ -404,7 +331,7 @@ const FRAMED_DESTINATIONS = new Set(["iframe", "frame", "embed", "object", "fenc
  * Is a protected site being loaded in a frame by a page of another origin?
  *
  * The answer to clickjacking of the protected sites, which serve the pages
- * of an app the owner or a member is signed in to. From another site, the
+ * of an app the owner or a guest is signed in to. From another site, the
  * frame already carries no cookie (`SameSite=Lax`) and shows the sign-in
  * page, which no page may frame (`doorHeaders`). From a sibling host of the
  * zone, the same site to a browser, it does carry the cookie, and a page
@@ -481,8 +408,12 @@ export function doorHeaders(): Record<string, string> {
 
 /**
  * The headers that tell a protected site who is in. `bin/cli/portal.ts`
- * copies these same names onto the request with `copy_headers`, and
- * bin/tests/cli-portal.test.ts checks that the two lists agree.
+ * strips these same names off every visitor's request and copies them from
+ * the portal's answer with `copy_headers`, and bin/tests/cli-portal.test.ts
+ * checks that the two lists agree. `user` and `name` once carried a company
+ * account's verified email and name; the portal sets neither any more, and
+ * the blocks in service still strip them, so that no visitor sends them to a
+ * site that read them.
  */
 export const IDENTITY_HEADERS = {
   user: "X-Sitesolide-User",
@@ -490,27 +421,12 @@ export const IDENTITY_HEADERS = {
   role: "X-Sitesolide-Role",
 } as const;
 
-/**
- * What a 200 from `/verifier` carries: the role always, the verified email and
- * the name when the provider gave them. A header is absent rather than empty
- * when the portal does not know: the owner's password and a guest's name
- * nobody.
- *
- * The name is percent-encoded UTF-8: a header carries bytes, and `Zoë` or
- * `李` would reach the site garbled, or not at all. `decodeURIComponent`
- * gives it back. The email needs nothing: `cleanEmail` keeps it ASCII.
- *
- * `toWellFormed` again, though `cleanName` already did it: `encodeURIComponent`
- * throws on nothing else, and this function runs on every request of every
- * protected site, where a throw is a 500 nobody can sign their way out of.
- */
-export function identityHeaders(role: Role, identity: Identity | null): Record<string, string> {
-  const headers: Record<string, string> = { [IDENTITY_HEADERS.role]: role };
-  if (identity !== null) {
-    headers[IDENTITY_HEADERS.user] = identity.email;
-    if (identity.name !== null) headers[IDENTITY_HEADERS.name] = encodeURIComponent(identity.name.toWellFormed());
-  }
-  return headers;
+/** Who came in, as `X-Sitesolide-Role` says it: the owner, or a password access. */
+export type Role = "admin" | "visitor";
+
+/** What a 200 from `/verifier` carries: the role, `admin` for the owner, `visitor` for a password access. */
+export function identityHeaders(role: Role): Record<string, string> {
+  return { [IDENTITY_HEADERS.role]: role };
 }
 
 /** The door's headers on the portal's own host, which is no protected site: no `X-Portal`. */

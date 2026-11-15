@@ -16,8 +16,6 @@ import {
   isWebSocketHandshake,
   returnForRequest,
   safeReturnTo,
-  issueIdentityToken,
-  cleanName,
   identityHeaders,
   purposeKey,
   seal,
@@ -258,126 +256,21 @@ test("the page loads nothing from anywhere but itself, its data: icon included",
   expect(csp).not.toInclude("script-src");
 });
 
-describe("an identity token", () => {
-  const ALICE = { email: "alice@acme.test", name: "Alice Martin" };
-  const IDENTITY_DURATION = 24 * 3600;
-  const validToken = issueIdentityToken(KEY, HOST, NOW + 3600, ALICE);
-
-  test("carries the verified email and the name, and nothing of a guest", () => {
-    expect(readToken(validToken, KEY, HOST, NOW, DURATION, IDENTITY_DURATION)).toEqual({ guest: null, identity: ALICE });
-    expect(validToken.split(".")).toHaveLength(4);
-  });
-
-  test("a person without a name stays a person", () => {
-    const token = issueIdentityToken(KEY, HOST, NOW + 60, { email: "bob@acme.test", name: null });
-    expect(readToken(token, KEY, HOST, NOW, DURATION)?.identity).toEqual({ email: "bob@acme.test", name: null });
-  });
-
-  test("opens no other host, and falls with the password", () => {
-    expect(readToken(validToken, KEY, "roster.test-zone.invalid", NOW, DURATION)).toBeNull();
-    expect(readToken(validToken, deriveKey(SEED, "$argon2id$other")!, HOST, NOW, DURATION)).toBeNull();
-  });
-
-  test("expires, and never lives beyond the identity duration, even when signed for longer", () => {
-    expect(readToken(validToken, KEY, HOST, NOW + 3600, DURATION, IDENTITY_DURATION)).toBeNull();
-    const distant = issueIdentityToken(KEY, HOST, NOW + IDENTITY_DURATION + 1, ALICE);
-    expect(readToken(distant, KEY, HOST, NOW, DURATION, IDENTITY_DURATION)).toBeNull();
-    expect(readToken(distant, KEY, HOST, NOW, DURATION)).not.toBeNull();
-  });
-
-  test("another email in the payload invalidates the signature", () => {
-    const [expiration, mark, , signature] = validToken.split(".");
-    const forged = Buffer.from(JSON.stringify({ e: "ceo@acme.test", n: "CEO" })).toString("base64url");
-    expect(readToken(`${expiration}.${mark}.${forged}.${signature}`, KEY, HOST, NOW, DURATION)).toBeNull();
-  });
-
-  test("does not turn into an owner's or a guest's token by dropping pieces, nor the reverse", () => {
-    const [expiration, , payload, signature] = validToken.split(".");
-    expect(readToken(`${expiration}.${signature}`, KEY, HOST, NOW, DURATION)).toBeNull();
-    expect(readToken(`${expiration}.${payload}.${signature}`, KEY, HOST, NOW, DURATION)).toBeNull();
-    const [ownerExpiration, ownerSignature] = issueToken(KEY, HOST, NOW + 3600).split(".");
-    expect(readToken(`${ownerExpiration}.id.${payload}.${ownerSignature}`, KEY, HOST, NOW, DURATION)).toBeNull();
-    const [guestExpiration, guest, guestSignature] = issueToken(KEY, HOST, NOW + 3600, GUEST_ID).split(".");
-    expect(readToken(`${guestExpiration}.id.${guest}.${guestSignature}`, KEY, HOST, NOW, DURATION)).toBeNull();
-  });
-
-  test("a fourth piece needs the identity mark", () => {
-    const [expiration, , payload, signature] = validToken.split(".");
-    expect(readToken(`${expiration}.xx.${payload}.${signature}`, KEY, HOST, NOW, DURATION)).toBeNull();
-  });
-
-  test("a signed payload that is not an identity is refused all the same", () => {
-    // Only the portal signs, but what it reads back it judges again.
-    for (const identity of [
-      { email: "not an email", name: null },
-      { email: "Alice@acme.test", name: null },
-      { email: "alice@acme.test", name: "two\nlines" },
-    ]) {
-      const token = issueIdentityToken(KEY, HOST, NOW + 60, identity);
-      expect(readToken(token, KEY, HOST, NOW, DURATION)).toBeNull();
-    }
-  });
-});
-
-describe("a display name", () => {
-  test("loses its control characters and its edges, and is cut", () => {
-    expect(cleanName("  Alice\r\nX-Sitesolide-Role: admin ")).toBe("Alice  X-Sitesolide-Role: admin");
-    expect(cleanName("a".repeat(500))).toHaveLength(200);
-    expect(cleanName("   ")).toBeNull();
-    expect(cleanName(42)).toBeNull();
-  });
-
-  test("is cut on characters, never inside one, and leaves no lone surrogate", () => {
-    // 199 letters then an emoji, two UTF-16 units: slice(0, 200) kept half of
-    // it, and encodeURIComponent threw on every request of that person.
-    const name = cleanName(`${"a".repeat(199)}😀😀`)!;
-    expect(name).toBe(`${"a".repeat(199)}😀`);
-    expect(name.isWellFormed()).toBe(true);
-    expect(Array.from(cleanName("😀".repeat(300))!)).toHaveLength(200);
-    // A lone surrogate the provider sent itself becomes U+FFFD.
-    expect(cleanName("Zo\ud800e")).toBe("Zo�e");
+describe("a company account's cookie of before", () => {
+  test("opens nothing, however well it was signed", () => {
+    // The form the portal issued while it signed people in with a provider:
+    // the literal `id`, the identity in base64url JSON, signed over four pieces.
+    const expiration = NOW + 3600;
+    const payload = Buffer.from(JSON.stringify({ e: "alice@acme.test", n: "Alice" })).toString("base64url");
+    const signature = new Bun.CryptoHasher("sha256", KEY).update(`${HOST}|${expiration}|id|${payload}`).digest("base64url");
+    expect(readToken(`${expiration}.id.${payload}.${signature}`, KEY, HOST, NOW, DURATION)).toBeNull();
   });
 });
 
 describe("the identity headers", () => {
   test("the owner and a password access are a role and nobody", () => {
-    expect(identityHeaders("admin", null)).toEqual({ "X-Sitesolide-Role": "admin" });
-    expect(identityHeaders("visitor", null)).toEqual({ "X-Sitesolide-Role": "visitor" });
-  });
-
-  test("a person carries their role, the email as is and the name percent-encoded", () => {
-    const headers = identityHeaders("developer", { email: "zoe@acme.test", name: "Zoë 李" });
-    expect(headers).toEqual({
-      "X-Sitesolide-Role": "developer",
-      "X-Sitesolide-User": "zoe@acme.test",
-      "X-Sitesolide-User-Name": "Zo%C3%AB%20%E6%9D%8E",
-    });
-    expect(decodeURIComponent(headers["X-Sitesolide-User-Name"]!)).toBe("Zoë 李");
-  });
-
-  test("no name, no name header rather than an empty one", () => {
-    expect(identityHeaders("admin", { email: "owner@acme.test", name: null })).toEqual({
-      "X-Sitesolide-Role": "admin",
-      "X-Sitesolide-User": "owner@acme.test",
-    });
-  });
-
-  test("a name the encoding cannot take does not throw, it is carried well formed", () => {
-    // Whatever slipped past cleanName, /verifier must answer, not fail.
-    const headers = identityHeaders("viewer", { email: "a@acme.test", name: "a\ud83d" });
-    expect(headers["X-Sitesolide-User-Name"]).toBe("a%EF%BF%BD");
-  });
-
-  test("an identity cookie carrying a lone surrogate opens nothing, and does not throw", () => {
-    // Minted before names were cut on characters: refused, the person signs
-    // in again and gets a name that encodes.
-    const token = issueIdentityToken(KEY, HOST, NOW + 60, { email: "zoe@acme.test", name: `${"a".repeat(199)}\ud83d` });
-    expect(readToken(token, KEY, HOST, NOW, DURATION)).toBeNull();
-  });
-
-  test("every value fits in a header", () => {
-    const headers = identityHeaders("visitor", { email: "a@acme.test", name: cleanName("Ünïcødé ✓ ") });
-    expect(() => new Headers(headers)).not.toThrow();
+    expect(identityHeaders("admin")).toEqual({ "X-Sitesolide-Role": "admin" });
+    expect(identityHeaders("visitor")).toEqual({ "X-Sitesolide-Role": "visitor" });
   });
 });
 
@@ -406,9 +299,9 @@ describe("sealed tokens", () => {
   });
 
   test("the flow's own cookies follow the __Host- rule", () => {
-    expect(cookieName(true, "-sso")).toBe("__Host-portal-sso");
-    expect(cookieName(false, "-sso")).toBe("portal-sso");
-    expect(setCookie("v", true, 60, "-sso").startsWith("__Host-portal-sso=v;")).toBe(true);
+    expect(cookieName(true, "-passkey")).toBe("__Host-portal-passkey");
+    expect(cookieName(false, "-passkey")).toBe("portal-passkey");
+    expect(setCookie("v", true, 60, "-passkey").startsWith("__Host-portal-passkey=v;")).toBe(true);
   });
 });
 

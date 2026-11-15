@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { signInPage, signedOutPage, doorPage, portalPage, homePage, DOOR_PAGE_MARKER } from "../src/page";
+import { signInPage, doorPage, portalPage, homePage, DOOR_PAGE_MARKER } from "../src/page";
 
 /** The chunk of page between two markers, bounds included. */
 function between(page: string, start: string, end: string): string {
@@ -64,51 +64,24 @@ describe("the portal login page", () => {
     expect(signInPage("/", "Password refused.")).toInclude('role="alert">Password refused.</p>');
   });
 
-  test("without a provider, exactly the page from before: no link, the password field focused", () => {
+  test("without a passkey, the password alone, its field focused", () => {
     const page = signInPage("/list");
     expect(page).not.toInclude("/_portal/oidc");
     expect(page).toInclude("Enter your password.");
     expect(page).toInclude("required autofocus>");
   });
 
-  test("with a provider, a link to begin the flow above the password, the return kept", () => {
-    const page = signInPage("/list?week=3", "", { providerName: "Google" });
-    expect(page).toInclude('<a class="sso" href="/_portal/oidc?retour=%2Flist%3Fweek%3D3">Sign in with Google</a>');
-    expect(page.indexOf('class="sso"')).toBeLessThan(page.indexOf('action="/_portal/connexion"'));
-    expect(page).toInclude('name="motdepasse"');
-    expect(page).not.toInclude("autofocus");
-    expect(page).not.toInclude("account=choose");
-  });
-
-  test("another account is offered when the one signed in is not let in", () => {
-    const page = signInPage("/", "Not shared.", { providerName: "Google", chooseAccount: true });
-    expect(page).toInclude('href="/_portal/oidc?retour=%2F&amp;account=choose">Use another account</a>');
-  });
-
-  test("a message sits under the password alone, and leads the card once a provider is offered", () => {
-    // With a provider most messages are the account's: not let in, expired.
-    // Under the password field they would read as a wrong password.
-    const alone = signInPage("/", "Password refused.");
-    expect(alone.indexOf('role="alert"')).toBeGreaterThan(alone.indexOf('name="motdepasse"'));
-    const offered = signInPage("/", "Not shared.", { providerName: "Google", chooseAccount: true });
-    expect(offered).toInclude('<p class="alert notice" role="alert">Not shared.</p>');
-    expect(offered.indexOf('role="alert"')).toBeLessThan(offered.indexOf('class="sso"'));
-    expect(offered.split('role="alert"')).toHaveLength(2);
-  });
-
   test("without a passkey offered, nothing of the passkey's layout", () => {
-    for (const page of [signInPage("/list"), signInPage("/list", "", { providerName: "Google" })]) {
-      expect(page).not.toInclude("/_portal/passkey");
-      expect(page).not.toInclude('class="glyph"');
-      expect(page).not.toInclude("Were you given a password?");
-      expect(page).not.toInclude("sso quiet");
-    }
+    const page = signInPage("/list");
+    expect(page).not.toInclude("/_portal/passkey");
+    expect(page).not.toInclude('class="glyph"');
+    expect(page).not.toInclude("Were you given a password?");
   });
 
   test("with a passkey, its button leads the card and the password follows for guests", () => {
-    const page = signInPage("/list?week=3", "", null, true);
+    const page = signInPage("/list?week=3", "", true);
     expect(page).toInclude("Sign in with your passkey, or enter the password you were given.");
-    expect(page).toInclude('<a class="sso" href="/_portal/passkey?retour=%2Flist%3Fweek%3D3"><svg class="glyph"');
+    expect(page).toInclude('<a class="button" href="/_portal/passkey?retour=%2Flist%3Fweek%3D3"><svg class="glyph"');
     expect(page).toInclude("<span>Sign in with a passkey</span></a>");
     const passkeyAt = page.indexOf("/_portal/passkey");
     expect(passkeyAt).toBeLessThan(page.indexOf('<p class="or">'));
@@ -123,34 +96,19 @@ describe("the portal login page", () => {
     expect(page).not.toInclude("<details");
   });
 
-  test("with a passkey and a provider: passkey, then company account, then password", () => {
-    const page = signInPage("/", "", { providerName: "Google", chooseAccount: true }, true);
-    expect(page).toInclude("Sign in with your passkey or your company account, or enter the password you were given.");
-    const passkeyAt = page.indexOf('href="/_portal/passkey');
-    const ssoAt = page.indexOf('<a class="sso quiet" href="/_portal/oidc?retour=%2F">Sign in with Google</a>');
-    expect(passkeyAt).toBeGreaterThan(-1);
-    expect(ssoAt).toBeGreaterThan(passkeyAt);
-    expect(page.indexOf("Use another account")).toBeGreaterThan(ssoAt);
-    expect(page.indexOf('action="/_portal/connexion"')).toBeGreaterThan(page.indexOf("Use another account"));
-  });
-
   test("with a passkey, a password's message sits under its field, any other leads the card", () => {
-    const refused = signInPage("/", "Password refused. The owner signs in with a passkey.", null, true, true);
+    const refused = signInPage("/", "Password refused. The owner signs in with a passkey.", true, true);
     expect(refused).toInclude('<p class="alert" role="alert">Password refused. The owner signs in with a passkey.</p>');
     expect(refused.indexOf('role="alert"')).toBeGreaterThan(refused.indexOf('name="motdepasse"'));
     // The guest retypes: the field takes the focus back.
     expect(refused).toInclude("required autofocus>");
-    const revoked = signInPage("/", "This passkey is no longer registered.", null, true);
+    const revoked = signInPage("/", "This passkey is no longer registered.", true);
     expect(revoked).toInclude('<p class="alert notice" role="alert">This passkey is no longer registered.</p>');
     expect(revoked.indexOf('role="alert"')).toBeLessThan(revoked.indexOf("/_portal/passkey"));
     expect(revoked).not.toInclude("autofocus");
     for (const page of [refused, revoked]) expect(page.split('role="alert"')).toHaveLength(2);
   });
 
-  test("the provider's name is escaped, it comes from the configuration", () => {
-    const page = signInPage("/", "", { providerName: "<b>Acme</b>" });
-    expect(page).toInclude("Sign in with &lt;b&gt;Acme&lt;/b&gt;");
-  });
 });
 
 describe("the pages of the portal's own host", () => {
@@ -169,17 +127,6 @@ describe("the pages of the portal's own host", () => {
     // not reach it would leave the portal's own host in the old design.
     const committed = await Bun.file(join(import.meta.dir, "..", "public", "index.html")).text();
     expect({ upToDate: committed === homePage(), fix: "bun run home-page" }).toEqual({ upToDate: true, fix: "bun run home-page" });
-  });
-});
-
-describe("the page a site's sign-out answers", () => {
-  test("goes on to the portal's host on its own, and offers the link for a browser that does not", () => {
-    const page = signedOutPage('https://portal.test-zone.invalid/oidc/signout?ticket=a.b&x="y');
-    expect(page).toInclude('<meta http-equiv="refresh" content="0; url=https://portal.test-zone.invalid/oidc/signout?ticket=a.b&amp;x=&quot;y">');
-    expect(page).toInclude('href="https://portal.test-zone.invalid/oidc/signout?ticket=a.b&amp;x=&quot;y"');
-    expect(page).not.toInclude('"y"');
-    // The door page shares the template and gains nothing from it.
-    expect(doorPage("")).not.toInclude("http-equiv");
   });
 });
 

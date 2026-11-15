@@ -1,27 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { createAccessAdmin } from "../src/admin";
-import { readSettings, type Settings } from "../src/oidc";
 import type { Reading } from "../src/projection";
 import { memoryAudit } from "./memory";
 
 const NOW = 1_800_000_000_000;
 const BASE = "http://127.0.0.1:3026";
 
-const SETTINGS = readSettings(
-  {
-    OIDC_ISSUER: "https://idp.test-zone.invalid",
-    OIDC_CLIENT_ID: "client-id-the-dashboard-never-sees",
-    OIDC_CLIENT_SECRET: "secret-the-dashboard-never-sees",
-    OIDC_ALLOWED_DOMAINS: "acme.test",
-    OIDC_ADMIN_EMAILS: "owner@acme.test",
-    OIDC_PROVIDER_NAME: "Acme",
-  },
-  "https://portal.test-zone.invalid",
-).settings!;
-
-function admin(settings: Settings | null = SETTINGS, state: { reading: Reading; writtenAt: number | null } = { reading: "steward", writtenAt: NOW }) {
+function admin(state: { reading: Reading; writtenAt: number | null } = { reading: "steward", writtenAt: NOW }) {
   const audit = memoryAudit();
-  return { audit, routes: createAccessAdmin({ access: { state: () => state }, audit, settings }) };
+  return { audit, routes: createAccessAdmin({ access: { state: () => state }, audit }) };
 }
 
 function request(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Request {
@@ -42,33 +29,8 @@ describe("what the portal reads who may open a site from", () => {
   });
 
   test("before the steward's projection, or with one it cannot believe, it says so", async () => {
-    const { routes } = admin(SETTINGS, { reading: "unreadable", writtenAt: null });
+    const { routes } = admin({ reading: "unreadable", writtenAt: null });
     expect(await routes.access(request("GET", "/admin/access")).json()).toEqual({ reading: "unreadable", writtenAt: null });
-  });
-});
-
-describe("how people sign in", () => {
-  test("GET /admin/sharing says how people sign in, never the client's secret nor its identifier, and no site", async () => {
-    const { routes } = admin();
-    const response = routes.sso(request("GET", "/admin/sharing"));
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    const body = await response.json();
-    expect(body).toEqual({
-      sso: {
-        configured: true,
-        providerName: "Acme",
-        portalUrl: "https://portal.test-zone.invalid",
-        admins: ["owner@acme.test"],
-        allowedDomains: ["acme.test"],
-      },
-    });
-    expect(JSON.stringify(body)).not.toInclude("never-sees");
-  });
-
-  test("without a provider, it says so", async () => {
-    const { routes } = admin(null);
-    const body = (await routes.sso(request("GET", "/admin/sharing")).json()) as { sso: unknown };
-    expect(body).toEqual({ sso: { configured: false, providerName: null, portalUrl: null, admins: [], allowedDomains: [] } });
   });
 });
 
@@ -92,7 +54,6 @@ describe("a request that came through Caddy reaches nothing", () => {
       const { routes } = admin();
       const carried = { [header]: "203.0.113.7" };
       expect(routes.access(request("GET", "/admin/access", undefined, carried)).status).toBe(403);
-      expect(routes.sso(request("GET", "/admin/sharing", undefined, carried)).status).toBe(403);
       const refused = routes.audit(request("GET", "/admin/audit", undefined, carried));
       expect(refused.status).toBe(403);
       expect(await refused.json()).toEqual({ error: "relayed-request" });

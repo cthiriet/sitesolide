@@ -1,9 +1,9 @@
 /**
  * The owner's passkeys as the portal reads them: the public half of each,
  * projected by the steward into `/etc/sitesolide-portal/passkeys.json`,
- * `root:site-portal 0640`, beside the access projection and the assertion
- * key. The steward writes it after every registration and every removal;
- * the portal reads it again as soon as it changes (src/passkey-signin.ts).
+ * `root:site-portal 0640`, beside the access projection. The steward
+ * writes it after every registration and every removal; the portal reads it
+ * again as soon as it changes (src/passkey-signin.ts).
  *
  * **Why the portal holds a copy and does not ask.** The portal answers
  * Caddy's `forward_auth` on every request of every restricted site, and

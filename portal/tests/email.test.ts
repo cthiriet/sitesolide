@@ -1,7 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { IDENTITY_VARIABLES, cleanDomain, cleanEmail, domainOf, maySignIn, readList } from "../src/sharing";
-
-const ADMINS = ["owner@acme.test"];
+import { cleanDomain, cleanEmail } from "../src/email";
 
 describe("an email", () => {
   test("is kept in lowercase, edges trimmed", () => {
@@ -50,10 +48,6 @@ describe("an email", () => {
     expect(cleanDomain("acme.Kim")).toBeNull();
     expect(cleanDomain(" acme.test")).toBeNull();
   });
-
-  test("its domain is what follows the @", () => {
-    expect(domainOf("alice@sub.acme.test")).toBe("sub.acme.test");
-  });
 });
 
 describe("a domain", () => {
@@ -64,32 +58,5 @@ describe("a domain", () => {
     expect(cleanDomain("*.acme.test")).toBeNull();
     expect(cleanDomain("acme.test/")).toBeNull();
     expect(cleanDomain("")).toBeNull();
-  });
-});
-
-describe("the sign-in settings", () => {
-  test("a list reads commas, spaces and line breaks, and says what it dropped", () => {
-    expect(readList("Owner@acme.test, second@acme.test\nnot-an-email", cleanEmail)).toEqual({
-      values: ["owner@acme.test", "second@acme.test"],
-      ignored: ["not-an-email"],
-    });
-    expect(readList("", cleanDomain)).toEqual({ values: [], ignored: [] });
-  });
-
-  test("allowed domains narrow who may sign in, the admins excepted", () => {
-    expect(maySignIn("bob@acme.test", ["acme.test"], ADMINS)).toBe(true);
-    expect(maySignIn("eve@elsewhere.test", ["acme.test"], ADMINS)).toBe(false);
-    expect(maySignIn("owner@acme.test", ["other.test"], ADMINS)).toBe(true);
-  });
-
-  test("without allowed domains, anyone the provider vouches for may sign in", () => {
-    expect(maySignIn("eve@elsewhere.test", [], ADMINS)).toBe(true);
-  });
-
-  test("the names the steward lets the dashboard write never include what would divert the portal", () => {
-    for (const name of IDENTITY_VARIABLES) expect(name).toMatch(/^OIDC_[A-Z_]+$/);
-    for (const forbidden of ["PORT", "DATA_DIR", "PUBLIC_URL", "PASSWORD_HASH", "NODE_ENV"]) {
-      expect(IDENTITY_VARIABLES as readonly string[]).not.toContain(forbidden);
-    }
   });
 });

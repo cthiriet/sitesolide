@@ -4,13 +4,10 @@
  * server, for its part, creates only one.
  */
 import { clientKey, remainingWait, isAcceptableSubmission } from "../borrowed/auth";
-import { grantActor, grantExpiration, type PasswordGrant, type Role } from "./access";
+import { grantActor, grantExpiration, type PasswordGrant } from "./access";
 import { recordQuietly, type AuditStore, type NewEvent } from "./database";
-import { issueSignOut, IDENTITY_DURATION_S, OWNER_SIGN_OUT } from "./handoff";
-import type { Settings } from "./oidc";
-import { signedOutPage, signInPage } from "./page";
+import { signInPage } from "./page";
 import type { AccessReader } from "./projection";
-import { maySignIn } from "./sharing";
 import {
   clearCookie,
   issueToken,
@@ -29,7 +26,7 @@ import {
   returnForRequest,
   safeReturnTo,
   type Bearer,
-  type Identity,
+  type Role,
 } from "./gate";
 
 export type Options = {
@@ -40,12 +37,6 @@ export type Options = {
   cookieDurationS: number;
   /** Who may open each site, from the steward's projection (src/projection.ts). */
   access: AccessReader;
-  /**
-   * Signing in with the identity provider. Absent or `null`: not offered, and
-   * an identity cookie opens nothing, so that removing the settings closes
-   * every session they opened.
-   */
-  settings?: Settings | null;
   /** Absent: nothing is recorded. */
   audit?: AuditStore;
   /**
@@ -56,19 +47,13 @@ export type Options = {
   passkeys?: { offered: () => boolean; known: (ref: string) => boolean };
 };
 
-/** What the sign-in page says to someone who has no access to this site. */
-export function notSharedMessage(email: string): string {
-  return `You are signed in as ${email}, but you don't have access to this site. Ask its owner, or use another account.`;
-}
-
 /**
  * Who a valid cookie says its holder is, as the audit names them: the
- * owner, the verified email, or a password access by who it was given to,
- * `password:<id>` when that is not an email or the access is gone.
+ * owner, or a password access by who it was given to, `password:<id>` when
+ * that is not an email or the access is gone.
  */
 export function actorOf(bearer: Bearer | null, grant: PasswordGrant | null = null): string {
   if (bearer === null) return "anonymous";
-  if (bearer.identity !== undefined) return bearer.identity.email;
   if (bearer.guest === null) return "owner";
   return grant !== null && grant.id === bearer.guest ? grantActor(grant) : `password:${bearer.guest}`;
 }
@@ -113,27 +98,15 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
   let verifying = false;
 
   /**
-   * The host set by Caddy and the site whose people decide, in lowercase, or
-   * null if they do not have that shape: see readAnnounced in src/gate.ts.
+   * The host set by Caddy and the site whose accesses decide, in lowercase,
+   * or null if they do not have that shape: see readAnnounced in src/gate.ts.
    */
   function announcedOf(req: Request): { host: string; site: string } | null {
     return readAnnounced(req.headers.get("x-portal-hote"));
   }
 
-  const settings = options.settings ?? null;
-
-  function door(
-    returnTo: string,
-    status: number,
-    message = "",
-    headers: Record<string, string> = {},
-    chooseAccount = false,
-    aboutPassword = false,
-  ) {
-    // The provider is offered only where a cookie could follow: a portal with
-    // no hash signs nothing, an identity no more than a password.
-    const sso = settings === null || options.key === null ? null : { providerName: settings.providerName, chooseAccount };
-    return new Response(signInPage(returnTo, message, sso, options.passkeys?.offered() ?? false, aboutPassword), {
+  function door(returnTo: string, status: number, message = "", headers: Record<string, string> = {}, aboutPassword = false) {
+    return new Response(signInPage(returnTo, message, options.passkeys?.offered() ?? false, aboutPassword), {
       status,
       headers: { ...doorHeaders(), ...headers },
     });
@@ -141,7 +114,7 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
 
   /** The sign-in page again, answering the password just posted. */
   function passwordDoor(returnTo: string, status: number, message: string, headers: Record<string, string> = {}) {
-    return door(returnTo, status, message, headers, false, true);
+    return door(returnTo, status, message, headers, true);
   }
 
   const audit = (event: NewEvent, now: number) => recordQuietly(options.audit, event, now);
@@ -165,9 +138,9 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
      *
      * Without `X-Portal-Hote`, 401: this route is never reached by anything
      * but Caddy, which always sets the header, and its absence must open
-     * nothing. The cookie is read for the host the browser is on, and judged
-     * against the site's people, the same on the site's own domain as on its
-     * preview.
+     * nothing. The cookie is read for the host the browser is on, and a
+     * password access is judged against the site's, the same on the site's
+     * own domain as on its preview.
      */
     verify(req) {
       const announced = announcedOf(req);
@@ -179,34 +152,14 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       const token = readCookie(req.headers.get("cookie"), cookieName(options.online));
       const now = clock();
 
-      const bearer = readToken(
-        token,
-        options.key,
-        host,
-        Math.floor(now / 1000),
-        options.cookieDurationS,
-        IDENTITY_DURATION_S,
-      );
+      const bearer = readToken(token, options.key, host, Math.floor(now / 1000), options.cookieDurationS);
       if (bearer === null) return door(returnTo, 401);
 
       // A password access is read again on every request, and that is what
       // makes removing it immediate: the cookie stays properly signed, the
-      // access is no longer in the steward's projection. An identity is
-      // judged against the site's people the same way, every request:
-      // removed or lowered, it holds at the next one.
-      let identity: Identity | null = null;
+      // access is no longer in the steward's projection.
       let role: Role = "admin";
-      if (bearer.identity !== undefined) {
-        // The settings are judged again too: a domain taken off the allowed
-        // ones closes its people out at the next request, not in a day.
-        if (settings === null || !maySignIn(bearer.identity.email, settings.allowedDomains, settings.admins)) {
-          return door(returnTo, 401);
-        }
-        const granted = options.access.roleOf(site, bearer.identity.email, settings.admins);
-        if (granted === null) return door(returnTo, 401, notSharedMessage(bearer.identity.email), {}, true);
-        identity = bearer.identity;
-        role = granted;
-      } else if (bearer.guest !== null) {
+      if (bearer.guest !== null) {
         if (options.access.passwordById(site, bearer.guest, now) === null) return door(returnTo, 401, "This access is no longer valid.");
         role = "visitor";
       } else if (bearer.passkey !== undefined) {
@@ -224,7 +177,7 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       // off any the visitor sent: see portalStanza in bin/cli/portal.ts. A
       // block from before identities copies nothing, and the site simply
       // learns nothing.
-      return new Response(null, { status: 200, headers: identityHeaders(role, identity) });
+      return new Response(null, { status: 200, headers: identityHeaders(role) });
     },
 
     async signIn(req) {
@@ -332,20 +285,7 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       return open(returnTo, issueToken(options.key!, host, expiration), options.cookieDurationS);
     },
 
-    /**
-     * Signs out of this site, and, with a provider configured, of the portal's
-     * own session too: on a shared computer, the next person clicking *Sign
-     * in with* would otherwise be signed in as the previous one, silently.
-     *
-     * The second half happens on the portal's host, which this host cannot
-     * set a cookie for: the answer is a page that sends the browser there,
-     * with a ticket naming this host, and the portal's host sends it back
-     * here. A page and not a 303: a browser applies the site's own
-     * `form-action` to every redirect after a form, and a site whose CSP says
-     * `'self'` would see its sign-out refused on the way to the portal. The
-     * page carries `X-Portal`, so a front end that signs out with `fetch`
-     * reloads on it, as it did on the sign-in page the 303 led to.
-     */
+    /** Signs out of this site: the cookie erased, and back to its home page. */
     signOut(req) {
       const announced = announcedOf(req);
       if (announced === null) return refuse("portal: unknown host", 400);
@@ -356,25 +296,14 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       const now = clock();
       const nowS = Math.floor(now / 1000);
       const token = readCookie(req.headers.get("cookie"), cookieName(options.online));
-      const bearer = readToken(token, options.key, host, nowS, options.cookieDurationS, IDENTITY_DURATION_S);
+      const bearer = readToken(token, options.key, host, nowS, options.cookieDurationS);
       // Only someone who was in signs out: a stranger posting here, any Origin
       // being easy to forge outside a browser, writes nothing.
       const grant = bearer?.guest === null || bearer?.guest === undefined ? null : options.access.passwordById(site, bearer.guest, now);
       if (bearer !== null) audit({ actor: actorOf(bearer, grant), action: "portal.signout", target: host }, now);
       // The cookie is erased even if it was no longer valid: a dead cookie
       // would otherwise stay in the browser.
-      const cleared = { "Set-Cookie": clearCookie(options.online), "Cache-Control": "no-store" };
-      // The ticket names who signs out, and ends that person's portal session
-      // alone; the owner's ends whatever session the browser holds. A stranger
-      // gets none, nor does a password access, whom no provider vouched for
-      // and who has no session of its own to end: a ticket minted for anyone
-      // who posts here was a link that signed whoever opened it out.
-      const who = bearer === null ? null : bearer.identity !== undefined ? bearer.identity.email : bearer.guest === null ? OWNER_SIGN_OUT : null;
-      if (options.key === null || settings === null || who === null) {
-        return new Response(null, { status: 303, headers: { Location: "/", ...cleared } });
-      }
-      const next = `${settings.portalOrigin}/oidc/signout?${new URLSearchParams({ ticket: issueSignOut(options.key, host, who, nowS) })}`;
-      return new Response(signedOutPage(next), { status: 200, headers: { ...doorHeaders(), ...cleared } });
+      return new Response(null, { status: 303, headers: { Location: "/", "Set-Cookie": clearCookie(options.online), "Cache-Control": "no-store" } });
     },
 
     /**

@@ -43,9 +43,9 @@ export const COOKIE_DURATION_S = 30 * 24 * 60 * 60;
 
 /**
  * The portal's own address, `https://portal.<zone>`, written by the manifest
- * as `https://{slug}.{zone}` and substituted at deployment. A sign-in with the
- * identity provider leaves from it and comes back to it, and the provider must
- * know `<PUBLIC_URL>/oidc/callback` in advance. No default value: an address
- * guessed here would send people to someone else's portal.
+ * as `https://{slug}.{zone}` and substituted at deployment. The owner's
+ * passkey ceremony runs on it, and the zone it names is the passkeys'
+ * relying party (src/passkey-signin.ts). No default value: an address
+ * guessed here would send the owner to someone else's portal.
  */
 export const PUBLIC_URL = process.env.PUBLIC_URL ?? "";

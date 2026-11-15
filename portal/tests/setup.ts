@@ -17,6 +17,3 @@ process.env.NODE_ENV = "test";
 // be lying around in the environment, and elsewhere.
 delete process.env.PASSWORD_HASH;
 delete process.env.PUBLIC_URL;
-for (const name of Object.keys(process.env)) {
-  if (name.startsWith("OIDC_")) delete process.env[name];
-}

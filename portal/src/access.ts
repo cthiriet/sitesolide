@@ -1,77 +1,37 @@
 /**
- * Who may open a restricted site, and with which role: the projection of the
- * steward's access registry that the portal reads, and the decisions it makes
- * from it.
+ * Who may open a restricted site besides the owner: the projection of the
+ * steward's access registry that the portal reads, and the decisions it
+ * makes from it.
  *
  * ## One source of truth, the steward's
  *
- * The steward, root, keeps the registry of every project's people with
- * access (dashboard/src/access/). After every change it writes this
- * projection to `/etc/sitesolide-portal/access.json`, `root:site-portal 0640`,
- * the way it lays the assertion key beside it: root writes it, the portal's
- * account reads it, the dashboard's cannot. The portal keeps no list of its
- * own: it reads this file again whenever it changes (src/projection.ts), so a
- * person removed or lowered is refused at their next request.
- *
- * ## The roles
- *
- * One ladder, each rung including the ones below:
- *
- * | Role | What it opens |
- * |---|---|
- * | `visitor` | the site, when its general access is restricted |
- * | `viewer` | the same, and the project in the dashboard |
- * | `developer` | the same, and deploying, restarting, writing secrets |
- * | `admin` | everything of the project |
- *
- * The portal only asks "may this person open the site", which every rung
- * answers yes, and passes the role on to the site in `X-Sitesolide-Role`.
- * The owner's password and `OIDC_ADMIN_EMAILS` open every site as `admin`.
+ * The steward, root, keeps the registry of every project's password access
+ * (dashboard/src/access/). After every change it writes this projection to
+ * `/etc/sitesolide-portal/access.json`, `root:site-portal 0640`, beside the
+ * projection of the owner's passkeys: root writes it, the portal's account
+ * reads it, the dashboard's cannot. The portal keeps no list of its own: it
+ * reads this file again whenever it changes (src/projection.ts), so an access
+ * removed is refused at its next request.
  *
  * ## Password access
  *
- * A person outside the company's domains signs in with a password the steward
- * drew for them, for one site, until its expiry. The projection carries its
- * SHA-256, never the password: drawn at random over about 92 bits, there is
- * nothing to guess, and a fast hash finds it by index rather than checking
- * every access one by one, as argon2id would make it.
+ * A guest signs in with a password the steward drew for them, for one site,
+ * until its expiry. The projection carries its SHA-256, never the password:
+ * drawn at random over about 92 bits, there is nothing to guess, and a fast
+ * hash finds it by index rather than checking every access one by one, as
+ * argon2id would make it. It opens the site as `visitor`; the owner, with a
+ * passkey or the owner's password, opens every site as `admin`.
  *
  * Pure: the dashboard borrows this file, so that the steward writes exactly
- * what the portal reads. Its one import, `./sharing`, is borrowed beside it.
+ * what the portal reads. Its one import, `./email`, is borrowed beside it.
  */
-import { EMAIL_MAX, cleanDomain, cleanEmail, domainOf } from "./sharing";
+import { EMAIL_MAX, cleanEmail } from "./email";
 
-/** The ladder, from the narrowest. */
-export const ROLES = ["visitor", "viewer", "developer", "admin"] as const;
-
-export type Role = (typeof ROLES)[number];
-
-export function isRole(value: unknown): value is Role {
-  return typeof value === "string" && (ROLES as readonly string[]).includes(value);
-}
-
-/** The rung's height: a role grants what every lower one does. */
-export function rank(role: Role): number {
-  return ROLES.indexOf(role);
-}
-
-/** Does `role` reach `minimum`? */
-export function atLeast(role: Role | null, minimum: Role): boolean {
-  return role !== null && rank(role) >= rank(minimum);
-}
-
-/** The higher of two roles, null when neither is one. */
-export function higher(a: Role | null, b: Role | null): Role | null {
-  if (a === null) return b;
-  if (b === null) return a;
-  return rank(a) >= rank(b) ? a : b;
-}
-
-/** Where the steward writes it, beside the assertion key, and its name. */
+/** Where the steward writes it, beside the passkeys' projection, and its name. */
 export const PROJECTION_FILE = "/etc/sitesolide-portal/access.json";
 export const PROJECTION_NAME = "access.json";
 
-/** A projection of a few hundred people per site, a hundred sites, fits well within it. */
+/** A projection of a few hundred password accesses per site, a hundred sites, fits well within it. */
 export const PROJECTION_MAX_BYTES = 8 * 1024 * 1024;
 
 export const PROJECTION_VERSION = 1;
@@ -88,13 +48,13 @@ export type PasswordGrant = {
   expiresAt: number | null;
 };
 
-/** One site's people with access. */
+/**
+ * One site's password accesses. A projection written before company sign-in
+ * went carries `people` and `domains` beside them, which nothing reads any
+ * more: they are ignored, and the steward's next write leaves them out.
+ */
 export type SiteAccess = {
   slug: string;
-  /** A verified email, and its role. */
-  people: Record<string, Role>;
-  /** Everyone at these domains may open it, as `visitor`. */
-  domains: string[];
   passwords: PasswordGrant[];
 };
 
@@ -134,18 +94,8 @@ export function isAccessId(value: unknown): value is string {
 
 function readSite(value: unknown): SiteAccess | null {
   if (!isObject(value)) return null;
-  const { slug, people, domains, passwords } = value;
-  if (typeof slug !== "string" || !SLUG.test(slug) || !isObject(people) || !Array.isArray(domains) || !Array.isArray(passwords)) return null;
-  const readPeople: Record<string, Role> = {};
-  for (const [email, role] of Object.entries(people)) {
-    if (cleanEmail(email) !== email || !isRole(role)) return null;
-    readPeople[email] = role;
-  }
-  const readDomains: string[] = [];
-  for (const domain of domains) {
-    if (typeof domain !== "string" || cleanDomain(domain) !== domain) return null;
-    readDomains.push(domain);
-  }
+  const { slug, passwords } = value;
+  if (typeof slug !== "string" || !SLUG.test(slug) || !Array.isArray(passwords)) return null;
   const readPasswords: PasswordGrant[] = [];
   for (const grant of passwords) {
     if (!isObject(grant)) return null;
@@ -154,7 +104,7 @@ function readSite(value: unknown): SiteAccess | null {
     if (expiresAt !== null && !isDate(expiresAt)) return null;
     readPasswords.push({ id, who, hash, expiresAt });
   }
-  return { slug, people: readPeople, domains: readDomains, passwords: readPasswords };
+  return { slug, passwords: readPasswords };
 }
 
 /**
@@ -187,19 +137,6 @@ export function encodeProjection(projection: Projection): string {
 }
 
 // --- the portal's decisions ------------------------------------------------------
-
-/**
- * The role a verified email holds on a site, or null when it may not open
- * it: an admin email opens every site as `admin`; otherwise the higher of its
- * own entry and its domain's, which is `visitor`.
- */
-export function emailRole(site: SiteAccess | undefined, email: string, admins: readonly string[]): Role | null {
-  if (admins.includes(email)) return "admin";
-  if (site === undefined) return null;
-  const own = Object.hasOwn(site.people, email) ? site.people[email]! : null;
-  const domain = site.domains.includes(domainOf(email)) ? "visitor" : null;
-  return higher(own, domain);
-}
 
 /** Does this password access open a site right now? An expired one closes as a removed one does. */
 export function grantOpens(grant: PasswordGrant | null | undefined, now: number): grant is PasswordGrant {

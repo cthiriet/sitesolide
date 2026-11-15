@@ -9,9 +9,9 @@ if (!DATA_DIR.endsWith(".attempts")) throw new Error(`isolated tests expected, D
 /** When the tests' steward writes, unless a test says otherwise. */
 export const WRITTEN_AT = 1_800_000_000_000;
 
-/** One site's people with access, nobody unless the test says so. */
+/** One site's password accesses, none unless the test says so. */
 export function site(slug: string, rest: Partial<Omit<SiteAccess, "slug">> = {}): SiteAccess {
-  return { slug, people: {}, domains: [], passwords: [], ...rest };
+  return { slug, passwords: [], ...rest };
 }
 
 export function projection(sites: Record<string, SiteAccess>, writtenAt = WRITTEN_AT): Projection {

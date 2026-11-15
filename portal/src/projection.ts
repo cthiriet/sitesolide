@@ -1,15 +1,15 @@
 /**
  * Where the portal reads who may open a site from: the steward's projection,
  * `/etc/sitesolide-portal/access.json` (src/access.ts), read again as soon as
- * it changes, so that someone removed or lowered is refused at their next
+ * it changes, so that a password access removed is refused at its next
  * request.
  *
  * **Read again when it changes, judged before use.** Every decision looks at
  * the file's identity, its inode, size and modification time, one `stat`
  * and nothing more when it has not moved; a file that moved is read whole
  * and judged by `readProjection`. One that does not read opens nothing but
- * what needs no list: the owner's password and `OIDC_ADMIN_EMAILS`. It is
- * said once in the journal, and read again at the next change.
+ * what needs no list: the owner. It is said once in the journal, and read
+ * again at the next change.
  *
  * **Before the steward writes it**, on a machine being set up, a missing
  * file is read the same way: nothing opens but what needs no list.
@@ -26,13 +26,11 @@ import { basename } from "node:path";
 import {
   EMPTY_PROJECTION,
   PROJECTION_MAX_BYTES,
-  emailRole,
   grantOpens,
   passwordIndex,
   readProjection,
   type PasswordGrant,
   type Projection,
-  type Role,
 } from "./access";
 
 /** What the portal decides from: the steward's projection, or nothing. */
@@ -41,8 +39,6 @@ export type Reading = "steward" | "unreadable";
 export type AccessReader = {
   /** Where the decisions come from now, and when the steward wrote what is read. */
   state: () => { reading: Reading; writtenAt: number | null };
-  /** The role this verified email holds on this host, or null when it may not open it. */
-  roleOf: (host: string, email: string, admins: readonly string[]) => Role | null;
   /** The password access this hash opens on this host, right now. */
   passwordByHash: (hash: string, host: string, now: number) => PasswordGrant | null;
   /** The password access a cookie names, still in place and unexpired on this host. */
@@ -146,7 +142,7 @@ export function createAccessReader(options: AccessReaderOptions): AccessReader {
     if (identity === null) {
       seen = null;
       current = { reading: "unreadable", projection: EMPTY_PROJECTION, index: new Map() };
-      say("missing", `access: ${options.file} is missing: only the owner's password and the admin emails open a site until the steward writes it again`);
+      say("missing", `access: ${options.file} is missing: only the owner opens a site until the steward writes it again`);
       return;
     }
     if (identity === seen) return;
@@ -157,7 +153,7 @@ export function createAccessReader(options: AccessReaderOptions): AccessReader {
       // read again in a few seconds, changed or not.
       failure = { identity, at: now() };
       current = { reading: "unreadable", projection: EMPTY_PROJECTION, index: new Map() };
-      say(`failed:${text.failed}`, `access: ${options.file} could not be read (${text.failed}): only the owner's password and the admin emails open a site, read again in a few seconds`);
+      say(`failed:${text.failed}`, `access: ${options.file} could not be read (${text.failed}): only the owner opens a site, read again in a few seconds`);
       return;
     }
     failure = null;
@@ -166,7 +162,7 @@ export function createAccessReader(options: AccessReaderOptions): AccessReader {
     const read = "refused" in text ? { unreadable: text.refused } : readProjection(text.text);
     if ("unreadable" in read) {
       current = { reading: "unreadable", projection: EMPTY_PROJECTION, index: new Map() };
-      say(`unreadable:${identity}`, `access: ${read.unreadable}: only the owner's password and the admin emails open a site until the steward writes it again`);
+      say(`unreadable:${identity}`, `access: ${read.unreadable}: only the owner opens a site until the steward writes it again`);
       return;
     }
     current = { reading: "steward", projection: read, index: passwordIndex(read) };
@@ -177,11 +173,6 @@ export function createAccessReader(options: AccessReaderOptions): AccessReader {
     state() {
       refresh();
       return { reading: current.reading, writtenAt: current.reading === "steward" ? current.projection.writtenAt : null };
-    },
-
-    roleOf(host, email, admins) {
-      refresh();
-      return emailRole(current.projection.sites[host], email, admins);
     },
 
     passwordByHash(hash, host, now) {

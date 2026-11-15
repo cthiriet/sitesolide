@@ -2,24 +2,23 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { encodeProjection, PROJECTION_MAX_BYTES } from "../src/access";
-import { createAccessReader, READ_RETRY_MS, readText, type Read } from "../src/projection";
+import { READ_RETRY_MS, readText, type AccessReader, type Read } from "../src/projection";
 import { accessFolder, grant, projection, site, WRITTEN_AT } from "./access-file";
 
 const HOST = "kanban.test-zone.invalid";
 const OTHER = "roster.test-zone.invalid";
-const ADMINS = ["owner@acme.test"];
 const NOW = 1_800_000_000_000;
 const HASH = "a".repeat(64);
+const ID = "PaSsWoRdAcCeSs01";
 
-/** Alice a developer on kanban, everyone at acme.test a visitor, one password access. */
+/** One password access on kanban, none on roster. */
 const KANBAN = projection({
-  [HOST]: site("kanban", {
-    people: { "alice@acme.test": "developer" },
-    domains: ["acme.test"],
-    passwords: [grant({ hash: HASH, expiresAt: NOW + 3_600_000 })],
-  }),
+  [HOST]: site("kanban", { passwords: [grant({ hash: HASH, expiresAt: NOW + 3_600_000 })] }),
   [OTHER]: site("roster"),
 });
+
+/** Does the password access of KANBAN open kanban, as the reader stands? */
+const opens = (reader: AccessReader, id = ID): boolean => reader.passwordById(HOST, id, NOW) !== null;
 
 describe("reading the steward's projection", () => {
   test("decides from the steward's file", () => {
@@ -27,12 +26,17 @@ describe("reading the steward's projection", () => {
     access.write(KANBAN);
     const reader = access.reader();
     expect(reader.state()).toEqual({ reading: "steward", writtenAt: WRITTEN_AT });
+    expect(opens(reader)).toBe(true);
+  });
 
-    expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBe("developer");
-    expect(reader.roleOf(HOST, "bob@acme.test", ADMINS)).toBe("visitor");
-    expect(reader.roleOf(HOST, "eve@elsewhere.test", ADMINS)).toBeNull();
-    expect(reader.roleOf(OTHER, "alice@acme.test", ADMINS)).toBeNull();
-    expect(reader.roleOf("never.test-zone.invalid", "owner@acme.test", ADMINS)).toBe("admin");
+  test("a projection of before, with people and domains, is read for its password accesses alone", () => {
+    const access = accessFolder("before");
+    const before = JSON.parse(encodeProjection(KANBAN));
+    before.sites[HOST] = { ...before.sites[HOST], people: { "alice@acme.test": "developer" }, domains: ["acme.test"] };
+    access.write(JSON.stringify(before));
+    const reader = access.reader();
+    expect(reader.state()).toEqual({ reading: "steward", writtenAt: WRITTEN_AT });
+    expect(opens(reader)).toBe(true);
   });
 
   test("finds a password access by its hash and by its identifier, on its own host and until its expiry", () => {
@@ -52,22 +56,16 @@ describe("reading the steward's projection", () => {
     expect(reader.passwordById(HOST, "PaSsWoRdAcCeSs01", NOW + 3_600_000)).toBeNull();
   });
 
-  test("a rewrite is seen at the very next call: removing or lowering someone holds at their next request", () => {
+  test("a rewrite is seen at the very next call: removing an access holds at its next request", () => {
     const access = accessFolder("rewrite");
     access.write(KANBAN);
     const reader = access.reader();
-    expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBe("developer");
+    expect(opens(reader)).toBe(true);
 
-    access.write(projection({ [HOST]: site("kanban", { people: { "alice@acme.test": "viewer" } }) }, WRITTEN_AT + 1));
-    expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBe("viewer");
+    access.write(projection({ [HOST]: site("kanban") }, WRITTEN_AT + 1));
     expect(reader.state()).toEqual({ reading: "steward", writtenAt: WRITTEN_AT + 1 });
-    // The domain went with the rewrite, and the password access too.
-    expect(reader.roleOf(HOST, "bob@acme.test", ADMINS)).toBeNull();
-    expect(reader.passwordById(HOST, "PaSsWoRdAcCeSs01", NOW)).toBeNull();
+    expect(opens(reader)).toBe(false);
     expect(reader.passwordByHash(HASH, HOST, NOW)).toBeNull();
-
-    access.write(projection({ [HOST]: site("kanban") }, WRITTEN_AT + 2));
-    expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBeNull();
   });
 
   test("even a write in place, same size and modification time, is seen: its change time moves", () => {
@@ -78,13 +76,12 @@ describe("reading the steward's projection", () => {
     writeFileSync(access.file, encodeProjection(KANBAN));
     utimesSync(access.file, at, at);
     const reader = access.reader();
-    expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBe("developer");
+    expect(opens(reader)).toBe(true);
 
-    writeFileSync(access.file, encodeProjection(KANBAN).replace("alice@acme.test", "alicx@acme.test"));
+    writeFileSync(access.file, encodeProjection(KANBAN).replace(ID, "PaSsWoRdAcCeSs02"));
     utimesSync(access.file, at, at);
-    // Alice's own entry is gone: what is left is her domain's.
-    expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBe("visitor");
-    expect(reader.roleOf(HOST, "alicx@acme.test", ADMINS)).toBe("developer");
+    expect(opens(reader)).toBe(false);
+    expect(opens(reader, "PaSsWoRdAcCeSs02")).toBe(true);
   });
 
   test("rights repaired on an unreadable file are seen without waiting for the steward", () => {
@@ -113,26 +110,25 @@ describe("a read that fails on the way", () => {
       };
       const reader = access.reader((line) => lines.push(line), { now: () => now, read });
 
-      // The first read fails: nothing opens from the file, the owner's emails aside.
-      expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBeNull();
-      expect(reader.roleOf(HOST, "owner@acme.test", ADMINS)).toBe("admin");
+      // The first read fails: nothing opens from the file.
+      expect(opens(reader)).toBe(false);
       expect(reader.state()).toEqual({ reading: "unreadable", writtenAt: null });
       expect(lines.filter((line) => line.includes(code))).toHaveLength(1);
 
       // Within the retry delay the file is not read again at every request.
       now += READ_RETRY_MS - 1;
-      expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBeNull();
+      expect(opens(reader)).toBe(false);
       expect(reads).toEqual(["failed"]);
 
       // Past it, the same file, never rewritten by the steward, is read again and believed.
       failing = false;
       now += 1;
-      expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBe("developer");
+      expect(opens(reader)).toBe(true);
       expect(reader.state()).toEqual({ reading: "steward", writtenAt: WRITTEN_AT });
       expect(reads).toEqual(["failed", "read"]);
       // Believed, it is not read again until it changes.
       now += 10 * READ_RETRY_MS;
-      reader.roleOf(HOST, "alice@acme.test", ADMINS);
+      opens(reader);
       expect(reads).toEqual(["failed", "read"]);
     }
   });
@@ -170,25 +166,22 @@ describe("a read that fails on the way", () => {
 });
 
 describe("a projection that cannot be believed", () => {
-  test("a malformed file opens nothing but the admin emails, says so once, and is read again when it changes", () => {
+  test("a malformed file opens nothing, says so once, and is read again when it changes", () => {
     const access = accessFolder("malformed");
     const lines: string[] = [];
     access.write(KANBAN);
     const reader = access.reader((line) => lines.push(line));
     expect(reader.state().reading).toBe("steward");
 
-    access.write(encodeProjection(KANBAN).replace('"developer"', '"member"'));
+    access.write(encodeProjection(KANBAN).replace('"slug": "kanban"', '"slug": "Kanban"'));
     expect(reader.state()).toEqual({ reading: "unreadable", writtenAt: null });
-    expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBeNull();
-    expect(reader.roleOf(HOST, "bob@acme.test", ADMINS)).toBeNull();
     expect(reader.passwordByHash(HASH, HOST, NOW)).toBeNull();
-    expect(reader.passwordById(HOST, "PaSsWoRdAcCeSs01", NOW)).toBeNull();
-    expect(reader.roleOf(HOST, "owner@acme.test", ADMINS)).toBe("admin");
+    expect(opens(reader)).toBe(false);
     expect(lines.filter((line) => line.includes("does not have the expected shape"))).toHaveLength(1);
 
     access.write(KANBAN);
     expect(reader.state().reading).toBe("steward");
-    expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBe("developer");
+    expect(opens(reader)).toBe(true);
   });
 
   test("a file gone after one was read opens nothing, and the next one written decides again", () => {
@@ -199,19 +192,16 @@ describe("a projection that cannot be believed", () => {
 
     access.remove();
     expect(reader.state()).toEqual({ reading: "unreadable", writtenAt: null });
-    expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBeNull();
     expect(reader.passwordByHash(HASH, HOST, NOW)).toBeNull();
-    expect(reader.roleOf(HOST, "owner@acme.test", ADMINS)).toBe("admin");
 
     access.write(KANBAN);
-    expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBe("developer");
+    expect(opens(reader)).toBe(true);
   });
 
   test("a missing file opens nothing", () => {
     const reader = accessFolder("missing-bare").reader();
     expect(reader.state()).toEqual({ reading: "unreadable", writtenAt: null });
-    expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBeNull();
-    expect(reader.roleOf(HOST, "owner@acme.test", ADMINS)).toBe("admin");
+    expect(opens(reader)).toBe(false);
   });
 
   test("a file behind a symbolic link is not read", () => {
@@ -221,7 +211,7 @@ describe("a projection that cannot be believed", () => {
     symlinkSync(real, access.file);
     const reader = access.reader();
     expect(reader.state().reading).toBe("unreadable");
-    expect(reader.roleOf(HOST, "alice@acme.test", ADMINS)).toBeNull();
+    expect(opens(reader)).toBe(false);
   });
 
   test("a folder in its place, or a file beyond the bound, is not read", () => {

@@ -1,10 +1,8 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import type { PasswordGrant, Role } from "../src/access";
+import type { PasswordGrant } from "../src/access";
 import { DATA_DIR } from "../src/config";
-import { deriveKey, issueToken, guestHash, issueIdentityToken } from "../src/gate";
-import { readSignOut } from "../src/handoff";
-import { readSettings } from "../src/oidc";
+import { deriveKey, issueToken, guestHash } from "../src/gate";
 import { actorOf, createRoutes, type Options } from "../src/routes";
 import { accessFolder, grant, projection, site } from "./access-file";
 import { memoryAudit } from "./memory";
@@ -24,7 +22,7 @@ const KEY = deriveKey(new Uint8Array(32).fill(3), "$argon2id$sample")!;
 const DURATION = 30 * 24 * 3600;
 const START = 1_800_000_000_000;
 
-/** A steward that gave access to nobody, what every case without people of its own reads. */
+/** A steward that gave access to nobody, what every case without accesses of its own reads. */
 const NOBODY = accessFolder("routes-nobody");
 NOBODY.write(projection({}));
 
@@ -428,46 +426,16 @@ describe("/_portal/deconnexion", () => {
     expect(routes().signOut(request).status).toBe(403);
   });
 
-  test("with a provider, goes on to the portal's host to end its session too, with a ticket for this host", () => {
-    // A page rather than a 303: a site whose CSP says form-action 'self'
-    // would see its sign-out form refused on a redirect to another host.
+  test("signs the owner out the same way, cookie in hand, with no page in between", () => {
     const owner = issueToken(KEY, HOST, 1_800_000_000 + 60);
     const request = new Request("http://127.0.0.1:3026/_portal/deconnexion", {
       method: "POST",
       headers: { "X-Portal-Hote": HOST, Origin: ORIGIN, Cookie: `__Host-portal=${owner}` },
     });
-    const response = routes({ settings: SETTINGS }).signOut(request);
-    expect(response.status).toBe(200);
+    const response = routes().signOut(request);
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/");
     expect(response.headers.get("set-cookie")).toInclude("Max-Age=0");
-    expect(response.headers.get("x-portal")).toBe("connexion");
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    return response.text().then((page) => {
-      const next = new URL(page.match(/<meta http-equiv="refresh" content="0; url=([^"]+)">/)![1]!);
-      expect(next.origin).toBe("https://portal.test-zone.invalid");
-      expect(next.pathname).toBe("/oidc/signout");
-      expect(readSignOut(KEY, next.searchParams.get("ticket"), START / 1000)).toEqual({ host: HOST, who: "owner" });
-    });
-  });
-
-  test("with a provider, the ticket names the person signing out, and nobody gets one who was not in", async () => {
-    function post(cookie: string | null): Response {
-      const headers: Record<string, string> = { "X-Portal-Hote": HOST, Origin: ORIGIN };
-      if (cookie !== null) headers.Cookie = `__Host-portal=${cookie}`;
-      return routes({ settings: SETTINGS }).signOut(new Request("http://127.0.0.1:3026/_portal/deconnexion", { method: "POST", headers }));
-    }
-    const identity = issueIdentityToken(KEY, HOST, 1_800_000_000 + 60, { email: "alice@acme.test", name: null });
-    const page = await post(identity).text();
-    const next = new URL(page.match(/<meta http-equiv="refresh" content="0; url=([^"]+)">/)![1]!.replaceAll("&amp;", "&"));
-    expect(readSignOut(KEY, next.searchParams.get("ticket"), START / 1000)).toEqual({ host: HOST, who: "alice@acme.test" });
-
-    // A stranger, an Origin being whatever a client outside a browser writes,
-    // and a password access, which no provider vouched for: home, no ticket.
-    for (const cookie of [null, "garbage", issueToken(KEY, HOST, 1_800_000_000 + 60, "PaSsWoRdAcCeSs01")]) {
-      const response = post(cookie);
-      expect(response.status).toBe(303);
-      expect(response.headers.get("location")).toBe("/");
-      expect(response.headers.get("set-cookie")).toInclude("Max-Age=0");
-    }
   });
 });
 
@@ -476,159 +444,26 @@ test("/sante says whether a hash is in place, without saying anything more about
   expect(await routes({ key: null }).health().json()).toEqual({ ok: true, configure: false });
 });
 
-const SETTINGS = readSettings(
-  {
-    OIDC_ISSUER: "https://idp.test-zone.invalid",
-    OIDC_CLIENT_ID: "client",
-    OIDC_CLIENT_SECRET: "not-a-real-secret",
-    OIDC_ADMIN_EMAILS: "owner@acme.test",
-    OIDC_PROVIDER_NAME: "Acme",
-  },
-  "https://portal.test-zone.invalid",
-).settings!;
-
-describe("an identity on /verifier", () => {
+describe("who came in, as the site learns it", () => {
   const NOW_S = START / 1000;
 
-  function identityCookie(email: string, name: string | null = null, host = HOST): string {
-    return `__Host-portal=${issueIdentityToken(KEY, host, NOW_S + 3600, { email, name })}`;
-  }
-
-  /** A steward that gave HOST to these people and domains; `null`, a site it never listed. */
-  function withPeople(people: Record<string, Role> | null, domains: string[] = []) {
-    const access = accessFolder("routes-identity");
-    access.write(projection(people === null ? {} : { [HOST]: site("kanban", { people, domains }) }));
-    return { access, r: routes({ settings: SETTINGS, access: access.reader() }) };
-  }
-
   function visit(r: ReturnType<typeof routes>, cookie: string) {
-    return r.verify(verification({ "X-Portal-Hote": HOST, Cookie: cookie, "X-Forwarded-Uri": "/board" }));
+    return r.verify(verification({ "X-Portal-Hote": HOST, Cookie: cookie }));
   }
 
-  test("an admin email gets in everywhere, as admin, its email and name passed on", () => {
-    const { r } = withPeople(null);
-    const response = visit(r, identityCookie("owner@acme.test", "Owner Name"));
-    expect(response.status).toBe(200);
-    expect(Object.fromEntries(response.headers)).toEqual({
-      "x-sitesolide-role": "admin",
-      "x-sitesolide-user": "owner@acme.test",
-      "x-sitesolide-user-name": "Owner%20Name",
-    });
-  });
-
-  test("a site the steward never listed lets nobody else in, and says so, offering another account", async () => {
-    const { r } = withPeople(null);
-    const response = visit(r, identityCookie("alice@acme.test"));
-    expect(response.status).toBe(401);
-    expect(response.headers.get("x-portal")).toBe("connexion");
-    expect(response.headers.get("x-sitesolide-user")).toBeNull();
-    const page = await response.text();
-    expect(page).toInclude("You are signed in as alice@acme.test, but you don&#39;t have access to this site.");
-    expect(page).toInclude("account=choose");
-  });
-
-  test("a person listed gets in with the role of their entry, the others do not", () => {
-    for (const role of ["visitor", "viewer", "developer", "admin"] as const) {
-      const { r } = withPeople({ "alice@acme.test": role });
-      const alice = visit(r, identityCookie("alice@acme.test"));
-      expect(alice.status).toBe(200);
-      expect(alice.headers.get("x-sitesolide-role")).toBe(role);
-      expect(alice.headers.get("x-sitesolide-user")).toBe("alice@acme.test");
-      expect(alice.headers.get("x-sitesolide-user-name")).toBeNull();
-      expect(visit(r, identityCookie("bob@acme.test")).status).toBe(401);
-    }
-  });
-
-  test("a domain lets everyone at it in as visitor, and a person listed above that keeps their role", () => {
-    const { r } = withPeople({ "alice@acme.test": "developer" }, ["acme.test"]);
-    const bob = visit(r, identityCookie("bob@acme.test"));
-    expect(bob.status).toBe(200);
-    expect(bob.headers.get("x-sitesolide-role")).toBe("visitor");
-    expect(visit(r, identityCookie("alice@acme.test")).headers.get("x-sitesolide-role")).toBe("developer");
-    expect(visit(r, identityCookie("eve@elsewhere.test")).status).toBe(401);
-  });
-
-  test("lowered, then removed, at the very next request each time, cookie in hand", () => {
-    const { access, r } = withPeople({ "alice@acme.test": "developer" });
-    const cookie = identityCookie("alice@acme.test");
-    expect(visit(r, cookie).headers.get("x-sitesolide-role")).toBe("developer");
-    access.write(projection({ [HOST]: site("kanban", { people: { "alice@acme.test": "visitor" } }) }));
-    expect(visit(r, cookie).headers.get("x-sitesolide-role")).toBe("visitor");
-    access.write(projection({ [HOST]: site("kanban") }));
-    expect(visit(r, cookie).status).toBe(401);
-  });
-
-  test("a projection the portal cannot believe closes everyone out but the admin emails", () => {
-    const { access, r } = withPeople({ "alice@acme.test": "admin" });
-    access.write("{ not json");
-    expect(visit(r, identityCookie("alice@acme.test")).status).toBe(401);
-    expect(visit(r, identityCookie("owner@acme.test")).status).toBe(200);
-  });
-
-  test("a domain taken off the allowed ones closes its people out at the next request, the admins excepted", () => {
-    const access = accessFolder("routes-narrowed");
-    access.write(projection({ [HOST]: site("kanban", { people: { "carol@partner.test": "viewer" }, domains: ["acme.test", "partner.test"] }) }));
-    const narrowed = { ...SETTINGS, allowedDomains: ["acme.test"] };
-    const r = routes({ settings: narrowed, access: access.reader() });
-    expect(visit(r, identityCookie("bob@acme.test")).status).toBe(200);
-    expect(visit(r, identityCookie("carol@partner.test")).status).toBe(401);
-    expect(visit(r, identityCookie("dave@partner.test")).status).toBe(401);
-    const admitted = routes({ settings: { ...narrowed, admins: ["boss@partner.test"] }, access: access.reader() });
-    expect(visit(admitted, identityCookie("boss@partner.test")).status).toBe(200);
-  });
-
-  test("the identity cookie of another site opens nothing here, listed or not", () => {
-    const { r } = withPeople({ "alice@acme.test": "visitor" });
-    expect(visit(r, identityCookie("alice@acme.test", null, OTHER)).status).toBe(401);
-  });
-
-  test("without the provider's settings, an identity cookie opens nothing, an admin's included", () => {
-    const access = accessFolder("routes-no-provider");
-    access.write(projection({ [HOST]: site("kanban", { people: { "alice@acme.test": "admin" } }) }));
-    const r = routes({ access: access.reader() });
-    expect(visit(r, identityCookie("owner@acme.test")).status).toBe(401);
-    expect(visit(r, identityCookie("alice@acme.test")).status).toBe(401);
-  });
-
-  test("the owner's cookie says admin and nobody, a password access's visitor and nobody, with or without a provider", () => {
+  test("the owner's cookie says admin and nobody, a password access's visitor and nobody", () => {
     const access = accessFolder("routes-roles");
     access.write(projection({ [HOST]: site("kanban", { passwords: [grant({ id: "PaSsWoRdAcCeSs01", hash: guestHash(ACCESS_PASSWORD) })] }) }));
-    for (const settings of [null, SETTINGS]) {
-      const r = routes({ settings, access: access.reader() });
-      const owner = visit(r, `__Host-portal=${issueToken(KEY, HOST, NOW_S + 60)}`);
-      expect(Object.fromEntries(owner.headers)).toEqual({ "x-sitesolide-role": "admin" });
-      const visitor = visit(r, `__Host-portal=${issueToken(KEY, HOST, NOW_S + 60, "PaSsWoRdAcCeSs01")}`);
-      expect(Object.fromEntries(visitor.headers)).toEqual({ "x-sitesolide-role": "visitor" });
-    }
+    const r = routes({ access: access.reader() });
+    const owner = visit(r, `__Host-portal=${issueToken(KEY, HOST, NOW_S + 60)}`);
+    expect(Object.fromEntries(owner.headers)).toEqual({ "x-sitesolide-role": "admin" });
+    const visitor = visit(r, `__Host-portal=${issueToken(KEY, HOST, NOW_S + 60, "PaSsWoRdAcCeSs01")}`);
+    expect(Object.fromEntries(visitor.headers)).toEqual({ "x-sitesolide-role": "visitor" });
   });
 
-  test("a POST from elsewhere is refused to an identity as to anyone", () => {
-    const { r } = withPeople(null);
-    const request = verification({
-      "X-Portal-Hote": HOST,
-      Cookie: identityCookie("owner@acme.test"),
-      "X-Forwarded-Method": "POST",
-      Origin: "https://agency.test-zone.invalid",
-    });
-    expect(r.verify(request).status).toBe(403);
-  });
-});
-
-describe("the sign-in page offers the provider", () => {
-  test("when it is configured, a link that keeps the return", async () => {
-    const page = await routes({ settings: SETTINGS })
-      .verify(verification({ "X-Portal-Hote": HOST, "X-Forwarded-Uri": "/board?x=1" }))
-      .text();
-    expect(page).toInclude('href="/_portal/oidc?retour=%2Fboard%3Fx%3D1"');
-    expect(page).toInclude("Sign in with Acme");
-    expect(page).toInclude('name="motdepasse"');
-  });
-
-  test("never without a hash, nor without settings", async () => {
-    expect(await routes().verify(verification({ "X-Portal-Hote": HOST })).text()).not.toInclude("/_portal/oidc");
-    expect(await routes({ key: null, settings: SETTINGS }).verify(verification({ "X-Portal-Hote": HOST })).text()).not.toInclude(
-      "/_portal/oidc",
-    );
+  test("the company account's routes are gone: nothing answers them here", () => {
+    const r = routes() as unknown as Record<string, unknown>;
+    expect(Object.keys(r).sort()).toEqual(["health", "signIn", "signOut", "verify"]);
   });
 });
 
@@ -693,11 +528,10 @@ describe("the audit of sign-ins", () => {
     ]);
   });
 
-  test("who a cookie names: the owner, the email, the access by who it was given to when it is the same one", () => {
+  test("who a cookie names: the owner, or the access by who it was given to when it is the same one", () => {
     const token = (guest: string | null) => ({ guest });
     expect(actorOf(null)).toBe("anonymous");
     expect(actorOf(token(null))).toBe("owner");
-    expect(actorOf({ ...token(null), identity: { email: "alice@acme.test", name: null } })).toBe("alice@acme.test");
     expect(actorOf(token("PaSsWoRdAcCeSs01"), grant())).toBe("alice@elsewhere.test");
     expect(actorOf(token("PaSsWoRdAcCeSs01"))).toBe("password:PaSsWoRdAcCeSs01");
     expect(actorOf(token("PaSsWoRdAcCeSs09"), grant())).toBe("password:PaSsWoRdAcCeSs09");
@@ -733,11 +567,11 @@ describe("a site's own domain", () => {
   const ACCESS_ID = "PaSsWoRdAcCeSs03";
   const NOW_S = START / 1000;
 
-  /** A steward that filed kanban's people under its preview, the one address it knows. */
+  /** A steward that filed kanban's accesses under its preview, the one address it knows. */
   function withSite(rest: Parameters<typeof site>[1] = {}) {
     const access = accessFolder("routes-domain");
     access.write(projection({ [HOST]: site("kanban", rest) }));
-    return routes({ settings: SETTINGS, access: access.reader() });
+    return routes({ access: access.reader() });
   }
 
   function onDomain(fields: Record<string, string>): Request {
@@ -762,27 +596,18 @@ describe("a site's own domain", () => {
     expect(visit(r, preview, HOST).status).toBe(200);
   });
 
-  test("a person is judged on the site's people, under the role of their entry", () => {
-    const r = withSite({ people: { "alice@acme.test": "developer" } });
-    const alice = `__Host-portal=${issueIdentityToken(KEY, DOMAIN, NOW_S + 3600, { email: "alice@acme.test", name: null })}`;
-    const response = visit(r, alice);
-    expect(response.status).toBe(200);
-    expect(response.headers.get("x-sitesolide-role")).toBe("developer");
-    const bob = `__Host-portal=${issueIdentityToken(KEY, DOMAIN, NOW_S + 3600, { email: "bob@acme.test", name: null })}`;
-    expect(visit(r, bob).status).toBe(401);
-  });
-
-  test("a person with access to another site gets nothing here by announcing it: only the block says whose site it is", () => {
+  test("a password access of another site gets nothing here by announcing it: only the block says whose site it is", async () => {
     // The visitor cannot write X-Portal-Hote, Caddy overwrites it; a block
     // that announced a site other than its own would be a generator's fault,
     // and the cookie, signed for its host, still opens nothing elsewhere.
     const access = accessFolder("routes-domain-other");
-    access.write(projection({ [HOST]: site("kanban"), [OTHER]: site("roster", { people: { "alice@acme.test": "viewer" } }) }));
-    const r = routes({ settings: SETTINGS, access: access.reader() });
-    const alice = `__Host-portal=${issueIdentityToken(KEY, DOMAIN, NOW_S + 3600, { email: "alice@acme.test", name: null })}`;
-    expect(visit(r, alice).status).toBe(401);
-    expect(visit(r, alice, `${DOMAIN} ${OTHER}`).status).toBe(200);
-    expect(visit(r, alice, `${OTHER} ${OTHER}`).status).toBe(401);
+    access.write(projection({ [HOST]: site("kanban"), [OTHER]: site("roster", { passwords: [grant({ id: ACCESS_ID, hash: guestHash(ACCESS_PASSWORD) })] }) }));
+    const r = routes({ access: access.reader() });
+    const roster = `__Host-portal=${issueToken(KEY, DOMAIN, NOW_S + 3600, ACCESS_ID)}`;
+    expect(visit(r, roster).status).toBe(401);
+    expect(visit(r, roster, `${DOMAIN} ${OTHER}`).status).toBe(200);
+    expect(visit(r, roster, `${OTHER} ${OTHER}`).status).toBe(401);
+    expect((await r.signIn(onDomain({ motdepasse: ACCESS_PASSWORD }))).status).toBe(401);
   });
 
   test("the owner's password opens the domain, and the failures count with the preview's", async () => {

@@ -3,14 +3,11 @@ import { isPasswordValid } from "./borrowed/auth";
 import { createAccessAdmin } from "./src/admin";
 import { PROJECTION_FILE } from "./src/access";
 import { createAccessReader } from "./src/projection";
-import { ASSERTION_KEY_FILE, createDashboardAdmin, dashboardOrigin, readKeyFile } from "./src/dashboard";
 import { auditStore, openDatabase } from "./src/database";
 import { COOKIE_DURATION_S, PASSWORD_HASH, ONLINE, DATABASE_FILE, KEY_FILE, PORT, PUBLIC_URL } from "./src/config";
 import { deriveKey, KEY_BYTES } from "./src/gate";
 import { handoffStore } from "./src/handoff";
-import { createProvider, readSettings } from "./src/oidc";
 import { createRoutes } from "./src/routes";
-import { createSso } from "./src/sso";
 import { createPasskeyReader, createPasskeySignIn, passkeyPlace } from "./src/passkey-signin";
 import { PASSKEYS_FILE } from "./src/passkeys";
 
@@ -38,18 +35,13 @@ const key = deriveKey(readOrDraw(KEY_FILE), PASSWORD_HASH);
 // anything; without a hash, it simply refuses everyone.
 if (key === null) console.warn("PASSWORD_HASH missing: nobody will be able to enter");
 
-// Signing in with the identity provider is offered only when it is fully
-// configured. Half configured, the portal behaves as it always has and says
-// what is missing; the names are printed, never a value.
-const { settings, problems } = readSettings(process.env, PUBLIC_URL);
-for (const problem of problems) console.warn(`sign-in with a provider: ${problem}`);
-if (settings !== null) console.log(`sign-in with ${settings.providerName} offered, callback ${settings.redirectUri}`);
-
-// The dashboard signs in through the same flow, from its own address, which
-// follows from the portal's: see src/dashboard.ts.
-const dashboard = settings === null ? null : dashboardOrigin(PUBLIC_URL, process.env.DASHBOARD_URL);
-if (settings !== null) {
-  console.log(dashboard === null ? "dashboard sign-in not offered: the portal's address does not start with portal." : `dashboard sign-in offered, back to ${dashboard}`);
+// Signing in with a company account is gone: the settings it read from
+// portal.env, OIDC_* among them, are left alone and read by nothing.
+for (const name of Object.keys(process.env)) {
+  if (name.startsWith("OIDC_")) {
+    console.warn("portal.env still carries OIDC_* settings, which nothing reads any more: see docs/upgrading.md");
+    break;
+  }
 }
 
 const database = openDatabase(DATABASE_FILE);
@@ -59,7 +51,7 @@ const audit = auditStore(database);
 // changes. See src/projection.ts.
 const access = createAccessReader({ file: process.env.ACCESS_FILE ?? PROJECTION_FILE });
 const reading = access.state();
-console.log(`access: read from ${reading.reading === "steward" ? "the steward's projection" : "nowhere: only the owner's password and the admin emails open a site"}`);
+console.log(`access: read from ${reading.reading === "steward" ? "the steward's projection" : "nowhere: only the owner opens a site"}`);
 
 // The owner's passkeys, the public halves the steward projects, and where
 // their ceremony runs: the portal's own host, under the zone. See
@@ -68,8 +60,7 @@ const place = passkeyPlace(PUBLIC_URL, process.env.PASSKEY_RP_ID);
 const passkeys = createPasskeyReader({ file: process.env.PASSKEYS_FILE ?? PASSKEYS_FILE });
 console.log(place === null ? "passkeys not offered: the portal's address does not start with portal." : `passkeys: ceremonies on ${place.origin}, for ${place.rpId}`);
 
-// One store of codes for the sites, the dashboard and the owner's passkey:
-// a code says which it was minted for, and is redeemed for nothing else.
+// The codes the owner's passkey sign-in hands back to a site.
 const handoffs = handoffStore();
 
 const passkeySignIn = createPasskeySignIn({ key, online: ONLINE, place, passkeys, handoffs, audit, cookieDurationS: COOKIE_DURATION_S });
@@ -81,33 +72,10 @@ const routes = createRoutes({
   online: ONLINE,
   cookieDurationS: COOKIE_DURATION_S,
   access,
-  settings,
   audit,
 });
 
-
-const sso = createSso({
-  key,
-  settings,
-  provider: settings === null ? null : createProvider(settings),
-  online: ONLINE,
-  access,
-  audit,
-  handoffs,
-  dashboardOrigin: dashboard,
-  passkeyOffered: passkeySignIn.offered,
-});
-
-const dashboardAdmin = createDashboardAdmin({
-  key,
-  settings,
-  origin: dashboard,
-  handoffs,
-  audit,
-  readKey: () => readKeyFile(process.env.ASSERTION_KEY_FILE ?? ASSERTION_KEY_FILE),
-});
-
-const admin = createAccessAdmin({ access, audit, settings });
+const admin = createAccessAdmin({ access, audit });
 
 const server = Bun.serve({
   port: PORT,
@@ -126,15 +94,6 @@ const server = Bun.serve({
     "/_portal/deconnexion": { POST: routes.signOut },
     "/sante": { GET: routes.health },
 
-    // Signing in with the identity provider: the first two on the protected
-    // site, through /_portal/*; the last three on the portal's own host,
-    // through the manifest's routes. See src/sso.ts.
-    "/_portal/oidc": { GET: sso.begin },
-    "/_portal/oidc/complete": { GET: sso.complete },
-    "/oidc/start": { GET: sso.start },
-    "/oidc/callback": { GET: sso.callback },
-    "/oidc/signout": { GET: sso.signOut },
-
     // The owner's passkey: the first two on the protected site, the last
     // three on the portal's own host, where the ceremony runs. See
     // src/passkey-signin.ts.
@@ -146,10 +105,7 @@ const server = Bun.serve({
 
     // Never relayed by Caddy: see src/admin.ts.
     "/admin/access": { GET: admin.access },
-    "/admin/sharing": { GET: admin.sso },
     "/admin/audit": { GET: admin.audit },
-    "/admin/dashboard/flow": { POST: dashboardAdmin.flow },
-    "/admin/dashboard/redeem": { POST: dashboardAdmin.redeem },
   },
 
   fetch() {

@@ -61,7 +61,7 @@ function bench(file: string, clock = () => START) {
       verifyPassword: async () => false,
       online: true,
       cookieDurationS: DURATION,
-      access: { roleOf: () => null, passwordByHash: () => null, passwordById: () => null, state: () => ({ reading: "steward", writtenAt: 0 }) },
+      access: { passwordByHash: () => null, passwordById: () => null, state: () => ({ reading: "steward", writtenAt: 0 }) },
       audit,
       passkeys: { offered: signIn.offered, known: (ref) => passkeys.byRef(ref) !== null },
     },
@@ -311,9 +311,9 @@ describe("the flow and the cookie", () => {
   test("a passkey's cookie lives the owner's thirty days, and its reference is signed", () => {
     const ref = passkeyRef("credential");
     const token = issuePasskeyToken(KEY, HOST, 1000 + DURATION, ref);
-    expect(readToken(token, KEY, HOST, 1000, DURATION, 24 * 3600)).toEqual({ guest: null, passkey: ref });
+    expect(readToken(token, KEY, HOST, 1000, DURATION)).toEqual({ guest: null, passkey: ref });
     const swapped = token.replace(ref, passkeyRef("another"));
-    expect(readToken(swapped, KEY, HOST, 1000, DURATION, 24 * 3600)).toBeNull();
+    expect(readToken(swapped, KEY, HOST, 1000, DURATION)).toBeNull();
     expect(readToken(issuePasskeyToken(KEY, HOST, 1000 + DURATION + 1, ref), KEY, HOST, 1000, DURATION)).toBeNull();
   });
 });

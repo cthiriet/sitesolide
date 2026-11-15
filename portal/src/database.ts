@@ -130,7 +130,8 @@ export const AUDIT_FLOOR_MS = 30 * 24 * 3600 * 1000;
  * password or any valid cookie can be replayed as fast as the network allows,
  * and each replay used to be a row. The row keeps the time of the first.
  * Failed sign-ins are not collapsed: they are bounded where they happen, by
- * the rate limiting and the per-minute bound of src/sso.ts.
+ * the rate limiting of src/routes.ts and the per-minute bound of
+ * src/passkey-signin.ts.
  */
 export const COLLAPSED_ACTIONS: ReadonlySet<string> = new Set(["portal.signin", "portal.signout"]);
 export const COLLAPSE_WINDOW_MS = 60 * 1000;

@@ -7,9 +7,6 @@
   "start": "/usr/local/bin/bun run server.ts",
   "routes": [
     "/sante",
-    "/oidc/start",
-    "/oidc/callback",
-    "/oidc/signout",
     "/passkey",
     "/passkey/options",
     "/passkey/verify"
@@ -19,7 +16,6 @@
     "SITESOLIDE_CONTACT": "{contact}",
     "PUBLIC_URL": "https://{slug}.{zone}"
   },
-  "network": "outbound",
   "exclude": [
     "node_modules",
     "data",
