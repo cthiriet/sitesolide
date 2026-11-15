@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type SyntheticEvent } from "react"
-import { CircleCheck, CircleX, Dices, Eye, EyeOff, LoaderCircle, LockOpen } from "lucide-react"
+import { CircleCheck, CircleX, Dices, Eye, EyeOff, KeyRound, LoaderCircle, LockOpen } from "lucide-react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,7 +25,8 @@ import { Label } from "@/components/ui/label"
 import { Progress } from "@/components/ui/progress"
 import { useAnnounce } from "@/components/copy"
 import { FormError, INPUT_DIALOG, Status } from "@/components/page"
-import { unlockSecrets, setVariable } from "@/lib/api"
+import { readSession, unlockSecrets, setVariable } from "@/lib/api"
+import { ceremonyMessage, unlockWithPasskey } from "@/lib/webauthn"
 import { appliesOnRestart, unrestartedSentence } from "@/lib/machine-settings"
 import { waitMessage } from "@/lib/signin"
 import { restartProgress, generateToken, refusalOf, readVerdict, succeeded, type Refusal } from "@/lib/secrets"
@@ -121,6 +122,14 @@ export function UnlockDialog({
   const [inProgress, setInProgress] = useState(false)
   const [waitUntil, setWaitUntil] = useState<number | null>(null)
   const field = useRef<HTMLInputElement>(null)
+  const button = useRef<HTMLButtonElement>(null)
+  // Once the owner holds a passkey, the steward unlocks with a fresh
+  // assertion alone: the password no longer does.
+  const [withPasskey, setWithPasskey] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (!open) return
+    void readSession().then(({ body }) => setWithPasskey(body?.passkeys?.registered === true))
+  }, [open])
 
   return (
     <Dialog
@@ -129,22 +138,71 @@ export function UnlockDialog({
         if (!next && !inProgress) onClose()
       }}
     >
-      <DialogContent initialFocus={field} finalFocus={focusReturn} className={cn("sm:max-w-md", INPUT_DIALOG)}>
+      <DialogContent initialFocus={withPasskey === true ? button : field} finalFocus={focusReturn} className={cn("sm:max-w-md", INPUT_DIALOG)}>
         <DialogHeader>
           <DialogTitle>{unlockTitle(purpose)}</DialogTitle>
-          <DialogDescription>{UNLOCK_SCOPE("Enter the dashboard password")}</DialogDescription>
+          <DialogDescription>{UNLOCK_SCOPE(withPasskey === true ? "Use your passkey" : "Enter the dashboard password")}</DialogDescription>
         </DialogHeader>
-        <UnlockForm
-          field={field}
-          inProgress={inProgress}
-          setInProgress={setInProgress}
-          waitUntil={waitUntil}
-          setWaitUntil={setWaitUntil}
-          onUnlocked={onUnlocked}
-          onRefusal={onRefusal}
-        />
+        {withPasskey === true ? (
+          <PasskeyUnlockForm button={button} inProgress={inProgress} setInProgress={setInProgress} onUnlocked={onUnlocked} onRefusal={onRefusal} />
+        ) : (
+          <UnlockForm
+            field={field}
+            inProgress={inProgress}
+            setInProgress={setInProgress}
+            waitUntil={waitUntil}
+            setWaitUntil={setWaitUntil}
+            onUnlocked={onUnlocked}
+            onRefusal={onRefusal}
+          />
+        )}
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** The owner's unlock with a passkey: a fresh assertion, the user verified, which the steward checks. */
+function PasskeyUnlockForm({
+  button,
+  inProgress,
+  setInProgress,
+  onUnlocked,
+  onRefusal,
+}: {
+  button: React.RefObject<HTMLButtonElement | null>
+  inProgress: boolean
+  setInProgress: (inProgress: boolean) => void
+  onUnlocked: (until: number) => void
+  onRefusal: OnRefusal
+}) {
+  const [error, setError] = useState("")
+  async function unlock() {
+    if (inProgress) return
+    setInProgress(true)
+    setError("")
+    try {
+      const result = await unlockWithPasskey()
+      if (result.ok && typeof result.body.until === "number") return onUnlocked(result.body.until)
+      if (result.status === -1 || result.status === 0) return setError(ceremonyMessage(result.status, null))
+      const message = onRefusal(refusalOf(result.status, result.body))
+      if (message !== null) setError(message)
+    } finally {
+      setInProgress(false)
+    }
+  }
+  return (
+    <div className="grid gap-4">
+      <FormError>{error}</FormError>
+      <DialogFooter>
+        <DialogClose render={<Button variant="outline" className="max-sm:h-11" />} disabled={inProgress}>
+          Cancel
+        </DialogClose>
+        <Button ref={button} type="button" onClick={() => void unlock()} disabled={inProgress} className="max-sm:h-11">
+          <KeyRound />
+          {inProgress ? "Waiting for the passkey…" : "Unlock with a passkey"}
+        </Button>
+      </DialogFooter>
+    </div>
   )
 }
 

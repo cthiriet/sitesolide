@@ -16,13 +16,14 @@ export function signInRefusal(status: number, body: { error?: string; wait?: num
   }
   if (status === 0) return { message: "Can't reach the dashboard. Check your connection.", waitS: 0 }
   if (body?.error === "origin-refused") return { message: "Origin not allowed.", waitS: 0 }
+  if (body?.error === "passkey-only") return { message: "This dashboard signs in with a passkey.", waitS: 0 }
   if (status === 401) return { message: "Wrong password.", waitS: 0 }
   return { message: `Sign-in failed (${status}).`, waitS: 0 }
 }
 
 /**
- * The button's label during the wait. The failure counter is global, not
- * specific to this browser: the wait applies to everyone.
+ * The button's label during the wait. The failures are counted per address,
+ * the one this browser comes from.
  */
 export function waitMessage(remainingS: number): string {
   return `Try again in ${duration(Math.max(0, remainingS) * 1000)}`

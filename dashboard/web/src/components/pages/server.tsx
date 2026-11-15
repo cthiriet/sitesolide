@@ -4,6 +4,7 @@ import { useData } from "@/components/data"
 import { InternalLink } from "@/components/navigation"
 import { Banner, ErrorState, PageBody, PageHeader, Panel, PanelSkeleton, useRetry } from "@/components/page"
 import { ServerSetupProvider, SettingRow, useServerSetup } from "@/components/server-setup"
+import { PasskeysPanel } from "@/components/passkeys"
 import { siteUrl } from "@/lib/pages"
 import { UNREACHABLE } from "@/lib/secrets"
 import { SERVER_GROUPS, serverRow, sitesRowIds } from "@/lib/server-setup"
@@ -83,6 +84,7 @@ function Content() {
           </div>
         </Panel>
       ))}
+      <PasskeysPanel />
       <p className="px-1 text-[0.8125rem] text-muted-foreground">
         Advanced: the server's files, in the{" "}
         <InternalLink href={siteUrl("dashboard", "secrets")} className="rounded-sm text-link underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">

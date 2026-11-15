@@ -12,7 +12,7 @@ import {
   sortProjects,
   type SiteSecretsPanel,
 } from "@/lib/secrets"
-import type { IdentityView, Snapshot, Reading, ProjectView, SsoOffer } from "@/lib/types"
+import type { IdentityView, PasskeyOffer, Snapshot, Reading, ProjectView, SsoOffer } from "@/lib/types"
 import { NO_DATA, verdict as judge, type Verdict } from "@/lib/verdict"
 
 /**
@@ -327,7 +327,7 @@ const NO_SSO: SsoOffer = { offered: false, providerName: null }
 type Session =
   | { state: "verification" }
   | { state: "unreachable" }
-  | { state: "closed"; configured: boolean; sso: SsoOffer; zone: string | null }
+  | { state: "closed"; configured: boolean; sso: SsoOffer; zone: string | null; passkeys: PasskeyOffer | undefined }
   | { state: "open"; configured: boolean; sso: SsoOffer; identity: IdentityView | null }
 
 /**
@@ -348,7 +348,7 @@ export function DataProvider({ wait, children }: { wait: ReactNode; children: Re
     setSession(
       body.open
         ? { state: "open", configured: body.configured, sso, identity: body.identity ?? null }
-        : { state: "closed", configured: body.configured, sso, zone },
+        : { state: "closed", configured: body.configured, sso, zone, passkeys: body.passkeys },
     )
   }, [])
 
@@ -376,7 +376,7 @@ export function DataProvider({ wait, children }: { wait: ReactNode; children: Re
     case "unreachable":
       return <UnreachableScreen onRetry={() => void check()} />
     case "closed":
-      return <SignIn configured={session.configured} sso={session.sso} zone={session.zone} onOpened={() => void check(true)} />
+      return <SignIn configured={session.configured} sso={session.sso} zone={session.zone} {...(session.passkeys === undefined ? {} : { passkeys: session.passkeys })} onOpened={() => void check(true)} />
     case "open":
       return (
         <OpenSession configured={session.configured} identity={session.identity} sso={session.sso} onClosed={closed}>

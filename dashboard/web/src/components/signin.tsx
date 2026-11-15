@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type SyntheticEvent } from "react"
-import { Eye, EyeOff, LogIn } from "lucide-react"
+import { Eye, EyeOff, KeyRound, LogIn } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -7,11 +7,17 @@ import { Label } from "@/components/ui/label"
 import { Logo } from "@/components/logo"
 import { FormError } from "@/components/page"
 import { ThemeToggleButton } from "@/components/theme"
-import { signIn } from "@/lib/api"
+import { readSession, signIn } from "@/lib/api"
 import { signInFailure, signInUrl } from "@/lib/identity"
 import { waitMessage, signInRefusal } from "@/lib/signin"
-import type { SsoOffer } from "@/lib/types"
+import type { PasskeyOffer, SsoOffer } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { ceremonyMessage, linkFromHash, passkeysSupported, registerPasskey, signInWithPasskey } from "@/lib/webauthn"
+
+const NO_PASSKEY: PasskeyOffer = { registered: false, passwordSignIn: true }
+
+/** What the owner does with no passkey left: the steward's link, minted by root. */
+const RECOVERY = "Lost your passkeys? Run sitesolide passkey link on your workstation for a one-time link."
 
 const NO_HASH = "Sign-in is disabled: no password hash is configured on the server."
 
@@ -38,15 +44,18 @@ function currentReturn(): string {
  * expired while the page is open, so that nothing underneath is lost, starting
  * with a password that is only shown once.
  *
- * Two ways in: a person signs in with the portal's identity provider, a link
+ * The ways in: a person signs in with the portal's identity provider, a link
  * and not a form, since the flow leaves for the portal's own host; the owner
- * types the dashboard's password. A sign-in with the provider that came back
- * without a session says why, from the address (`?signin=`).
+ * with a passkey once they hold one, the dashboard's password until then. A
+ * sign-in with the provider that came back without a session says why, from
+ * the address (`?signin=`). Root's one-time link, `#passkey=`, registers the
+ * owner's passkey and signs them in.
  */
 export function SignIn({
   configured,
   sso = { offered: false, providerName: null },
   zone = null,
+  passkeys: given,
   message = "",
   overlay = false,
   onOpened,
@@ -55,11 +64,60 @@ export function SignIn({
   sso?: SsoOffer
   /** The zone the server serves, under the title: which server the password goes to, before it is typed. */
   zone?: string | null
+  /** Whether the owner holds a passkey; absent, asked of /api/session. */
+  passkeys?: PasskeyOffer
   message?: string
   overlay?: boolean
   onOpened: () => void
 }) {
   const [ssoFailure] = useState(() => signInFailure(new URLSearchParams(window.location.search).get("signin")))
+  const [link, setLink] = useState(() => linkFromHash(window.location.hash))
+  const [fetched, setFetched] = useState<PasskeyOffer | null>(null)
+  const passkeys = given ?? fetched ?? NO_PASSKEY
+  // The password form, until the owner holds a passkey; with no hash it says sign-in is disabled.
+  const showPassword = link === null && (!passkeys.registered || passkeys.passwordSignIn)
+  useEffect(() => {
+    if (given !== undefined) return
+    void readSession().then(({ body }) => {
+      if (body?.passkeys !== undefined) setFetched(body.passkeys)
+    })
+  }, [given])
+  const [passkeyError, setPasskeyError] = useState("")
+  const [passkeyBusy, setPasskeyBusy] = useState(false)
+  const [deviceName, setDeviceName] = useState("")
+  const nameId = useId()
+
+  async function passkeySignIn() {
+    if (passkeyBusy) return
+    setPasskeyBusy(true)
+    setPasskeyError("")
+    try {
+      const result = await signInWithPasskey()
+      if (result.ok) return onOpened()
+      setPasskeyError(ceremonyMessage(result.status, result.body))
+    } finally {
+      setPasskeyBusy(false)
+    }
+  }
+
+  async function registerWithLink(event: SyntheticEvent) {
+    event.preventDefault()
+    if (passkeyBusy || link === null) return
+    setPasskeyBusy(true)
+    setPasskeyError("")
+    try {
+      const result = await registerPasskey(deviceName.trim() === "" ? "Passkey" : deviceName.trim(), link)
+      if (result.ok) {
+        // The link is spent: out of the address, so that a reload does not offer it again.
+        window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`)
+        setLink(null)
+        return onOpened()
+      }
+      setPasskeyError(ceremonyMessage(result.status, result.body))
+    } finally {
+      setPasskeyBusy(false)
+    }
+  }
   const titleId = useId()
   const fieldId = useId()
   const errorId = useId()
@@ -158,20 +216,48 @@ export function SignIn({
               {ssoFailure}
             </p>
           )}
+          {link !== null && (
+            <form noValidate onSubmit={registerWithLink} className="grid gap-3">
+              <p className="text-sm text-pretty">Register a passkey on this device with the one-time link from your server. It signs you in as the owner.</p>
+              <div className="grid gap-2">
+                <Label htmlFor={nameId}>Name this passkey</Label>
+                <Input id={nameId} value={deviceName} maxLength={60} placeholder="Laptop" onChange={(event) => setDeviceName(event.target.value)} className={CONTROL} />
+              </div>
+              <Button type="submit" disabled={passkeyBusy || !passkeysSupported()} className={cn(BUTTON, "w-full")}>
+                <KeyRound />
+                {passkeyBusy ? "Waiting for the passkey…" : "Register a passkey"}
+              </Button>
+              {!passkeysSupported() && <p className="text-sm text-muted-foreground">This browser doesn't offer passkeys.</p>}
+              <FormError>{passkeyError}</FormError>
+            </form>
+          )}
+          {link === null && passkeys.registered && (
+            <div className="grid gap-2">
+              <Button type="button" onClick={() => void passkeySignIn()} disabled={passkeyBusy || !passkeysSupported()} className={cn(BUTTON, "w-full")}>
+                <KeyRound />
+                {passkeyBusy ? "Waiting for the passkey…" : "Sign in with a passkey"}
+              </Button>
+              <FormError>{passkeyError}</FormError>
+              {!passkeys.passwordSignIn && !sso.offered && <p className="text-xs text-pretty text-muted-foreground">{RECOVERY}</p>}
+            </div>
+          )}
           {sso.offered && (
             <>
               <a href={signInUrl(currentReturn())} className={cn(buttonVariants({ variant: "outline" }), BUTTON, "w-full [&_svg]:text-signin-ink")}>
                 <LogIn />
                 Sign in with {sso.providerName ?? "your company account"}
               </a>
-              <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                <span aria-hidden="true" className="h-px flex-1 bg-border" />
-                or with the owner's password
-                <span aria-hidden="true" className="h-px flex-1 bg-border" />
-              </div>
+              {showPassword && (
+                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                  <span aria-hidden="true" className="h-px flex-1 bg-border" />
+                  or with the owner's password
+                  <span aria-hidden="true" className="h-px flex-1 bg-border" />
+                </div>
+              )}
             </>
           )}
-          <form noValidate onSubmit={submit} className="grid gap-4">
+          {passkeys.registered && !passkeys.passwordSignIn && sso.offered && <p className="text-xs text-pretty text-muted-foreground">{RECOVERY}</p>}
+          {showPassword && <form noValidate onSubmit={submit} className="grid gap-4">
             {/* For password managers, which file a username with every secret. */}
             <input type="text" name="username" autoComplete="username" value="sitesolide" readOnly hidden />
 
@@ -215,7 +301,7 @@ export function SignIn({
             >
               {buttonLabel}
             </Button>
-          </form>
+          </form>}
         </CardContent>
       </Card>
     </div>

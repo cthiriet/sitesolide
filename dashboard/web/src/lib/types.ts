@@ -87,7 +87,7 @@ export type { Scope, TokenView, DeploymentState, AuditEntry, TeamPageResponse, C
  * (src/people/protocol.ts). Types only: what a person may do is the
  * steward's to decide.
  */
-export type { IdentityView, Roles, SessionResponse, SsoOffer, DashboardRole as Role } from "../../../src/people/protocol"
+export type { IdentityView, PasskeyOffer, Roles, SessionResponse, SsoOffer, DashboardRole as Role } from "../../../src/people/protocol"
 
 /**
  * Access, from its contract (src/access/protocol.ts): a project's general
