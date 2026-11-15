@@ -51,9 +51,9 @@ export async function tokenHash(token: string): Promise<string> {
 }
 
 /**
- * Who a session belongs to: `owner`, whoever typed the dashboard's password,
- * or the email of a member who signed in with the portal's identity provider.
- * An email always holds an `@`, `owner` never does.
+ * Who a session belongs to: `owner`, the one person who signs in. A row
+ * naming anyone else, a person who signed in with a company account before,
+ * reads as no session, and is closed (src/routes.ts, `createSessionReader`).
  */
 export const OWNER_IDENTITY = "owner";
 
@@ -64,10 +64,6 @@ export type Session = {
   identity: string;
 };
 
-export function isMemberSession(session: Session): boolean {
-  return session.identity !== OWNER_IDENTITY;
-}
-
 /**
  * How long the owner's session stays open with nobody using it: a laptop
  * left signed in for the weekend is signed out on Monday, whatever is left of
@@ -76,13 +72,13 @@ export function isMemberSession(session: Session): boolean {
 export const OWNER_IDLE_MS = 12 * 3600 * 1000;
 
 /**
- * `durationMs` is the owner's; a member's session lasts `memberDurationMs`,
- * half a day, whatever the owner's is. `ownerIdleMs`: the owner's closes
- * too once unused that long, `seenAt` being rewritten every minute of use.
+ * The owner's session, within `durationMs` of its opening and, `idleMs`,
+ * used within that long, `seenAt` being rewritten every minute of use.
+ * Anyone else's is not.
  */
-export function isSessionAlive(session: Session, durationMs: number, now: number, memberDurationMs: number = durationMs, ownerIdleMs: number = Infinity): boolean {
-  if (isMemberSession(session)) return now - session.createdAt < memberDurationMs;
-  return now - session.createdAt < durationMs && now - session.seenAt < ownerIdleMs;
+export function isSessionAlive(session: Session, durationMs: number, now: number, idleMs: number = Infinity): boolean {
+  if (session.identity !== OWNER_IDENTITY) return false;
+  return now - session.createdAt < durationMs && now - session.seenAt < idleMs;
 }
 
 /**

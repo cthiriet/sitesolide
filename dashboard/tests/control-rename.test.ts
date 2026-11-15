@@ -26,13 +26,13 @@ describe("the steward's registries follow a rename", () => {
     expect(renameInClaims(claims, "blog", "journal")).toBeNull();
   });
 
-  test("the people with access keep their roles under the new name", () => {
-    const put = putEntry(EMPTY_REGISTRY, "oldsite", "ada@test-zone.invalid", "admin", "owner", 1);
+  test("the guests keep their password under the new name", () => {
+    const put = putEntry(EMPTY_REGISTRY, "oldsite", "ada@test-zone.invalid", "owner", 1, () => ({ id: "guest00000000001", hash: "h", expiresAt: null }));
     if ("refusal" in put) throw new Error(put.refusal);
     const { registry, moved } = renameProject(put.registry, "oldsite", "cybersolide");
     expect(moved).toBe(1);
     expect(entriesOf(registry, "oldsite")).toEqual([]);
-    expect(entriesOf(registry, "cybersolide").map((entry) => [entry.who, entry.role])).toEqual([["ada@test-zone.invalid", "admin"]]);
+    expect(entriesOf(registry, "cybersolide").map((entry) => [entry.who, entry.password.id])).toEqual([["ada@test-zone.invalid", "guest00000000001"]]);
   });
 });
 

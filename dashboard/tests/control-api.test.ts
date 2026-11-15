@@ -144,7 +144,7 @@ async function follow(id: string, token = secret): Promise<DeploymentView> {
 describe("a deployment, from the manifest to the site", () => {
   test("whoami says who the token is", async () => {
     const identity = ((await (await api("/api/v1/whoami")).json()) as { identity: Identity }).identity;
-    expect(identity).toMatchObject({ email: "owner", member: null, scope: SCOPE, owned: [] });
+    expect(identity).toMatchObject({ email: "owner", scope: SCOPE, owned: [] });
   });
 
   test("manifest, archive, installer, result: a private site, its port chosen on the machine", async () => {

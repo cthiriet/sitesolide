@@ -1,5 +1,5 @@
 /**
- * The tokens: each one a person's, or the owner's own, held by the steward in
+ * The tokens: each one the owner's, for themselves and their agents, held by the steward in
  * `/var/lib/sitesolide-steward/team.json` (the file keeps its name: it is
  * the one on the machine).
  *
@@ -13,11 +13,11 @@
  * **A token deploys what its scope allows, and the projects it created.** The
  * ownership is recorded at the start of a project's first deployment, before
  * anything is written on the machine: a first deployment that fails half way
- * leaves a directory nobody else can take. For a person's token, its creator
- * is made its Admin once that installer has ended, however it ended, when
- * nobody has access to the project yet (src/control/steward.ts,
- * `settleCreations`); their role then decides whether the token deploys it
- * again.
+ * leaves a directory nobody else can take.
+ *
+ * **A person's token from before is refused.** When people signed in with a
+ * company account, a token could belong to one of them (`member`): such a
+ * record is read and written back as it stands, and refused at every use.
  *
  * **Dead tokens do not pile up.** A revoked or expired token is kept 90 days
  * for the Tokens page, then dropped, sooner when the file needs the room, the
@@ -33,7 +33,6 @@
 import { generateToken, tokenHash, type RandomSource } from "../sessions";
 import { reservedReason } from "./policy";
 import {
-  EMAIL_MAX,
   LABEL_MAX,
   MAX_EXPIRY_MS,
   MAX_TOKENS,
@@ -47,17 +46,15 @@ import { isValidSlug } from "../../borrowed/manifest";
 
 /**
  * What the registry keeps of a token: its view without `owned`, and its hash.
- * `member` is written for a person's token alone, so that the owner's own
- * reads as it always did; `by` when the owner made it for someone, a token a
- * person minted themselves carrying none.
+ * `member` and `by` are a person's token's of before alone: whose it was, and
+ * that the owner made it for them. Nothing writes either any more.
  */
-export type TokenRecord = Omit<TokenView, "owned" | "member" | "by"> & { hash: string; member?: string; by?: string };
+export type TokenRecord = Omit<TokenView, "owned"> & { hash: string; member?: string; by?: string };
 
 export type Team = {
   /**
-   * 2: every token belongs to someone, a person of People or the owner. The
-   * registries of before, 1 or no version, were made so at the first start
-   * of a steward of 0.4.0 to 0.16, and are no longer read.
+   * 2: the registries of before, 1 or no version, were converted at the
+   * first start of a steward of 0.4.0 to 0.16, and are no longer read.
    */
   version: 2;
   tokens: TokenRecord[];
@@ -120,8 +117,7 @@ export function bearerOf(header: string | null): string | null {
  * permission with it, whatever the other flags say: every project, as the
  * owner, is a token that also creates, opens a site to the public, reaches
  * outside hosts, declares a domain and manages secrets, and saying so here
- * keeps every other check of a scope as it is. Whether its holder may have
- * it, the owner alone, is the steward's to judge (`mintRefusals`).
+ * keeps every other check of a scope as it is.
  */
 export function readScope(value: unknown, zone: string): Scope | Refusal {
   if (!isObject(value)) return { refusal: "scope must be an object" };
@@ -154,31 +150,14 @@ export function readScope(value: unknown, zone: string): Scope | Refusal {
   };
 }
 
-export type TokenRequest = { label: string; email: string; expiresAt: number | null; scope: Scope };
+export type TokenRequest = { label: string; expiresAt: number | null; scope: Scope };
 
-/**
- * Whose token the owner makes: `owner`, their own, or a person's email,
- * lowercase; or the refusal. Whether that person may hold one is the
- * steward's to judge, against the access registry.
- */
-export function readHolder(value: unknown): string | Refusal {
-  if (value === OWNER_HOLDER) return OWNER_HOLDER;
-  if (typeof value !== "string" || value.length > EMAIL_MAX || !EMAIL_SHAPE.test(value.trim())) {
-    return { refusal: "holder: owner, for a token of your own, or the email of a person of People" };
-  }
-  return value.trim().toLowerCase();
-}
-
-/** What is asked for, judged: label, expiry, scope; `email` the holder's, `owner` for the owner's own. */
+/** What is asked for, judged: label, expiry, scope. */
 export function readTokenRequest(body: Record<string, unknown>, now: number, zone: string): TokenRequest | Refusal {
-  const { label, email, expiresAt, scope } = body;
-  // The C1 controls too, CSI and OSC in one character each: the owner's
-  // terminal prints a person's labels when they leave (bin/cli/access.ts).
+  const { label, expiresAt, scope } = body;
+  // The C1 controls too, CSI and OSC in one character each: a terminal prints the labels.
   if (typeof label !== "string" || label.trim() === "" || label.length > LABEL_MAX || /[\u0000-\u001f\u007f-\u009f]/.test(label)) {
     return { refusal: `label: one line of text, ${LABEL_MAX} characters at most` };
-  }
-  if (email !== OWNER_HOLDER && (typeof email !== "string" || email.length > EMAIL_MAX || !EMAIL_SHAPE.test(email.trim()))) {
-    return { refusal: "email: the address of the person who will hold this token" };
   }
   if (expiresAt !== null) {
     if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) return { refusal: "expiresAt: a date in milliseconds, or null" };
@@ -187,7 +166,7 @@ export function readTokenRequest(body: Record<string, unknown>, now: number, zon
   }
   const readScopeResult = readScope(scope, zone);
   if ("refusal" in readScopeResult) return readScopeResult;
-  return { label: label.trim(), email: (email as string).trim().toLowerCase(), expiresAt, scope: readScopeResult };
+  return { label: label.trim(), expiresAt, scope: readScopeResult };
 }
 
 // --- the registry -------------------------------------------------------------------
@@ -321,11 +300,11 @@ export function ownedBy(team: Team, id: string): string[] {
 }
 
 export function viewOf(team: Team, record: TokenRecord): TokenView {
-  const { hash: _hash, member, by, ...view } = record;
-  return { ...view, scope: { ...record.scope, slugs: [...record.scope.slugs] }, owned: ownedBy(team, record.id), member: member ?? null, by: by ?? member ?? OWNER_HOLDER };
+  const { hash: _hash, member: _member, by: _by, ...view } = record;
+  return { ...view, scope: { ...record.scope, slugs: [...record.scope.slugs] }, owned: ownedBy(team, record.id) };
 }
 
-/** The holder as minted. A member's token is narrowed to the member's rights before anyone reads it (src/people/tokens.ts). */
+/** The holder as minted. */
 export function identityOf(team: Team, record: TokenRecord): Identity {
   return {
     id: record.id,
@@ -334,18 +313,12 @@ export function identityOf(team: Team, record: TokenRecord): Identity {
     expiresAt: record.expiresAt,
     scope: { ...record.scope, slugs: [...record.scope.slugs] },
     owned: ownedBy(team, record.id),
-    member: record.member ?? null,
   };
 }
 
 /** Is this token still able to deploy, for a cap counted on live tokens? */
 function isLive(record: TokenRecord, now: number): boolean {
   return record.revokedAt === null && (record.expiresAt === null || now < record.expiresAt);
-}
-
-/** The live tokens that belong to a person, whoever made them. */
-export function liveTokensOf(team: Team, email: string, now: number): TokenRecord[] {
-  return team.tokens.filter((record) => record.member === email && isLive(record, now));
 }
 
 /** Newest first: the page lists them that way. */
@@ -362,35 +335,29 @@ function newId(team: Team, random: RandomSource): string {
 
 /**
  * A new token. The value lives only in what is returned: the registry keeps
- * its hash. `member`: the person it belongs to, null for the owner's own;
- * `byOwner`: the owner made it for that person.
+ * its hash.
  */
 export async function createToken(
   team: Team,
   request: TokenRequest,
   now: number,
   random: RandomSource = (bytes) => crypto.getRandomValues(new Uint8Array(bytes)),
-  member: string | null = null,
-  byOwner = false,
 ): Promise<{ team: Team; view: TokenView; secret: string } | Refusal> {
-  // Live as a person's own cap counts them (`liveTokensOf`): an expired token
-  // counted here, a person minting tokens a second long, ten at a time,
-  // stopped everyone minting, the owner included, for their 90 days.
+  // Live tokens alone: an expired token counted here, tokens minted a second
+  // long would stop every mint for their 90 days.
   const alive = team.tokens.filter((record) => isLive(record, now)).length;
   if (alive >= MAX_TOKENS) return { refusal: `${MAX_TOKENS} live tokens at most: revoke the ones nobody uses` };
   const secret = `${TOKEN_PREFIX}${generateToken(random)}`;
   const record: TokenRecord = {
     id: newId(team, random),
     label: request.label,
-    email: request.email,
+    email: OWNER_HOLDER,
     createdAt: now,
     expiresAt: request.expiresAt,
     revokedAt: null,
     lastUsedAt: null,
     scope: request.scope,
     hash: await tokenHash(secret),
-    ...(member === null ? {} : { member }),
-    ...(member !== null && byOwner ? { by: OWNER_HOLDER } : {}),
   };
   const next: Team = { version: team.version, tokens: [...team.tokens, record], owners: { ...team.owners } };
   return { team: next, view: viewOf(next, record), secret };
@@ -410,42 +377,33 @@ export function revokeToken(team: Team, id: unknown, now: number): { team: Team;
   return { team: next, view: viewOf(next, revoked) };
 }
 
-/**
- * Every live token that belongs to a person, revoked, whoever made it: the
- * person no longer signs in. Their projects stay where they are, as for any
- * revoked token.
- */
-export function revokeMemberTokens(team: Team, email: string, now: number): { team: Team; revoked: TokenView[] } {
-  const ids = new Set(team.tokens.filter((record) => record.member === email && record.revokedAt === null).map((record) => record.id));
-  if (ids.size === 0) return { team, revoked: [] };
-  const next: Team = { version: team.version, tokens: team.tokens.map((record) => (ids.has(record.id) ? { ...record, revokedAt: now } : record)), owners: team.owners };
-  return { team: next, revoked: next.tokens.filter((record) => ids.has(record.id)).map((record) => viewOf(next, record)) };
-}
-
 export type Authentication =
   | { kind: "accepted"; record: TokenRecord; identity: Identity }
-  | { kind: "refused"; reason: "unknown" | "expired" | "revoked"; member?: boolean };
+  | { kind: "refused"; reason: "unknown" | "expired" | "revoked" | "person" };
 
 /**
  * Who holds this bearer. Found by its hash; expired or revoked, refused with a
  * reason the caller may tell the holder, since the holder already has the
- * value. An unknown value learns nothing.
+ * value; a person's token of before, refused for good. An unknown value
+ * learns nothing.
  */
 export async function authenticate(team: Team, bearer: unknown, now: number): Promise<Authentication> {
   if (!isTokenShape(bearer)) return { kind: "refused", reason: "unknown" };
   const hash = await tokenHash(bearer);
   const record = team.tokens.find((candidate) => candidate.hash === hash);
   if (record === undefined) return { kind: "refused", reason: "unknown" };
-  const member = record.member !== undefined;
-  if (record.revokedAt !== null) return { kind: "refused", reason: "revoked", member };
-  if (record.expiresAt !== null && now >= record.expiresAt) return { kind: "refused", reason: "expired", member };
+  if (record.member !== undefined) return { kind: "refused", reason: "person" };
+  if (record.revokedAt !== null) return { kind: "refused", reason: "revoked" };
+  if (record.expiresAt !== null && now >= record.expiresAt) return { kind: "refused", reason: "expired" };
   return { kind: "accepted", record, identity: identityOf(team, record) };
 }
 
-/** What the holder is told: the reason, and what to do about it. A person mints their own again, from the Tokens page. */
+/** What the holder is told: the reason, and what to do about it. */
 export function refusalMessage(reason: Authentication & { kind: "refused" }): string {
-  const another = reason.member === true ? "mint a new one from the dashboard's Tokens page if you still have a role there" : "ask the owner of the machine for a new one";
+  const another = "ask the owner of the machine for a new one";
   switch (reason.reason) {
+    case "person":
+      return `this token belonged to a person, and only the owner holds tokens now: ${another}`;
     case "expired":
       return `this token has expired: ${another}, then run sitesolide login again`;
     case "revoked":

@@ -269,7 +269,7 @@ export function finalManifest(
     throw new Stop("invalid-manifest", `sitesolide.json is refused: ${asked.errors.join("; ")}`);
   }
   const refusals = scopeRefusals(asked.manifest, scope, slug);
-  const door = decideDoor(asked.manifest, scope, onMachine.kind === "present" ? onMachine.portal : null, request.token.member !== null);
+  const door = decideDoor(asked.manifest, scope, onMachine.kind === "present" ? onMachine.portal : null);
   if ("refusal" in door) refusals.push(door.refusal);
   if (refusals.length > 0 || "refusal" in door) throw new Stop("out-of-scope", refusals.join("; "));
 
@@ -305,7 +305,7 @@ export function finalManifest(
     const uncovered = domainHosts(asked.manifest.domain).filter((host) => !covered.has(host));
     // The owner's token for every project adds names as the owner's SSH
     // deployment did: they ride the domain's switch, which stays the machine's.
-    if (before?.active === true && uncovered.length > 0 && !everyProject({ scope: request.scope, member: request.token.member })) {
+    if (before?.active === true && uncovered.length > 0 && !everyProject({ scope: request.scope })) {
       throw new Stop(
         "out-of-scope",
         `${before.name} is switched on, and ${uncovered.join(", ")} would be new names of this domain: a token's deployment would switch the whole domain off, and it would stop answering at the next regeneration of the domain table. Deploy without them, or ask the owner of the machine, who adds names to a domain switched on over SSH`,
@@ -351,7 +351,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
   const { zone } = options;
   // `sitesolide deploy --force`, asked by the owner's token for every project
   // alone: a file edited by hand on the machine is replaced, as over SSH.
-  const forced = request.force === true && everyProject({ scope: request.scope, member: request.token.member });
+  const forced = request.force === true && everyProject({ scope: request.scope });
   let allocated: { service: string | null; port: number }[] = [];
   let release: (() => void) | null = null;
   const created: Created = { account: false, tree: false, units: [], store: false };

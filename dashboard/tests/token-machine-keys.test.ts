@@ -17,7 +17,7 @@ import { APP, createBench, deploy, PUBLIC, renameHost } from "./rename-bench";
 
 test("finalManifest drops a token's disabled: true", () => {
   const out = finalManifest(
-    { deployment: "0123456789abcdef01234567", slug: "oldsite", requestedAt: Date.now(), token: { id: "aaaaaaaaaaaa", email: null, member: null }, scope: PUBLIC, creating: true, manifest: JSON.stringify({ ...APP, disabled: true }) } as never,
+    { deployment: "0123456789abcdef01234567", slug: "oldsite", requestedAt: Date.now(), token: { id: "aaaaaaaaaaaa", email: null }, scope: PUBLIC, creating: true, manifest: JSON.stringify({ ...APP, disabled: true }) } as never,
     new Map(),
   );
   expect(out.manifest.disabled).toBeUndefined();
@@ -44,7 +44,7 @@ test("a former name is refused to every token, its new name told only to one tha
   const machine = new Map([["crm-v2", `${JSON.stringify({ slug: "crm-v2", formerSlugs: ["crm"], publicDir: "public" })}\n`]]);
   const refusal = (slugs: string[]) => {
     try {
-      finalManifest({ deployment: "0123456789abcdef01234567", slug: "crm", requestedAt: Date.now(), token: { id: "aaaaaaaaaaaa", email: null, member: null }, scope: { ...PUBLIC, slugs }, creating: true, manifest: JSON.stringify({ slug: "crm", publicDir: "public" }) } as never, machine);
+      finalManifest({ deployment: "0123456789abcdef01234567", slug: "crm", requestedAt: Date.now(), token: { id: "aaaaaaaaaaaa", email: null }, scope: { ...PUBLIC, slugs }, creating: true, manifest: JSON.stringify({ slug: "crm", publicDir: "public" }) } as never, machine);
     } catch (error) {
       return (error as Error).message;
     }

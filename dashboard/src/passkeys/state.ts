@@ -7,7 +7,7 @@
  * A registry the steward cannot read counts as holding passkeys: the
  * password comes back only once root has removed the last one.
  */
-import type { PasskeyOffer } from "../people/protocol";
+import type { PasskeyOffer } from "./protocol";
 import type { PasskeyStewardClient } from "./client";
 
 export type PasskeyState = {

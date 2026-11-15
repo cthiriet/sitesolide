@@ -14,10 +14,7 @@ import {
   DEAD_TOKEN_RETENTION_MS,
   MAX_TOKEN_RECORDS,
   pruneTeam,
-  readHolder,
   viewOf,
-  liveTokensOf,
-  revokeMemberTokens,
   recordOwnership,
   refusalMessage,
   revokeToken,
@@ -40,7 +37,7 @@ function counter(): (bytes: number) => Uint8Array {
 }
 
 async function teamWith(scope = SCOPE): Promise<{ team: Team; secret: string; id: string }> {
-  const request = readTokenRequest({ label: "Ada's laptop", email: "Ada@Test-Zone.invalid", expiresAt: null, scope }, NOW, ZONE);
+  const request = readTokenRequest({ label: "Ada's laptop", expiresAt: null, scope }, NOW, ZONE);
   if ("refusal" in request) throw new Error(request.refusal);
   const created = await createToken(EMPTY_TEAM, request, NOW, counter());
   if ("refusal" in created) throw new Error(created.refusal);
@@ -73,17 +70,16 @@ describe("the token's value", () => {
 });
 
 describe("what the owner asks for", () => {
-  test("a label, an email lowered, an expiry in the future, a scope", () => {
-    expect(readTokenRequest({ label: " Ada ", email: "ADA@test-zone.invalid", expiresAt: NOW + 1000, scope: SCOPE }, NOW, ZONE)).toEqual({
+  test("a label, an expiry in the future, a scope", () => {
+    expect(readTokenRequest({ label: " Ada ", expiresAt: NOW + 1000, scope: SCOPE }, NOW, ZONE)).toEqual({
       label: "Ada",
-      email: "ada@test-zone.invalid",
       expiresAt: NOW + 1000,
       scope: SCOPE,
     });
   });
 
   test("each malformed field is refused with what to send", () => {
-    const base = { label: "Ada", email: "ada@test-zone.invalid", expiresAt: null, scope: SCOPE };
+    const base = { label: "Ada", expiresAt: null, scope: SCOPE };
     const refusals: [Record<string, unknown>, string][] = [
       [{ ...base, label: "" }, "label"],
       [{ ...base, label: "a\nb" }, "label"],
@@ -91,8 +87,6 @@ describe("what the owner asks for", () => {
       [{ ...base, label: "a\u009b2Jb" }, "label"],
       [{ ...base, label: "a\u009d52;c;Y3VybA==\u009cb" }, "label"],
       [{ ...base, label: "x".repeat(65) }, "label"],
-      [{ ...base, email: "ada" }, "email"],
-      [{ ...base, email: 42 }, "email"],
       [{ ...base, expiresAt: NOW }, "future"],
       [{ ...base, expiresAt: "tomorrow" }, "expiresAt"],
       [{ ...base, expiresAt: NOW + 6 * 365 * 24 * 3600 * 1000 }, "five years"],
@@ -130,7 +124,7 @@ describe("authentication", () => {
   test("the right value is accepted, with its identity", async () => {
     const { team, secret, id } = await teamWith();
     const result = await authenticate(team, secret, NOW + 1);
-    expect(result).toMatchObject({ kind: "accepted", identity: { id, email: "ada@test-zone.invalid", scope: SCOPE, owned: [] } });
+    expect(result).toMatchObject({ kind: "accepted", identity: { id, email: "owner", scope: SCOPE, owned: [] } });
   });
 
   test("an unknown value, a revoked token, an expired token: refused with their reason", async () => {
@@ -140,20 +134,19 @@ describe("authentication", () => {
 
     const revoked = revokeToken(team, id, NOW + 5);
     if ("refusal" in revoked) throw new Error(revoked.refusal);
-    expect(await authenticate(revoked.team, secret, NOW + 6)).toEqual({ kind: "refused", reason: "revoked", member: false });
+    expect(await authenticate(revoked.team, secret, NOW + 6)).toEqual({ kind: "refused", reason: "revoked" });
 
     const expiring = { ...team, tokens: [{ ...team.tokens[0]!, expiresAt: NOW + 10 }] };
     expect((await authenticate(expiring, secret, NOW + 9)).kind).toBe("accepted");
-    expect(await authenticate(expiring, secret, NOW + 10)).toEqual({ kind: "refused", reason: "expired", member: false });
+    expect(await authenticate(expiring, secret, NOW + 10)).toEqual({ kind: "refused", reason: "expired" });
   });
 
   test("the message tells the holder what to do, and an unknown value learns nothing", () => {
     expect(refusalMessage({ kind: "refused", reason: "expired" })).toContain("expired");
     expect(refusalMessage({ kind: "refused", reason: "revoked" })).toContain("revoked");
     expect(refusalMessage({ kind: "refused", reason: "unknown" })).toContain("Authorization: Bearer");
-    // A person's own: mint another, rather than ask the owner.
-    expect(refusalMessage({ kind: "refused", reason: "revoked", member: true })).toContain("mint a new one from the dashboard's Tokens page if you still have a role there");
-    expect(refusalMessage({ kind: "refused", reason: "expired", member: false })).toContain("ask the owner of the machine");
+    expect(refusalMessage({ kind: "refused", reason: "expired" })).toContain("ask the owner of the machine");
+    expect(refusalMessage({ kind: "refused", reason: "person" })).toContain("only the owner holds tokens now");
   });
 });
 
@@ -243,12 +236,10 @@ describe("dead tokens do not pile up", () => {
     expect(pruneTeam(live, NOW, 1024 * 1024)).toBeNull();
   });
 
-  test("an expired token is no longer live: a person who minted two hundred a second apart, ten at a time, stops nobody minting", async () => {
+  test("an expired token is no longer live: two hundred minted a second apart stop nobody minting", async () => {
     const minted = teamOf(Array.from({ length: MAX_TOKENS }, (_, n) => ({ id: id(n + 1), dead: null })));
     const expired: Team = { ...minted, tokens: minted.tokens.map((record) => ({ ...record, expiresAt: NOW - 1_000 })) };
-    // Their own cap counts live tokens alone: it never held them back.
-    expect(liveTokensOf(expired, "ada@acme.test", NOW)).toEqual([]);
-    const request = readTokenRequest({ label: "owner's laptop", email: "owner", expiresAt: null, scope: SCOPE }, NOW, ZONE);
+    const request = readTokenRequest({ label: "owner's laptop", expiresAt: null, scope: SCOPE }, NOW, ZONE);
     if ("refusal" in request) throw new Error(request.refusal);
     expect(await createToken(expired, request, NOW, counter())).not.toHaveProperty("refusal");
     // Live, they still count.
@@ -266,44 +257,29 @@ describe("a project removed", () => {
   });
 });
 
-describe("whose a token is", () => {
-  test("the owner names a holder: owner, or a person's email, lowercase; nothing else", () => {
-    expect(readHolder("owner")).toBe("owner");
-    expect(readHolder(" Alice@Acme.test ")).toBe("alice@acme.test");
-    for (const value of ["", "alice", "@acme.test", 42, null, "a".repeat(250) + "@x.test"]) expect(readHolder(value)).toHaveProperty("refusal");
-  });
-
-  test("the owner's own carries no person and says the owner made it; one made for a person says so; a person's own, themselves", async () => {
-    const own = await createToken(EMPTY_TEAM, { label: "agent", email: "owner", expiresAt: null, scope: SCOPE }, NOW, counter());
+describe("a person's token of before", () => {
+  test("reads back as it stands, and is refused at every use", async () => {
+    const random = counter();
+    const own = await createToken(EMPTY_TEAM, { label: "agent", expiresAt: null, scope: SCOPE }, NOW, random);
     if ("refusal" in own) throw new Error(own.refusal);
-    expect(own.view).toMatchObject({ email: "owner", member: null, by: "owner" });
-    const forAlice = await createToken(own.team, { label: "laptop", email: "alice@acme.test", expiresAt: null, scope: SCOPE }, NOW, counter(), "alice@acme.test", true);
-    if ("refusal" in forAlice) throw new Error(forAlice.refusal);
-    expect(forAlice.view).toMatchObject({ email: "alice@acme.test", member: "alice@acme.test", by: "owner" });
-    const hers = await createToken(forAlice.team, { label: "agent", email: "alice@acme.test", expiresAt: null, scope: SCOPE }, NOW, counter(), "alice@acme.test");
+    expect(own.view.email).toBe("owner");
+    expect(own.view).not.toHaveProperty("member");
+    const hers = await createToken(own.team, { label: "laptop", expiresAt: null, scope: SCOPE }, NOW, random);
     if ("refusal" in hers) throw new Error(hers.refusal);
-    expect(hers.view).toMatchObject({ member: "alice@acme.test", by: "alice@acme.test" });
-    // The file reads back with both, and a `by` other than the owner is refused.
-    expect(readTeam(encodeTeam(hers.team))).toEqual(hers.team);
-    expect(readTeam(encodeTeam({ ...hers.team, tokens: [{ ...hers.team.tokens[0]!, by: "mallory@acme.test" }] }))).toHaveProperty("unreadable");
-  });
-
-  test("a person leaving takes every token of theirs, the one the owner made for them included, never the owner's own", async () => {
-    let team: Team = EMPTY_TEAM;
-    for (const [email, member, byOwner] of [["owner", null, false], ["alice@acme.test", "alice@acme.test", true], ["alice@acme.test", "alice@acme.test", false]] as const) {
-      const made = await createToken(team, { label: "x", email, expiresAt: null, scope: SCOPE }, NOW, counter(), member, byOwner);
-      if ("refusal" in made) throw new Error(made.refusal);
-      team = made.team;
-    }
-    const revoked = revokeMemberTokens(team, "alice@acme.test", NOW + 1);
-    expect(revoked.revoked.map((view) => view.by).sort()).toEqual(["alice@acme.test", "owner"]);
-    expect(revoked.team.tokens.filter((record) => record.revokedAt === null).map((record) => record.email)).toEqual(["owner"]);
+    const legacy: Team = { ...hers.team, tokens: hers.team.tokens.map((record) => (record.id === hers.view.id ? { ...record, email: "alice@acme.test", member: "alice@acme.test", by: "owner" } : record)) };
+    const read = readTeam(encodeTeam(legacy));
+    expect(read).toEqual(legacy);
+    expect(viewOf(legacy, legacy.tokens[1]!)).not.toHaveProperty("member");
+    expect(await authenticate(legacy, hers.secret, NOW + 1)).toEqual({ kind: "refused", reason: "person" } as never);
+    expect((await authenticate(legacy, own.secret, NOW + 1)).kind).toBe("accepted");
+    // A `by` other than the owner is refused.
+    expect(readTeam(encodeTeam({ ...legacy, tokens: [{ ...legacy.tokens[1]!, by: "mallory@acme.test" }] }))).toHaveProperty("unreadable");
   });
 });
 
 describe("the registry of before every token belonged to someone", () => {
   test("is no longer read: version 1, or none, refuses every token until a human looks", async () => {
-    const made = await createToken(EMPTY_TEAM, { label: "alice@acme.test", email: "alice@acme.test", expiresAt: null, scope: SCOPE }, NOW, counter());
+    const made = await createToken(EMPTY_TEAM, { label: "alice@acme.test", expiresAt: null, scope: SCOPE }, NOW, counter());
     if ("refusal" in made) throw new Error(made.refusal);
     for (const version of [undefined, 1, 3]) {
       const text = JSON.stringify({ ...(version === undefined ? {} : { version }), tokens: made.team.tokens, owners: made.team.owners });
@@ -327,12 +303,12 @@ describe("the secrets permission", () => {
     for (const secrets of ["true", 1, null, {}, []]) {
       expect(readScope({ ...OLD, secrets }, ZONE)).toEqual({ refusal: "scope.secrets must be true or false" });
     }
-    const request = readTokenRequest({ label: "agent", email: "owner", expiresAt: null, scope: { ...OLD, secrets: "yes" } }, NOW, ZONE);
+    const request = readTokenRequest({ label: "agent", expiresAt: null, scope: { ...OLD, secrets: "yes" } }, NOW, ZONE);
     expect(request).toEqual({ refusal: "scope.secrets must be true or false" });
   });
 
   test("a registry from before reads, its tokens kept and none of them managing secrets; written back with the flag false", async () => {
-    const made = await createToken(EMPTY_TEAM, { label: "ci", email: "owner", expiresAt: null, scope: { ...SCOPE, secrets: true } }, NOW, counter());
+    const made = await createToken(EMPTY_TEAM, { label: "ci", expiresAt: null, scope: { ...SCOPE, secrets: true } }, NOW, counter());
     if ("refusal" in made) throw new Error(made.refusal);
     // The file as a steward from before the flag wrote it: no `secrets` key at all.
     const before = JSON.parse(encodeTeam(made.team)) as { version: number; tokens: { scope: Record<string, unknown> }[]; owners: Record<string, string> };

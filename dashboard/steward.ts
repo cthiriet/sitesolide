@@ -41,12 +41,10 @@ import { createControlSystem } from "./src/control/system";
 import { INSTALLER_RUN_FOLDER } from "./src/control/protocol";
 import { CODES_FILE as LOCK_CODES_FILE, FRAGMENT_NAME, LOCKS_DIR } from "./borrowed/locks";
 import { createBackupReader } from "./src/backup/reader";
-import { createMembersSystem } from "./src/people/system";
 import { createAccessSystem } from "./src/access/system";
 import { createPasskeySystem } from "./src/passkeys/system";
-import type { LeavingToken } from "./src/access/protocol";
-import { OWNER_SOCKET, PORTAL_KEY_FOLDER } from "./src/people/protocol";
-import { PORTAL_RELAY_SOCKET, relayedPortal } from "./src/people/portal";
+import { OWNER_SOCKET, PORTAL_FOLDER } from "./src/access/protocol";
+import { PORTAL_RELAY_SOCKET, relayedPortal } from "./src/access/portal";
 
 const SITES_DIR = process.env.SITES_DIR ?? "/srv/sites";
 const SECRETS_FOLDER = process.env.SECRETS_FOLDER ?? "/etc/sitesolide";
@@ -72,8 +70,8 @@ const JOURNALCTL = process.env.JOURNALCTL ?? "/usr/bin/journalctl";
 const SOCKET_GROUP = process.env.SOCKET_GROUP ?? "site-dashboard";
 
 /**
- * The owner's socket, which only root opens: `sitesolide share` and
- * `sitesolide people` reach the access registry there, over the owner's SSH.
+ * The owner's socket, which only root opens: `sitesolide share` reaches the
+ * access registry there, over the owner's SSH.
  * Its folder is a runtime directory of its own, root's, since the dashboard's
  * socket needs a folder of its own (src/secrets/socket.ts). Empty: no
  * owner's socket.
@@ -81,11 +79,11 @@ const SOCKET_GROUP = process.env.SOCKET_GROUP ?? "site-dashboard";
 const OWNER_SOCKET_PATH = process.env.OWNER_SOCKET ?? OWNER_SOCKET;
 
 /**
- * Where the portal's private key is laid, and the portal's group, which reads
- * it. The folder is bin/deploy-steward.sh's; missing, members cannot sign in
- * yet and the dashboard says so.
+ * Where the access and passkey projections are laid, and the portal's group,
+ * which reads them. The folder is bin/deploy-steward.sh's; missing, the
+ * portal is not told who may open a site, and the steward's log says so.
  */
-const PORTAL_KEY_DIR = process.env.PORTAL_KEY_FOLDER ?? PORTAL_KEY_FOLDER;
+const PORTAL_KEY_DIR = process.env.PORTAL_KEY_FOLDER ?? PORTAL_FOLDER;
 const PORTAL_GROUP = process.env.PORTAL_GROUP ?? "site-portal";
 
 /**
@@ -150,13 +148,9 @@ const backups = createBackupReader({
   unitsFolder: UNITS_FOLDER,
 });
 
-// The control routes are built after this handler, and the members and
-// access routes ask them to revoke the tokens of someone who no longer signs
-// in, and which tokens that would be: the calls are filled in below.
-let revokeMemberTokens: (email: string, actor: string) => Promise<LeavingToken[]> = async () => [];
-let memberTokens: (email: string) => Promise<LeavingToken[]> = async () => [];
-// And the owner's writes into a store, which take back a name a token claims,
-// its store moved aside first when a token's write made it.
+// The control routes are built after this handler, and the owner's writes
+// into a store take back a name a token claims, its store moved aside first
+// when a token's write made it: the calls are filled in below.
 let ownerStoreWritten: (slug: string) => Promise<void> = async () => undefined;
 let ownerStoreClaimed: (slug: string) => Promise<boolean> = async () => false;
 
@@ -166,30 +160,18 @@ const handler = createSteward(system, {
   ownerStoreWritten: (slug) => ownerStoreWritten(slug),
   ownerStoreClaimed: (slug) => ownerStoreClaimed(slug),
   backups,
-  // Access: the registry of who may do what on each project, the portal's
-  // projection of it, the sessions of the people who sign in, the key pair
-  // the portal signs with. See src/access/ and src/people/.
-  members: {
-    system: createMembersSystem({
+  // Access: the registry of each project's guests and the portal's
+  // projection of it. See src/access/.
+  access: {
+    system: createAccessSystem({
       stateFolder: STATE_FOLDER,
       sitesDir: SITES_DIR,
-      secretsFolder: SECRETS_FOLDER,
       portalKeyFolder: PORTAL_KEY_DIR,
       groupsFile: GROUPS_FILE,
       portalGroup: OWNERS === "" ? "" : PORTAL_GROUP,
     }),
-    access: createAccessSystem(
-      {
-        stateFolder: STATE_FOLDER,
-        portalKeyFolder: PORTAL_KEY_DIR,
-        groupsFile: GROUPS_FILE,
-        portalGroup: OWNERS === "" ? "" : PORTAL_GROUP,
-      },
-    ),
     zone: process.env.SITESOLIDE_ZONE ?? "",
     portal: PORTAL_RELAY === "" ? null : relayedPortal(PORTAL_RELAY),
-    revokeTokens: (email, actor) => revokeMemberTokens(email, actor),
-    tokensOf: (email) => memberTokens(email),
   },
   // The owner's passkeys: the registry in the state folder, root's, and the
   // projection of their public keys laid for the portal beside the access
@@ -211,20 +193,11 @@ const handler = createSteward(system, {
 // the portal reads it from the next request on.
 await handler.startPasskeys().catch((e: unknown) => console.error(`steward: passkeys not started (${(e as Error).name})`));
 
-// The key pair, laid now if it is missing: the portal reads its half at every
-// sign-in, and needs no restart for it. A portal not deployed yet is said, and
-// the pair is laid at the first sign-in asked for once it is.
-const keys = await handler.ensureMemberKeys().catch((e: unknown) => ({ kind: "unavailable" as const, reason: (e as Error).name }));
-if (keys !== null) {
-  console.log(keys.kind === "ready" ? `steward: dashboard sign-in key ${keys.publicKey.kid} in place` : `steward: nobody signs in to the dashboard with an account yet, ${keys.reason}`);
-}
-
 // The control API's routes, under /tokens/ and /control/: the token registry and
 // the start of the installer. They share the socket and its permissions, and
-// ask the secrets routes whether a token is the live unlock, the members
-// routes who a person is and what they may do now, for a person's own
-// tokens, the access routes for a token's changes of access, and the secrets
-// routes for a token's secrets, restart and store. See src/control/steward.ts.
+// ask the secrets routes whether a token is the live unlock, the access
+// routes to forget or move a project's guests, and the secrets routes for a
+// token's secrets, restart and store. See src/control/steward.ts.
 const control = createControlSteward(
   createControlSystem({
     stateFolder: STATE_FOLDER,
@@ -243,10 +216,10 @@ const control = createControlSteward(
     zone: process.env.SITESOLIDE_ZONE ?? "",
     isUnlocked: handler.isUnlocked,
     uidRoot: OWNERS === "" ? null : 0,
-    members: handler.memberAuthority ?? undefined,
-    access: handler.accessForToken,
     forgetAccess: handler.forgetProjectAccess,
-    // A project renamed: its people keep their roles under the new name.
+    // A project removed or taken back from a token, journaled under the owner.
+    journal: handler.journal,
+    // A project renamed: its guests open it under the new name.
     renameAccess: handler.renameProjectAccess,
     secrets: handler.secretsForToken,
     // A token's work on a project's store, judged by the control routes then
@@ -258,35 +231,19 @@ const control = createControlSteward(
     contact: process.env.SITESOLIDE_CONTACT ?? "",
   },
 );
-revokeMemberTokens = control.revokeMember;
-memberTokens = control.tokensOf;
 ownerStoreWritten = control.ownerWroteStore;
 ownerStoreClaimed = control.storeClaimed;
 
 // The access registry: begun empty on a machine without one, then its
 // projection written again for the portal. In the background, never in the
 // sockets' way: until it is done the access routes answer `not-ready`, and an
-// attempt that fails is tried again later and later. Then the tokens of anyone
-// with no rights left go at once, rather than at the first sweep.
-void handler
-  .startAccess()
-  .then(() => control.sweepTokens())
-  .catch((e: unknown) => console.error(`steward: access registry not ready (${(e as Error).name})`));
+// attempt that fails is tried again later and later.
+void handler.startAccess().catch((e: unknown) => console.error(`steward: access registry not ready (${(e as Error).name})`));
 
-// A person becomes Admin of what their token created once its installer has
-// finished and the machine carries the project: the dashboard's tracker reads
-// every result within seconds, which settles it; this settles it too when
-// nobody reads. Then the live tokens of anyone the registry gives no rights
-// are revoked: none comes back to life with a role given again.
-setInterval(
-  () =>
-    void control
-      .settleCreations()
-      .catch((e: unknown) => console.error(`steward: creations not settled (${(e as Error).name})`))
-      .then(() => control.sweepTokens())
-      .catch((e: unknown) => console.error(`steward: tokens not swept (${(e as Error).name})`)),
-  30_000,
-);
+// A name a token holds for a creation undone, or for a write ahead that made
+// nothing, is given back: the dashboard's tracker reads every result within
+// seconds, which settles it; this settles it too when nobody reads.
+setInterval(() => void control.settle().catch((e: unknown) => console.error(`steward: names not settled (${(e as Error).name})`)), 30_000);
 
 /**
  * A restart is observed for eight seconds, a portal takes up to ninety, and a

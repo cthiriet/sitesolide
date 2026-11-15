@@ -3,7 +3,12 @@
  * (src/control/steward.ts), and the secrets steward, which works on a
  * project's store (src/secrets/steward.ts). Types only.
  */
-import type { Who } from "../people/actions";
+
+/**
+ * Who acts, as the journal names them: `owner`, or `token:<id>` with the
+ * token's identifier; `member`, the guest an event of access is about.
+ */
+export type Who = { actor: string; member: string | null; token?: string };
 import type { StoreFileRemoveRequest, StoreFileRequest, StoreGenerateRequest } from "../../borrowed/store-protocol";
 
 /** What the control routes hand the secrets steward once a token is judged. `creating`: the slug is not deployed, and this token may create it, so its store may be written ahead of its first deployment. */

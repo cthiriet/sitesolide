@@ -84,7 +84,7 @@ export const DEFAULT_TIMEOUTS: Timeouts = {
 /**
  * One call on the steward's socket, the request as JSON when there is one,
  * for every client of the dashboard's: this one, the control routes', the
- * people's and access's. `socket` is the path of the socket's file; the
+ * access's. `socket` is the path of the socket's file; the
  * URL's host serves no purpose on a Unix socket, it only names the
  * correspondent in a trace.
  *

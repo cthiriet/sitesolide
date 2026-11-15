@@ -8,9 +8,6 @@ import { createTokens } from "../src/secrets/tokens";
 import type { ControlSteward } from "../src/control/client";
 import { createControlStore } from "../src/control/store";
 import { createTeamRoutes, NOT_AVAILABLE_REASON } from "../src/control/team";
-import type { TeamPageResponse } from "../src/control/protocol";
-import { createMemberRelay, TOKENS_OUTDATED } from "../src/people/relay";
-import type { IdentityResolver } from "../src/people/identity";
 
 /**
  * The Team page's routes, with a simulated steward: what the dashboard checks
@@ -53,7 +50,7 @@ function setup(options: { signedIn?: boolean; old?: boolean; stewardLocked?: boo
 const post = (path: string, body: unknown, origin = PUBLIC_URL) =>
   new Request(`http://127.0.0.1:3022${path}`, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
-const REQUEST = { label: "Ada", holder: "owner", expiresAt: null, scope: view.scope };
+const REQUEST = { label: "Ada", expiresAt: null, scope: view.scope };
 
 describe("the Team page's routes", () => {
   test("the list needs a session, and says when the steward is too old", async () => {
@@ -107,60 +104,12 @@ describe("the Team page's routes", () => {
 
 // --- The tokens alone -----------------------------------------------------------------
 
-const ADAS = "bbbbbbbbbbbb";
-const ADA = "ada@test-zone.invalid";
-
 describe("the list is the tokens alone", () => {
   test("the owner's page: the tokens and the unlock, nothing the page would not show", async () => {
     const s = setup();
     s.store.recordAudit({ at: 1, actor: "owner", action: "token.create", target: null, detail: { id: view.id } });
     const keys = async (routes: ReturnType<typeof setup>["routes"]) => Object.keys((await (await routes.team(new Request("http://x/api/tokens"))).json()) as object).sort();
-    expect(await keys(s.routes)).toEqual(["available", "member", "reason", "tokens", "until"]);
-    expect(await keys(setup({ old: true }).routes)).toEqual(["available", "member", "reason", "tokens", "until"]);
-  });
-
-  describe("a person's page", () => {
-    const own = { ...view, id: ADAS, email: ADA, member: ADA, by: ADA };
-
-    function relay(options: { old?: boolean } = {}) {
-      const resolve = Object.assign(
-        (async () => ({
-          session: { hash: "ada-session-hash", createdAt: 0, seenAt: 0, identity: ADA },
-          token: "ada-session",
-          identity: { kind: "person", email: ADA, name: null, roles: { shop: "developer" }, create: false, expiresAt: 1_800_000_000_000 },
-        })) as IdentityResolver,
-        { forget: () => undefined },
-      );
-      const steward = {
-        act: async (_method: string, path: string) => {
-          if (options.old) return Response.json({ error: "not-found", message: "no such route" }, { status: 404 });
-          if (path !== "/tokens/person/list") return Response.json({ error: "not-found", message: "unexpected" }, { status: 404 });
-          return Response.json({ tokens: [own], rights: { roles: { shop: "developer" }, create: false } });
-        },
-        lock: async () => new Response(null, { status: 204 }),
-      };
-      const unreachable = async () => Response.json({ error: "failure", message: "not in this test" }, { status: 500 });
-      return createMemberRelay({
-        publicUrl: PUBLIC_URL,
-        resolve,
-        closeSession: () => undefined,
-        steward,
-        tokens: createTokens(),
-        secrets: { readLog: unreachable },
-        backups: { readBackups: unreachable, readBackupAudit: unreachable },
-      });
-    }
-
-    test("their own tokens and their rights, the journal never read for it", async () => {
-      const page = (await (await relay().team(new Request("http://x/api/tokens"))).json()) as TeamPageResponse;
-      expect(page.tokens.map((token) => token.id)).toEqual([ADAS]);
-      expect(page.member).toEqual({ email: ADA, roles: { shop: "developer" }, create: false });
-      expect(Object.keys(page).sort()).toEqual(["available", "member", "reason", "tokens", "until"]);
-    });
-
-    test("a steward that predates personal tokens is said", async () => {
-      const page = (await (await relay({ old: true }).team(new Request("http://x/api/tokens"))).json()) as TeamPageResponse;
-      expect(page).toMatchObject({ available: false, reason: TOKENS_OUTDATED, tokens: [] });
-    });
+    expect(await keys(s.routes)).toEqual(["available", "reason", "tokens", "until"]);
+    expect(await keys(setup({ old: true }).routes)).toEqual(["available", "reason", "tokens", "until"]);
   });
 });

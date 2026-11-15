@@ -3,16 +3,17 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readProjection } from "../borrowed/access";
-import { encodeRegistry, readRegistry, type Registry } from "../src/access/registry";
+import { readRegistry } from "../src/access/registry";
 import { BEGIN_RETRY_MS, BEGINNING, createAccessStore, type AccessEvent } from "../src/access/steward";
 import { createAccessSystem, type AccessSystem } from "../src/access/system";
 
 /**
  * A machine without an access registry begins it empty at the steward's
  * start, written with its projection, in the background, never in a
- * request's way; a registry already there is read as it stands, the record
- * of its making from the stores before it, in 0.4.0, kept. The stores before
- * it, `members.json` and the portal's database, are read by nothing.
+ * request's way; a registry already there is read, what company sign-in
+ * left in it (people and domains with a role, who could create) left out
+ * until its next change. The stores before it, `members.json` and the
+ * portal's database, are read by nothing.
  */
 
 const ZONE = "test-zone.invalid";
@@ -33,12 +34,11 @@ function tree() {
 }
 
 function store(paths: ReturnType<typeof tree>, options: { events?: AccessEvent[]; sleep?: (ms: number) => Promise<void>; system?: (system: AccessSystem) => AccessSystem } = {}) {
-  const system = createAccessSystem({ stateFolder: paths.state, portalKeyFolder: paths.key, groupsFile: "/etc/group", portalGroup: "" });
+  const system = createAccessSystem({ stateFolder: paths.state, sitesDir: join(paths.root, "sites"), portalKeyFolder: paths.key, groupsFile: "/etc/group", portalGroup: "" });
   return createAccessStore({
     system: options.system === undefined ? system : options.system(system),
     zone: ZONE,
     hostOf: (slug) => `${slug}.${ZONE}`,
-    journal: async (event) => void options.events?.push(event),
     sleep: options.sleep ?? (async () => {}),
   });
 }
@@ -50,7 +50,7 @@ describe("a machine without a registry", () => {
     const access = store(paths, { events });
     expect(await access.ensure()).toBe(true);
     const registry = readRegistry(readFileSync(join(paths.state, "access.json"), "utf8"));
-    expect(registry).toEqual({ version: 1, projects: {}, creators: [], migration: null });
+    expect(registry).toEqual({ registry: { version: 1, projects: {} }, leftOut: 0 });
     expect(statSync(join(paths.state, "access.json")).mode & 0o777).toBe(0o600);
     expect(readProjection(readFileSync(join(paths.key, "access.json"), "utf8"))).toMatchObject({ sites: {} });
     expect(events).toEqual([]);
@@ -61,7 +61,7 @@ describe("a machine without a registry", () => {
     writeFileSync(join(paths.state, "members.json"), JSON.stringify({ members: [{ email: "ann@acme.test", roles: { blog: "admin" }, invitedBy: "owner", createdAt: 1, updatedAt: 1 }] }));
     const access = store(paths);
     await access.ensure();
-    expect(await access.read()).toMatchObject({ projects: {}, creators: [], migration: null });
+    expect(await access.read()).toEqual({ version: 1, projects: {} });
   });
 
   test("never in a request's way: a read or a change before it is begun answers not-ready, and begins it in the background", async () => {
@@ -91,7 +91,7 @@ describe("a machine without a registry", () => {
       await Bun.sleep(5);
     }
     await access.start();
-    expect(await access.read()).toMatchObject({ projects: {}, migration: null });
+    expect(await access.read()).toEqual({ version: 1, projects: {} });
   });
 
   test("an attempt that fails is tried again, later and later", async () => {
@@ -114,22 +114,30 @@ describe("a machine without a registry", () => {
   });
 });
 
-describe("a registry made from the stores before it, in 0.4.0", () => {
-  const made: Registry = {
+describe("a registry written while people signed in with a company account", () => {
+  const guest = { who: "gus@elsewhere.test", role: "visitor", by: "owner", createdAt: NOW - 10, updatedAt: NOW - 10, password: { id: "guest00000000001", hash: "a".repeat(64), expiresAt: null } };
+  const before = {
     version: 1,
-    projects: { blog: [{ who: "ann@acme.test", role: "admin", by: "migration", createdAt: NOW - 10, updatedAt: NOW - 5 }] },
-    creators: [],
-    migration: { at: NOW - 10, from: ["members.json", "portal.db"], setAside: [{ source: "sharing", slug: null, who: "old.elsewhere.test", reason: "a host this zone gives no project" }] },
+    projects: {
+      blog: [{ who: "ann@acme.test", role: "admin", by: "migration", createdAt: NOW - 10, updatedAt: NOW - 5 }, guest],
+      shop: [{ who: "@acme.test", role: "viewer", by: "owner", createdAt: NOW - 10, updatedAt: NOW - 10 }],
+    },
+    creators: [{ email: "ann@acme.test", by: "owner", at: NOW }],
+    migration: { at: NOW - 10, from: ["members.json"], setAside: [] },
   };
 
-  test("is read as it stands, and a change writes its record back, nothing it set aside lost", async () => {
+  test("is read, its people, domains and creators left out, its guests kept; they go from the file at its next change", async () => {
     const paths = tree();
-    writeFileSync(join(paths.state, "access.json"), encodeRegistry(made), { mode: 0o600 });
+    const text = `${JSON.stringify(before, null, 2)}\n`;
+    writeFileSync(join(paths.state, "access.json"), text, { mode: 0o600 });
     const access = store(paths);
     expect(await access.ensure()).toBe(true);
-    expect(await access.read()).toEqual(made);
-    await access.change(async (registry) => ({ registry: { ...registry, creators: [{ email: "ann@acme.test", by: "owner", at: NOW }] }, value: null }));
-    const written = readRegistry(readFileSync(join(paths.state, "access.json"), "utf8"));
-    expect(written).toMatchObject({ migration: made.migration, projects: made.projects, creators: [{ email: "ann@acme.test" }] });
+    const { role: _, ...kept } = guest;
+    expect(await access.read()).toEqual({ version: 1, projects: { blog: [kept] } });
+    // Reading writes nothing back.
+    expect(readFileSync(join(paths.state, "access.json"), "utf8")).toBe(text);
+    await access.change(async (registry) => ({ registry: { ...registry, projects: { ...registry.projects } }, value: null }));
+    expect(readRegistry(readFileSync(join(paths.state, "access.json"), "utf8"))).toEqual({ registry: { version: 1, projects: { blog: [kept] } }, leftOut: 0 });
+    expect(readProjection(readFileSync(join(paths.key, "access.json"), "utf8"))).toMatchObject({ sites: { [`blog.${ZONE}`]: { slug: "blog", passwords: [{ id: "guest00000000001", who: "gus@elsewhere.test" }] } } });
   });
 });

@@ -24,9 +24,6 @@ import { join } from "node:path";
 import { configFrom, type Environment } from "../gatekeeper/main";
 import { createMachine, type Systemctl } from "../gatekeeper/real";
 import { readBounded, writeAtomically } from "../secrets/system";
-import { readRegistry, rightsOf } from "../access/registry";
-import { REGISTRY_NAME } from "../access/protocol";
-import { installScope, type MemberRights } from "../people/tokens";
 import { INSTALLER_RUN_FOLDER, MAX_ENTRIES, MAX_EXTRACTED_BYTES, MAX_LOG_LINE, MAX_LOG_LINES, MAX_PATH_BYTES, type InstallerResult, type InstallRequest } from "../control/protocol";
 import { extract } from "./extract";
 import { readLaunch, readRequest } from "./instance";
@@ -114,26 +111,6 @@ export function createReporter(folder: string, request: InstallRequest, clock: (
   };
 }
 
-/**
- * The rights of the person whose token asked for this deployment, as the
- * access registry reads now, in the steward's state folder: null when they
- * no longer sign in to the dashboard, or the registry does not read, which
- * refuses rather than guessing.
- */
-export function memberRights(stateFolder: string, email: string): MemberRights | null {
-  const examination = readBounded(join(stateFolder, REGISTRY_NAME), 8 * 1024 * 1024);
-  if (examination.kind === "absent") return null;
-  if (examination.bytes === null) return null;
-  let text: string;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(examination.bytes);
-  } catch {
-    return null;
-  }
-  const registry = readRegistry(text);
-  return "unreadable" in registry ? null : rightsOf(registry, email);
-}
-
 /** A result is read while its deployment is followed; a week later, nobody will. */
 export const RESULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -203,26 +180,12 @@ export async function main(argv: string[], env: Environment, overrides: { comman
     console.error(`installer ${slug}: nothing to do: ${read.reason}`);
     return 0;
   }
-  let { request } = read;
+  const { request } = read;
 
   const resultsFolder = env.INSTALLER_FOLDER ?? INSTALLER_RUN_FOLDER;
   pruneResults(resultsFolder, Date.now());
   const reporter = createReporter(resultsFolder, request, Date.now, (line) => console.log(line));
-  reporter.log(`-> deployment ${request.deployment} of ${slug}, for ${request.token.email} (token ${request.token.id}${request.token.member === null ? "" : `, a person's own`})`);
-
-  // A member's token: its scope narrowed once more to the member's roles as
-  // the registry reads now, the request's copy being the steward's of a few
-  // seconds ago. See src/people/tokens.ts.
-  if (request.token.member !== null) {
-    const narrowed = installScope(request.scope, memberRights(stateFolder, request.token.member), slug, request.creating);
-    if ("refusal" in narrowed) {
-      reporter.finish({ ok: false, code: "out-of-scope", message: narrowed.refusal, allocated: [] });
-      return 0;
-    }
-    // Every project, as the owner, is never a person's: dropped whatever the
-    // request carries, with the `force` only it may ask.
-    request = { ...request, scope: { ...narrowed.scope, all: false }, force: false };
-  }
+  reporter.log(`-> deployment ${request.deployment} of ${slug}, for ${request.token.email} (token ${request.token.id})`);
 
   const machineConfig = { ...configFrom(env, overrides.systemctl), holder: "installer" as const };
   // The accounts are checked and handed over unless CHECK_ACCOUNTS is set

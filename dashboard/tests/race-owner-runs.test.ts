@@ -18,7 +18,7 @@ import { hostOf, stageBundle, ZONE } from "./installer-bench";
 import { APP, createBench, deploy, FILES, NOW, PUBLIC, renameHost } from "./rename-bench";
 
 const AGAIN = "fedcba9876543210fedcba98";
-const request = (manifest: object): InstallRequest => ({ deployment: AGAIN, slug: "oldsite", requestedAt: NOW, token: { id: "aaaaaaaaaaaa", email: "", member: null }, scope: PUBLIC, creating: false, manifest: JSON.stringify(manifest) });
+const request = (manifest: object): InstallRequest => ({ deployment: AGAIN, slug: "oldsite", requestedAt: NOW, token: { id: "aaaaaaaaaaaa", email: "" }, scope: PUBLIC, creating: false, manifest: JSON.stringify(manifest) });
 
 /** The installer's host whose first manifests read is `before`. */
 function staleFirstRead(b: Parameters<typeof hostOf>[0], before: Map<string, string>) {

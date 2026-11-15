@@ -373,6 +373,6 @@ describe("sign-out and session", () => {
 
   test("the session's state can be read with no session", async () => {
     const response = await routes.session(new Request(`${PUBLIC_URL}/api/session`));
-    expect(await response.json()).toEqual({ open: false, configured: true });
+    expect(await response.json()).toEqual({ open: false, configured: true, zone: null, passkeys: { registered: false, passwordSignIn: true } });
   });
 });

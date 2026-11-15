@@ -18,10 +18,9 @@
  * is nothing more to judge in them, validate() has judged the names.
  *
  * **Nor what a removed project left under its name.** `sitesolide remove`
- * releases the name for any token to create again, and its creator is made
- * Admin of what it creates; but the backups' snapshots are keyed by the slug
- * alone, and stay. The project created again would list its predecessor's
- * snapshots and restore them into its own data folder. A project's store of
+ * releases the name for any token to create again; but the backups'
+ * snapshots are keyed by the slug alone, and stay. The project created again
+ * would restore its predecessor's snapshots into its own data folder. A project's store of
  * secrets is keyed by the slug too: one the owner laid ahead of a deployment,
  * or left by a removal stopped half way, would hand its values to whatever
  * code a token deploys under that name. So no token
@@ -111,13 +110,9 @@ export function decideSlug(identity: Identity, slug: unknown, machine: { exists:
   return refused("out-of-scope", `your token may not create projects: ask the owner of the machine to grant ${slug}, or to allow creating projects`);
 }
 
-/**
- * Every project, as the owner: an owner's own token minted with `all`. A
- * person's token never is, whatever its scope says (src/people/tokens.ts
- * refuses it at the mint, and narrowIdentity drops it).
- */
-export function everyProject(identity: Pick<Identity, "scope" | "member">): boolean {
-  return identity.scope.all === true && (identity.member === null || identity.member === undefined);
+/** Every project, as the owner: a token minted with `all`. */
+export function everyProject(identity: Pick<Identity, "scope">): boolean {
+  return identity.scope.all === true;
 }
 
 /**
@@ -140,8 +135,8 @@ const listed = (items: string[]) => (items.length <= 1 ? items.join("") : `${ite
 /**
  * Why a token may not create this slug, after decideSlug allowed the
  * creation, or null when nothing was left under it. A project created again
- * under a removed one's name inherits what was left, whoever creates it: its
- * Admin restores the snapshots, the restore matching nothing but the folder
+ * under a removed one's name inherits what was left, whoever creates it: a
+ * restore of its snapshots matches nothing but the folder
  * and the time (src/backup/restore.ts), and its services read the store.
  * Neither is withdrawn by the removal, and retention never forgets a folder's
  * newest snapshot. A project the machine carries is a deployment, never a
@@ -192,7 +187,7 @@ export function scopeRefusals(manifest: Manifest, scope: Scope, slug: string): s
   }
   // A private range reached again is a provider's network, the machines
   // around this one: the owner's decision alone, never a token's, whatever
-  // its other permissions. A member's scope is never `all`.
+  // its other permissions.
   if (manifest.privateNetworks !== undefined && scope.all !== true) {
     refusals.push("privateNetworks: only the owner of the machine deploys a project that reaches a private network; remove it, or ask the owner to deploy it");
   }
@@ -207,7 +202,7 @@ export function scopeRefusals(manifest: Manifest, scope: Scope, slug: string): s
   // overrides anyway, and no token's bounds.
   if (scope.all === true) return refusals;
   if (manifest.lock !== undefined) {
-    refusals.push("lock: a preview code is chosen in the site's Access section, by its Admin or the owner, never by a deployment; remove the key");
+    refusals.push("lock: a preview code is chosen in the site's Access section, by the owner, never by a deployment; remove the key");
   }
   const services = servicesOf(manifest);
   if (services.length > MAX_TOKEN_SERVICES) refusals.push(`services: ${MAX_TOKEN_SERVICES} at most for a token's project`);
@@ -230,18 +225,12 @@ export type Door = { portal: boolean } | { refusal: string };
  * machine's wins, as for `sitesolide deploy`; otherwise private unless the
  * token may go public and the manifest asks for it.
  *
- * `member`: a member's own token. An owner's token without the public
- * permission deploys private sites only, an existing public one included: a
- * stolen one publishes nothing. A member's token answers to the member's role
- * instead (src/people/tokens.ts): the door of an existing project was
- * decided by the owner or its Admin, a deployment never changes it,
- * and a Developer deploys the project as it stands, in the open if it is.
- * What opens a door, a new project in the open or paths exempted from the
- * portal, still takes the public permission, an Admin's.
+ * A token without the public permission deploys private sites only, an
+ * existing public one included: a stolen one publishes nothing.
  */
-export function decideDoor(manifest: Manifest, scope: Scope, onMachine: boolean | null, member = false): Door {
+export function decideDoor(manifest: Manifest, scope: Scope, onMachine: boolean | null): Door {
   const portal = onMachine ?? (scope.public ? isProtected(manifest) : true);
-  if (!portal && !scope.public && !(member && onMachine === false)) {
+  if (!portal && !scope.public) {
     return { refusal: "this site is public on the machine, and your token may only deploy private sites: ask the owner of the machine" };
   }
   if (portal && !isApp(manifest)) {
@@ -270,11 +259,11 @@ export type ManifestDecision =
  * ask the owner, when docs/access.md promises a 403 that says to pick another
  * slug, and nothing the owner could grant would ever change the answer.
  */
-export function decideManifest(manifest: Manifest, scope: Scope, onMachine: boolean | null, zone: string, member = false): ManifestDecision {
+export function decideManifest(manifest: Manifest, scope: Scope, onMachine: boolean | null, zone: string): ManifestDecision {
   const reserved = reservedReason(manifest.slug, zone);
   if (reserved !== null) return { kind: "refused", error: "reserved", message: reserved };
   const refusals = scopeRefusals(manifest, scope, manifest.slug);
-  const door = decideDoor(manifest, scope, onMachine, member);
+  const door = decideDoor(manifest, scope, onMachine);
   if ("refusal" in door) refusals.push(door.refusal);
   if (refusals.length > 0 || "refusal" in door) return { kind: "refused", error: "invalid-manifest", details: refusals };
   return { kind: "allowed", portal: door.portal };

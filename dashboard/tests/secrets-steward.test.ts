@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   linkSync,
@@ -37,7 +38,6 @@ import type {
 } from "../src/secrets/protocol";
 import { UNLOCK_DURATION_MS } from "../src/secrets/protocol";
 import { fromJournal } from "../src/audit/normalize";
-import { IDENTITY_VARIABLES } from "../borrowed/sharing";
 import {
   MAX_BODY_BYTES,
   MAX_QUEUED,
@@ -662,12 +662,13 @@ describe("GET /projects: every site", () => {
   test("a write in the same second as the service's start is pending (bench measurement 4)", async () => {
     const bench = await mount();
     const token = await unlock(bench);
+    appendFileSync(join(bench.secrets, "portal.env"), "OIDC_ISSUER=https://old.test-zone.invalid\n");
     // Well away from the end of a second, so that start and write fall in the same one.
     while (Date.now() % 1000 > 700 || Date.now() % 1000 < 20) await Bun.sleep(10);
     const started = Date.now() - 10;
     bench.scenario.current = () => showA("active", "running", 0, started);
 
-    const set = await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", value: "https://id.test-zone.invalid" });
+    const set = await bench.call("DELETE", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER" });
     const { file } = (await set.json()) as FileResponse;
     const modified = statSync(join(bench.secrets, "portal.env")).mtimeMs;
     expect(Math.floor(modified / 1000)).toBe(Math.floor(started / 1000));
@@ -678,7 +679,8 @@ describe("GET /projects: every site", () => {
   test("saving then restarting: nothing is pending any more", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", value: "https://then.test-zone.invalid" });
+    appendFileSync(join(bench.secrets, "portal.env"), "OIDC_ISSUER=https://old.test-zone.invalid\n");
+    await bench.call("DELETE", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER" });
     // The restart that follows the write, a few milliseconds later.
     const started = statSync(join(bench.secrets, "portal.env")).mtimeMs + 3;
     bench.scenario.current = () => showA("active", "running", 0, started);
@@ -692,7 +694,8 @@ describe("GET /projects: every site", () => {
     const bench = await mount();
     const token = await unlock(bench);
     bench.scenario.current = () => "LoadState=loaded\nActiveState=active\nSubState=running\nNRestarts=0\nActiveEnterTimestamp=@1789593252\n";
-    await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", value: "https://x.test-zone.invalid" });
+    appendFileSync(join(bench.secrets, "portal.env"), "OIDC_ISSUER=https://old.test-zone.invalid\n");
+    await bench.call("DELETE", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER" });
     bench.clock.t += 2000;
     const portal = (await projects(bench)).find((project) => project.slug === "portal")!;
     expect(portal.service).toEqual({ unit: "portal", state: "active", subState: "running", startedAt: null });
@@ -702,7 +705,8 @@ describe("GET /projects: every site", () => {
   test("a restart pending after a change", async () => {
     const bench = await mount();
     const token = await unlock(bench);
-    await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", value: "https://other.test-zone.invalid" });
+    appendFileSync(join(bench.secrets, "portal.env"), "OIDC_ISSUER=https://old.test-zone.invalid\n");
+    await bench.call("DELETE", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER" });
     expect((await fileSeen(bench, "portal", "portal.env")).restartPending).toBe(true);
   });
 
@@ -1108,16 +1112,12 @@ describe("hash only: dashboard.env and portal.env carry nothing but PASSWORD_HAS
       ["portal", "portal.env", "OTHER"],
     ];
     const before = { dashboard: readFileSync(join(bench.secrets, "dashboard.env"), "utf8"), portal: readFileSync(join(bench.secrets, "portal.env"), "utf8") };
-    const held: Record<string, string> = {
-      "dashboard.env": "PASSWORD_HASH",
-      "portal.env": `PASSWORD_HASH and ${IDENTITY_VARIABLES.join(", ")}`,
-    };
     for (const [slug, file, variable] of cas) {
       const response = await bench.call("PUT", "/variable", { token, slug, file, variable, value: "/tmp/trap.sock" });
       expect(response.status).toBe(403);
       expect(await errorOf(response)).toEqual({
         error: "out-of-scope",
-        message: `${file} holds ${held[file]} only: any other variable would change how its service runs, not add a secret`,
+        message: `${file} holds PASSWORD_HASH only: any other variable would change how its service runs, not add a secret`,
       });
     }
     expect(readFileSync(join(bench.secrets, "dashboard.env"), "utf8")).toBe(before.dashboard);
@@ -1157,23 +1157,14 @@ describe("hash only: dashboard.env and portal.env carry nothing but PASSWORD_HAS
     expect(readFileSync(join(bench.secrets, "portal.env"), "utf8")).toBe(trap);
   });
 
-  test("the portal's sign-in settings are written into portal.env, which stays managed", async () => {
+  test("the portal's company sign-in settings of before, left in portal.env: never written, removable, the file still managed", async () => {
     const bench = await mount({ hashPassword: hashFast });
     const token = await unlock(bench);
-    for (const [variable, value] of [
-      ["OIDC_ISSUER", "https://idp.test-zone.invalid"],
-      ["OIDC_CLIENT_SECRET", "not-a-real-secret"],
-      ["OIDC_ADMIN_EMAILS", "owner@test-zone.invalid"],
-    ]) {
-      const response = await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable, value });
-      expect({ variable, status: response.status }).toEqual({ variable, status: 200 });
-    }
-    const content = readFileSync(join(bench.secrets, "portal.env"), "utf8");
-    expect(content).toContain("OIDC_ISSUER=https://idp.test-zone.invalid");
-    expect(content).toContain("PASSWORD_HASH=");
-
-    const seen = await fileSeen(bench, "portal", "portal.env");
-    expect(seen.state).not.toBe("unmanaged");
+    appendFileSync(join(bench.secrets, "portal.env"), "OIDC_ISSUER=https://old.test-zone.invalid\n");
+    appendFileSync(join(bench.secrets, "portal.env"), "OIDC_CLIENT_SECRET=not-a-real-secret\n");
+    const set = await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", value: "https://new.test-zone.invalid" });
+    expect(set.status).toBe(403);
+    expect((await fileSeen(bench, "portal", "portal.env")).state).not.toBe("unmanaged");
     // Change password still works on the file that carries them.
     const password = await bench.call("POST", "/password", {
       token,
@@ -1184,7 +1175,10 @@ describe("hash only: dashboard.env and portal.env carry nothing but PASSWORD_HAS
       newPassword: null,
     });
     expect(password.status).toBe(200);
-    expect(readFileSync(join(bench.secrets, "portal.env"), "utf8")).toContain("OIDC_CLIENT_SECRET=not-a-real-secret");
+    expect((await bench.call("DELETE", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER" })).status).toBe(200);
+    const content = readFileSync(join(bench.secrets, "portal.env"), "utf8");
+    expect(content).not.toContain("OIDC_ISSUER");
+    expect(content).toContain("OIDC_CLIENT_SECRET=not-a-real-secret");
   });
 });
 
@@ -1197,7 +1191,7 @@ describe("reading and writing", () => {
 
     expect((await bench.call("POST", "/value", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "NON" })).status).toBe(404);
     rmSync(join(bench.secrets, "portal.env"));
-    expect((await bench.call("POST", "/value", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER" })).status).toBe(404);
+    expect((await bench.call("POST", "/value", { token, slug: "portal", file: "portal.env", variable: "ANYTHING" })).status).toBe(404);
 
     expect(log(bench).find((e) => e.operation === "read" && e.result === "ok")).toMatchObject({
       slug: "dashboard",
@@ -1284,8 +1278,8 @@ describe("reading and writing", () => {
     rmSync(join(bench.secrets, "portal.env"));
     symlinkSync(target, join(bench.secrets, "portal.env"));
 
-    for (const [slug, file, variable] of [["dashboard", "dashboard-monitor.env", "B"], ["portal", "portal.env", "OIDC_ISSUER"]] as const) {
-      const response = await bench.call("PUT", "/variable", { token, slug, file, variable, value: "2" });
+    for (const [slug, file, variable] of [["dashboard", "dashboard-monitor.env", "B"], ["portal", "portal.env", "PASSWORD_HASH"]] as const) {
+      const response = slug === "portal" ? await bench.call("DELETE", "/variable", { token, slug, file, variable: "OIDC_ISSUER" }) : await bench.call("PUT", "/variable", { token, slug, file, variable, value: "2" });
       expect(response.status).toBe(409);
       expect((await errorOf(response)).error).toBe("unmanaged");
     }
@@ -1298,7 +1292,7 @@ describe("reading and writing", () => {
     const bench = await mount();
     const token = await unlock(bench);
     rmSync(join(bench.secrets, "portal.env"));
-    const response = await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", value: "1" });
+    const response = await bench.call("DELETE", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER" });
     expect(response.status).toBe(404);
     expect(existsSync(join(bench.secrets, "portal.env"))).toBe(false);
   });
@@ -2279,7 +2273,8 @@ describe("GET /log", () => {
     const bench = await mount();
     const token = await unlock(bench);
     await bench.call("POST", "/value", { token, slug: "dashboard", file: "dashboard-monitor.env", variable: "TOKEN" });
-    await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", value: "https://id.test-zone.invalid" });
+    appendFileSync(join(bench.secrets, "portal.env"), "OIDC_ISSUER=https://old.test-zone.invalid\n");
+    await bench.call("DELETE", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER" });
     await bench.call("POST", "/file", { token, slug: "test-zone.invalid", file: "landing-mail.env" });
 
     const whole = (await (await bench.call("GET", "/log")).json()) as LogResponse;
@@ -2361,7 +2356,8 @@ describe("owners checked", () => {
     const created = statSync(join(bench.secrets, "portal.env"));
     expect([created.uid, created.gid, created.mode & 0o777]).toEqual([UID, TEST_GID, 0o600]);
 
-    expect((await bench.call("PUT", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", value: "https://id.test-zone.invalid" })).status).toBe(200);
+    appendFileSync(join(bench.secrets, "portal.env"), "OIDC_ISSUER=https://old.test-zone.invalid\n");
+    expect((await bench.call("DELETE", "/variable", { token, slug: "portal", file: "portal.env", variable: "OIDC_ISSUER" })).status).toBe(200);
     expect(statSync(join(bench.secrets, "portal.env")).uid).toBe(UID);
   });
 
@@ -2401,7 +2397,7 @@ describe("owners checked", () => {
     // use: an account removed last comes back on the same uid, and the uid no
     // longer tells the earlier site's previous version from this one's. The
     // earlier file was removed by hand, its previous version stayed.
-    const PREDECESSOR = "OIDC_CLIENT_SECRET=predecessor-secret-value\n";
+    const PREDECESSOR = "SOME_SECRET=predecessor-secret-value\n";
     const bench = await underChecks();
     const token = await unlock(bench);
     rmSync(join(bench.secrets, "portal.env"));
@@ -3304,15 +3300,15 @@ describe("integration: dashboard/steward.ts on a socket", () => {
       const ownerSocket = join(root, "owner", "owner.sock");
       expect(statSync(join(root, "owner")).mode & 0o777).toBe(0o700);
       expect(statSync(ownerSocket).mode & 0o777).toBe(0o600);
-      expect((await fetch("http://steward/people", { unix: ownerSocket })).status).toBe(200);
-      expect((await fetch("http://steward/members", { unix: ownerSocket })).status).toBe(404);
+      expect((await fetch("http://steward/access?slug=cms", { unix: ownerSocket })).status).toBe(200);
+      expect((await fetch("http://steward/people", { unix: ownerSocket })).status).toBe(404);
       expect((await fetch("http://steward/projects", { unix: ownerSocket })).status).toBe(404);
       // The access registry was made at startup, nothing before it, and its projection laid for the portal.
       expect(existsSync(join(root, "state", "access.json"))).toBe(true);
       expect(existsSync(join(root, "portal-key", "access.json"))).toBe(true);
-      // The key pair was laid at startup, the private half where the portal reads it.
-      expect(existsSync(join(root, "portal-key", "assertion.key"))).toBe(true);
-      expect(existsSync(join(root, "state", "assertion.pub"))).toBe(true);
+      // No sign-in key pair is laid any more.
+      expect(existsSync(join(root, "portal-key", "assertion.key"))).toBe(false);
+      expect(existsSync(join(root, "state", "assertion.pub"))).toBe(false);
       expect(existsSync(join(root, "secrets/.dashboard-monitor.env.0123456789abcdef.tmp"))).toBe(false);
 
       const { projects: enumerate } = (await (await fetch("http://steward/projects", { unix: socket })).json()) as ProjectsResponse;

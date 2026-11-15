@@ -149,19 +149,19 @@ export type Operation =
   // access chosen, this the code replaced, never the code itself.
   | "code"
   | "restart"
-  // Someone given access to a project, their role changed, or taken off; the
-  // registry made from the stores before it; the right to create projects.
+  // A guest given password access to a project, or taken off.
   | "access.add"
-  | "access.change"
   | "access.remove"
+  // The names a journal written while people signed in with a company
+  // account, or before the access registry, carries: read, never written
+  // any more. A role changed, the registry made from the stores before it,
+  // the right to create projects, a person's session to the dashboard.
+  | "access.change"
   | "access.migrate"
   | "people.create"
-  // A person's session opened from an assertion, refused, or closed.
   | "dashboard.signin"
   | "dashboard.signin_failed"
   | "dashboard.signout"
-  // The names a journal written before the access registry carries: read,
-  // never written any more.
   | "member.invite"
   | "member.role"
   | "member.remove"
@@ -176,12 +176,10 @@ export type Operation =
   // secrets in their store alone. Read, never written.
   | "migrate"
   | "retire"
-  // A person's restore refused by the steward before it reached the backups,
-  // which record those that go through.
+  // Read, never written any more: a person's restore refused before it
+  // reached the backups, a person's own token created or revoked, a project
+  // a person's token created.
   | "backup.restore"
-  // A member's own token created or revoked, or refused above their roles;
-  // the tokens of a member removed, revoked under who removed them; and a
-  // project a member's token created, which made them its Admin.
   | "token.create"
   | "token.revoke"
   | "project.create"
@@ -209,13 +207,12 @@ export type LogEntry = {
   result: OperationResult;
   /**
    * Who asked, as the steward verified it: `owner` for the dashboard's
-   * password, the email of a person whose session it opened, `token:<id>`
-   * for a token it judged, `anonymous` for a sign-in it could not
-   * attribute, `system` for what it did on its own, the migration. Never
+   * password or SSH, `token:<id>` for a token it judged, `anonymous` for a
+   * sign-in it could not attribute, `system` for what it did on its own, the migration. Never
    * taken from a request. A line written before this field reads as `owner`.
    */
   actor: string;
-  /** The person an event is about, null otherwise. */
+  /** The guest an event of access is about, null otherwise. */
   member: string | null;
   slug: string | null;
   file: string | null;

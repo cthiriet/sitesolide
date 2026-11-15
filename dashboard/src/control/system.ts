@@ -21,7 +21,6 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readBounded, writeAtomically, type Command, type Examination } from "../secrets/system";
 import { DEPLOYMENT_ID_SHAPE, INSTALLER_TEMPLATE, LIFECYCLE_FOLDER, LIFECYCLE_TEMPLATE, lifecycleResultName, RENAME_TEMPLATE, RENAMES_FOLDER, renameResultName } from "./protocol";
-import { CREATIONS_NAME } from "./creations";
 import { CLAIMS_NAME } from "./claims";
 import type { Leftovers } from "./policy";
 import { isValidSlug } from "../../borrowed/manifest";
@@ -60,9 +59,6 @@ export type ControlSystem = {
   writeTeam: (text: string) => Promise<void>;
   /** `installs/<slug>.json`, read by the installer when it starts. */
   writeRequest: (slug: string, text: string) => Promise<void>;
-  /** The creations waiting for their installer's result (creations.ts), null when there is no file. */
-  readCreations: () => Promise<string | null>;
-  writeCreations: (text: string) => Promise<void>;
   /** What tokens did to names the machine did not carry (claims.ts), null when there is no file. Throws when it is there but unreadable. */
   readClaims: () => Promise<string | null>;
   writeClaims: (text: string) => Promise<void>;
@@ -163,8 +159,6 @@ export function createControlSystem(config: ControlSystemConfig): ControlSystem 
 
     readTeam: async () => readState(TEAM_NAME),
     writeTeam: async (text) => writeState(TEAM_NAME, text),
-    readCreations: async () => readState(CREATIONS_NAME),
-    writeCreations: async (text) => writeState(CREATIONS_NAME, text),
     readClaims: async () => readState(CLAIMS_NAME),
     writeClaims: async (text) => writeState(CLAIMS_NAME, text),
 

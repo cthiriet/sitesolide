@@ -53,3 +53,18 @@ export const LINK_DURATION_MS = 15 * 60 * 1000;
 
 /** The fragment the dashboard's page reads a registration link from: never sent to a server in a URL. */
 export const LINK_FRAGMENT = "passkey";
+
+/**
+ * Whether the owner holds a passkey, and whether the password still signs
+ * in. Once a passkey exists, it does not: the page offers the passkey alone,
+ * and root's registration link is the way back in.
+ */
+export type PasskeyOffer = { registered: boolean; passwordSignIn: boolean };
+
+/**
+ * What `/api/session` answers, before any session: whether one is open,
+ * whether a password hash is in place, the zone the server serves, which
+ * the sign-in names so that whoever runs a test install beside production
+ * sees which server it goes to, and the passkey offer.
+ */
+export type SessionResponse = { open: boolean; configured: boolean; zone: string | null; passkeys: PasskeyOffer };

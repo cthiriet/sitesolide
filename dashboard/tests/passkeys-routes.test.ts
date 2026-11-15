@@ -4,7 +4,7 @@ import type { PasskeyStewardClient } from "../src/passkeys/client";
 import type { LinkResponse } from "../src/passkeys/protocol";
 import { createPasskeyRoutes } from "../src/passkeys/routes";
 import { createPasskeyState } from "../src/passkeys/state";
-import { createRoutes, createSessionReader, ownerSessionOpener, ownerSessions, type Store } from "../src/routes";
+import { createRoutes, createSessionReader, ownerSessionOpener, type Store } from "../src/routes";
 import type { Steward } from "../src/secrets/client";
 import { createSecretsRoutes } from "../src/secrets/routes";
 import { createTokens } from "../src/secrets/tokens";
@@ -50,7 +50,7 @@ async function dashboard() {
   let remembered: boolean | null = null;
   const state = createPasskeyState({ steward: client, passwordConfigured: true, readRemembered: () => remembered, remember: (value) => (remembered = value), clock });
   const options = { online: true, sessionDurationMs: WEEK };
-  const owner = ownerSessions(createSessionReader(store, options));
+  const owner = createSessionReader(store, options);
   const tokens = createTokens(clock);
   const passkeys = createPasskeyRoutes(
     {

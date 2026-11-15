@@ -1,8 +1,7 @@
 /**
  * The Tokens page's routes, `/api/tokens`: the owner's side of the control API,
  * behind the dashboard's session like every other page. The owner makes a
- * token for themselves, or for a person of People (`holder`), which the
- * steward mints within that person's roles.
+ * token for themselves and their agents: every token is the owner's.
  *
  * Same stance as src/secrets/routes.ts: the dashboard checks the origin, the
  * session and the shape of the body, adds the unlock token it holds, and
@@ -14,9 +13,7 @@
  * on the machine, it deserves the password retyped. The token's value comes
  * back once, in the answer to the creation, and is never stored here.
  *
- * Every creation and revocation goes into the audit, actor `owner`. A
- * person's own tokens answer at the same addresses through
- * src/people/relay.ts, and the steward journals them under their email.
+ * Every creation and revocation goes into the audit, actor `owner`.
  *
  * The list is the tokens alone: what a token did, its deployments and its
  * work through the steward, is the Activity page's, which a token's sheet
@@ -94,11 +91,11 @@ export function createTeamRoutes(dependencies: TeamDependencies, clock: () => nu
       const reached = await reach(() => steward.listTokens());
       const until = tokens.read(open.hash)?.expiresAt ?? null;
       if (reached.kind === "unavailable") {
-        return json({ available: false, reason: NOT_AVAILABLE_REASON, member: null, tokens: [], until } satisfies TeamPageResponse);
+        return json({ available: false, reason: NOT_AVAILABLE_REASON, tokens: [], until } satisfies TeamPageResponse);
       }
       if (reached.kind !== "received" || reached.status !== 200) return relayRefusal(reached);
       if (!Array.isArray(reached.body.tokens)) return error(502, "failure", "The server sent an unreadable answer.");
-      return json({ available: true, reason: null, member: null, tokens: reached.body.tokens as TokenView[], until } satisfies TeamPageResponse);
+      return json({ available: true, reason: null, tokens: reached.body.tokens as TokenView[], until } satisfies TeamPageResponse);
     },
 
     async createToken(req) {
@@ -109,9 +106,9 @@ export function createTeamRoutes(dependencies: TeamDependencies, clock: () => nu
       const kept = tokens.read(open.hash);
       if (kept === null) return error(423, "locked", "Unlock first: creating a token needs the dashboard password.");
 
-      const { label, holder, expiresAt, scope } = body;
+      const { label, expiresAt, scope } = body;
       const reached = await reach(
-        () => steward.createToken({ token: kept.token, label: label as string, holder: holder as string, expiresAt: expiresAt as number | null, scope: scope as Scope }),
+        () => steward.createToken({ token: kept.token, label: label as string, expiresAt: expiresAt as number | null, scope: scope as Scope }),
         [kept.token],
       );
       if (reached.kind === "received" && reached.status === 401 && reached.body.error === "locked") {
@@ -125,7 +122,7 @@ export function createTeamRoutes(dependencies: TeamDependencies, clock: () => nu
         actor: "owner",
         action: "token.create",
         target: null,
-        detail: { id: created.id, label: created.label, email: created.email, member: created.member, expiresAt: created.expiresAt, scope: created.scope },
+        detail: { id: created.id, label: created.label, email: created.email, expiresAt: created.expiresAt, scope: created.scope },
       });
       return json({ token: created, secret: reached.body.secret }, 201);
     },

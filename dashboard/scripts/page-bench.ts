@@ -25,9 +25,8 @@
  *   out of management and `dashboard.env` pending a restart, as only a
  *   project's own `<slug>.env` can be: the monitor's and the backups' files
  *   are read by units of their own, at their own next pass. `dashboard.env`
- *   and `portal.env` carry nothing but their `PASSWORD_HASH` (`portal.env` also
- *   takes the names of its `OIDC_*` sign-in settings, as the real steward
- *   allows), which changes only through `/password` and is never restored, one log per site, lines
+ *   and `portal.env` carry nothing but their `PASSWORD_HASH`, which changes
+ *   only through `/password` and is never restored, one log per site, lines
  *   written by tokens through the control API among them, for a token's
  *   sheet and Activity, and an unlocking by the same password; each app's
  *   store, listed by the real `storeView` from its manifest: every declared
@@ -41,23 +40,12 @@
  *   backup of an interrupted action has remained: its state is unknown. The
  *   messages are those of the real gatekeeper and of the real steward,
  *   imported from src/;
- * - a fake portal on the loopback, which answers `/admin/sharing` with how
- *   people sign in, `/admin/access` like `portal/src/admin.ts`, and
- *   `/admin/audit` with sign-ins of every kind;
- * - access, with the steward's own access and sign-in routes
- *   (src/access/steward.ts, src/people/steward.ts) on the fake steward's
- *   socket, its registry written in the temporary directory as a machine
- *   carries one made in 0.4.0 from the stores before it, entries the
- *   migration gave among them: alice@example.com is a Developer on `cms`, an Admin on
- *   `calendar` and a Viewer on `brand`, bruno@example.com an Admin on `cms`
- *   and a Developer on `calendar`, chloe@example.com a Viewer on
- *   `calendar`, maya@example.com may create projects; people and a domain
- *   can open `cms` and `calendar`, editor@example.com can only open `cms`,
- *   and five password accesses are carried over, one of them expired. *Sign in with Google* on the sign-in page goes through the fake
- *   portal's `/admin/dashboard/flow` to a page of its own that signs in one
- *   of them, or stranger@example.com, whom the registry does not name, then back with a
- *   code the fake portal redeems for an assertion signed with the steward's
- *   key, as the real one does;
+ * - a fake portal on the loopback, which answers `/admin/access` like
+ *   `portal/src/admin.ts`, and `/admin/audit` with sign-ins of every kind;
+ * - access, with the steward's own access routes (src/access/steward.ts) on
+ *   the fake steward's socket, its registry written in the temporary
+ *   directory: five guests with password access across `brand`, `calendar`,
+ *   `cms` and `inventory`, one of them expired;
  * - with the dashboard's own audit of tokens and deployments, written below,
  *   the egress proxy's, the backups' and the steward's, every source of the
  *   Activity page has rows;
@@ -75,8 +63,7 @@
  *   BENCH_PORT=4322          the front end's port, the service takes the next one
  *   BENCH_STALE=1           a snapshot ten minutes old, never rewritten
  *   BENCH_NO_STEWARD=1  no steward: Secrets and Access say 502
- *   BENCH_NO_PORTAL=1     no portal: the sign-in page offers no provider, Activity can't read it
- *   BENCH_NO_SSO=1        a portal with passwords only: everyone outside gets password access
+ *   BENCH_NO_PORTAL=1     no portal: Activity can't read it
  *   BENCH_NO_EGRESS=1     no egress proxy: Activity says it isn't installed
  *   BENCH_EMPTY=1             no snapshot at all: the "No snapshot" state
  *   BENCH_FRESH=1             a fresh machine: the platform's own projects alone, all well,
@@ -102,7 +89,7 @@
  *
  * The password is fixed and obvious, `demo`, since nothing here is real.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, normalize, resolve } from "node:path";
 import { fixedRefusal } from "../src/gatekeeper/rules";
@@ -115,14 +102,9 @@ import { hasStore, secretsOf, type Manifest } from "../borrowed/manifest";
 import { PLATFORM_PORTS } from "../borrowed/services";
 import { INTERRUPTED_TRANSACTION_REASON } from "../src/secrets/portal";
 import { benchBackupRoutes } from "./bench-backups";
-import { readPrivateKey, signAssertion } from "../borrowed/assertion";
-import { createMemberRoutes } from "../src/people/steward";
 import { createAccessRoutes, createAccessStore } from "../src/access/steward";
 import { createAccessSystem } from "../src/access/system";
 import { encodeRegistry, sortEntries, type Entry, type Registry } from "../src/access/registry";
-import { mintRefusals, scopeText } from "../src/people/tokens";
-import { generalNeedsUnlock, may, needsUnlock, powerRefusal, type Power } from "../src/people/powers";
-import { createMembersSystem } from "../src/people/system";
 
 const PASSWORD = "demo";
 
@@ -922,7 +904,7 @@ const log: LogRow[] = [
   // restarted calendar; alice-ci, which may not, was refused on cms.
   { a: start - 2 * HOUR, operation: "set", result: "ok", actor: "token:0f1e2d3c4b5a", member: null, slug: "calendar", file: "store", variable: "API_KEY", detail: null },
   { a: start - 2 * HOUR + MINUTE, operation: "restart", result: "ok", actor: "token:0f1e2d3c4b5a", member: null, slug: "calendar", file: null, variable: null, detail: "active, active/running, 0 restarts" },
-  { a: start - 90 * MINUTE, operation: "set", result: "rejects", actor: "token:a11ce0c1ab12", member: "alice@example.com", slug: "cms", file: null, variable: null, detail: "no secrets permission" },
+  { a: start - 90 * MINUTE, operation: "set", result: "rejects", actor: "token:a11ce0c1ab12", member: null, slug: "cms", file: null, variable: null, detail: "no secrets permission" },
 ];
 
 if (SHOWCASE) {
@@ -1013,7 +995,7 @@ function storeOf(p: FakeProject) {
     },
     unitReadsStore: p.service !== null,
     startedUs: p.service?.startedAt == null ? null : p.service.startedAt * 1000,
-    may: storeMay({ kind: "owner", restore: true }),
+    may: storeMay("owner"),
     owner: true,
   });
 }
@@ -1041,15 +1023,7 @@ async function readBody(req: Request): Promise<Record<string, unknown>> {
 
 const text = (value: unknown) => (typeof value === "string" ? value : "");
 
-/**
- * What a member's request carries once the bench's steward judged their role
- * (see `memberAction`): the fake routes below take it for an unlock, as the
- * real steward hands a member's request to the very operations of the owner's.
- */
-const MEMBER_PASS = `member-${crypto.randomUUID()}`;
-
 function isValidToken(requested: Record<string, unknown>): boolean {
-  if (requested.token === MEMBER_PASS) return true;
   return token !== null && requested.token === token.value && Date.now() < token.expiresAt;
 }
 
@@ -1127,22 +1101,15 @@ type BenchToken = {
   /** `secrets` absent: a token minted before the permission, which manages none. */
   scope: { slugs: string[]; create: boolean; outbound: boolean; domain: boolean; public: boolean; secrets?: boolean };
   owned: string[];
-  /** The person it belongs to, null for the owner's own. */
-  member: string | null;
-  /** Who made it: `owner`, or the person themselves. */
-  by: string;
 };
 
 const teamTokens: BenchToken[] = [
-  // Made by the owner for Alice: narrowed to her roles, revoked with her.
-  { id: "a1b2c3d4e5f6", label: "Alice's laptop", email: "alice@example.com", createdAt: start - 12 * DAY, expiresAt: start + 78 * DAY, revokedAt: null, lastUsedAt: start - 3 * HOUR, scope: { slugs: ["cms"], create: true, outbound: false, domain: false, public: false }, owned: ["notes"], member: "alice@example.com", by: "owner" },
-  // The owner's own, for an agent of theirs, which may manage its project's secrets.
-  { id: "0f1e2d3c4b5a", label: "Release agent", email: "owner", createdAt: start - 40 * DAY, expiresAt: start + 4 * DAY, revokedAt: null, lastUsedAt: start - DAY, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: true, secrets: true }, owned: [], member: null, by: "owner" },
-  { id: "9a8b7c6d5e4f", label: "Bob, contractor", email: "bob@example.com", createdAt: start - 90 * DAY, expiresAt: null, revokedAt: start - 20 * DAY, lastUsedAt: start - 21 * DAY, scope: { slugs: [], create: true, outbound: false, domain: false, public: false }, owned: ["mockups"], member: null, by: "owner" },
-  // A person's own, minted from her Tokens page: a Developer on cms, an Admin on calendar.
-  { id: "c0ffee123456", label: "Alice's agent", email: "alice@example.com", createdAt: start - 2 * DAY, expiresAt: start + 88 * DAY, revokedAt: null, lastUsedAt: start - 5 * HOUR, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: false }, owned: [], member: "alice@example.com", by: "alice@example.com" },
-  // Hers too, minted while she was a Developer on brand: a Viewer there now, it is paused on brand.
-  { id: "a11ce0c1ab12", label: "alice-ci", email: "alice@example.com", createdAt: start - 9 * DAY, expiresAt: null, revokedAt: null, lastUsedAt: start - 2 * DAY, scope: { slugs: ["cms", "brand"], create: false, outbound: false, domain: false, public: false }, owned: [], member: "alice@example.com", by: "alice@example.com" },
+  // The owner's, for the laptop, which created a project of its own.
+  { id: "a1b2c3d4e5f6", label: "Laptop", email: "owner", createdAt: start - 12 * DAY, expiresAt: start + 78 * DAY, revokedAt: null, lastUsedAt: start - 3 * HOUR, scope: { slugs: ["cms"], create: true, outbound: false, domain: false, public: false }, owned: ["notes"] },
+  // For an agent, which may manage its project's secrets.
+  { id: "0f1e2d3c4b5a", label: "Release agent", email: "owner", createdAt: start - 40 * DAY, expiresAt: start + 4 * DAY, revokedAt: null, lastUsedAt: start - DAY, scope: { slugs: ["calendar"], create: false, outbound: true, domain: false, public: true, secrets: true }, owned: [] },
+  { id: "9a8b7c6d5e4f", label: "Old CI", email: "owner", createdAt: start - 90 * DAY, expiresAt: null, revokedAt: start - 20 * DAY, lastUsedAt: start - 21 * DAY, scope: { slugs: [], create: true, outbound: false, domain: false, public: false }, owned: ["mockups"] },
+  { id: "a11ce0c1ab12", label: "Preview bot", email: "owner", createdAt: start - 9 * DAY, expiresAt: null, revokedAt: null, lastUsedAt: start - 2 * DAY, scope: { slugs: ["cms", "brand"], create: false, outbound: false, domain: false, public: false }, owned: [] },
 ];
 
 // The control API's history, written by the service's own store in its data
@@ -1157,15 +1124,15 @@ Bun.spawnSync(
      const store = createControlStore(openDatabase(process.env.DATA_DIR + "/dashboard.db"));
      const start = ${start};
      const rows = [
-       ["0123456789abcdef00000001", "a1b2c3d4e5f6", "alice@example.com", "notes", "succeeded", 1, start - 3 * 3600000, null],
+       ["0123456789abcdef00000001", "a1b2c3d4e5f6", "owner", "notes", "succeeded", 1, start - 3 * 3600000, null],
        ${SHOWCASE
          ? `["0123456789abcdef00000002", "0f1e2d3c4b5a", "agent@example.com", "calendar", "succeeded", 0, start - 26 * 3600000, null],`
          : `["0123456789abcdef00000002", "0f1e2d3c4b5a", "agent@example.com", "calendar", "failed", 0, start - 26 * 3600000, "install-failed: bun install --production failed (exit 1): nothing served was changed"],`}
-       ["0123456789abcdef00000003", "a1b2c3d4e5f6", "alice@example.com", "cms", "succeeded", 0, start - 50 * 3600000, null],
+       ["0123456789abcdef00000003", "a1b2c3d4e5f6", "owner", "cms", "succeeded", 0, start - 50 * 3600000, null],
      ];
      const audit = [
-       { at: start - 20 * 86400000, actor: "owner", action: "token.revoke", target: null, detail: { id: "9a8b7c6d5e4f", label: "Bob, contractor", email: "bob@example.com" } },
-       { at: start - 12 * 86400000, actor: "owner", action: "token.create", target: null, detail: { id: "a1b2c3d4e5f6", label: "Alice's laptop", email: "alice@example.com", expiresAt: start + 78 * 86400000, scope: { slugs: ["cms"], create: true, outbound: false, domain: false, public: false } } },
+       { at: start - 20 * 86400000, actor: "owner", action: "token.revoke", target: null, detail: { id: "9a8b7c6d5e4f", label: "Old CI", email: "owner" } },
+       { at: start - 12 * 86400000, actor: "owner", action: "token.create", target: null, detail: { id: "a1b2c3d4e5f6", label: "Laptop", email: "owner", expiresAt: start + 78 * 86400000, scope: { slugs: ["cms"], create: true, outbound: false, domain: false, public: false } } },
      ];
      for (const [id, tokenId, email, slug, state, creating, at, message] of rows) {
        store.createDeployment({ id, tokenId, email, slug, creating: creating === 1, manifest: "{}", createdAt: at });
@@ -1180,63 +1147,33 @@ Bun.spawnSync(
   { cwd: PROJECT_ROOT, env: { ...process.env, DATA_DIR: folder }, stdout: "inherit", stderr: "inherit" },
 );
 
-// --- The people who sign in, with the steward's own routes -------------------------
+// --- Access, with the steward's own routes ------------------------------------------
 //
-// The registry, the sessions and the key pair in the temporary directory, the
-// projects those of the snapshot, the portal's settings the fake portal's. A
-// restart is simulated, and recorded in the steward's log under the person.
+// The registry and its projection in the temporary directory, the projects
+// those of the snapshot.
 
-const membersState = join(folder, "members-state");
-const portalKeyFolder = join(folder, "portal-key");
-mkdirSync(membersState, { recursive: true });
-mkdirSync(portalKeyFolder, { recursive: true });
+const accessState = join(folder, "access-state");
+const portalFolder = join(folder, "portal-folder");
+mkdirSync(accessState, { recursive: true });
+mkdirSync(portalFolder, { recursive: true });
 
-/** How people sign in on the bench: Google, unless BENCH_NO_SSO asks for a portal with passwords only. */
-const sso =
-  process.env.BENCH_NO_SSO === "1"
-    ? { configured: false, providerName: null, portalUrl: null, admins: [] as string[], allowedDomains: [] as string[] }
-    : {
-        configured: true,
-        providerName: "Google",
-        portalUrl: "https://portal.example.com",
-        admins: ["owner@example.com"],
-        allowedDomains: ["example.com"],
-      };
-
-// The registry as a machine upgraded through 0.4.0 carries it: made from
-// alice's roles in members.json and from a portal database whose sharing let
-// people and a domain in, and whose guests had passwords, carried with their
-// hashes and expiry; the entries the migration gave say `migration`.
+// Five guests with password access, their hashes and expiry, one expired.
 const hashOf = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex");
-const by = (who: string, role: Entry["role"], made: string, at: number, password?: Entry["password"]): Entry => ({ who, role, by: made, createdAt: at, updatedAt: at, ...(password === undefined ? {} : { password }) });
-const madeIn04: Registry = {
+const guest = (who: string, at: number, password: Entry["password"]): Entry => ({ who, by: "owner", createdAt: at, updatedAt: at, password });
+const benchRegistry: Registry = {
   version: 1,
   projects: {
-    brand: sortEntries([
-      by("alice@example.com", "viewer", "owner", start - 20 * DAY),
-      by("Bob and Carol", "visitor", "migration", start - 41 * DAY, { id: "benchGuest000003", hash: hashOf("bench three"), expiresAt: null }),
-    ]),
+    brand: [guest("Bob and Carol", start - 41 * DAY, { id: "benchGuest000003", hash: hashOf("bench three"), expiresAt: null })],
     calendar: sortEntries([
-      by("@example.com", "visitor", "migration", start - 9 * DAY),
-      by("alice@example.com", "admin", "owner", start - 20 * DAY),
-      by("auditor@partner.example", "visitor", "migration", start - 3 * DAY, { id: "benchGuest000005", hash: hashOf("bench five"), expiresAt: start + 14 * HOUR }),
-      by("bruno@example.com", "developer", "owner", start - 12 * DAY),
-      by("chloe@example.com", "viewer", "alice@example.com", start - 4 * DAY),
-      by("Example Accounting", "visitor", "migration", start - DAY, { id: "benchGuest000002", hash: hashOf("bench two"), expiresAt: start + 6 * DAY }),
+      guest("auditor@partner.example", start - 3 * DAY, { id: "benchGuest000005", hash: hashOf("bench five"), expiresAt: start + 14 * HOUR }),
+      guest("Example Accounting", start - DAY, { id: "benchGuest000002", hash: hashOf("bench two"), expiresAt: start + 6 * DAY }),
     ]),
-    cms: sortEntries([
-      by("alice@example.com", "developer", "owner", start - 20 * DAY),
-      by("bruno@example.com", "admin", "owner", start - 12 * DAY),
-      by("client@example.org", "visitor", "migration", start - 6 * DAY - 19 * HOUR, { id: "benchGuest000001", hash: hashOf("bench one"), expiresAt: start + 5 * HOUR }),
-      by("editor@example.com", "visitor", "migration", start - 2 * DAY),
-    ]),
-    inventory: [by("Dave, intern", "visitor", "migration", start - 32 * DAY, { id: "benchGuest000004", hash: hashOf("bench four"), expiresAt: start - 2 * DAY })],
+    cms: [guest("client@example.org", start - 6 * DAY - 19 * HOUR, { id: "benchGuest000001", hash: hashOf("bench one"), expiresAt: start + 5 * HOUR })],
+    inventory: [guest("Dave, intern", start - 32 * DAY, { id: "benchGuest000004", hash: hashOf("bench four"), expiresAt: start - 2 * DAY })],
   },
-  creators: [{ email: "maya@example.com", by: "owner", at: start - 2 * DAY }],
-  migration: { at: start - 20 * DAY, from: ["members.json", "portal.db"], setAside: [] },
 };
-const benchAccess = createAccessSystem({ stateFolder: membersState, portalKeyFolder, groupsFile: "/etc/group", portalGroup: "" });
-await benchAccess.writeRegistry(encodeRegistry(madeIn04));
+const benchAccess = createAccessSystem({ stateFolder: accessState, sitesDir: join(folder, "no-sites"), portalKeyFolder: portalFolder, groupsFile: "/etc/group", portalGroup: "" });
+await benchAccess.writeRegistry(encodeRegistry(benchRegistry));
 
 const benchJournal = async (event: { operation: string; result: "ok" | "rejects"; actor: string; member: string | null; slug?: string; detail: string | null }) =>
   record({ operation: event.operation, result: event.result, actor: event.actor, member: event.member, slug: event.slug ?? null, file: null, variable: null, detail: event.detail });
@@ -1245,57 +1182,15 @@ const accessStore = createAccessStore({
   system: benchAccess,
   zone: "example.com",
   hostOf: (slug) => `${slug}.example.com`,
-  journal: benchJournal,
 });
 // Its projection written before anything asks, as the steward does at startup.
 await accessStore.start();
-
-/** A person's live tokens, as the steward's control routes name them for a confirmation (src/control/steward.ts, `tokensOf`). */
-function liveTokensOf(email: string): { id: string; label: string; madeBy: "them" | "owner" }[] {
-  return teamTokens
-    .filter((token) => token.member === email && token.revokedAt === null && (token.expiresAt === null || Date.now() < token.expiresAt))
-    .map((token) => ({ id: token.id, label: token.label, madeBy: token.by === "owner" ? ("owner" as const) : ("them" as const) }));
-}
-
-const memberRoutes = createMemberRoutes({
-  revokeTokens: async (email) => {
-    const gone = liveTokensOf(email);
-    for (const token of teamTokens) if (gone.some((one) => one.id === token.id)) token.revokedAt = Date.now();
-    return gone;
-  },
-  system: {
-    ...createMembersSystem({
-      stateFolder: membersState,
-      sitesDir: join(folder, "no-sites"),
-      secretsFolder: join(folder, "no-secrets"),
-      portalKeyFolder,
-      groupsFile: "/etc/group",
-      portalGroup: "",
-    }),
-    projectExists: (slug) => FOLDERS.some((one) => one.slug === slug),
-    readPortalSettings: async () => ({ configured: sso.configured, allowedDomains: sso.allowedDomains, admins: sso.admins, providerName: sso.providerName }),
-  },
-  access: accessStore,
-  zone: "example.com",
-  readBody: async (req, fields) => {
-    const body = await readBody(req);
-    return Object.keys(body).every((key) => fields.includes(key)) ? body : refusal(400, "invalid", "unexpected field in the request body");
-  },
-  journal: benchJournal,
-  restart: async (_req, slug, who, allowed) => {
-    await Bun.sleep(1500);
-    if (!(await allowed())) return refusal(403, "out-of-scope", `${who.actor} may no longer restart ${slug}`);
-    record({ operation: "restart", result: "ok", actor: who.actor, member: who.member, slug, file: null, variable: null, detail: "active, active/running, 0 restarts" });
-    return Response.json({ verdict: { kind: "active", state: "active", subState: "running", restarts: 0 } });
-  },
-});
 
 const accessRoutes = createAccessRoutes({
   store: accessStore,
   zone: "example.com",
   hostOf: (slug) => `${slug}.example.com`,
   projectExists: (slug) => FOLDERS.some((one) => one.slug === slug),
-  signIn: async () => ({ configured: sso.configured, allowedDomains: sso.allowedDomains, admins: sso.admins, providerName: sso.providerName }),
   general: async (slug) => {
     const found = FOLDERS.find((one) => one.slug === slug);
     if (found === undefined) return null;
@@ -1308,46 +1203,7 @@ const accessRoutes = createAccessRoutes({
     return Object.keys(body).every((key) => fields.includes(key)) ? body : refusal(400, "invalid", "unexpected field in the request body");
   },
   journal: benchJournal,
-  journalRefusal: benchJournal,
-  authorize: memberRoutes.authorize,
-  leave: memberRoutes.leave,
-  tokensOf: async (email) => liveTokensOf(email),
 });
-
-/**
- * A member's work on their projects, as src/people/actions.ts judges it: the
- * session, the member's unlock where the power needs one, the role, then the
- * owner's fake operation. Enough for the page; the real decisions are tested
- * in tests/people-actions.test.ts.
- */
-function memberAction(power: Power, operation: (req: Request) => Response | Promise<Response>) {
-  return async (req: Request): Promise<Response> => {
-    const body = await readBody(req);
-    const target = body.access === "public" || body.access === "restricted" || body.access === "code" ? body.access : body.active === true ? "restricted" : "public";
-    const asks = power === "general" ? generalNeedsUnlock(target) : needsUnlock(power);
-    const principal = await memberRoutes.authorize(body.session, asks ? body.token : null);
-    if (principal instanceof Response) return principal;
-    const slug = text(body.slug);
-    const role = Object.hasOwn(principal.roles, slug) ? principal.roles[slug]! : null;
-    if (!may(role, power)) return refusal(403, "out-of-scope", powerRefusal(principal.email, role, slug, power));
-    const { session: _session, token: _token, ...rest } = body;
-    // The actor, the email this steward verified, as the real one hands its operations.
-    return operation(new Request(req.url, { method: req.method, body: JSON.stringify({ ...rest, token: MEMBER_PASS, actor: principal.email }) }));
-  };
-}
-
-/** A member's projects in the Secrets section: never the platform's, whose files are the owner's alone. */
-async function memberProjects(req: Request): Promise<Response> {
-  const body = await readBody(req);
-  const principal = await memberRoutes.authorize(body.session, null);
-  if (principal instanceof Response) return principal;
-  const projects = PROJECTS.filter((p) => !PLATFORM.includes(p.slug) && may(principal.roles[p.slug] ?? null, "secrets.list")).map((p) => {
-    const view = projectView(p);
-    // A person's store says what the real steward lets them do: no reveal, the restore for an Admin.
-    return view.store === null ? view : { ...view, store: { ...view.store, may: storeMay({ kind: "person", restore: principal.roles[p.slug] === "admin" }) } };
-  });
-  return Response.json({ projects, until: await memberRoutes.unlockedUntil(body.session) });
-}
 
 const steward =
   process.env.BENCH_NO_STEWARD === "1"
@@ -1355,19 +1211,7 @@ const steward =
     : Bun.serve({
         unix: socket,
         routes: {
-          ...memberRoutes.dashboard,
           ...accessRoutes.dashboard,
-          "/people/secrets/projects": { POST: memberProjects },
-          // The owner's fake routes, judged by role first: see memberAction.
-          ...(() => {
-            // Through the bench's own socket: the owner's route, as it stands.
-            const owner = (path: string, method: string) => async (req: Request) =>
-              fetch(`http://steward${path}`, { unix: socket, method, headers: { "Content-Type": "application/json" }, body: await req.text() });
-            return {
-              "/people/portal": { POST: memberAction("general", owner("/portal", "POST")) },
-              "/people/general": { POST: memberAction("general", owner("/general", "POST")) },
-            };
-          })(),
           // The backups, their troubles and a simulated restore: scripts/bench-backups.ts.
           ...benchBackupRoutes({ start, folders: FOLDERS, isValidToken }),
           "/projects": { GET: () => Response.json({ projects: PROJECTS.map(projectView) }) },
@@ -1380,29 +1224,16 @@ const steward =
               if (!isValidToken(requested)) return refusal(401, "locked", "locked, unlock again");
               const scope = requested.scope as BenchToken["scope"];
               if (scope.slugs.includes("dashboard")) return refusal(400, "invalid", "scope.slugs: dashboard is reserved for the platform: pick another slug");
-              // Whose token: the owner's own, or a person's, within their roles.
-              const holder = text(requested.holder).toLowerCase();
-              let member: string | null = null;
-              if (holder !== "owner") {
-                const rights = await memberRoutes.rights(holder);
-                if (rights instanceof Response) return rights;
-                if (rights === null) return refusal(400, "invalid", `${holder} does not sign in to this dashboard: a token belongs to a person of People with a role above Can open, or to you`);
-                const refusals = mintRefusals(scope, rights);
-                if (refusals.length > 0) return refusal(403, "out-of-scope", refusals.join("; "), { details: refusals });
-                member = holder;
-              }
               const created: BenchToken = {
                 id: draw(12, "0123456789abcdef"),
                 label: text(requested.label),
-                email: member ?? "owner",
+                email: "owner",
                 createdAt: Date.now(),
                 expiresAt: typeof requested.expiresAt === "number" ? requested.expiresAt : null,
                 revokedAt: null,
                 lastUsedAt: null,
                 scope,
                 owned: [],
-                member,
-                by: "owner",
               };
               teamTokens.push(created);
               return Response.json({ token: created, secret: `sst_${draw(43, ALPHABET)}` }, { status: 201 });
@@ -1443,56 +1274,6 @@ const steward =
               }
               await writeState();
               return Response.json({ slug, action, log: [`-> ${slug} ${action}, for owner`] });
-            },
-          },
-          // A member's own tokens, judged by the real rules (src/people/tokens.ts) on her session and unlock.
-          "/tokens/person/list": {
-            POST: async (req) => {
-              const requested = await readBody(req);
-              const principal = await memberRoutes.authorize(requested.session, null);
-              if (principal instanceof Response) return principal;
-              return Response.json({
-                tokens: [...teamTokens].filter((token) => token.member === principal.email).sort((a, b) => b.createdAt - a.createdAt),
-                rights: { roles: principal.roles, create: principal.create },
-                until: await memberRoutes.unlockedUntil(requested.session),
-              });
-            },
-          },
-          "/tokens/person/create": {
-            POST: async (req) => {
-              const requested = await readBody(req);
-              const principal = await memberRoutes.authorize(requested.session, requested.token);
-              if (principal instanceof Response) return principal;
-              const scope = requested.scope as BenchToken["scope"];
-              const refusals = mintRefusals(scope, { email: principal.email, roles: principal.roles, create: principal.create });
-              if (refusals.length > 0) return refusal(403, "out-of-scope", refusals.join("; "), { details: refusals });
-              const created: BenchToken = {
-                id: draw(12, "0123456789abcdef"),
-                label: text(requested.label),
-                email: principal.email,
-                createdAt: Date.now(),
-                expiresAt: typeof requested.expiresAt === "number" ? requested.expiresAt : null,
-                revokedAt: null,
-                lastUsedAt: null,
-                scope,
-                owned: [],
-                member: principal.email,
-                by: principal.email,
-              };
-              teamTokens.push(created);
-              record({ operation: "token.create", result: "ok", actor: principal.email, member: principal.email, slug: null, file: null, variable: null, detail: `${created.id}: ${scopeText(scope)}` });
-              return Response.json({ token: created, secret: `sst_${draw(43, ALPHABET)}` }, { status: 201 });
-            },
-          },
-          "/tokens/person/revoke": {
-            POST: async (req) => {
-              const requested = await readBody(req);
-              const principal = await memberRoutes.authorize(requested.session, null);
-              if (principal instanceof Response) return principal;
-              const found = teamTokens.find((candidate) => candidate.id === requested.id && candidate.member === principal.email);
-              if (found === undefined) return refusal(404, "not-found", "no such token of yours");
-              found.revokedAt ??= Date.now();
-              return Response.json({ token: found });
             },
           },
           "/tokens/revoke": {
@@ -1713,7 +1494,7 @@ const steward =
               const action = renew ? "renew" : target === "restricted" ? "on" : target === "public" ? "off" : "code";
               const actor = typeof requested.actor === "string" ? requested.actor : undefined;
               const trace = (result: "ok" | "rejects" | "failure", detail: string) =>
-                record({ operation, result, ...(actor === undefined ? {} : { actor, member: actor }), slug: project.slug, file: null, variable: null, detail });
+                record({ operation, result, ...(actor === undefined ? {} : { actor }), slug: project.slug, file: null, variable: null, detail });
               const before = generalView(folder);
               const refused = before.choices![target];
               if (refused !== null) {
@@ -1814,8 +1595,8 @@ function page<T extends { id: number }>(rows: readonly T[], params: URLSearchPar
 }
 
 /**
- * The portal's audit: sign-ins of every kind, one refused, guests, sharing
- * changes, in the shape of portal/src/database.ts. Never a password, as there.
+ * The portal's audit: sign-ins of every kind, refused ones, guests, in the
+ * shape of portal/src/database.ts. Never a password, as there.
  */
 let portalEventId = 0;
 function portalEvent(actor: string, action: string, target: string | null, detail: object | null, at: number) {
@@ -1823,22 +1604,18 @@ function portalEvent(actor: string, action: string, target: string | null, detai
   return { id: portalEventId, at: new Date(at).toISOString(), actor, action, target, detail };
 }
 const portalEvents = [
-  portalEvent("owner", "sharing.update", "calendar.example.com", { mode: "domain", previousMode: "admins", peopleAdded: [], peopleRemoved: [], domainsAdded: ["example.com"], domainsRemoved: [] }, start - 9 * DAY),
-  // A colleague opening the calendar through the day, for a week: enough rows
+  // A guest opening the calendar through the day, for a week: enough rows
   // for the Activity page to need more than one page.
   ...Array.from({ length: 7 * 14 }, (_, index) => {
     const day = 7 - Math.floor(index / 14);
-    return portalEvent("bob@example.com", "portal.signin", "calendar.example.com", { method: "oidc", role: "member" }, start - day * DAY + (8 + (index % 14)) * HOUR);
+    return portalEvent("password:benchGuest000002", "portal.signin", "calendar.example.com", { method: "password-access", name: "Example Accounting" }, start - day * DAY + (8 + (index % 14)) * HOUR);
   }),
-  portalEvent("owner", "sharing.update", "cms.example.com", { mode: "people", previousMode: "people", peopleAdded: ["editor@example.org"], peopleRemoved: [], domainsAdded: [], domainsRemoved: [] }, start - 2 * DAY),
-  portalEvent("guest:benchGuest000001", "portal.signin", "cms.example.com", { method: "guest" }, start - 2 * HOUR),
-  portalEvent("password:benchGuest000002", "portal.signin", "calendar.example.com", { method: "password-access", name: "Example Accounting" }, start - 70 * MINUTE),
-  portalEvent("owner", "portal.signin", "brand.example.com", { method: "password", count: 3 }, start - 90 * MINUTE),
-  portalEvent("eve@elsewhere.example.net", "portal.signin_failed", "cms.example.com", { method: "oidc", reason: "not-shared" }, start - 50 * MINUTE),
+  portalEvent("client@example.org", "portal.signin", "cms.example.com", { method: "password-access" }, start - 2 * HOUR),
+  portalEvent("owner", "portal.signin", "brand.example.com", { method: "password" }, start - 90 * MINUTE),
+  portalEvent("anonymous", "portal.signin_failed", "cms.example.com", { method: "passkey", reason: "unknown-passkey" }, start - 50 * MINUTE),
   portalEvent("anonymous", "portal.signin_failed", "inventory.example.com", { method: "password" }, start - 30 * MINUTE),
-  portalEvent("alice@example.com", "portal.signin", "cms.example.com", { method: "oidc", role: "member" }, start - 18 * MINUTE),
-  portalEvent("owner@example.com", "portal.signin", "calendar.example.com", { method: "oidc", role: "admin" }, start - 6 * MINUTE),
-  portalEvent("alice@example.com", "portal.signout", "cms.example.com", null, start - 4 * MINUTE),
+  portalEvent("owner", "portal.signin", "calendar.example.com", { method: "passkey" }, start - 6 * MINUTE),
+  portalEvent("client@example.org", "portal.signout", "cms.example.com", null, start - 4 * MINUTE),
 ]
   .filter((event) => !SHOWCASE || event.action !== "portal.signin_failed")
   .reverse();
@@ -1880,12 +1657,6 @@ function draw(length: number, alphabet: string): string {
   return [...bytes].map((byte) => alphabet[byte % alphabet.length]).join("");
 }
 
-/** The bench's sign-ins in flight: a flow until a user is picked, a code until it is redeemed. */
-const benchFlows = new Map<string, { binding: string; returnTo: string; reauth: boolean }>();
-const benchCodes = new Map<string, { binding: string; returnTo: string; email: string; reauth: boolean }>();
-/** The fake portal's own address, where the browser goes to sign in; set once it listens. */
-let portalAddress = "";
-
 const portal =
   process.env.BENCH_NO_PORTAL === "1"
     ? null
@@ -1893,68 +1664,14 @@ const portal =
         hostname: "127.0.0.1",
         port: 0,
         routes: {
-          // How people sign in, and what the portal reads its access from,
-          // like portal/src/admin.ts.
-          "/admin/sharing": { GET: () => Response.json({ sso, sites: [] }) },
+          // What the portal reads its access from, like portal/src/admin.ts.
           "/admin/access": { GET: () => Response.json({ reading: "steward", writtenAt: Date.now() }) },
           "/admin/audit": { GET: (req) => Response.json({ events: page(portalEvents, new URL(req.url).searchParams) }) },
-
-          // A member's sign-in, as portal/src/dashboard.ts: the flow sealed
-          // around the dashboard's binding, a page of the bench's own in the
-          // provider's place, and the code redeemed for a signed assertion.
-          "/admin/dashboard/flow": {
-            POST: async (req) => {
-              if (!sso.configured) return Response.json({ error: "not-offered", message: "no provider" }, { status: 404 });
-              const body = await readBody(req);
-              const id = draw(24, ALPHABET);
-              benchFlows.set(id, { binding: text(body.binding), returnTo: text(body.returnTo).startsWith("/") ? text(body.returnTo) : "/", reauth: body.reauth === true });
-              return Response.json({ start: `${portalAddress}/oidc/start?flow=${id}` });
-            },
-          },
-          "/oidc/start": (req) => {
-            const flow = new URL(req.url).searchParams.get("flow") ?? "";
-            if (!benchFlows.has(flow)) return new Response("unknown flow", { status: 400 });
-            const choice = (email: string, label: string) => `<p><a href="/oidc/pick?flow=${flow}&email=${encodeURIComponent(email)}">Sign in as ${label}</a></p>`;
-            return new Response(
-              `<!doctype html><meta charset="utf-8"><title>Bench provider</title><h1>Bench identity provider</h1>${choice("alice@example.com", "alice@example.com: Admin of calendar, Developer of cms, Viewer of brand")}${choice("bruno@example.com", "bruno@example.com: Admin of cms, Developer of calendar")}${choice("chloe@example.com", "chloe@example.com: Viewer of calendar")}${choice("editor@example.com", "editor@example.com: Can open on cms")}${choice("stranger@example.com", "stranger@example.com, no role anywhere")}`,
-              { headers: { "Content-Type": "text/html; charset=utf-8" } },
-            );
-          },
-          "/oidc/pick": (req) => {
-            const params = new URL(req.url).searchParams;
-            const flow = benchFlows.get(params.get("flow") ?? "");
-            if (flow === undefined) return new Response("unknown flow", { status: 400 });
-            benchFlows.delete(params.get("flow")!);
-            const code = draw(43, ALPHABET);
-            benchCodes.set(code, { ...flow, email: params.get("email") ?? "" });
-            return new Response(null, { status: 303, headers: { Location: `${publicAddress}/api/sso/complete?code=${code}` } });
-          },
-          "/admin/dashboard/redeem": {
-            POST: async (req) => {
-              const body = await readBody(req);
-              const minted = benchCodes.get(text(body.code));
-              benchCodes.delete(text(body.code));
-              if (minted === undefined || minted.binding !== body.binding) return Response.json({ error: "wrong-browser", message: "expired" }, { status: 400 });
-              const key = readPrivateKey(readFileSync(join(portalKeyFolder, "assertion.key"), "utf8"));
-              if (key === null) return Response.json({ error: "no-key", message: "no key" }, { status: 503 });
-              const nowS = Math.floor(Date.now() / 1000);
-              // A member's unlock: the bench's page stands for a forced sign-in, fresh, and says so.
-              const reauth = minted.reauth === true;
-              return Response.json({
-                assertion: await signAssertion(key, { email: minted.email, name: null, authTime: nowS, reauth }, nowS),
-                returnTo: minted.returnTo,
-                reauth,
-              });
-            },
-          },
         },
         fetch: () => new Response("404", { status: 404 }),
       });
 
-portalAddress = portal === null ? "" : `http://127.0.0.1:${portal.port}`;
-
-// The key pair, and the registry's projection.
-await memberRoutes.ensureKeys();
+// The registry's projection.
 await accessStore.ensure();
 
 // --- The service -------------------------------------------------------------

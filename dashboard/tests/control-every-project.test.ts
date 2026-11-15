@@ -7,7 +7,6 @@ import { INSTALLER_TEMPLATE, type Identity, type InstallRequest, type PlanRespon
 import { createControlSteward } from "../src/control/steward";
 import { createControlSystem, type ControlSystem } from "../src/control/system";
 import { readScope } from "../src/control/tokens";
-import { mintRefusals } from "../src/people/tokens";
 import { finalManifest, replaceable } from "../src/installer/pipeline";
 
 /**
@@ -15,8 +14,7 @@ import { finalManifest, replaceable } from "../src/installer/pipeline";
  * deploys with now that no deployment goes over SSH. It reaches every project
  * the machine carries but the platform's and those another token holds,
  * creates under a name a removed project left, takes a name back, replaces a
- * file edited by hand, keeps a `lock` key, and is bounded by no token cap. A
- * person's token never is.
+ * file edited by hand, keeps a `lock` key, and is bounded by no token cap.
  */
 
 const ZONE = "test-zone.invalid";
@@ -30,8 +28,8 @@ afterEach(() => {
   for (const folder of toClean.splice(0)) rmSync(folder, { recursive: true, force: true });
 });
 
-function identity(scope: Scope, member: string | null = null): Identity {
-  return { id: "aaaaaaaaaaaa", label: "Laptop", email: "owner", expiresAt: null, scope, owned: [], member };
+function identity(scope: Scope): Identity {
+  return { id: "aaaaaaaaaaaa", label: "Laptop", email: "owner", expiresAt: null, scope, owned: [] };
 }
 
 describe("the scope", () => {
@@ -41,11 +39,8 @@ describe("the scope", () => {
     expect(readScope({ ...NONE, all: "yes" }, ZONE)).toEqual({ refusal: "scope.all must be true or false" });
   });
 
-  test("a person's token is never minted with it, nor treated as one", () => {
-    const rights = { email: "ada@acme.test", roles: { cms: "admin" as const }, create: true };
-    expect(mintRefusals({ ...EVERY, slugs: ["cms"] }, rights).some((line) => line.startsWith("scope.all:"))).toBe(true);
+  test("only a scope that says all is treated as every project", () => {
     expect(everyProject(identity(EVERY))).toBe(true);
-    expect(everyProject(identity(EVERY, "ada@acme.test"))).toBe(false);
     expect(everyProject(identity({ ...EVERY, all: false }))).toBe(false);
   });
 
@@ -80,7 +75,7 @@ describe("the installer", () => {
       deployment: DEPLOYMENT,
       slug: "shop",
       requestedAt: 0,
-      token: { id: "aaaaaaaaaaaa", email: "owner", member: null },
+      token: { id: "aaaaaaaaaaaa", email: "owner" },
       scope,
       creating: false,
       manifest: asked,
@@ -134,7 +129,7 @@ describe("the steward", () => {
     const response = await s.handler.owner(new Request("http://steward/tokens/owner", { method: "POST", body: JSON.stringify({ label: "workstation", expiresAt: null }) }));
     expect(response.status).toBe(201);
     const { token, secret } = (await response.json()) as { token: TokenView; secret: string };
-    expect(token).toMatchObject({ email: "owner", member: null, scope: EVERY });
+    expect(token).toMatchObject({ email: "owner", scope: EVERY });
     expect(secret).toMatch(/^sst_[A-Za-z0-9_-]{43}$/);
     expect(readFileSync(join(s.root, "state", "team.json"), "utf8")).not.toContain(secret);
     // Never on the dashboard's socket.

@@ -216,11 +216,6 @@ export type Lock = {
   code: string | null;
   /** The address to send to the client, code included, or null without a code. */
   url: string | null;
-  /**
-   * A code is in force, but not shown to whoever reads: a Viewer or a
-   * Developer of the site, see src/people/view.ts. Absent for the owner.
-   */
-  withheld?: boolean;
 };
 
 /**
@@ -432,9 +427,7 @@ export type Discrepancy = {
   message: string;
   /**
    * The site's section that says more and mends it, when it is not the
-   * Overview: Secrets for a declared name the store lacks. A person whose
-   * role does not reach that section is not shown the discrepancy
-   * (src/people/view.ts).
+   * Overview: Secrets for a declared name the store lacks.
    */
   section?: "secrets";
 };
@@ -468,8 +461,7 @@ export type Snapshot = {
    * the status the collector copies (src/monitor.ts). Null when the monitor
    * says nothing about them: a collector older than the monitor, no monitor
    * installed, a status refused, unreadable or silent for too long. Null is
-   * unknown, never "not set". A person's snapshot carries null: the machine's
-   * own alerting is the owner's.
+   * unknown, never "not set".
    */
   alerting: Alerting | null;
 };

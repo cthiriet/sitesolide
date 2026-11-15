@@ -15,32 +15,12 @@
  * is revoke every token, and an owner revoking a stolen one must not have to
  * look for their password first.
  *
- * **Every token belongs to a person**, or is the owner's own. A person mints
- * theirs under their own unlock; the owner makes one for a person under the
- * owner's, minted exactly as the person's own would be. Either way it is
- * never stronger than their roles (src/people/tokens.ts): this steward reads
- * the access registry when one is minted, and again at every use of it, so
- * that a role lowered, the create right taken back or a person removed holds
- * from the next request, and a person removed takes every token of theirs
- * with them, whoever made it. The token owns a project's name from its first
- * deployment. A project a person's token creates makes that person its
- * Admin under one rule (`settleCreations`): the creation's own installer has
- * ended, succeeded, failed or stopped half way, the machine carries the
- * project, the token still owns the name, and nobody has access to the
- * project yet. Otherwise nobody is made Admin; a creation not settled within
- * a day is dropped, and the project, if there is one, is the owner's to
- * give. One undone, nothing laid, gives its name back. No token creates a
+ * **Every token is the owner's**, for themselves and their agents. The
+ * token owns a project's name from its first deployment; one undone,
+ * nothing laid, gives its name back (`settleNames`). No token creates a
  * name under which the machine still keeps a removed project's snapshots or
- * store of secrets (`judgeDeployment`): its creator would be their Admin.
- * The live tokens of anyone the registry gives no rights are revoked every
- * 30 seconds (`sweepTokens`), so that a person given a role again never
- * finds old tokens alive.
- *
- * **Two queues here**, the tokens' and the creations', in the order
- * src/people/steward.ts sets for every queue of this steward: the tokens'
- * may wait on the creations', which may wait on the registry's, never the
- * other way. So a creation undone gives its name back in the tokens' queue,
- * once the creations' turn is over.
+ * store of secrets (`judgeDeployment`): they would be handed to its code. A
+ * person's token from before is refused at every use (src/control/tokens.ts).
  *
  * **team.json stays readable.** Revoked and expired tokens are kept 90 days,
  * then dropped, sooner when room is needed, the oldest first; a token that
@@ -48,19 +28,15 @@
  * leave the file past what it is read with is refused, and nothing is
  * written (`pruneTeam`, `save`).
  *
- * **A token's changes of access are judged here**, the token first, then
- * the access rules (src/access/rules.ts), which let a token give Can open
- * alone: the steward writes them, and the portal reads them from its
- * projection. The journal names the token, never an actor the dashboard
- * would choose.
+ * **A token never changes access.** A project's guests are the owner's to
+ * give, from the dashboard or over SSH (src/access/steward.ts).
  *
- * **A token's restart is judged here too**, the token and its person's
- * role, then handed to the secrets routes' own code (src/secrets/steward.ts,
+ * **A token's restart is judged here too**, then handed to the secrets routes' own code (src/secrets/steward.ts,
  * `secretsForToken`), with the token as the requester, in the project's own
  * turn, where this judgement is made again once the turn has come. Each
  * token is bounded per hour, in memory: what it may push through the
- * journal, its changes, its restarts and its refusals each, those of its
- * changes of access included, and how often it cuts a service.
+ * journal, its changes, its restarts and its refusals each, and how often
+ * it cuts a service.
  *
  * **So is a token's work on a project's store** (`/control/store/*`): the
  * same judgement, then the store's own code (src/secrets/steward.ts,
@@ -74,11 +50,8 @@
  * (src/control/claims.ts): a write that wrote nothing claims nothing. A
  * project of that name deployed by anyone but that token, the owner over
  * SSH above all, releases the token's hold on it, and a name with no
- * project, no store and no deployment under way is given back. Its person
- * becomes Admin through its own deployment, as for any creation
- * (`settleCreations`), never through a store alone: the registry never makes
- * anyone Admin of a name the machine does not carry. No value is ever sent
- * back: neither one set, nor one drawn, nor a file's content.
+ * project, no store and no deployment under way is given back. No value is
+ * ever sent back: neither one set, nor one drawn, nor a file's content.
  *
  * The order of the checks is the order of the risk, as in src/secrets/steward.ts:
  * shape of the body, token, slug, state of the machine, writing.
@@ -87,16 +60,10 @@ import type { RandomSource } from "../sessions";
 import { isValidSlug, servicesOf, readManifest as parseManifest } from "../../borrowed/manifest";
 import { portalFromManifest } from "../../borrowed/portal-vm";
 import { unitArgument } from "../../borrowed/unit";
-import type { MemberEvent, MemberPrincipal, TokenRefusal } from "../people/steward";
-import type { Who } from "../people/actions";
-import { may, powerRefusal, roleDetail, roleOn, type Power } from "../people/powers";
 import type { AccessRoutes } from "../access/steward";
-import type { LeavingToken } from "../access/protocol";
-import { deployRefusal, MAX_TOKENS_PER_MEMBER, mintRefusals, narrowIdentity, scopeText, type MemberRights } from "../people/tokens";
-import type { StoreForToken } from "../secrets/store-api";
+import type { StoreForToken, Who } from "../secrets/store-api";
 import { createQueue, createServe, errorName, readJsonBody, type Body, type Handler } from "../secrets/requests";
 import { readFileContent, readFileName, readGenerate, readSecretsChange } from "./secrets";
-import { CREATION_MAX_AGE_MS, encodeCreations, MAX_PENDING, readCreations, type PendingCreation } from "./creations";
 import {
   claimOf,
   credited,
@@ -137,7 +104,6 @@ import {
   type PlanResponse,
   type PreflightResponse,
   type TeamResponse,
-  type TokenView,
   OWNER_HOLDER,
 } from "./protocol";
 import { cleanLine, interrupted, judgeResult } from "./results";
@@ -151,45 +117,37 @@ import {
   createToken,
   encodeTeam,
   forgetOwnership,
-  liveTokensOf,
   MAX_UNCARRIED_NAMES,
   ownedBy,
   pruneTeam,
-  readHolder,
   readTeam,
   readTokenRequest,
   recordOwnership,
   refusalMessage,
-  revokeMemberTokens,
   revokeToken,
   touch,
-  viewOf,
   views,
   type Team,
 } from "./tokens";
 
-/**
- * What this steward asks the people's routes (src/people/steward.ts) for a
- * person's tokens: their session and unlock, their rights as the registry
- * reads now, and the project one of their tokens created.
- */
-export type MemberAuthority = {
-  /** The person behind a session, and their unlock when it is not null; or the refusal to send back. */
-  authorize: (session: unknown, unlock: unknown | null) => Promise<MemberPrincipal | Response>;
-  unlockedUntil: (session: unknown) => Promise<number | null>;
-  /** Their rights now; null: they do not sign in; a Response: the registry does not read. */
-  rights: (email: string) => Promise<MemberRights | null | Response>;
-  /** Of these people, those the registry gives no rights now, read once; a Response: the registry does not read. */
-  rightless: (emails: readonly string[]) => Promise<string[] | Response>;
-  /**
-   * They become Admin of what their token created, the installer done, on a
-   * project nobody has access to yet, journaled: null. A Response when it is
-   * not recorded, refused or the registry not reading.
-   */
-  recordCreation: (slug: string, email: string, tokenId: string) => Promise<Response | null>;
-  journal: (event: MemberEvent) => Promise<void>;
-  /** A refusal, bounded per minute. */
-  journalRefusal: (event: MemberEvent) => Promise<void>;
+/** A token's refusal, into the journal of the secrets routes. */
+export type TokenRefusal = {
+  operation: "list" | "set" | "remove" | "restart";
+  result: "rejects";
+  actor: string;
+  member: string | null;
+  slug: string;
+  detail: string;
+};
+
+/** A line of the journal, written by the secrets routes. */
+export type ControlEvent = {
+  operation: "project.remove";
+  result: "ok";
+  actor: string;
+  member: null;
+  slug: string;
+  detail: string;
 };
 
 export type ControlStewardOptions = {
@@ -207,20 +165,11 @@ export type ControlStewardOptions = {
   maxInFlight?: number;
   /** A `running` result whose unit stopped this long ago is an interrupted installer. */
   graceMs?: number;
-  /**
-   * The people who sign in, for their tokens. Absent, a steward built
-   * without them: a person's token is refused, and their routes do not
-   * exist.
-   */
-  members?: MemberAuthority;
-  /**
-   * A token's changes of access (src/access/steward.ts), the token judged
-   * here first. Absent, a steward built without the access registry.
-   */
-  access?: AccessRoutes["forToken"] | null;
-  /** A project removed from the machine: its people with access dropped. Absent, a steward without the registry. */
+  /** Into the journal: a project removed or taken back. Absent, nothing is journaled. */
+  journal?: (event: ControlEvent) => Promise<void>;
+  /** A project removed from the machine: its guests dropped. Absent, a steward without the registry. */
   forgetAccess?: AccessRoutes["forgetProject"] | null;
-  /** A project renamed on the machine: its people with access moved to the new name. Absent, a steward without the registry. */
+  /** A project renamed on the machine: its guests moved to the new name. Absent, a steward without the registry. */
   renameAccess?: AccessRoutes["renameProject"] | null;
   /** How long the steward waits on a rename run, its unit's TimeoutStartSec and a margin. */
   renameTimeoutMs?: number;
@@ -256,8 +205,8 @@ export type ControlStewardOptions = {
 
 /**
  * What this steward asks the secrets routes for a token's restart. `still`
- * is asked once the project's own turn has come: the token and its person's
- * role judged again, nothing done on a refusal.
+ * is asked once the project's own turn has come: the token judged again,
+ * nothing done on a refusal.
  */
 export type SecretsForToken = {
   /** The project's service restarted and observed: `TokenRestartResponse`. */
@@ -269,29 +218,22 @@ export type SecretsForToken = {
 };
 
 /**
- * The handler of the dashboard's socket, what the people's routes ask of it,
- * a person who left, every token of theirs revoked, `actor` the one who took
- * them out, and the handler of the owner's socket, which only root opens.
+ * The handler of the dashboard's socket, and the handler of the owner's
+ * socket, which only root opens.
  */
 export type ControlHandler = Handler & {
-  /** Every live token of theirs revoked, once judged again; the ones revoked. */
-  revokeMember: (email: string, actor: string) => Promise<LeavingToken[]>;
-  /** A person's live tokens, as a confirmation names them: what their leaving would revoke. */
-  tokensOf: (email: string) => Promise<LeavingToken[]>;
-  /** `DELETE /tokens/project`: a project removed from the machine, its token ownership and its people with access forgotten. */
+  /** `DELETE /tokens/project`: a project removed from the machine, its token ownership and its guests forgotten. */
   owner: Handler;
-  /** The creations whose installer has finished, settled: the person Admin of what succeeded. */
-  settleCreations: () => Promise<void>;
-  /** The live tokens of anyone the registry gives no rights, revoked; the ones revoked. */
-  sweepTokens: () => Promise<LeavingToken[]>;
+  /** Every name the tokens hold settled: a creation undone gives its name back (`settleNames`). */
+  settle: () => Promise<void>;
   /** The owner wrote into this project's store: a name the machine does not carry is theirs from then on (src/control/claims.ts). */
   ownerWroteStore: (slug: string) => Promise<void>;
   /** Is this store, of a name the machine does not carry, a token's write ahead, to move aside before the owner's write? Read alone. */
   storeClaimed: (slug: string) => Promise<boolean>;
 };
 
-/** Who a bearer is, narrowed to their person's rights for a person's token. */
-type Holder = { identity: Identity; rights: MemberRights | null };
+/** Who a bearer is. */
+type Holder = { identity: Identity };
 
 /** A slug as a deployment's judgement reads it. */
 type SlugState = { exists: boolean; owner: string | null; claims: Claims | null };
@@ -313,11 +255,6 @@ const CURSOR_SHAPE = /^[A-Za-z0-9=;_-]{1,512}$/;
 function failure(code: ControlErrorCode, message: string, details?: string[]): Response {
   const body: ControlFailure = details === undefined ? { error: code, message } : { error: code, message, details };
   return Response.json(body, { status: CONTROL_STATUSES[code] });
-}
-
-/** What the journal keeps of a reason: one line, bounded. */
-function line(text: string): string {
-  return text.length <= 150 ? text : `${text.slice(0, 149)}…`;
 }
 
 export function installerUnit(slug: string): string {
@@ -457,9 +394,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   /**
-   * The bearer's holder, or the refusal. A person's token is narrowed to
-   * their rights as the registry reads now, and refused once they no longer
-   * sign in. The last use moves forward at most once an hour; `touching`
+   * The bearer's holder, or the refusal. The last use moves forward at most once an hour; `touching`
    * false for a judgement made again under the secrets' lock, which must
    * never wait on this file's queue while it holds that lock.
    */
@@ -469,25 +404,13 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     const now = system.now();
     const result = await authenticate(registry, bearer, now);
     if (result.kind === "refused") return failure("unauthenticated", refusalMessage(result));
-    let holder: Holder = { identity: result.identity, rights: null };
-    const member = result.identity.member;
-    if (member !== null) {
-      if (options.members === undefined) {
-        return failure("unauthenticated", "this token belongs to a person, and this steward does not keep people with access: the owner must run sitesolide upgrade");
-      }
-      const rights = await options.members.rights(member);
-      if (rights instanceof Response) return rights;
-      if (rights === null) {
-        return failure("unauthenticated", `this token belongs to ${member}, who no longer has a role on this dashboard: it is refused`);
-      }
-      holder = { identity: narrowIdentity(result.identity, rights), rights };
-    }
+    let holder: Holder = { identity: result.identity };
     // What tokens claimed decides which names a token holds: while that does
     // not read, a hold released could come back, so no token is served.
     const claims = await claimsNow();
     if (claims === null) return failure("failure", "the tokens' claims on names do not read on the machine, and no token is served meanwhile: the owner must check /var/lib/sitesolide-steward/claims.json");
-    holder = { ...holder, identity: await heldNow(holder.identity, claims) };
-    if (everyProject(holder.identity)) holder = { ...holder, identity: await everyProjectOf(holder.identity, registry, claims) };
+    holder = { identity: await heldNow(holder.identity, claims) };
+    if (everyProject(holder.identity)) holder = { identity: await everyProjectOf(holder.identity, registry, claims) };
     const touched = touching ? touch(registry, result.identity.id, now) : null;
     if (touched !== null) {
       // Out of the request's path: a registry that cannot be written does not
@@ -502,28 +425,9 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     return holder;
   }
 
-  /**
-   * May this holder deploy this slug, and would it create it? For a person's
-   * token, their role first, or the create right for a new project, then the
-   * token's own rule, its refusals said in a person's words: the Tokens page
-   * is where they mint another.
-   */
+  /** May this holder deploy this slug, and would it create it? */
   function judgeSlug(holder: Holder, slug: unknown, state: { exists: boolean; owner: string | null }): SlugDecision {
-    const { rights } = holder;
-    const shaped = typeof slug === "string" && isValidSlug(slug) && reservedReason(slug, options.zone) === null;
-    if (rights !== null && shaped) {
-      const refusal = deployRefusal(rights, slug as string, state.exists);
-      if (refusal !== null) return { kind: "refused", error: "out-of-scope", message: refusal };
-    }
-    const decision = decideSlug(holder.identity, slug, { ...state, zone: options.zone });
-    if (rights === null || decision.kind !== "refused" || decision.error !== "out-of-scope") return decision;
-    return {
-      kind: "refused",
-      error: "out-of-scope",
-      message: state.exists
-        ? `${String(slug)} is not among this token's projects: mint a token for it from the dashboard's Tokens page`
-        : "this token may not create projects: mint one that may from the dashboard's Tokens page",
-    };
+    return decideSlug(holder.identity, slug, { ...state, zone: options.zone });
   }
 
   /**
@@ -563,10 +467,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * A deployment's slug judged as `judgeSlug` does, then, for a creation,
    * on what the machine still keeps under that name: a removed project's
    * snapshots and store of secrets, which the project created again would
-   * be handed (src/control/policy.ts, `leftoversReason`). Any token, a
-   * person's or the owner's own: a person is made Admin of what their token
-   * creates, and a store is read by whatever code runs under the slug. A
-   * project on the machine is deployed again and never asked; the owner's
+   * be handed (src/control/policy.ts, `leftoversReason`): a store is read
+   * by whatever code runs under the slug. A project on the machine is deployed again and never asked; the owner's
    * SSH deploy does not come here.
    *
    * Asked of the deployment itself, in the tokens' queue, right before the
@@ -611,46 +513,26 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   /**
-   * The owner's route, under the owner's unlock. `holder` says whose token it
-   * is: `owner`, the owner's own, its scope free; or a person of People, the
-   * token minted exactly as their own would be, within their roles, counted
-   * among theirs, and revoked with them. A person mints theirs at
-   * /tokens/person/create.
+   * The owner's route, under the owner's unlock. `holder`, from a dashboard
+   * of before, may only say `owner`: every token is the owner's.
    */
   async function newToken(req: Request): Promise<Response> {
     const body = await readBody(req, ["token", "label", "holder", "expiresAt", "scope"]);
     if (body instanceof Response) return body;
     if (!(await options.isUnlocked(body.token))) return failure("locked", "locked, unlock again");
-    const holder = readHolder(body.holder);
-    if (typeof holder !== "string") return failure("invalid", holder.refusal);
-    const request = readTokenRequest({ label: body.label, email: holder, expiresAt: body.expiresAt, scope: body.scope }, system.now(), options.zone);
+    if (body.holder !== undefined && body.holder !== OWNER_HOLDER) return failure("invalid", "holder: every token is the owner's");
+    const request = readTokenRequest({ label: body.label, expiresAt: body.expiresAt, scope: body.scope }, system.now(), options.zone);
     if ("refusal" in request) return failure("invalid", request.refusal);
     return serially(async () => {
       // Checked again once its turn has come, as the secrets routes do.
       if (!(await options.isUnlocked(body.token))) return failure("locked", "locked, unlock again");
-      let member: string | null = null;
-      if (holder !== OWNER_HOLDER) {
-        if (options.members === undefined) return failure("not-available", "this steward does not keep people with access: a token is the owner's own");
-        const rights = await options.members.rights(holder);
-        if (rights instanceof Response) return rights;
-        if (rights === null) return failure("invalid", `${holder} does not sign in to this dashboard: a token belongs to a person of People with a role above Can open, or to you`);
-        const refusals = mintRefusals(request.scope, rights);
-        if (refusals.length > 0) return failure("out-of-scope", refusals.join("; "), refusals);
-        member = holder;
-      }
       const registry = await team();
       if (registry instanceof Response) return registry;
-      if (member !== null && liveTokensOf(registry, member, system.now()).length >= MAX_TOKENS_PER_MEMBER) {
-        return failure("invalid", `${MAX_TOKENS_PER_MEMBER} live tokens per person at most: revoke one of ${member}'s first`);
-      }
-      const created = await createToken(registry, request, system.now(), options.random, member, member !== null);
+      const created = await createToken(registry, request, system.now(), options.random);
       if ("refusal" in created) return failure("invalid", created.refusal);
       const refused = await save(created.team);
       if (refused !== null) return refused;
-      if (member !== null) {
-        await options.members?.journal({ operation: "token.create", result: "ok", actor: OWNER_HOLDER, member, detail: line(`${created.view.id}: ${scopeText(created.view.scope)}; made by the owner for ${member}`) });
-      }
-      console.log(`control: token ${created.view.id} created ${member === null ? "for the owner" : `by the owner for ${member}`}`);
+      console.log(`control: token ${created.view.id} created for the owner`);
       const response: CreatedTokenResponse = { token: created.view, secret: created.secret };
       return Response.json(response, { status: 201 });
     });
@@ -669,7 +551,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     const body = await readBody(req, ["label", "expiresAt"]);
     if (body instanceof Response) return body;
     const request = readTokenRequest(
-      { label: body.label, email: OWNER_HOLDER, expiresAt: body.expiresAt ?? null, scope: { slugs: [], create: true, outbound: true, domain: true, public: true, secrets: true, all: true } },
+      { label: body.label, expiresAt: body.expiresAt ?? null, scope: { slugs: [], create: true, outbound: true, domain: true, public: true, secrets: true, all: true } },
       system.now(),
       options.zone,
     );
@@ -778,7 +660,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       deployment: "0".repeat(24),
       slug: target,
       requestedAt: system.now(),
-      token: { id: identity.id, email: identity.email, member: identity.member },
+      token: { id: identity.id, email: identity.email },
       scope: identity.scope,
       creating: decision.creating,
       manifest,
@@ -854,7 +736,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     if (force instanceof Response) return force;
     if (typeof deployment !== "string" || !DEPLOYMENT_ID_SHAPE.test(deployment)) return failure("invalid", "not a deployment id");
     // An id is used once: a result already there is another deployment's,
-    // which a creation would otherwise be settled by.
+    // which a creation's name would otherwise be settled by.
     if ((await system.readResult(deployment)).kind !== "absent") return failure("invalid", "this deployment id was already used: create a new deployment");
     if (typeof manifest !== "string" || new TextEncoder().encode(manifest).length > MAX_MANIFEST_BYTES) {
       return failure("invalid", "manifest: the text of sitesolide.json, 64 KiB at most");
@@ -892,21 +774,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
         if (held instanceof Response) return held;
         const bounded = await uncarriedBound(held, identity.id, target);
         if (bounded !== null) return bounded;
-        // The token owns the name from its first deployment; a person
-        // becomes its Admin once the installer has finished, noted here so
-        // that it is settled then, even across a restart of this steward.
-        if (identity.member !== null && options.members !== undefined) {
-          // A project created is a change of access, its creator's: bounded
-          // as theirs are, before anything starts.
-          const bounded = (await options.access?.widen(identity.member)) ?? null;
-          if (bounded !== null) {
-            const { message } = (await bounded.json()) as { message: string };
-            return failure(bounded.status === 429 ? "too-many-attempts" : "not-available", message);
-          }
-          const noted = await notePending({ deployment, slug: target, email: identity.member, token: identity.id, at: system.now() });
-          if (noted !== null) return noted;
-        }
-        // Which token deployed it, so that a hold this one claimed ahead is
+        // The token owns the name from its first deployment. Which token deployed it, so that a hold this one claimed ahead is
         // kept once the project is there, and the name settled otherwise.
         const claims = await claimsWithRoom(target);
         if (claims instanceof Response) return claims;
@@ -924,7 +792,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
         deployment,
         slug: target,
         requestedAt: system.now(),
-        token: { id: identity.id, email: identity.email, member: identity.member },
+        token: { id: identity.id, email: identity.email },
         scope: identity.scope,
         creating: decision.creating,
         manifest,
@@ -953,9 +821,9 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     if (judgement.kind === "unreadable") return failure("failure", judgement.reason);
     let { result } = judgement;
     if (await stopped(result)) result = interrupted(result, system.now());
-    // A creation that just finished is settled before its result is handed
-    // over: whoever reads "succeeded" finds its creator Admin already.
-    if (result.state !== "running") await settleCreations();
+    // A creation that just ended is settled before its result is handed
+    // over: one undone gives its name back at once.
+    if (result.state !== "running") await settleNames();
     return Response.json({ result });
   }
 
@@ -1002,58 +870,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     return Response.json(response);
   }
 
-  // --- access ----------------------------------------------------------------------
-
-  /**
-   * A token's request on a project's access: the token judged, the project
-   * among those it reaches, any other reading as unknown; then the access
-   * rules, the person a token belongs to an Admin of it, Can open alone.
-   */
-  async function accessRoute(req: Request, fields: string[], run: (holder: Holder, slug: string, body: Body) => Promise<Response>): Promise<Response> {
-    const body = await readBody(req, ["bearer", "slug", ...fields]);
-    if (body instanceof Response) return body;
-    const holder = await identify(body.bearer);
-    if (holder instanceof Response) return holder;
-    const { identity } = holder;
-    const { slug } = body;
-    if (typeof slug !== "string" || !isValidSlug(slug)) return failure("invalid", "slug: lowercase letters, digits and dashes");
-    if (!identity.owned.includes(slug) && !identity.scope.slugs.includes(slug)) return failure("not-found", `no project ${slug} for this token`);
-    if (options.access === undefined || options.access === null) return failure("not-available", "this steward does not carry the access registry: the owner must run sitesolide upgrade");
-    return run(holder, slug, body);
-  }
-
-  const granterOf = (holder: Holder) => ({ kind: "token" as const, id: holder.identity.id, email: holder.identity.member, role: null });
-
-  /**
-   * A token's change of access, charged to the hour of its refusals
-   * (`refusal`, below) before it is asked, and given back once accepted.
-   * The access routes journal a token's refusal, Admin asked of a token that
-   * gives Can open alone, someone outside the company's domains: unbounded,
-   * a stolen token, a deploy token alone, wrote twenty lines a minute, and
-   * within the hour pushed past the thousand lines the journal keeps every
-   * change of secrets made in it, any token's. An accepted change goes to
-   * the access log, bounded by the registry's own hour per actor; `silent`
-   * says which other answers wrote no line either.
-   */
-  async function accessChange(holder: Holder, change: () => Promise<Response>, silent: (answer: Response) => boolean = (answer) => answer.ok): Promise<Response> {
-    const key = `refusals:${holder.identity.id}`;
-    const before = system.now();
-    const bounded = withinHour(key, 1, refusalsPerHour, "refused requests");
-    if (bounded !== null) return bounded;
-    const answer = await change();
-    if (silent(answer)) giveBack(key, before);
-    return answer;
-  }
-
-  const accessList = (req: Request) => accessRoute(req, [], (holder, slug) => options.access!.list(slug, granterOf(holder)));
-  const accessGrant = (req: Request) =>
-    accessRoute(req, ["who", "role"], (holder, slug, body) => accessChange(holder, () => options.access!.grant(slug, body.who, body.role, granterOf(holder))));
-  // An entry not there to remove is said, never journaled: a cleanup run twice costs nothing.
-  const accessRemove = (req: Request) =>
-    accessRoute(req, ["who"], (holder, slug, body) =>
-      accessChange(holder, () => options.access!.remove(slug, body.who, granterOf(holder)), (answer) => answer.ok || answer.status === 404),
-    );
-
   // --- a token's secrets and restart -----------------------------------------------
 
   const secrets = options.secrets ?? null;
@@ -1061,13 +877,12 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   const restartsPerHour = options.restartsPerHour ?? TOKEN_RESTARTS_PER_HOUR;
   const refusalsPerHour = options.refusalsPerHour ?? TOKEN_REFUSALS_PER_HOUR;
 
-  /** What a token asks for, and the power each takes of its person's role. */
+  /** What a token asks for. */
   type Work = "list" | "write" | "restart";
-  const POWERS: Record<Work, Power> = { list: "secrets.list", write: "secrets.write", restart: "restart" };
   type WorkOperation = TokenRefusal["operation"];
 
-  /** The requester the secrets routes act for: the token, and the person it belongs to. */
-  const whoOf = (holder: Holder): Who => ({ actor: `token:${holder.identity.id}`, member: holder.identity.member, token: holder.identity.id });
+  /** The requester the secrets routes act for: the token. */
+  const whoOf = (holder: Holder): Who => ({ actor: `token:${holder.identity.id}`, member: null, token: holder.identity.id });
 
   /** The slug a token names, or the refusal: a platform project reads as unknown, as any other it does not reach. */
   function tokenSlug(slug: unknown): string | Response {
@@ -1111,35 +926,28 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     if (quiet) return refused;
     const bounded = withinHour(`refusals:${holder.identity.id}`, 1, refusalsPerHour, "refused requests");
     if (bounded !== null) return bounded;
-    await secrets?.refuse({ operation, result: "rejects", actor: `token:${holder.identity.id}`, member: holder.identity.member, slug, detail });
+    await secrets?.refuse({ operation, result: "rejects", actor: `token:${holder.identity.id}`, member: null, slug, detail });
     return refused;
   }
 
   /**
    * May this holder do this work on this project now? In the order of the
-   * risk: a person's role first, whatever the token's scope says, as for a
-   * deployment (`judgeSlug`); then the project among those the token
-   * reaches, any other reading as unknown and never journaled, a guess
+   * risk: the project among those the token reaches, any other reading as unknown and never journaled, a guess
    * learning nothing; the project on the machine; then the `secrets` flag,
    * which a restart does not need: any token that deploys a project may
    * restart it. An owner's token without `public` changes the secrets of a
    * project it could deploy as it stands and that is restricted
    * (`privateTokenWrites`): it changes nothing of a project it could not
-   * deploy, nor of one in the open. A person's token answers to the role
-   * instead, as for a deployment. Each refusal journaled is charged to the
+   * deploy, nor of one in the open. Each refusal journaled is charged to the
    * token's hour (`refusal`).
    */
   async function judgeWork(holder: Holder, slug: string, work: Work, operation: WorkOperation, quiet = false): Promise<Response | null> {
-    const { identity, rights } = holder;
-    if (rights !== null) {
-      const role = roleOn(rights.roles, slug);
-      if (!may(role, POWERS[work])) return refusal(holder, slug, operation, roleDetail(role), failure("out-of-scope", powerRefusal(rights.email, role, slug, POWERS[work])), quiet);
-    }
+    const { identity } = holder;
     if (!identity.owned.includes(slug) && !identity.scope.slugs.includes(slug)) return failure("not-found", `no project ${slug} for this token`);
     if (!(await system.projectExists(slug))) return failure("not-found", `${slug} is not deployed on this machine`);
     if (work === "restart") return null;
     if (identity.scope.secrets !== true) return noSecrets(holder, slug, operation, quiet);
-    if (work === "write" && rights === null && !identity.scope.public && !(await privateTokenWrites(identity, slug))) {
+    if (work === "write" && !identity.scope.public && !(await privateTokenWrites(identity, slug))) {
       const message = `${slug} is not restricted on the machine as this token could deploy it, and this token, which deploys private sites only, changes the secrets of those alone: ask the owner of the machine`;
       return refusal(holder, slug, operation, "not restricted", failure("out-of-scope", message), quiet);
     }
@@ -1148,8 +956,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
 
   /** A token without the `secrets` flag: refused, journaled within its hour. */
   function noSecrets(holder: Holder, slug: string, operation: WorkOperation, quiet: boolean): Promise<Response> {
-    const another = holder.rights === null ? "ask the owner of the machine for one that may manage secrets" : "mint one with Manage secrets from the dashboard's Tokens page";
-    return refusal(holder, slug, operation, "no secrets permission", failure("out-of-scope", `this token may not manage secrets: ${another}`), quiet);
+    return refusal(holder, slug, operation, "no secrets permission", failure("out-of-scope", "this token may not manage secrets: ask the owner of the machine for one that may"), quiet);
   }
 
   /** What each token used of its hour, by bound: in memory, a restart of the steward forgets it. */
@@ -1167,13 +974,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     spent.set(key, [...(spent.get(key) ?? []), ...Array<number>(cost).fill(system.now())]);
     // A map that keeps only the tokens seen this hour.
     if (spent.size > 10_000) for (const old of [...spent.keys()].slice(0, 1_000)) spent.delete(old);
-  }
-
-  /** One charge made since `since` given back: the work it was counted for wrote no line of this bound. */
-  function giveBack(key: string, since: number): void {
-    const times = spent.get(key) ?? [];
-    const index = times.findLastIndex((at) => at >= since);
-    if (index >= 0) times.splice(index, 1);
   }
 
   /**
@@ -1202,8 +1002,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   const restarting = new Set<string>();
 
   /**
-   * A restart, for any token that may deploy the project, a person's while
-   * they hold `restart` there: never while its installer runs, which
+   * A restart, for any token that may deploy the project: never while its
+   * installer runs, which
    * restarts it at its own end, asked again once the project's turn has
    * come, a deployment started meanwhile included.
    */
@@ -1244,8 +1044,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   /**
    * May this holder list or write this project's store now, and is it a
    * slug the machine does not carry yet? A deployed project is judged as
-   * for its secrets (`judgeWork`): the person's role, the project among
-   * those the token reaches, the flag, and an owner's token without
+   * for its secrets (`judgeWork`): the project among those the token reaches, the flag, and an owner's token without
    * `public` writes the store of a project restricted on the machine alone.
    *
    * A slug not deployed is judged as the deployment that would create it
@@ -1447,124 +1246,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     return storeWrite(body, "remove", 1, false, (who, slug, _creating, still) => store!.removeFile(req, { slug, name }, who, still));
   }
 
-  // --- a person's own tokens ------------------------------------------------------
-
-  const members = options.members;
-
-  async function memberList(req: Request): Promise<Response> {
-    if (members === undefined) return failure("not-found", "no such route");
-    const body = await readBody(req, ["session"]);
-    if (body instanceof Response) return body;
-    const principal = await members.authorize(body.session, null);
-    if (principal instanceof Response) return principal;
-    const registry = await team();
-    if (registry instanceof Response) return registry;
-    return Response.json({
-      tokens: views(registry).filter((view) => view.member === principal.email),
-      rights: { roles: principal.roles, create: principal.create },
-      until: await members.unlockedUntil(body.session),
-    });
-  }
-
-  /**
-   * A person's own token: under their own unlock, with their email, within
-   * their roles as the registry reads once its turn has come. A refusal names
-   * every reason, and enters the journal.
-   */
-  async function memberCreate(req: Request): Promise<Response> {
-    if (members === undefined) return failure("not-found", "no such route");
-    const body = await readBody(req, ["session", "token", "label", "expiresAt", "scope"]);
-    if (body instanceof Response) return body;
-    const principal = await members.authorize(body.session, body.token);
-    if (principal instanceof Response) return principal;
-    const request = readTokenRequest({ label: body.label, email: principal.email, expiresAt: body.expiresAt, scope: body.scope }, system.now(), options.zone);
-    if ("refusal" in request) return failure("invalid", request.refusal);
-    return serially(async () => {
-      const again = await members.authorize(body.session, body.token);
-      if (again instanceof Response) return again;
-      const email = again.email;
-      if (email !== principal.email) return failure("out-of-scope", "this session is someone else's now");
-      const refusals = mintRefusals(request.scope, { email, roles: again.roles, create: again.create });
-      if (refusals.length > 0) {
-        await members.journalRefusal({ operation: "token.create", result: "rejects", actor: email, member: email, detail: line(refusals[0]!) });
-        return failure("out-of-scope", refusals.join("; "), refusals);
-      }
-      const registry = await team();
-      if (registry instanceof Response) return registry;
-      if (liveTokensOf(registry, email, system.now()).length >= MAX_TOKENS_PER_MEMBER) {
-        return failure("invalid", `${MAX_TOKENS_PER_MEMBER} live tokens per person at most: revoke one you no longer use`);
-      }
-      const created = await createToken(registry, request, system.now(), options.random, email);
-      if ("refusal" in created) return failure("invalid", created.refusal);
-      const refused = await save(created.team);
-      if (refused !== null) return refused;
-      await members.journal({ operation: "token.create", result: "ok", actor: email, member: email, detail: line(`${created.view.id}: ${scopeText(created.view.scope)}`) });
-      console.log(`control: token ${created.view.id} created by ${email}`);
-      const response: CreatedTokenResponse = { token: created.view, secret: created.secret };
-      return Response.json(response, { status: 201 });
-    });
-  }
-
-  /** A person revokes a token of theirs, whoever made it, no unlock, as the owner does; anyone else's reads as unknown. */
-  async function memberRevoke(req: Request): Promise<Response> {
-    if (members === undefined) return failure("not-found", "no such route");
-    const body = await readBody(req, ["session", "id"]);
-    if (body instanceof Response) return body;
-    const principal = await members.authorize(body.session, null);
-    if (principal instanceof Response) return principal;
-    return serially(async () => {
-      const registry = await team();
-      if (registry instanceof Response) return registry;
-      const record = registry.tokens.find((candidate) => candidate.id === body.id);
-      if (record === undefined || record.member !== principal.email) return failure("not-found", "no such token of yours");
-      const result = revokeToken(registry, body.id, system.now());
-      if ("refusal" in result) return failure("invalid", result.refusal);
-      if (result.team !== registry) {
-        const refused = await save(result.team);
-        if (refused !== null) return refused;
-        await members.journal({ operation: "token.revoke", result: "ok", actor: principal.email, member: principal.email, detail: result.view.id });
-        console.log(`control: token ${result.view.id} revoked by ${principal.email}`);
-      }
-      return Response.json({ token: result.view });
-    });
-  }
-
-  /** A token as a confirmation names it. */
-  const leavingToken = (view: { id: string; label: string; by: string }): LeavingToken => ({ id: view.id, label: view.label, madeBy: view.by === OWNER_HOLDER ? "owner" : "them" });
-
-  async function tokensOf(email: string): Promise<LeavingToken[]> {
-    const registry = await team();
-    if (registry instanceof Response) return [];
-    return liveTokensOf(registry, email, system.now()).map((record) => leavingToken(viewOf(registry, record)));
-  }
-
-  /**
-   * Every live token of a person who left, whoever made it, revoked,
-   * journaled under whoever took them out. Judged again in this queue: given
-   * a role again since they left, they keep their tokens; a registry that
-   * does not read revokes nothing, their tokens being refused meanwhile.
-   */
-  function revokeMember(email: string, actor: string): Promise<LeavingToken[]> {
-    return serially(async () => {
-      const rights = members === undefined ? null : await members.rights(email);
-      if (rights instanceof Response) {
-        console.error(`control: the tokens of ${email} not revoked, the access registry does not read; refused meanwhile`);
-        return [];
-      }
-      if (rights !== null) return [];
-      const registry = await team();
-      if (registry instanceof Response) return [];
-      const result = revokeMemberTokens(registry, email, system.now());
-      if (result.revoked.length === 0) return [];
-      const refused = await save(result.team);
-      if (refused !== null) return [];
-      const ids = result.revoked.map((view) => view.id).join(", ");
-      await members?.journal({ operation: "token.revoke", result: "ok", actor, member: email, detail: line(`${ids}: ${email} no longer has a role on this dashboard`) });
-      console.log(`control: ${result.revoked.length} token(s) of ${email} revoked, no role left`);
-      return result.revoked.map(leavingToken);
-    });
-  }
-
   // --- a project removed, for root -----------------------------------------------------
 
   /**
@@ -1577,11 +1258,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * ownership, and running it again finishes both. Journaled under `owner`,
    * the token in the detail. On the owner's socket alone: a compromised
    * dashboard cannot hand a project's name to another token.
-   *
-   * A creation of that name still waiting for its installer goes too, in
-   * the creations' turn, which this queue may wait on: settled later, it
-   * would make its person Admin of whatever the machine carries under that
-   * name by then, the owner's own project included.
    */
   async function forgetProject(req: Request): Promise<Response> {
     const body = await readBody(req, ["slug"]);
@@ -1591,17 +1267,13 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     return releaseRemoved(slug);
   }
 
-  /** A project gone from the machine: its name released from its token, its creation and claims dropped, its people let go. */
+  /** A project gone from the machine: its name released from its token, its claims dropped, its guests let go. */
   async function releaseRemoved(slug: string): Promise<Response> {
     const released = await serially(async () => {
       if (await system.projectExists(slug)) {
         return failure("busy", `${slug} is still on the machine: remove it first, with sitesolide remove --confirm ${slug}`);
       }
-      // The creation first: a removal stopped between the two, run again,
-      // finds the ownership still there and finishes.
-      const dropped = await dropPending(slug);
-      if (dropped instanceof Response) return dropped;
-      // Its claims too: a project created again under the name starts from nobody's.
+      // Its claims first: a project created again under the name starts from nobody's.
       const claims = await claimsToChange();
       if (claims instanceof Response) return claims;
       if (Object.hasOwn(claims, slug)) await system.writeClaims(encodeClaims(without(claims, slug)));
@@ -1615,8 +1287,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       return forgotten.id;
     });
     if (released instanceof Response) return released;
-    // Its people with access go with it, outside this file's queue: someone
-    // they were the last role of leaves, and their tokens are revoked there.
+    // Its guests go with it, outside this file's queue.
     let dropped = 0;
     if (options.forgetAccess !== undefined && options.forgetAccess !== null) {
       const result = await options.forgetAccess(slug, "owner");
@@ -1624,7 +1295,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       dropped = result;
     }
     if (released !== null) {
-      await options.members?.journal({ operation: "project.remove", result: "ok", actor: "owner", member: null, detail: `created by token ${released}, its name free again`, slug });
+      await options.journal?.({ operation: "project.remove", result: "ok", actor: "owner", member: null, detail: `created by token ${released}, its name free again`, slug });
     }
     return Response.json({ slug, forgotten: released, access: dropped });
   }
@@ -1651,7 +1322,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * sitesolide-rename@<slug> (src/installer/rename.ts), which this waits
    * on; then this steward's registries follow: the token that created the
    * project still owns it, every token scoped to it reaches it under its new
-   * name, its people keep their roles.
+   * name, its guests open it there.
    *
    * Asked again for a project already renamed on the machine, whose
    * registries did not follow, a crash between the two, it finishes the
@@ -1704,9 +1375,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
         return failure("invalid", `${to} was the name of a removed project, which left ${left.snapshots > 0 ? "backup snapshots" : "a secrets store"} under it: pick another name; nothing was changed`);
       }
       if (await isActive(installerUnit(slug))) return failure("busy", `a deployment of ${slug} is running: wait for it to finish, then rename`);
-      const waiting = await pending();
-      if (waiting instanceof Response) return waiting;
-      if (waiting.some((creation) => creation.slug === slug)) return failure("busy", `${slug} is still being created: wait for its deployment to finish, then rename`);
 
       const request: RenameRequest = { slug, to, requestedAt: system.now(), actor: OWNER_HOLDER };
       await system.writeRenameRequest(slug, `${JSON.stringify(request)}\n`);
@@ -1744,7 +1412,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     let people = 0;
     if (options.renameAccess !== undefined && options.renameAccess !== null) {
       const answer = await options.renameAccess(slug, to, OWNER_HOLDER);
-      if (answer instanceof Response) return failure("failure", `${slug} is renamed ${to} on the machine, but its people with access did not follow: rename it again, which finishes it`);
+      if (answer instanceof Response) return failure("failure", `${slug} is renamed ${to} on the machine, but its guests did not follow: rename it again, which finishes it`);
       people = answer;
     }
     console.log(`control: ${slug} renamed ${to}`);
@@ -1764,7 +1432,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * unlocked, the slug retyped for a removal; or over the owner's SSH,
    * `sitesolide disable` and `enable`. The machine's own run does it,
    * sitesolide-lifecycle@<slug> (src/installer/lifecycle.ts), which this
-   * waits on; a removal then lets go of the project's token and people, as
+   * waits on; a removal then lets go of the project's token and guests, as
    * `sitesolide remove` does through /tokens/project.
    */
   async function lifecycleRoute(req: Request, channel: "dashboard" | "ssh"): Promise<Response> {
@@ -1802,7 +1470,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       }
       if (action === "remove") {
         const released = await releaseRemoved(slug);
-        if (!released.ok) return failure("failure", `${slug} is removed from the machine, but its token and people with access were not let go: run sitesolide remove --confirm ${slug} in its folder, which finishes it`, result.log);
+        if (!released.ok) return failure("failure", `${slug} is removed from the machine, but its token and guests were not let go: run sitesolide remove --confirm ${slug} in its folder, which finishes it`, result.log);
       }
       return Response.json({ slug, action, log: result.log });
     } finally {
@@ -1861,12 +1529,12 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * `DELETE /tokens/claim { slug }` on the owner's socket: the owner takes
    * a name back from the token that holds or claims it, before deploying it
    * themselves (`sitesolide deploy --adopt`), on the machine or not: the
-   * token's hold, its claim and its person's creation of it dropped, as
+   * token's hold and its claim dropped, as
    * `DELETE /tokens/project` forgets a removed project's token, and the
    * store's variables and files moved aside first, kept as their previous
    * versions and named in the answer, so that none of the token's values
-   * stays in effect under the owner's code. Its people with access stay,
-   * the owner's to change. Refused while a deployment of it runs. A name no
+   * stays in effect under the owner's code. Its guests stay, the owner's to
+   * change. Refused while a deployment of it runs. A name no
    * token holds changes nothing, the owner's own store above all.
    * Journaled under the owner.
    */
@@ -1910,8 +1578,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
         if (!aside.ok) return failure("failure", `the store of ${slug} could not be moved aside: nothing was taken back`);
         dropped = (await aside.json()) as typeof nothing;
       }
-      const pendings = await dropPending(slug);
-      if (pendings instanceof Response) return pendings;
       if (claim !== null) await system.writeClaims(encodeClaims(without(claims, slug)));
       const released = holder ?? claim?.creator ?? claim?.deployer ?? null;
       if (holder !== null) {
@@ -1923,7 +1589,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       }
       const where = onMachine ? "its project on the machine adopted" : "before any project of that name";
       console.log(`control: ${slug} taken back by the owner from token ${released}, ${where}`);
-      await options.members?.journal({ operation: "project.remove", result: "ok", actor: "owner", member: null, detail: `taken back from token ${released}, ${where}`, slug });
+      await options.journal?.({ operation: "project.remove", result: "ok", actor: "owner", member: null, detail: `taken back from token ${released}, ${where}`, slug });
       return { released, dropped };
     });
   }
@@ -1935,7 +1601,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    * claimed there, and even while a deployment of it by the token runs,
    * which its installer then refuses (the store no longer its own). Never
    * fails the write it follows. A project on the machine stays its
-   * holder's: the owner sets a colleague's secret there as any other.
+   * holder's: the owner sets a secret there as any other.
    */
   async function ownerWroteStore(slug: string): Promise<void> {
     if (!isValidSlug(slug)) return;
@@ -1958,52 +1624,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     return claim !== null && claim.creator !== null;
   }
 
-  // --- creations and the tokens from before -----------------------------------------
-
-  /** The creations waiting for their installer, one change at a time. */
-  const inCreationsTurn = createQueue();
-
-  async function pending(): Promise<PendingCreation[] | Response> {
-    let text: string | null;
-    try {
-      text = await system.readCreations();
-    } catch (e) {
-      console.error(`control: creations.json unreadable (${errorName(e)})`);
-      return failure("failure", "the creations in progress cannot be read on the machine: the owner must read the steward's log");
-    }
-    const read = readCreations(text);
-    if ("unreadable" in read) {
-      console.error(`control: ${read.unreadable}`);
-      return failure("failure", "the creations in progress do not read on the machine: the owner must read the steward's log");
-    }
-    return read;
-  }
-
-  /** A creation noted before its installer starts; a refusal when it cannot be, and nothing is started. */
-  function notePending(creation: PendingCreation): Promise<Response | null> {
-    return inCreationsTurn(async () => {
-      const current = await pending();
-      if (current instanceof Response) return current;
-      const kept = current.filter((one) => one.slug !== creation.slug && system.now() - one.at < CREATION_MAX_AGE_MS);
-      await system.writeCreations(encodeCreations([...kept, creation].slice(-MAX_PENDING)));
-      return null;
-    });
-  }
-
-  /** The creations of this slug dropped, in the creations' turn: the project they were for is gone. How many; a refusal when the file does not read. */
-  function dropPending(slug: string): Promise<number | Response> {
-    return inCreationsTurn(async () => {
-      const current = await pending();
-      if (current instanceof Response) return current;
-      const kept = current.filter((one) => one.slug !== slug);
-      if (kept.length === current.length) return 0;
-      await system.writeCreations(encodeCreations(kept));
-      for (const one of current.filter((creation) => creation.slug === slug)) {
-        console.log(`control: the creation of ${slug} by ${one.email} dropped, the project removed from the machine`);
-      }
-      return current.length - kept.length;
-    });
-  }
+  // --- the names the tokens hold ---------------------------------------------------
 
   /**
    * How a deployment of this slug, accepted at `at`, went (claims.ts): under
@@ -2027,75 +1648,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   /**
-   * The creations settled, under one rule. Its person is made Admin only
-   * when all of this holds at once: its own installer has ended, having
-   * laid the project's folder itself and kept it, its deployment succeeded
-   * or not (a service that did not start for want of a secret: they deploy
-   * it again), a creation's installer never laying itself over a project
-   * the owner deployed meanwhile (src/installer/pipeline.ts); the machine
-   * carries the project, the token that started it still owns its name,
-   * and nobody has access to the project yet, which the registry
-   * checks in its own queue with the create right (`recordCreation`). An
-   * ended creation is dropped either way: one of those failing, nobody is
-   * made anything. Ended with nothing on the machine, it is undone, and its
-   * name comes back once this turn is over (see the queues above). Not ended
-   * within `CREATION_MAX_AGE_MS`: dropped, nobody made Admin, the project, if
-   * there is one, the owner's to give by hand. A result not there yet, its
-   * installer active or the creation within the grace, waits for the next
-   * call.
-   */
-  async function settleCreations(): Promise<void> {
-    const undone: PendingCreation[] = [];
-    await inCreationsTurn(async () => {
-      const current = await pending();
-      if (current instanceof Response || current.length === 0) return;
-      const left: PendingCreation[] = [];
-      /** The token registry, read once, when a creation needs it. */
-      let held: Team | Response | null = null;
-      for (const creation of current) {
-        const expired = system.now() - creation.at >= CREATION_MAX_AGE_MS;
-        const outcome = await outcomeOf(creation.deployment, creation.slug, creation.at);
-        if (!expired && outcome === "under-way") {
-          left.push(creation);
-          continue;
-        }
-        const carried = await system.projectExists(creation.slug);
-        if (!carried) undone.push(creation);
-        if (expired || !carried || options.members === undefined) {
-          console.log(`control: the creation of ${creation.slug} by ${creation.email} ${expired ? "not settled within a day" : "undone"}: dropped, nobody made Admin`);
-          continue;
-        }
-        if (outcome !== "succeeded" && outcome !== "laid") {
-          // Whatever the machine carries under the name was not laid by a
-          // deployment of theirs: the owner's to give.
-          console.log(`control: the creation of ${creation.slug} by ${creation.email} laid nothing that stands: dropped, nobody made Admin`);
-          continue;
-        }
-        held ??= await team();
-        // The registry of tokens being unreadable: tried again at the next call.
-        if (held instanceof Response) {
-          left.push(creation);
-          continue;
-        }
-        if (held.owners[creation.slug] !== creation.token) {
-          console.log(`control: the creation of ${creation.slug} by ${creation.email} dropped, nobody made Admin: its name is no longer token ${creation.token}'s`);
-          continue;
-        }
-        const refused = await options.members.recordCreation(creation.slug, creation.email, creation.token);
-        // The registry being made or unreadable: tried again at the next call.
-        if (refused !== null && refused.status >= 500) {
-          left.push(creation);
-          continue;
-        }
-        if (refused !== null) console.log(`control: the creation of ${creation.slug} by ${creation.email} dropped, nobody made Admin: refused by the registry`);
-      }
-      if (left.length !== current.length) await system.writeCreations(encodeCreations(left));
-    });
-    for (const creation of undone) console.log(`control: the creation of ${creation.slug} undone, its name settled with the others`);
-    await settleNames();
-  }
-
-  /**
    * Every name the tokens' registry holds, or a claim names, settled in the
    * tokens' queue (src/control/claims.ts, `settle`), the facts read once
    * the turn has come:
@@ -2104,9 +1656,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
    *     deployed, the owner's SSH deploy of it above all, is no longer the
    *     holder's;
    *   - a name with no project, no store its holder's write made, and no
-   *     deployment under way, its installer active, a person's creation
-   *     noted, or the claim's own deployment not ended (`outcomeOf`), is given
-   *     back.
+   *     deployment under way, its installer active or the claim's own
+   *     deployment not ended (`outcomeOf`), is given back.
    *
    * So a creation undone, or a write ahead that made nothing, holds no name
    * for good, and `owners` never grows by one name per attempt. A file that
@@ -2119,16 +1670,13 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
       const read = await claimsNow();
       if (read === null) return;
       let claims = read;
-      // The tokens' queue may wait on the creations' turn, never the other way.
-      const noted = await inCreationsTurn(pending);
-      if (noted instanceof Response) return;
       const given: string[] = [];
       for (const slug of new Set([...Object.keys(registry.owners), ...Object.keys(claims)])) {
         const holder = Object.hasOwn(registry.owners, slug) ? registry.owners[slug]! : null;
         const claim = claimOf(claims, slug);
         const onMachine = await system.projectExists(slug);
         const outcome = claim === null || claim.deployment === null ? null : await outcomeOf(claim.deployment, slug, claim.at);
-        const noting = noted.some((one) => one.slug === slug) || outcome === "under-way";
+        const noting = outcome === "under-way";
         const store = onMachine || noting ? false : await storeKept(slug);
         let settled = settle(claim, holder, { onMachine, store, pending: noting, credited: credited(claim, holder, outcome) });
         // Asked last, of what would otherwise be let go: an installer still at work.
@@ -2157,44 +1705,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     }
   }
 
-  /**
-   * The live tokens of anyone the registry gives no rights, revoked in this
-   * queue, journaled under `system`. Someone taken out while their tokens
-   * could not be revoked, the registry not reading then, or out of a
-   * registry restored or edited by hand, would otherwise find them alive
-   * again the day they are given a role back. A registry that does not read
-   * revokes nothing: their tokens are refused meanwhile.
-   */
-  function sweepTokens(): Promise<LeavingToken[]> {
-    if (members === undefined) return Promise.resolve([]);
-    return serially(async () => {
-      const registry = await team();
-      if (registry instanceof Response) return [];
-      const now = system.now();
-      const holders = [...new Set(registry.tokens.flatMap((record) => (record.member === undefined ? [] : [record.member])))].filter(
-        (email) => liveTokensOf(registry, email, now).length > 0,
-      );
-      if (holders.length === 0) return [];
-      const gone = await members.rightless(holders);
-      if (gone instanceof Response || gone.length === 0) return [];
-      let next = registry;
-      const revoked: { email: string; views: TokenView[] }[] = [];
-      for (const email of gone) {
-        const result = revokeMemberTokens(next, email, now);
-        if (result.revoked.length === 0) continue;
-        next = result.team;
-        revoked.push({ email, views: result.revoked });
-      }
-      if (revoked.length === 0 || (await save(next)) !== null) return [];
-      for (const { email, views } of revoked) {
-        const ids = views.map((view) => view.id).join(", ");
-        await members.journal({ operation: "token.revoke", result: "ok", actor: "system", member: email, detail: line(`${ids}: ${email} has no role on this dashboard`) });
-        console.log(`control: ${views.length} token(s) of ${email} revoked, no role on this dashboard`);
-      }
-      return revoked.flatMap(({ views }) => views.map(leavingToken));
-    });
-  }
-
   const routes: Record<string, Record<string, Handler>> = {
     "/tokens/list": { GET: listTokens },
     "/tokens/create": { POST: newToken },
@@ -2206,8 +1716,6 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     "/control/deploy": { POST: deploy },
     "/control/deployment": { GET: deploymentResult },
     "/control/logs": { POST: logs },
-    "/control/access/list": { POST: accessList },
-    "/control/access": { PUT: accessGrant, DELETE: accessRemove },
     "/control/rename": { POST: (req) => renameRoute(req, "dashboard") },
     "/control/lifecycle": { POST: (req) => lifecycleRoute(req, "dashboard") },
     ...(secrets === null
@@ -2223,20 +1731,11 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
           "/control/store/generate": { POST: storeGenerate },
           "/control/store/file": { PUT: storeSetFile, DELETE: storeRemoveFile },
         }),
-    ...(members === undefined
-      ? {}
-      : {
-          "/tokens/person/list": { POST: memberList },
-          "/tokens/person/create": { POST: memberCreate },
-          "/tokens/person/revoke": { POST: memberRevoke },
-        }),
   };
 
   // Both sockets' routes, behind the same bound on requests in flight.
   const serve = createServe({ maxInFlight, log: "control" });
   return Object.assign(serve(routes), {
-    revokeMember,
-    tokensOf,
     owner: serve({
       "/tokens/project": { DELETE: forgetProject },
       "/tokens/claim": { GET: claimRoute, DELETE: takeBackRoute },
@@ -2246,8 +1745,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     }),
     ownerWroteStore,
     storeClaimed,
-    settleCreations,
-    sweepTokens,
+    settle: settleNames,
   });
 }
 

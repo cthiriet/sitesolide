@@ -8,7 +8,7 @@
  * reason src/gatekeeper/instance.ts gives. The installer receives `%n`, draws
  * the slug from it, and reads `installs/<slug>.json` in the steward's state
  * directory: the request names the deployment, the token's scope as the
- * steward judged it, the member whose token it is if any, and the manifest. A
+ * steward judged it, and the manifest. A
  * unit started by hand without a fresh request does nothing.
  *
  * Pure.
@@ -65,9 +65,9 @@ export function readRequest(text: string | null, slug: string, now: number): Req
     return { ok: false, reason: "the steward's request is stale: it is replayed, not asked for" };
   }
   if (!isObject(token) || typeof token.id !== "string" || typeof token.email !== "string") return { ok: false, reason: "the steward's request names no token" };
-  // A request from a steward before members' tokens names no member: an owner's token.
-  const member = token.member === undefined || token.member === null ? null : token.member;
-  if (member !== null && (typeof member !== "string" || !/^[^\s@]+@[^\s@]+$/.test(member))) return { ok: false, reason: "the steward's request names a person by something that is no email" };
+  // Every token is the owner's: a request naming a person's, from a steward
+  // of before, is refused.
+  if (token.member !== undefined && token.member !== null) return { ok: false, reason: "the steward's request names a person's token, and only the owner holds tokens now" };
   if (!isScope(scope)) return { ok: false, reason: "the steward's request carries no scope" };
   if (typeof creating !== "boolean") return { ok: false, reason: "the steward's request does not say whether the project is new" };
   if (typeof manifest !== "string") return { ok: false, reason: "the steward's request carries no manifest" };
@@ -75,6 +75,6 @@ export function readRequest(text: string | null, slug: string, now: number): Req
     ok: true,
     // `force` from a steward that knows it, true alone: absent or anything
     // else, the hand-edited file stops the deployment, as it always did.
-    request: { deployment, slug, requestedAt, token: { id: token.id, email: token.email, member }, scope, creating, manifest, ...(object.force === true ? { force: true } : {}) },
+    request: { deployment, slug, requestedAt, token: { id: token.id, email: token.email }, scope, creating, manifest, ...(object.force === true ? { force: true } : {}) },
   };
 }

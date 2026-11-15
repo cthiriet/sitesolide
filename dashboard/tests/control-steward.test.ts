@@ -92,7 +92,7 @@ describe("the registry", () => {
     const s = setup();
     expect(await (await call(s, "GET", "/tokens/list")).json()).toEqual({ tokens: [] });
     const { token, secret } = await newToken(s);
-    expect(token).toMatchObject({ label: "Ada", email: "owner", member: null, by: "owner", scope: SCOPE, owned: [], revokedAt: null });
+    expect(token).toMatchObject({ label: "Ada", email: "owner", scope: SCOPE, owned: [], revokedAt: null });
     const file = join(s.root, "state", "team.json");
     expect(readFileSync(file, "utf8")).not.toContain(secret);
     expect(statSync(file).mode & 0o777).toBe(0o600);
@@ -146,7 +146,7 @@ describe("authentication and preflight", () => {
     const s = setup();
     const { token, secret } = await newToken(s);
     const response = await call(s, "POST", "/control/authenticate", { bearer: secret });
-    expect(await response.json()).toEqual({ identity: { id: token.id, label: "Ada", email: "owner", expiresAt: null, scope: SCOPE, owned: [], member: null } });
+    expect(await response.json()).toEqual({ identity: { id: token.id, label: "Ada", email: "owner", expiresAt: null, scope: SCOPE, owned: [] } });
     expect((await call(s, "POST", "/control/authenticate", { bearer: `sst_${"x".repeat(43)}` })).status).toBe(401);
     expect((await call(s, "POST", "/control/authenticate", {})).status).toBe(401);
   });

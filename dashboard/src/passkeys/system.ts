@@ -7,16 +7,16 @@
  * follows no link, and an atomic write whose temporary file is created with
  * `O_EXCL | O_NOFOLLOW`. The projection goes where the access projection
  * goes, `root:site-portal 0640` in `/etc/sitesolide-portal`
- * (src/people/system.ts, `layForPortal`).
+ * (src/access/system.ts, `layForPortal`).
  */
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { PASSKEYS_NAME } from "../../borrowed/passkeys";
-import { layForPortal, type MembersSystemConfig, type PortalWrite } from "../people/system";
+import { layForPortal, type PortalFolderConfig, type PortalWrite } from "../access/system";
 import { readBounded, writeAtomically } from "../secrets/system";
 import { REGISTRY_MAX_BYTES, REGISTRY_NAME } from "./registry";
 
-export type PasskeySystemConfig = Pick<MembersSystemConfig, "stateFolder" | "portalKeyFolder" | "groupsFile" | "portalGroup">;
+export type PasskeySystemConfig = PortalFolderConfig & { stateFolder: string };
 
 /** The registry's text: null when there is none yet, `unreadable` when one is there and cannot be read whole. */
 export type RegistryText = string | null | "unreadable";

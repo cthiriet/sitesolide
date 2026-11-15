@@ -25,7 +25,6 @@
  * tokens.ts and policy.ts, pure, and run by the steward and the installer. The
  * page imports nothing from here but types.
  */
-import type { EntryView, GeneralView } from "../access/protocol";
 import type { ServiceKind } from "../../borrowed/manifest";
 import type { Verdict } from "../secrets/protocol";
 import type { StoreMissing } from "../../borrowed/store-protocol";
@@ -66,8 +65,7 @@ export type Scope = {
    */
   secrets?: boolean;
   /**
-   * Every project, as the owner: the owner's own tokens alone, never a
-   * person's. It reaches every project the machine carries but the
+   * Every project, as the owner. It reaches every project the machine carries but the
    * platform's own and those another token holds, creates any name the
    * machine still keeps a removed project's snapshots or store under, takes a
    * name back from the token that holds it (`sitesolide deploy --adopt`),
@@ -85,22 +83,14 @@ export type Scope = {
 
 /**
  * What the page and the API show of a token. Never its hash, never its value.
- *
- * **Every token belongs to a person**: `member`, a person of People, or null
- * for the owner's own, the owner's agents'. A person's token never does more
- * than that person's roles, read at every use, and dies with them, whoever
- * made it; `by` says who did: the owner, for themselves or for a person, or
- * the person themselves.
+ * Every token is the owner's, minted by the owner for themselves and their
+ * agents.
  */
 export type TokenView = {
   /** Short and random, the token's name in the audit: `token:<id>`. */
   id: string;
   label: string;
-  /**
-   * The person's email for a person's token. For the owner's own, `owner`;
-   * a token from before every token belonged to someone keeps the address
-   * it was made for, as a label.
-   */
+  /** `owner`; a token from before every token was the owner's keeps the address it was made for, as a label. */
   email: string;
   createdAt: number;
   /** null: no expiry. */
@@ -111,24 +101,12 @@ export type TokenView = {
   scope: Scope;
   /** The projects it created, recorded at the start of their first deployment. */
   owned: string[];
-  /**
-   * The person it belongs to, null for the owner's own. Never stronger than
-   * that person: the steward narrows it to their roles at every use
-   * (src/people/tokens.ts), and revokes it when they leave.
-   */
-  member: string | null;
-  /** Who made it: `owner`, or the person's own email when they minted it themselves. */
-  by: string;
 };
 
-/** The owner's own token, the owner's agents': whose it is when the owner makes one for themselves. */
+/** Whose a token is: the owner's, the owner's agents'. */
 export const OWNER_HOLDER = "owner";
 
-/**
- * What a request authenticated by a token knows of its holder. For a
- * person's token, its scope and projects as the steward narrowed them to
- * their roles at that moment, not as they were minted.
- */
+/** What a request authenticated by a token knows of its holder. */
 export type Identity = {
   id: string;
   label: string;
@@ -136,14 +114,12 @@ export type Identity = {
   expiresAt: number | null;
   scope: Scope;
   owned: string[];
-  member: string | null;
 };
 
 /** The token's value: `sst_` then 43 characters of base64url, 256 bits. */
 export const TOKEN_PREFIX = "sst_";
 
 export const LABEL_MAX = 64;
-export const EMAIL_MAX = 254;
 /** A registry is a team, not a user base. */
 export const MAX_TOKENS = 200;
 /** Five years: beyond that, "no expiry" says it better. */
@@ -207,12 +183,7 @@ export type InstallRequest = {
   deployment: string;
   slug: string;
   requestedAt: number;
-  /**
-   * `member`: the person whose token it is, null for the owner's own. The
-   * installer narrows the scope again to that person's roles as the registry
-   * reads when it starts.
-   */
-  token: { id: string; email: string; member: string | null };
+  token: { id: string; email: string };
   scope: Scope;
   creating: boolean;
   /** The manifest's text as the client sent it. The installer re-validates it. */
@@ -387,9 +358,6 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 //   POST   /control/deploy        DeployRequest    -> { deployment, slug, creating }   202
 //   GET    /control/deployment?id=<id>             -> { result: InstallerResult }
 //   POST   /control/logs          LogsRequest      -> LogsResponse
-//   POST   /control/access/list   { bearer, slug }            -> AccessResponse (src/access/protocol.ts)
-//   PUT    /control/access        { bearer, slug, who, role } -> EntryResponse     Can open alone
-//   DELETE /control/access        { bearer, slug, who }       -> EntryResponse
 //   POST   /control/restart       { bearer, slug }            -> TokenRestartResponse           any token that deploys it
 //   POST   /control/store/list    { bearer, slug }            -> StoreListResponse              the `secrets` flag
 //   PATCH  /control/store         { bearer, slug, set, remove } -> 200|201 StoreChangeResponse   the `secrets` flag
@@ -398,9 +366,8 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 //   DELETE /control/store/file    { bearer, slug, name }      -> StoreChangeResponse
 //   DELETE /control/claim         { bearer, slug }            -> ClaimReleased                  an owner's token with `all`: deploy --adopt
 //
-// The restart and store ones judge a person's token by role first
-// (`secrets.list`, `secrets.write`, `restart`), then the project among those
-// it reaches, then the flag, and are bounded per token and per hour. `set` is
+// The restart and store ones judge the project among those the token
+// reaches, then the flag, and are bounded per token and per hour. `set` is
 // an object of names and values, `remove` a list of names: both optional,
 // fifty names in all at most. An older steward answers `no such route`: the
 // dashboard says to run sitesolide upgrade.
@@ -416,16 +383,9 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 // answer's values are never a value: a value set, generated or held in a
 // file is never sent back to a token.
 //
-// A person's own tokens, judged by their session, their unlock to create, and
-// their roles (src/people/tokens.ts):
-//
-//   POST   /tokens/person/list    { session }                                     -> MemberTeamResponse
-//   POST   /tokens/person/create  { session, token, label, expiresAt, scope }     -> CreatedTokenResponse   (their unlock)
-//   POST   /tokens/person/revoke  { session, id }                                 -> { token: TokenView }   their own alone
-//
 // And on the owner's socket, which only root opens:
 //
-//   DELETE /tokens/project        { slug }    a project removed: its token ownership and its people with access forgotten
+//   DELETE /tokens/project        { slug }    a project removed: its token ownership and its guests forgotten
 //   GET    /tokens/claim?slug=<slug>          -> ClaimView: does a token hold or claim a name, and is a deployment of it under way
 //   DELETE /tokens/claim          { slug }    -> ClaimReleased: the owner takes such a name back, its store moved aside
 //   POST   /tokens/owner          OwnerTokenRequest -> CreatedTokenResponse: the owner's own token, every permission, `sitesolide login --owner`
@@ -461,21 +421,10 @@ export type ClaimView = {
  * its previous versions: names alone, for the owner to set what they need.
  */
 export type ClaimReleased = { slug: string; released: string | null; dropped: { variables: string[]; files: string[] } };
-/**
- * A person's tokens, those the owner made for them included, and what they
- * may mint them for: their roles, and the create right. `until`: the end of
- * their session's unlock, null if locked.
- */
-export type MemberTeamResponse = { tokens: TokenView[]; rights: { roles: Record<string, "viewer" | "developer" | "admin">; create: boolean }; until: number | null };
 export type CreateTokenRequest = {
   /** The unlock token of src/secrets: creating a token demands the dashboard unlocked. */
   token: string;
   label: string;
-  /**
-   * Whose token: `owner`, the owner's own, its scope free; or the email of a
-   * person of People, minted as their own would be, within their roles.
-   */
-  holder: string;
   expiresAt: number | null;
   scope: Scope;
 };
@@ -539,7 +488,7 @@ export type RestartOutcome = { verdict: Verdict } | { error: ControlErrorCode; m
 // --- The Tokens page's routes, under /api/tokens, behind the session --------------
 //
 //   GET    /api/tokens                             -> TeamPageResponse
-//   POST   /api/tokens        { label, holder, expiresAt, scope }  -> CreatedTokenResponse   (unlocked)
+//   POST   /api/tokens        { label, expiresAt, scope }  -> CreatedTokenResponse   (unlocked)
 //   POST   /api/tokens/revoke { id }               -> { token: TokenView }
 
 /** One line of the dashboard's audit, in the shape every component shares. */
@@ -556,11 +505,6 @@ export type TeamPageResponse = {
   /** False when the steward does not carry the control routes yet; `reason` says what to run. */
   available: boolean;
   reason: string | null;
-  /**
-   * Null for the owner, who sees every token. A member sees their own alone,
-   * and mints them within these rights: their roles, and the create right.
-   */
-  member: { email: string; roles: Record<string, "viewer" | "developer" | "admin">; create: boolean } | null;
   tokens: TokenView[];
   /**
    * End of this session's unlock, null if locked. What the tokens did is
@@ -580,9 +524,6 @@ export type TeamPageResponse = {
 //   GET    /api/v1/projects                        -> { projects: ProjectStatus[] }
 //   GET    /api/v1/projects/:slug                  -> { project: ProjectStatus }
 //   GET    /api/v1/projects/:slug/logs[?lines=<n>&cursor=<c>] -> LogsResponse
-//   GET    /api/v1/projects/:slug/access           -> { access: ProjectAccess }
-//   PUT    /api/v1/projects/:slug/access    { who, role }  -> { entry, change, access: ProjectAccess }
-//   DELETE /api/v1/projects/:slug/access    { who }        -> { entry, change, access: ProjectAccess }
 //   POST   /api/v1/projects/:slug/restart          -> TokenRestartResponse
 //   GET    /api/v1/projects/:slug/store            -> StoreListResponse
 //   PATCH  /api/v1/projects/:slug/store     StoreApiChangeBody   -> 200|201 StoreApiChangeResponse
@@ -624,7 +565,7 @@ export type ProjectStatus = {
   deployed: boolean;
   type: "static" | "app" | null;
   url: string | null;
-  /** Who may open the site at all: public, restricted to its people with access, or anyone with the preview code; null when not deployed. */
+  /** Who may open the site at all: public, restricted to the owner and its guests, or anyone with the preview code; null when not deployed. */
   general: "public" | "restricted" | "code" | null;
   portal: { wanted: boolean; installed: boolean } | null;
   services: ServiceStatus[];
@@ -672,21 +613,6 @@ export type ScheduleStatus = {
   next: number | null;
   /** The last run that ended, null while one runs or before the first since the timer was loaded. */
   lastRun: { at: number | null; ok: boolean; failure: string | null } | null;
-};
-
-/**
- * A project's general access and people with access, as a token reads them:
- * never the admin emails, which a token has no use for, nor anything of the
- * provider but whether it is set up and the company's domains, the only ones
- * a token may give access to.
- */
-export type ProjectAccess = {
-  slug: string;
-  host: string;
-  url: string;
-  general: GeneralView | null;
-  entries: EntryView[];
-  signIn: { configured: boolean; allowedDomains: string[]; providerName: string | null };
 };
 
 // --- Renaming a project -------------------------------------------------------------

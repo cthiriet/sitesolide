@@ -19,7 +19,7 @@ import { APP, createBench, DEPLOYMENT, NOW, PUBLIC, renameHost } from "./rename-
 test("a removal sets a restricted app's public/ aside before the reload that drops its door", async () => {
   const b = createBench();
   stageBundle(b, DEPLOYMENT, [file("app/server.ts", "Bun.serve({})"), file("public/index.html", "<h1>restricted</h1>")]);
-  const deployed = await runPipeline(hostOf(b), { deployment: DEPLOYMENT, slug: "oldsite", requestedAt: NOW, token: { id: "aaaaaaaaaaaa", email: "", member: null }, scope: PUBLIC, creating: true, manifest: JSON.stringify({ ...APP, portal: true }) }, { zone: ZONE, runFolder: b.run });
+  const deployed = await runPipeline(hostOf(b), { deployment: DEPLOYMENT, slug: "oldsite", requestedAt: NOW, token: { id: "aaaaaaaaaaaa", email: "" }, scope: PUBLIC, creating: true, manifest: JSON.stringify({ ...APP, portal: true }) }, { zone: ZONE, runFolder: b.run });
   expect(deployed.ok).toBe(true);
   b.events.length = 0;
   expect(readManifest(readFileSync(join(b.sites, "oldsite", "sitesolide.json"), "utf8")).manifest!.portal).toBe(true);
@@ -49,7 +49,7 @@ import { runRename } from "../src/installer/rename";
 test("a rename lays the new name's block before it moves a restricted app's folder there", async () => {
   const b = createBench();
   stageBundle(b, DEPLOYMENT, [file("app/server.ts", "Bun.serve({})"), file("public/index.html", "<h1>restricted</h1>")]);
-  const deployed = await runPipeline(hostOf(b), { deployment: DEPLOYMENT, slug: "oldsite", requestedAt: NOW, token: { id: "aaaaaaaaaaaa", email: "", member: null }, scope: PUBLIC, creating: true, manifest: JSON.stringify({ ...APP, portal: true }) }, { zone: ZONE, runFolder: b.run });
+  const deployed = await runPipeline(hostOf(b), { deployment: DEPLOYMENT, slug: "oldsite", requestedAt: NOW, token: { id: "aaaaaaaaaaaa", email: "" }, scope: PUBLIC, creating: true, manifest: JSON.stringify({ ...APP, portal: true }) }, { zone: ZONE, runFolder: b.run });
   expect(deployed.ok).toBe(true);
   writeFileSync(join(b.root, "group"), `${readFileSync(join(b.root, "group"), "utf8")}site-oldsite:x:2000:\n`);
   const host = renameHost(b);

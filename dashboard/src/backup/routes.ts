@@ -45,12 +45,6 @@ export type BackupRoutes = {
   list: (req: Request) => Promise<Response>;
   restore: (req: Request) => Promise<Response>;
   audit: (req: Request) => Promise<Response>;
-  /**
-   * The restore itself, under a lock its caller already holds, the body
-   * judged and its requester set: an Admin's, through
-   * src/people/actions.ts, with the email the steward verified.
-   */
-  start: (req: Request, body: Record<string, unknown>) => Promise<Response>;
 };
 
 export const NOT_INSTALLED_REASON = "backups are not set up on this server: run sitesolide setup again for this machine, without --minimal";
@@ -208,16 +202,13 @@ export function createBackupRoutes(dependencies: BackupRouteDependencies): Backu
       const body = await dependencies.bodyWithToken(req, ["slug", "snapshot", "confirmation", "actor"]);
       if (body instanceof Response) return body;
       // The token this route takes is the owner's unlock, the dashboard's
-      // password: whoever restores here is the owner. A person restores
-      // through their own session (src/people/actions.ts), which names them
-      // with the email this steward verified. Any other name in the body is
-      // the dashboard's to say, and the audit is not: a dashboard that caught
-      // the owner's unlock would restore under a person's name.
-      if (body.actor !== OWNER_ACTOR) return fail("invalid", "this route restores for the owner: a person restores from their own session");
+      // password: whoever restores here is the owner, and the audit names
+      // nobody else. Any other name in the body is refused rather than
+      // recorded: a dashboard that caught the owner's unlock would otherwise
+      // restore under a name of its choosing.
+      if (body.actor !== OWNER_ACTOR) return fail("invalid", "this route restores for the owner alone");
       return dependencies.underLock(req, body, () => start(req, body));
     },
-
-    start: (req, body) => start(req, body),
   };
 
   /** The restore asked for, once the lock is held: the order of the risk, as for the secrets. */

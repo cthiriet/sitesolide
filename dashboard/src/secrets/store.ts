@@ -36,15 +36,15 @@ import {
 } from "../../borrowed/store";
 import type { StoreFileView, StoreMay, StoreVariableView, StoreView } from "../../borrowed/store-protocol";
 import { checkKey, checkValue, isVariableName, MAX_KEY, PASSWORD_VARIABLE, VALUE_LIKE_PREFIXES } from "../../borrowed/variables";
-import { machineRefusal } from "../people/powers";
+import { reservedReason } from "../control/policy";
 import { restartPending } from "./restart";
 import { LANDING_LABEL, type Expected, type Refusal, type Site } from "./scope";
 
 const outOfScope = (message: string): Refusal => ({ error: "out-of-scope", message });
 const invalid = (message: string): Refusal => ({ error: "invalid", message });
 
-/** Who asks: the owner (dashboard unlocked, or root over SSH), a person signed in, or a token the control routes judged. */
-export type StoreRequester = "owner" | "person" | "token";
+/** Who asks: the owner (dashboard unlocked, or root over SSH), or a token the control routes judged. */
+export type StoreRequester = "owner" | "token";
 
 /** What a store's env file and its files are expected to be: root's, 0600. */
 export const STORE_EXPECTED: Expected = { owner: "root", group: "root", mode: 0o600 };
@@ -75,7 +75,7 @@ export type StoreSlugContext = {
  *
  * Deployed, it must be an app: a static site has no service to read a store.
  * Not deployed: the owner may lay a store ahead of the first deployment, a
- * token only for a slug the control routes let it create, a person never.
+ * token only for a slug the control routes let it create.
  * The slug is never quoted when it is not one.
  */
 export function storeSlugRefusal(slug: unknown, context: StoreSlugContext): Refusal | null {
@@ -372,12 +372,25 @@ function unique(names: readonly string[]): string[] {
 
 /**
  * What a requester may do on a store, as the listing says and the routes
- * enforce: the owner everything, but reading a value back over SSH; an
- * Admin writes and restores; a Developer and a token with Manage secrets
- * write.
+ * enforce: the owner everything, but reading a value back over SSH; a token
+ * with Manage secrets writes.
  */
-export function storeMay(requester: { kind: "owner" | "ssh" | "person" | "token"; restore: boolean }): StoreMay {
-  if (requester.kind === "owner") return { write: true, reveal: true, restore: true };
-  if (requester.kind === "ssh") return { write: true, reveal: false, restore: true };
-  return { write: true, reveal: false, restore: requester.kind === "person" && requester.restore };
+export function storeMay(kind: "owner" | "ssh" | "token"): StoreMay {
+  if (kind === "owner") return { write: true, reveal: true, restore: true };
+  if (kind === "ssh") return { write: true, reveal: false, restore: true };
+  return { write: true, reveal: false, restore: false };
+}
+
+/**
+ * The files of the machine itself, whatever a token may reach: the
+ * platform's own projects, the dashboard's and the portal's settings, and
+ * any file the steward lays for root. They stay the owner's.
+ */
+export function machineRefusal(slug: string, file: { name: string; expected: { owner: string } } | null, zone: string): string | null {
+  if (reservedReason(slug, zone) !== null) return `${slug} belongs to the platform, which stays the owner's`;
+  if (file === null) return null;
+  if (file.expected.owner === "root" || file.name === "dashboard.env" || file.name === "portal.env") {
+    return `${file.name} belongs to the machine, which stays the owner's`;
+  }
+  return null;
 }

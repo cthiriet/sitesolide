@@ -25,11 +25,6 @@ export type ControlSteward = {
   takeBack: (bearer: string, slug: string) => Promise<Response>;
   deployment: (id: string) => Promise<Response>;
   logs: (requested: LogsRequest) => Promise<Response>;
-  /** A project's access, as a token reads it. */
-  accessList: (bearer: string, slug: string) => Promise<Response>;
-  /** Someone given Can open, or taken off, by a token: the steward judges both. */
-  accessPut: (requested: { bearer: string; slug: string; who: unknown; role: unknown }) => Promise<Response>;
-  accessRemove: (requested: { bearer: string; slug: string; who: unknown }) => Promise<Response>;
   /** A project's service restarted for a token, and its verdict. */
   restart: (bearer: string, slug: string) => Promise<Response>;
   /**
@@ -78,9 +73,6 @@ export function localControlSteward(socket: string, timeoutMs = CONTROL_TIMEOUT_
     takeBack: (bearer, slug) => call("DELETE", "/control/claim", { bearer, slug }, longMs),
     deployment: (id) => call("GET", `/control/deployment?${new URLSearchParams({ id })}`),
     logs: (requested) => call("POST", "/control/logs", requested),
-    accessList: (bearer, slug) => call("POST", "/control/access/list", { bearer, slug }),
-    accessPut: (requested) => call("PUT", "/control/access", requested),
-    accessRemove: (requested) => call("DELETE", "/control/access", requested),
     restart: (bearer, slug) => call("POST", "/control/restart", { bearer, slug }, longMs),
     // Sent only when asked: a steward from before refuses a field it does not know.
     storeList: (bearer, slug, quiet = false) => call("POST", "/control/store/list", quiet ? { bearer, slug, quiet: true } : { bearer, slug }),

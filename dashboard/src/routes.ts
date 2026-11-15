@@ -7,13 +7,11 @@ import { clientKey, createClientLimiter, isPasswordValid, isAcceptableSubmission
 import { read, type Reading } from "./read";
 import type { StoreMissing } from "../borrowed/store-protocol";
 import { withMissingSecrets } from "./state";
-import { memberReading } from "./people/view";
-import type { Roles } from "./people/protocol";
+import type { PasskeyOffer, SessionResponse } from "./passkeys/protocol";
 import {
   clearCookie,
   readCookie,
   isAcceptableOrigin,
-  isMemberSession,
   setCookie,
   isSessionAlive,
   type Session,
@@ -24,8 +22,8 @@ export type Store = {
   readSession: (token: string) => Promise<Session | null>;
   touchSession: (hash: string, now: number) => void;
   closeSession: (hash: string) => void;
-  /** The owner's sessions opened before `before`, a member's before `memberBefore`. */
-  purgeSessions: (before: number, memberBefore?: number) => void;
+  /** The sessions opened before `before`, and any row not the owner's. */
+  purgeSessions: (before: number) => void;
 };
 
 /**
@@ -48,15 +46,15 @@ export type Options = {
   publicUrl: string;
   online: boolean;
   sessionDurationMs: number;
-  /** A member's session: half a day, whatever the owner's is. Absent, the owner's. */
-  memberSessionDurationMs?: number;
   stateFile: string;
+  /** The served zone, which the page names; absent or empty, none. */
+  zone?: string;
   /**
-   * The roles that bound what a session sees of the snapshot: null for the
-   * owner, who sees the whole machine. Absent, everyone sees it whole, as
-   * before members. See src/people/view.ts.
+   * What the sign-in offers: a passkey registered, the password still
+   * signing in (src/passkeys/state.ts). Absent, no passkey and the password
+   * as configured.
    */
-  roles?: (req: Request, now: number) => Promise<Roles | null | "no-session" | "unreachable">;
+  passkeys?: () => Promise<PasskeyOffer>;
   /**
    * The declared names each project's store lacks, read from the steward's
    * listing (src/secrets/missing.ts), or null when it does not answer: they
@@ -64,11 +62,6 @@ export type Options = {
    * reading the store. Absent, the snapshot goes out as the collector left it.
    */
   missingSecrets?: () => Promise<ReadonlyMap<string, StoreMissing> | null>;
-  /**
-   * Called on signing out a member with their session's token: the steward
-   * closes its side and journals it. Never rejects.
-   */
-  memberSignOut?: (token: string) => Promise<void>;
   /**
    * Called on signing out with the hash of the closed session: the dashboard
    * forgets there the unlocking of the secrets and revokes it at the steward.
@@ -169,12 +162,12 @@ async function readSignInBody(req: Request): Promise<{ body: unknown } | "too-la
  * Built apart so that the secrets routes check the session by this same path
  * rather than by a copy, which would end up diverging.
  *
- * It reads the owner's sessions and the members' alike: `ownerSessions` keeps
- * the first alone, for every route that is the owner's.
+ * The owner's sessions alone: a row naming anyone else, from when people
+ * signed in with a company account, is closed as an expired one is.
  */
 export function createSessionReader(
   store: Pick<Store, "readSession" | "touchSession" | "closeSession">,
-  options: Pick<Options, "online" | "sessionDurationMs" | "memberSessionDurationMs" | "ownerIdleMs">,
+  options: Pick<Options, "online" | "sessionDurationMs" | "ownerIdleMs">,
 ): SessionReader {
   return async (req, now) => {
     const token = readCookie(req.headers.get("cookie"), options.online);
@@ -183,7 +176,7 @@ export function createSessionReader(
     const found = await store.readSession(token);
     if (found === null) return null;
 
-    if (!isSessionAlive(found, options.sessionDurationMs, now, options.memberSessionDurationMs, options.ownerIdleMs)) {
+    if (!isSessionAlive(found, options.sessionDurationMs, now, options.ownerIdleMs)) {
       store.closeSession(found.hash);
       return null;
     }
@@ -196,27 +189,15 @@ export function createSessionReader(
 }
 
 /**
- * The same reader, for the owner's sessions alone: a member's reads as no
- * session. Every route that is the owner's takes this one, so that a
- * route forgetting to ask who is signed in still refuses a member.
- */
-export function ownerSessions(reader: SessionReader): SessionReader {
-  return async (req, now) => {
-    const found = await reader(req, now);
-    return found !== null && !isMemberSession(found) ? found : null;
-  };
-}
-
-/**
  * The owner's session opened, the expired ones purged first, and the answer
  * that sets its cookie: what a password and a passkey sign-in both end on.
  */
 export function ownerSessionOpener(
   store: Pick<Store, "openSession" | "purgeSessions">,
-  options: Pick<Options, "online" | "sessionDurationMs" | "memberSessionDurationMs">,
+  options: Pick<Options, "online" | "sessionDurationMs">,
 ): (now: number) => Promise<Response> {
   return async (now) => {
-    store.purgeSessions(now - options.sessionDurationMs, now - (options.memberSessionDurationMs ?? options.sessionDurationMs));
+    store.purgeSessions(now - options.sessionDurationMs);
     const token = await store.openSession(now);
     return Response.json({ open: true }, { headers: { "Set-Cookie": setCookie(token, options.online, options.sessionDurationMs), ...NO_CACHE } });
   };
@@ -263,10 +244,14 @@ export function createRoutes(store: Store, options: Options, clock: () => number
      */
     async session(req) {
       const now = clock();
-      return Response.json({
+      const configured = options.hash !== "";
+      const body: SessionResponse = {
         open: (await session(req, now)) !== null,
-        configured: options.hash !== "",
-      });
+        configured,
+        zone: options.zone === undefined || options.zone === "" ? null : options.zone,
+        passkeys: options.passkeys === undefined ? { registered: false, passwordSignIn: configured } : await options.passkeys(),
+      };
+      return Response.json(body, { headers: NO_CACHE });
     },
 
     async signIn(req) {
@@ -338,16 +323,9 @@ export function createRoutes(store: Store, options: Options, clock: () => number
       const open = await session(req, now);
       if (open !== null) {
         store.closeSession(open.hash);
-        if (isMemberSession(open)) {
-          // The steward holds the member's session too: it closes its side
-          // and journals the sign-out under the member's email.
-          const token = readCookie(req.headers.get("cookie"), options.online);
-          if (token !== null) await options.memberSignOut?.(token);
-        } else {
-          // Failing which the steward's token would survive the session that
-          // obtained it, until its expiry.
-          await options.forgetUnlock?.(open.hash);
-        }
+        // Failing which the steward's token would survive the session that
+        // obtained it, until its expiry.
+        await options.forgetUnlock?.(open.hash);
       }
 
       // The cookie is erased even without a session: an already expired
@@ -363,16 +341,9 @@ export function createRoutes(store: Store, options: Options, clock: () => number
       if ((await session(req, now)) === null) {
         return Response.json({ error: "no-session" }, { status: 401 });
       }
-      // A member sees their projects alone; the owner, the whole machine.
-      const roles = options.roles === undefined ? null : await options.roles(req, now);
-      if (roles === "no-session") return Response.json({ error: "no-session" }, { status: 401 });
-      if (roles === "unreachable") {
-        return Response.json({ error: "failure", message: "Can't reach the server to say what this person may see." }, { status: 502 });
-      }
-
       const reading = await withSecrets(await read(options.stateFile, now));
       // Nothing in this dashboard is to be kept: it describes an instant.
-      return Response.json(roles === null ? reading : memberReading(reading, roles), { headers: NO_CACHE });
+      return Response.json(reading, { headers: NO_CACHE });
     },
   };
 }

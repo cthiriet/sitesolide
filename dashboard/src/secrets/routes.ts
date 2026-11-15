@@ -90,7 +90,7 @@ export type SecretsRoutes = {
   setStoreFile: Handler;
   removeStoreFile: Handler;
   restoreStore: Handler;
-  /** The one route whose answer is a value: the owner's alone, server.ts refuses it to a person. */
+  /** The one route whose answer is a value: the owner's alone, behind the unlock. */
   revealStoreValue: Handler;
   /** A site's snapshots and its restore, read with the session alone, like the projects. */
   backups: Handler;
@@ -251,7 +251,7 @@ const extractRestore: Extraction<WithoutToken<RestoreRequest>> = (body) => {
   return { ...names, actor: SESSION_ACTOR };
 };
 
-/** `/portal`: the slug, `active` a boolean, and the confirmation, a string. A person's relay reads it the same way. */
+/** `/portal`: the slug, `active` a boolean, and the confirmation, a string. */
 export const extractPortal: Extraction<WithoutToken<PortalRequest>> = (body) => {
   const names = fields(["slug", "confirmation"] as const)(body);
   if (names instanceof Response) return names;
@@ -276,7 +276,7 @@ function optional<T>(body: Record<string, unknown>, name: string, type: "boolean
 
 /**
  * The bodies of the store's routes: the fields each takes, of their type,
- * those alone, the person's relay reading them the same way (people/relay.ts).
+ * those alone.
  * What a name, a value, a format or a size may be is the steward's to judge.
  */
 export const STORE_EXTRACTIONS = {

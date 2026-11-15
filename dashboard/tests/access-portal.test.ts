@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { portalReading, type PortalAdmin } from "../src/people/portal";
+import { portalReading, type PortalAdmin } from "../src/access/portal";
 
 /**
  * What the steward, root, reads of the portal's answer to `GET /admin/access`.

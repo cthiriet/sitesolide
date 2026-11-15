@@ -30,7 +30,8 @@ export const PRAGMAS = [
 ] as const;
 
 export const SCHEMA = [
-  // `identity`: `owner`, or a member's email.
+  // `identity`: `owner`. A person's email in a row from when people signed
+  // in with a company account: read as no session, purged at the next sign-in.
   `CREATE TABLE IF NOT EXISTS sessions (
      empreinte TEXT PRIMARY KEY,
      cree_a    INTEGER NOT NULL,
@@ -87,9 +88,7 @@ const queries = {
     "UPDATE sessions SET vue_a = ? WHERE empreinte = ?",
   ),
   deleteSession: base.query<undefined, [string]>("DELETE FROM sessions WHERE empreinte = ?"),
-  purgeSessions: base.query<undefined, [number, number]>(
-    "DELETE FROM sessions WHERE (identity = 'owner' AND cree_a < ?) OR (identity <> 'owner' AND cree_a < ?)",
-  ),
+  purgeSessions: base.query<undefined, [number]>("DELETE FROM sessions WHERE identity <> 'owner' OR cree_a < ?"),
   setting: base.query<{ value: string }, [string]>(
     "SELECT valeur AS value FROM reglages WHERE cle = ?",
   ),
@@ -97,7 +96,6 @@ const queries = {
     `INSERT INTO reglages (cle, valeur) VALUES (?, ?)
        ON CONFLICT(cle) DO UPDATE SET valeur = excluded.valeur`,
   ),
-  // The owner's only: a member's session does not rest on the owner's password.
   clearSessions: base.query<undefined, []>("DELETE FROM sessions WHERE identity = 'owner'"),
   countOwnerSessions: base.query<{ n: number }, []>("SELECT count(*) AS n FROM sessions WHERE identity = 'owner'"),
   closeOtherOwnerSessions: base.query<undefined, [string]>("DELETE FROM sessions WHERE identity = 'owner' AND empreinte <> ?"),
@@ -108,14 +106,6 @@ export async function openSession(now: number): Promise<string> {
   const token = generateToken();
   queries.createSession.run(await tokenHash(token), now, now, OWNER_IDENTITY);
   return token;
-}
-
-/**
- * A member's session, whose token the steward drew: kept here by its hash, as
- * the owner's, under the member's email.
- */
-export async function recordSession(token: string, identity: string, now: number): Promise<void> {
-  queries.createSession.run(await tokenHash(token), now, now, identity);
 }
 
 export async function readSession(token: string): Promise<Session | null> {
@@ -132,9 +122,9 @@ export function closeSession(hash: string): void {
   queries.deleteSession.run(hash);
 }
 
-/** Called at every sign-in, not on a timer: the owner's sessions opened before `before`, a member's before `memberBefore`. */
-export function purgeSessions(before: number, memberBefore: number = before): void {
-  queries.purgeSessions.run(before, memberBefore);
+/** Called at every sign-in, not on a timer: the sessions opened before `before`, and any row not the owner's. */
+export function purgeSessions(before: number): void {
+  queries.purgeSessions.run(before);
 }
 
 /** Every session of the owner's but this one: a passkey removed signs out whoever else held it. */

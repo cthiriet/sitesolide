@@ -155,8 +155,8 @@ export function credited(claim: Claim | null, holder: string | null, outcome: De
  * What becomes of a name in the tokens' registry once settled, and of its
  * claim. `holder`: the token the registry names, null for none. `store`:
  * the store's folder is there, or cannot be told (counted as there).
- * `pending`: a deployment of the name is under way: its installer active, a
- * person's creation noted, or the claim's own deployment not ended.
+ * `pending`: a deployment of the name is under way: its installer active,
+ * or the claim's own deployment not ended.
  * `credited`: the holder's own deployment of it succeeded.
  */
 export type Settlement = { forget: boolean; drop: boolean };

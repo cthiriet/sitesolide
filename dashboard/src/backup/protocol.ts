@@ -96,8 +96,7 @@ export type BackupsResponse = { backups: BackupsView };
  * `confirmation`: the slug, retyped: a restore replaces the data in service.
  * `actor`: who asks, `owner` and nothing else on this route, whose token is
  * the owner's unlock: the steward refuses another name rather than record
- * it (routes.ts). A person restores through `/people/backups/restore`, named
- * by the steward with the email it verified.
+ * it (routes.ts).
  */
 export type RestoreRequest = WithToken & { slug: string; snapshot: string; confirmation: string; actor: string };
 

@@ -209,7 +209,7 @@ describe("the query", () => {
   const read = (query: string) => readQuery(new URLSearchParams(query));
 
   test("with nothing, every source, the default page, no filter", () => {
-    expect(read("")).toEqual({ sources: [...AUDIT_SOURCES], actor: null, action: null, target: null, from: null, to: null, limit: 100, cursor: null, restrict: null });
+    expect(read("")).toEqual({ sources: [...AUDIT_SOURCES], actor: null, action: null, target: null, from: null, to: null, limit: 100, cursor: null });
   });
 
   test("sources repeated or listed, kept in their fixed order", () => {

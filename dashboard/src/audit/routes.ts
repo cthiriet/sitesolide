@@ -14,16 +14,10 @@ import { read } from "../read";
 import type { SessionReader } from "../routes";
 import type { Snapshot } from "../state";
 import { aggregate, BUDGET, type Budget, type Readers } from "./aggregate";
-import { readQuery, siteResolver, type Restriction } from "./merge";
+import { readQuery, siteResolver } from "./merge";
 
 export type AuditOptions = {
   session: SessionReader;
-  /**
-   * What the session may read: null for the owner's whole machine, a
-   * member's projects and own rows otherwise. Absent, every session reads it
-   * all, as before members.
-   */
-  restriction?: (req: Request, now: number) => Promise<Restriction | null>;
   readers: Readers;
   stateFile: string;
   zone: string;
@@ -52,7 +46,7 @@ export function createAuditRoutes(options: AuditOptions, clock: () => number = D
       if ((await options.session(req, now)) === null) return Response.json({ error: "no-session" }, { status: 401, headers: NO_STORE });
       const read = readQuery(new URL(req.url).searchParams);
       if ("error" in read) return Response.json({ error: "invalid", message: read.error }, { status: 400, headers: NO_STORE });
-      const query = { ...read, restrict: (await options.restriction?.(req, now)) ?? null };
+      const query = read;
 
       const resolve = siteResolver(await snapshot(options.stateFile, now), options.zone);
       const page = await aggregate(query, options.readers, resolve, options.budget ?? BUDGET, clock);

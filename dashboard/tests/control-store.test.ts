@@ -17,26 +17,24 @@ import { createControlStore } from "../src/control/store";
 import { createControlSystem, type ControlSystem } from "../src/control/system";
 import { MAX_UNCARRIED_NAMES } from "../src/control/tokens";
 import { createTracker } from "../src/control/tracker";
-import { createMembersSystem } from "../src/people/system";
-import type { Who } from "../src/people/actions";
+import type { Who } from "../src/secrets/store-api";
 import { reread } from "../src/secrets/log";
 import type { LogEntry } from "../src/secrets/protocol";
 import type { StoreForToken } from "../src/secrets/store-api";
 import { createSteward } from "../src/secrets/steward";
 import { createSystem, type Command, type System } from "../src/secrets/system";
-import { readRegistryFile, registryOf, writeRegistry, type People } from "./registry-fixtures";
 
 /**
  * A token's work on a project's store, both halves.
  *
  * The steward: the real control routes, wired as dashboard/steward.ts wires
- * them to the real secrets routes for the people, the access registry, the
+ * them to the real secrets routes for the access registry, the
  * journal of refusals and whether a project is restricted; the store's own
  * work (src/secrets/store-api.ts, the secrets steward's, which another part
  * of this release writes) simulated by a fake that records what it was
  * handed and lays the store's folder as the real one does. What is judged
  * here is what the control routes decide before handing anything over: the
- * token, its person's role, its flag, the slug deployed or to be created,
+ * token, its flag, the slug deployed or to be created,
  * what a removed project or another token left under a name, the hour.
  *
  * Then the same routes with the secrets steward's real store behind them,
@@ -51,9 +49,6 @@ import { readRegistryFile, registryOf, writeRegistry, type People } from "./regi
 
 const ZONE = "test-zone.invalid";
 const PASSWORD = "Owner-Password-For-The-Store-Tests-1";
-const ALICE = "alice@acme.test";
-const BOB = "bob@acme.test";
-const CARL = "carl@acme.test";
 /** Planted in every value and file a test sends: never to come out anywhere. */
 const CANARY = "store-canary-5e81c2a9d0";
 const CONTENT = Buffer.from(`{"private_key":"${CANARY}"}\n`).toString("base64");
@@ -90,9 +85,7 @@ type Bench = {
   control: ReturnType<typeof createControlSteward>;
   journal: () => LogEntry[];
   owners: () => Record<string, string>;
-  seed: (people: People, creators?: string[]) => void;
   ownerToken: (scope: Partial<Scope>) => Promise<{ token: TokenView; secret: string }>;
-  personToken: (email: string, scope: Partial<Scope>) => Promise<{ token: TokenView; secret: string }>;
   everywhere: () => string;
 };
 
@@ -182,18 +175,18 @@ async function mount(options: { store?: boolean | "real"; secretChangesPerHour?:
     },
   };
   const portalKey = folder("portal-key");
-  const members = { ...createMembersSystem({ stateFolder: state, sitesDir: sites, secretsFolder: secrets, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "" }), now: () => clock.t };
-  const access = { ...createAccessSystem({ stateFolder: state, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "" }), now: () => clock.t };
+  const access = { ...createAccessSystem({ stateFolder: state, sitesDir: sites, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "" }), now: () => clock.t };
   // The owner's writes into a store told to the control routes, as dashboard/steward.ts wires them.
   let ownerStoreWritten: (slug: string) => Promise<void> = async () => undefined;
   let ownerStoreClaimed: (slug: string) => Promise<boolean> = async () => false;
   const handler = createSteward(system, {
     secretsFolder: secrets,
     checkAccounts: false,
-    members: { system: members, access, zone: ZONE },
+    access: { system: access, zone: ZONE },
     ownerStoreWritten: (slug) => ownerStoreWritten(slug),
     ownerStoreClaimed: (slug) => ownerStoreClaimed(slug),
   });
+  await handler.startAccess();
 
   // The store's own work, as the secrets steward does it: asks `still` once
   // its turn has come, lays the store's folders on a write, answers names.
@@ -259,9 +252,8 @@ async function mount(options: { store?: boolean | "real"; secretChangesPerHour?:
     zone: ZONE,
     isUnlocked: handler.isUnlocked,
     uidRoot: null,
-    members: handler.memberAuthority ?? undefined,
-    access: handler.accessForToken,
     forgetAccess: handler.forgetProjectAccess,
+    journal: handler.journal,
     secrets: handler.secretsForToken,
     store: options.store === false ? null : options.store === "real" ? handler.storeForToken : store,
     storeAside: handler.storeAside,
@@ -283,13 +275,10 @@ async function mount(options: { store?: boolean | "real"; secretChangesPerHour?:
     answers.push(await response.clone().text());
     return response;
   };
-  const seed = (people: People, creators: string[] = []) => writeRegistry(state, registryOf(people, creators));
-  seed({ [ALICE]: { cms: "developer", blog: "developer", kanban: "developer" }, [BOB]: { cms: "viewer" } }, [CARL]);
-
   const unlocked = await call("POST", "/unlock", { password: PASSWORD });
   const unlock = ((await unlocked.json()) as { token: string }).token;
-  const mint = async (holder: string, scope: Partial<Scope>) => {
-    const response = await call("POST", "/tokens/create", { token: unlock, label: "agent", holder, expiresAt: null, scope: { ...NONE, ...scope } });
+  const mint = async (scope: Partial<Scope>) => {
+    const response = await call("POST", "/tokens/create", { token: unlock, label: "agent", expiresAt: null, scope: { ...NONE, ...scope } });
     expect(response.status).toBe(201);
     return (await response.json()) as { token: TokenView; secret: string };
   };
@@ -313,9 +302,7 @@ async function mount(options: { store?: boolean | "real"; secretChangesPerHour?:
     control,
     journal: () => reread(readOr(join(state, "journal.jsonl"))),
     owners: () => (JSON.parse(readOr(join(state, "team.json")) || "{}") as { owners?: Record<string, string> }).owners ?? {},
-    seed,
-    ownerToken: (scope) => mint("owner", scope),
-    personToken: (email, scope) => mint(email, scope),
+    ownerToken: (scope) => mint(scope),
     everywhere: () =>
       [...answers, readOr(join(state, "journal.jsonl")), readOr(join(state, "access-log.jsonl")), readOr(join(state, "team.json")), printed.map((args) => args.map(String).join(" ")).join("\n")].join("\n"),
   };
@@ -406,21 +393,6 @@ describe("the steward: a deployed project's store", () => {
     }
     expect(b.journal()).toHaveLength(journaled);
     expect(b.handed).toEqual([]);
-    expect(b.everywhere()).not.toContain(CANARY);
-  });
-
-  test("a person's token answers to their role first: a Developer writes, journaled as their token's; lowered to Viewer, refused naming the role, journaled", async () => {
-    const b = await mount();
-    const alice = await b.personToken(ALICE, { slugs: ["kanban"], secrets: true });
-    expect((await change(b, alice.secret, "kanban", { API_KEY: CANARY })).status).toBe(201);
-    expect(b.handed.at(-1)).toMatchObject({ op: "change", who: { actor: `token:${alice.token.id}`, member: ALICE, token: alice.token.id }, creating: false });
-    // Lowered to Viewer since: the next write is refused, and so is a listing.
-    b.seed({ [ALICE]: { kanban: "viewer" } }, [CARL]);
-    const handed = b.handed.length;
-    expect(await body(await change(b, alice.secret, "kanban", { API_KEY: "x" }))).toMatchObject({ status: 403, error: "out-of-scope", message: expect.stringContaining("Viewer") });
-    expect(b.journal().at(-1)).toMatchObject({ operation: "set", result: "rejects", actor: `token:${alice.token.id}`, member: ALICE, slug: "kanban" });
-    expect((await list(b, alice.secret, "kanban")).status).toBe(403);
-    expect(b.handed).toHaveLength(handed);
     expect(b.everywhere()).not.toContain(CANARY);
   });
 
@@ -520,26 +492,17 @@ describe("the steward: a store ahead of the first deployment", () => {
     expect(await body(await change(b, secret, "shop", { API_KEY: "x" }))).toMatchObject({ status: 403, error: "reserved" });
   });
 
-  test("a token that may not create, and a person without the right: unknown, nothing recorded; a person with it writes, recorded, and is made Admin of nothing by a store alone", async () => {
+  test("a token that may not create: unknown, nothing recorded; one that may writes, recorded, and needs the flag", async () => {
     const b = await mount();
     const plain = await b.ownerToken({ slugs: ["kanban"], secrets: true });
     expect(await body(await change(b, plain.secret, "shop", { API_KEY: "x" }))).toMatchObject({ status: 404, error: "not-found" });
-    const alice = await b.personToken(ALICE, { slugs: ["kanban"], secrets: true });
-    // Alice may not create projects: a name the machine does not carry is no project of hers.
-    expect(await body(await change(b, alice.secret, "shop", { API_KEY: "x" }))).toMatchObject({ status: 404, error: "not-found" });
-    // Given the right, then taken back: her token's create flag narrowed to nothing again.
-    b.seed({ [ALICE]: { kanban: "developer" } }, [ALICE, CARL]);
-    const creating = await b.personToken(ALICE, { slugs: ["kanban"], create: true, secrets: true });
-    b.seed({ [ALICE]: { kanban: "developer" } }, [CARL]);
-    expect(await body(await change(b, creating.secret, "shop", { API_KEY: "x" }))).toMatchObject({ status: 404, error: "not-found" });
     expect(b.owners()).toEqual({});
-    const carl = await b.personToken(CARL, { create: true, secrets: true });
-    expect((await change(b, carl.secret, "shop", { API_KEY: CANARY })).status).toBe(201);
-    expect(b.owners()).toEqual({ shop: carl.token.id });
-    expect(b.handed.at(-1)).toMatchObject({ op: "change", creating: true, who: { member: CARL } });
-    expect(readRegistryFile(b.state).projects.shop ?? []).toEqual([]);
-    // Without the flag, a creator writes no store either.
-    const flagless = await b.personToken(CARL, { create: true });
+    const creating = await b.ownerToken({ create: true, secrets: true });
+    expect((await change(b, creating.secret, "shop", { API_KEY: CANARY })).status).toBe(201);
+    expect(b.owners()).toEqual({ shop: creating.token.id });
+    expect(b.handed.at(-1)).toMatchObject({ op: "change", creating: true, who: { member: null } });
+    // Without the flag, a token that may create writes no store either.
+    const flagless = await b.ownerToken({ create: true });
     expect(await body(await change(b, flagless.secret, "other", { API_KEY: "x" }))).toMatchObject({ status: 403, error: "out-of-scope" });
   });
 
@@ -575,9 +538,9 @@ describe("the steward: a store ahead of the first deployment", () => {
     expect((await change(b, secret, "held-0", { API_KEY: "x" })).status).toBe(201);
   });
 
-  test("a creation of a person's undone keeps its name while its store is there: the store stays its writer's to deploy", async () => {
+  test("a creation undone keeps its name while its store is there: the store stays its writer's to deploy", async () => {
     const b = await mount();
-    const carl = await b.personToken(CARL, { create: true, secrets: true });
+    const carl = await b.ownerToken({ create: true, secrets: true });
     expect((await change(b, carl.secret, "shop", { API_KEY: CANARY })).status).toBe(201);
     expect((await deploy(b, carl.secret, "shop")).status).toBe(202);
     // Its installer failed before laying anything: the creation is undone.
@@ -587,18 +550,18 @@ describe("the steward: a store ahead of the first deployment", () => {
       JSON.stringify({ deployment: DEPLOYMENT, slug: "shop", state: "failed", startedAt: at, updatedAt: at, finishedAt: at, log: [], error: { code: "install-failed", message: "x" }, url: null, allocated: [], missingSecrets: null }),
       { mode: 0o600 },
     );
-    await b.control.settleCreations();
+    await b.control.settle();
     expect(b.owners()).toEqual({ shop: carl.token.id });
     expect(await body(await preflight(b, carl.secret, "shop"))).toMatchObject({ status: 200, creating: true });
     // Without a store, the name goes back, as before.
-    const other = await b.personToken(CARL, { create: true, secrets: true });
+    const other = await b.ownerToken({ create: true, secrets: true });
     expect((await deploy(b, other.secret, "plain", "bcdefabcdefabcdefabcdefa")).status).toBe(202);
     writeFileSync(
       join(b.root, "installer", "bcdefabcdefabcdefabcdefa.json"),
       JSON.stringify({ deployment: "bcdefabcdefabcdefabcdefa", slug: "plain", state: "failed", startedAt: at, updatedAt: at, finishedAt: at, log: [], error: { code: "x", message: "x" }, url: null, allocated: [], missingSecrets: null }),
       { mode: 0o600 },
     );
-    await b.control.settleCreations();
+    await b.control.settle();
     expect(b.owners()).toEqual({ shop: carl.token.id });
   });
 });
@@ -679,7 +642,7 @@ describe("end to end, with the secrets steward's real store", () => {
     }
   });
 
-  test("the rules hold against the real store: a token without the flag, another's project, a person below Developer; nothing written", async () => {
+  test("the rules hold against the real store: a token without the flag, another's project; nothing written", async () => {
     const b = await mount({ store: "real" });
     const c = await chain(b);
     try {
@@ -687,9 +650,7 @@ describe("end to end, with the secrets steward's real store", () => {
       expect(await c.send(flagless.secret, "PATCH", "/kanban/store", { set: { API_KEY: CANARY } })).toMatchObject({ status: 403, json: { error: "out-of-scope" } });
       const elsewhere = await b.ownerToken({ slugs: ["blog"], secrets: true });
       expect(await c.send(elsewhere.secret, "GET", "/kanban/store")).toMatchObject({ status: 404 });
-      const alice = await b.personToken(ALICE, { slugs: ["kanban"], secrets: true });
-      b.seed({ [ALICE]: { kanban: "viewer" } }, [CARL]);
-      expect(await c.send(alice.secret, "POST", "/kanban/store/generate", { name: "SESSION_KEY" })).toMatchObject({ status: 403, json: { error: "out-of-scope" } });
+      expect(await c.send(flagless.secret, "POST", "/kanban/store/generate", { name: "SESSION_KEY" })).toMatchObject({ status: 403, json: { error: "out-of-scope" } });
       expect(existsSync(join(b.storeRoot, "kanban", "env"))).toBe(false);
       for (const text of [...c.texts, b.everywhere()]) expect(text).not.toContain(CANARY);
     } finally {
@@ -723,7 +684,7 @@ describe("end to end, with the secrets steward's real store", () => {
 
 const tokenOf = (letter: string) => `sst_${letter.repeat(43)}`;
 const GRACE = tokenOf("g");
-const IDENTITY: Identity = { id: "bbbbbbbbbbbb", label: "Grace", email: "owner", expiresAt: null, scope: { slugs: ["kanban"], create: false, outbound: false, domain: false, public: false, secrets: true }, owned: [], member: null };
+const IDENTITY: Identity = { id: "bbbbbbbbbbbb", label: "Grace", email: "owner", expiresAt: null, scope: { slugs: ["kanban"], create: false, outbound: false, domain: false, public: false, secrets: true }, owned: [] };
 
 type Refusal = { status: number; error: string; message: string; wait?: number };
 
@@ -1102,7 +1063,7 @@ describe("a name is claimed by the store a write made, and by nothing less", () 
     expect(await body(await change(b, secret, "shop", { WEBHOOK_URL: "https://attacker.invalid/x" }))).toMatchObject({ status: 404, error: "not-found" });
     expect(await body(await preflight(b, secret, "shop"))).toMatchObject({ status: 403, error: "out-of-scope" });
     expect(((await (await b.call("POST", "/control/authenticate", { bearer: secret })).json()) as { identity: Identity }).identity.owned).toEqual([]);
-    await b.control.settleCreations();
+    await b.control.settle();
     expect(b.owners()).toEqual({});
     expect(claims(b)).toEqual({});
   });
@@ -1118,7 +1079,7 @@ describe("a name is claimed by the store a write made, and by nothing less", () 
     expect((await list(b, secret, "shop")).status).toBe(404);
     succeededResult(b, DEPLOYMENT, "shop");
     expect((await list(b, secret, "shop")).status).toBe(200);
-    await b.control.settleCreations();
+    await b.control.settle();
     expect(b.owners()).toEqual({ shop: token.id });
     expect(claims(b)).toEqual({});
     expect(await body(await preflight(b, secret, "shop"))).toMatchObject({ status: 200, creating: false });
@@ -1147,27 +1108,27 @@ describe("a name is claimed by the store a write made, and by nothing less", () 
     writeFileSync(join(b.state, "team.json"), JSON.stringify(team));
     expect((await change(b, secret, "made", { API_KEY: "x" })).status).toBe(201);
     expect((await deploy(b, secret, "running")).status).toBe(202);
-    await b.control.settleCreations();
+    await b.control.settle();
     expect(b.owners()).toEqual({ made: token.id, running: token.id });
     // Its installer ended with nothing laid: given back.
     failedResult(b, DEPLOYMENT, "running");
-    await b.control.settleCreations();
+    await b.control.settle();
     expect(b.owners()).toEqual({ made: token.id });
     expect(Object.keys(claims(b))).toEqual(["made"]);
     // The store removed by hand: nothing left under the name, given back too.
     rmSync(join(b.storeRoot, "made"), { recursive: true });
-    await b.control.settleCreations();
+    await b.control.settle();
     expect(b.owners()).toEqual({});
     expect(claims(b)).toEqual({});
   });
 
-  test("a person's creation undone keeps its name only for a store its token's write made: one the owner laid meanwhile frees it, and stays a leftover", async () => {
+  test("a creation undone keeps its name only for a store its token's write made: one the owner laid meanwhile frees it, and stays a leftover", async () => {
     const b = await mount({ store: "real" });
-    const carl = await b.personToken(CARL, { create: true, secrets: true });
+    const carl = await b.ownerToken({ create: true, secrets: true });
     expect((await deploy(b, carl.secret, "shop")).status).toBe(202);
     mkdirSync(join(b.storeRoot, "shop", "files"), { recursive: true });
     failedResult(b, DEPLOYMENT, "shop");
-    await b.control.settleCreations();
+    await b.control.settle();
     expect(b.owners()).toEqual({});
     expect(await body(await preflight(b, carl.secret, "shop"))).toMatchObject({ status: 403, error: "reserved" });
   });
@@ -1234,7 +1195,7 @@ describe("a token never holds what the owner deployed or filled", () => {
     expect((await list(b, secret, "shop")).status).toBe(404);
     expect((await change(b, secret, "shop", { WEBHOOK_URL: "https://attacker.invalid/x" })).status).toBe(404);
     expect((await preflight(b, secret, "shop")).status).toBe(403);
-    await b.control.settleCreations();
+    await b.control.settle();
     expect(b.owners()).toEqual({});
     expect((await preflight(b, secret, "shop")).status).toBe(403);
   });
@@ -1244,13 +1205,13 @@ describe("a token never holds what the owner deployed or filled", () => {
     const { token, secret } = await b.ownerToken({ create: true, secrets: true });
     expect(await body(await deploy(b, secret, "shop"))).toMatchObject({ status: 202, creating: true });
     deployedOverSsh(b, "shop", 3061);
-    await b.control.settleCreations();
+    await b.control.settle();
     expect(b.owners()).toEqual({ shop: token.id });
     // Under way, the project is not its own yet.
     expect((await list(b, secret, "shop")).status).toBe(404);
     b.clock.t += 60_000;
     result(b, DEPLOYMENT, "shop", "failed");
-    await b.control.settleCreations();
+    await b.control.settle();
     expect(b.owners()).toEqual({});
     expect((await list(b, secret, "shop")).status).toBe(404);
   });
@@ -1265,7 +1226,7 @@ describe("a token never holds what the owner deployed or filled", () => {
     for (const response of [await preflight(b, secret, "shop"), await list(b, secret, "shop"), await b.call("POST", "/control/authenticate", { bearer: secret })]) {
       expect(await body(response)).toMatchObject({ status: 500, error: "failure" });
     }
-    await b.control.settleCreations();
+    await b.control.settle();
     expect((await list(b, secret, "shop")).status).toBe(500);
     // The owner's deploy, asking the claim, is told to restore the file, never to delete it.
     for (const response of [await owner(b, "GET", "/tokens/claim?slug=shop"), await owner(b, "DELETE", "/tokens/claim", { slug: "shop" })]) {
@@ -1331,7 +1292,7 @@ describe("a token never holds what the owner deployed or filled", () => {
   });
 });
 
-describe("a colleague's token with Manage secrets and create, end to end", () => {
+describe("a token with Manage secrets and create, end to end", () => {
   /** What its installer lays, and its result: `laid`, the folder made by this creation and kept, failed or not. */
   const laid = (b: Bench, slug: string, state: "failed" | "succeeded", deployment = DEPLOYMENT) => {
     mkdirSync(join(b.root, "sites", slug), { recursive: true });
@@ -1364,7 +1325,7 @@ describe("a colleague's token with Manage secrets and create, end to end", () =>
       expect((await change(b, secret, "shop", { API_KEY: "a" })).status).toBe(201);
       expect(await body(await deploy(b, secret, "shop"))).toMatchObject({ status: 202, creating: true });
       laid(b, "shop", outcome);
-      await b.control.settleCreations();
+      await b.control.settle();
       expect((await change(b, secret, "shop", { STRIPE_KEY: "b" })).status).toBe(200);
       expect(await body(await deploy(b, secret, "shop", "abcdefabcdefabcdefabcde0"))).toMatchObject({ status: 202, creating: false });
       expect(b.owners()).toEqual({ shop: token.id });

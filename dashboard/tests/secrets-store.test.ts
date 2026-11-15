@@ -41,12 +41,11 @@ const APP = { start: "/usr/local/bin/bun run server.ts", port: 3040 };
 
 describe("who may hold a store (rule 1)", () => {
   const owner = { requester: "owner" as const, creating: false, zone: ZONE };
-  const person = { requester: "person" as const, creating: false, zone: ZONE };
   const token = { requester: "token" as const, creating: false, zone: ZONE };
 
-  test("a deployed app, for the owner, a person and a token", () => {
+  test("a deployed app, for the owner and a token", () => {
     const shop = site("shop", { slug: "shop", ...APP, secrets: ["API_KEY"] });
-    for (const context of [owner, person, token]) expect(storeSlugRefusal("shop", { ...context, site: shop })).toBeNull();
+    for (const context of [owner, token]) expect(storeSlugRefusal("shop", { ...context, site: shop })).toBeNull();
   });
 
   test("what is not a slug is invalid and never quoted, a value pasted in its place included", () => {
@@ -68,7 +67,7 @@ describe("who may hold a store (rule 1)", () => {
   test("the platform's projects are the owner's alone", () => {
     const api = site("api", { slug: "api", ...APP });
     expect(storeSlugRefusal("api", { ...owner, site: api })).toBeNull();
-    for (const context of [person, token]) {
+    for (const context of [token]) {
       for (const slug of ["api"]) {
         expect(storeSlugRefusal(slug, { ...context, site: site(slug, { slug, ...APP }) })).toEqual({ error: "out-of-scope", message: `${slug} belongs to the platform, which stays the owner's` });
       }
@@ -77,7 +76,7 @@ describe("who may hold a store (rule 1)", () => {
 
   test("a static site has no store, whoever asks", () => {
     const blog = site("blog", { slug: "blog", publicDir: "public", build: "bun run build" });
-    for (const context of [owner, person, token]) {
+    for (const context of [owner, token]) {
       expect(storeSlugRefusal("blog", { ...context, site: blog })).toEqual({
         error: "out-of-scope",
         message: "a static site has no service to read a store; its build secrets stay with whoever deploys",
@@ -89,16 +88,14 @@ describe("who may hold a store (rule 1)", () => {
     for (const manifest of [null, { slug: "other", ...APP }]) {
       const folder = site("shop", manifest);
       expect(storeSlugRefusal("shop", { ...owner, site: folder })).toBeNull();
-      expect(storeSlugRefusal("shop", { ...person, site: folder })?.error).toBe("out-of-scope");
       expect(storeSlugRefusal("shop", { ...token, creating: true, site: folder })?.error).toBe("out-of-scope");
     }
   });
 
-  test("ahead of a deployment: the owner, a token that may create the slug; never a person, nor another token", () => {
+  test("ahead of a deployment: the owner, a token that may create the slug; never another token", () => {
     expect(storeSlugRefusal("fresh", { ...owner, site: null })).toBeNull();
     expect(storeSlugRefusal("fresh", { ...token, creating: true, site: null })).toBeNull();
     expect(storeSlugRefusal("fresh", { ...token, site: null })).toEqual({ error: "not-found", message: "fresh is not a project deployed on this machine" });
-    expect(storeSlugRefusal("fresh", { ...person, creating: true, site: null })).toEqual({ error: "not-found", message: "fresh is not a project deployed on this machine" });
   });
 });
 
@@ -230,7 +227,7 @@ describe("the listing", () => {
     store: emptyStore,
     unitReadsStore: true,
     startedUs: T * 1000,
-    may: storeMay({ kind: "owner", restore: true }),
+    may: storeMay("owner"),
     owner: true,
     ...partial,
   });
@@ -282,8 +279,8 @@ describe("the listing", () => {
       { name: "linked", state: "unmanaged", declared: false, reason: "symbolic link", bytes: null, modifiedAt: null, restartPending: false },
       { name: "undeclared.pem", state: "missing", declared: false, reason: "empty", bytes: 0, modifiedAt: T - 5000, restartPending: false },
     ]);
-    const developer = storeView(input({ store, owner: false, may: storeMay({ kind: "person", restore: false }) }));
-    expect(developer.files.map((file) => file.bytes)).toEqual([null, null, null, null]);
+    const token = storeView(input({ store, owner: false, may: storeMay("token") }));
+    expect(token.files.map((file) => file.bytes)).toEqual([null, null, null, null]);
   });
 
   test("a restart is pending when the env or a file changed after the main service started; never for an anchor", () => {
@@ -306,17 +303,14 @@ describe("the listing", () => {
     });
     const kept = { ...emptyStore, previous: true };
     expect(storeView(input({ store: kept })).previous).toBe(true);
-    expect(storeView(input({ store: kept, may: storeMay({ kind: "person", restore: true }), owner: false })).previous).toBe(true);
-    expect(storeView(input({ store: kept, may: storeMay({ kind: "person", restore: false }), owner: false })).previous).toBe(false);
-    expect(storeView(input({ store: kept, may: storeMay({ kind: "token", restore: false }), owner: false })).previous).toBe(false);
+    expect(storeView(input({ store: kept, may: storeMay("ssh"), owner: false })).previous).toBe(true);
+    expect(storeView(input({ store: kept, may: storeMay("token"), owner: false })).previous).toBe(false);
   });
 
   test("what may be done, by requester", () => {
-    expect(storeMay({ kind: "owner", restore: true })).toEqual({ write: true, reveal: true, restore: true });
-    expect(storeMay({ kind: "ssh", restore: true })).toEqual({ write: true, reveal: false, restore: true });
-    expect(storeMay({ kind: "person", restore: true })).toEqual({ write: true, reveal: false, restore: true });
-    expect(storeMay({ kind: "person", restore: false })).toEqual({ write: true, reveal: false, restore: false });
-    expect(storeMay({ kind: "token", restore: true })).toEqual({ write: true, reveal: false, restore: false });
+    expect(storeMay("owner")).toEqual({ write: true, reveal: true, restore: true });
+    expect(storeMay("ssh")).toEqual({ write: true, reveal: false, restore: true });
+    expect(storeMay("token")).toEqual({ write: true, reveal: false, restore: false });
   });
 
 });

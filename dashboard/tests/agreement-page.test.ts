@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { LANDING_FOLDER, buildSnapshot, type Raw, type Discrepancy, type Site } from "../src/state";
 import { MAX_RESTART_MS } from "../src/secrets/protocol";
-import { HASH_FILE_SETTINGS, PASSWORD_VARIABLE, PLATFORM_FILES, outsideHashRefusal } from "../src/secrets/scope";
+import { LEFTOVER_SETTINGS, PASSWORD_VARIABLE, PLATFORM_FILES, outsideHashRefusal } from "../src/secrets/scope";
 import { OFFSITE_VARIABLES, offsiteFrom } from "../src/backup/offsite";
 import { readManifest } from "../borrowed/manifest";
 import { unitEnvironment } from "../borrowed/envfile";
@@ -41,16 +41,6 @@ import { siteAccess, siteAddress, serviceState, type Mismatch } from "../web/src
 
 const PROJECT = resolve(import.meta.dir, "..");
 const WEB = join(PROJECT, "web", "src");
-
-/**
- * The portal's own reader of its sign-in settings, imported by its path: its
- * sources are written for the portal's TypeScript, and this project's compiler
- * refuses one of them (a Uint8Array against BufferSource) that the portal's
- * accepts. Only the shape this test calls is typed.
- */
-const { readSettings } = (await import(join(PROJECT, "..", "portal", "src", "oidc.ts"))) as {
-  readSettings: (env: Record<string, string | undefined>, publicUrl: string) => { settings: unknown };
-};
 
 // --- The page receives only types ------------------------------------------------
 
@@ -484,30 +474,10 @@ describe("the server's settings and the services that read them", () => {
     expect(appliesOnRestart("dashboard", "dashboard-backup.env")).toBe(false);
   });
 
-  test("the company sign-in is the portal's own list of sign-in settings, and the steward lets exactly those into portal.env", () => {
-    const names = settingById("company-signin").variables.map((one) => one.name);
-    expect(new Set(names)).toEqual(new Set(HASH_FILE_SETTINGS["portal.env"]));
-    for (const name of names) expect([name, outsideHashRefusal("portal.env", name)]).toEqual([name, null]);
+  test("portal.env takes nothing but its password hash: the company sign-in settings of before are never written again", () => {
+    for (const name of LEFTOVER_SETTINGS["portal.env"]!) expect([name, outsideHashRefusal("portal.env", name)]).not.toEqual([name, null]);
     expect(outsideHashRefusal("portal.env", "PORT")).not.toBeNull();
-    // Nothing else is allowed in the dashboard's own file.
-    for (const name of names) expect(outsideHashRefusal("dashboard.env", name)).not.toBeNull();
-  });
-
-  test("the portal needs the issuer, the client and its secret, and takes the rest as refinements", () => {
-    const values: Record<string, string> = {
-      OIDC_ISSUER: "https://idp.test-zone.invalid",
-      OIDC_CLIENT_ID: "client",
-      OIDC_CLIENT_SECRET: "secret",
-      OIDC_ALLOWED_DOMAINS: "test-zone.invalid",
-      OIDC_ADMIN_EMAILS: "owner@test-zone.invalid",
-      OIDC_PROVIDER_NAME: "Company",
-    };
-    const portal = "https://portal.test-zone.invalid";
-    for (const { name, required } of settingById("company-signin").variables) {
-      const { [name]: _left, ...rest } = values;
-      expect([name, readSettings(rest, portal).settings !== null]).toEqual([name, !required]);
-    }
-    expect(readSettings(values, portal).settings).not.toBeNull();
+    expect(outsideHashRefusal("portal.env", PASSWORD_VARIABLE)).toBeNull();
   });
 
   test("the offsite copy needs the five the backups need, and takes the region and the prefix as refinements", () => {

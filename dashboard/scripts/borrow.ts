@@ -51,10 +51,9 @@ const BORROWINGS = [
   // is certified on demand: config.ts reads its paths there, and the
   // installer writes the list with its script, as `sitesolide deploy` does.
   "api/src/zone-names.ts",
-  // The sharing modes and the rules of an email and a domain, which the portal
-  // applies, and the names of its sign-in settings, which the steward lets the
-  // dashboard write into portal.env.
-  "portal/src/sharing.ts",
+  // The shape of an email, which names a guest: the steward, the portal and
+  // the page judge it with this one copy.
+  "portal/src/email.ts",
   // The generator of the Caddy blocks and what it imports: the gatekeeper puts
   // up or takes away a site's portal by generating the block exactly like
   // `sitesolide deploy`, failing which the next deployment would write a block
@@ -82,10 +81,7 @@ const BORROWINGS = [
   // The names of the data snapshots: the backup component writes them, the
   // steward lists them and `sitesolide backups` reads them, all by this rule.
   "bin/cli/backups.ts",
-  // The identity assertion: the portal signs it, the steward verifies it
-  // before it opens a member session, with this one copy of the format.
-  "portal/src/assertion.ts",
-  // The role ladder and the projection of the access registry: the steward
+  // The projection of the access registry: the steward
   // writes it, the portal reads it, both with this one copy of the format.
   "portal/src/access.ts",
   // The door page of a site that opens with a code: the gatekeeper writes it

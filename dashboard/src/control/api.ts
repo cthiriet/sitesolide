@@ -1,5 +1,5 @@
 /**
- * The control API, `/api/v1/`, for a team member's CLI or an agent: a bearer
+ * The control API, `/api/v1/`, for the owner's CLI or an agent: a bearer
  * token, JSON in and out, and every refusal a stable code with a message that
  * says what to do next.
  *
@@ -15,19 +15,16 @@
  * requests for the same reason: the manifest first, judged, then the archive,
  * streamed to the spool and handed to the installer.
  *
- * **Access is the steward's**: a project's general access and people with
- * access are read from it and changed through it, which judges the token
- * and the access rules (src/access/rules.ts): a token gives Can open alone,
- * to people inside the company's domains or to one of those domains, and
- * removes Can open entries.
+ * **A token never gives anyone access.** A project's guests are the
+ * owner's to give, from the dashboard or with `sitesolide share`.
  *
- * **So are restarts and a project's store.** Any token that deploys a
+ * **Restarts and a project's store are the steward's.** Any token that deploys a
  * project restarts it. A token with the `secrets` permission lists its
  * project's store, sets and removes names in it, has a value drawn on the
  * machine, and sets and removes its files, `restart` asked or not. The
  * dashboard refuses early a malformed body alone, so that a value it cannot
- * read never travels further; the token, its person's role, its project and
- * its flag are the steward's to judge, which journals its refusals within
+ * read never travels further; the token, its project and its flag are the
+ * steward's to judge, which journals its refusals within
  * the token's hourly bound. Every answer is built from the fields known
  * here, and a token's view of the store is a Developer's whatever the
  * steward sends: no file size, no previous version, never `reveal` nor
@@ -61,7 +58,6 @@ import {
   type PlanResponse,
   type Identity,
   type InstallerResult,
-  type ProjectAccess,
   type ProjectStatus,
   type RestartOutcome,
   type ScheduleStatus,
@@ -105,9 +101,6 @@ export type ApiRoutes = {
   projects: Handler;
   project: (req: Request, slug: string) => Promise<Response>;
   projectLogs: (req: Request, slug: string) => Promise<Response>;
-  projectAccess: (req: Request, slug: string) => Promise<Response>;
-  putProjectAccess: (req: Request, slug: string) => Promise<Response>;
-  removeProjectAccess: (req: Request, slug: string) => Promise<Response>;
   restartProject: (req: Request, slug: string) => Promise<Response>;
   projectStore: (req: Request, slug: string) => Promise<Response>;
   changeProjectStore: (req: Request, slug: string) => Promise<Response>;
@@ -142,9 +135,6 @@ function relayed(reached: Reached): Response {
   if (reached.kind === "unreachable") return unreachable();
   if (reached.kind === "unavailable") return unavailable();
   if (reached.kind === "unreadable") return unreadable();
-  // The access registry's bounds, a token's change refused for them, in the API's own codes.
-  if (reached.body.error === "too-many-changes") return failure("too-many-attempts", String(reached.body.message));
-  if (reached.body.error === "log-full") return failure("not-available", String(reached.body.message));
   const code = reached.body.error as ControlErrorCode;
   const known = Object.hasOwn(CONTROL_STATUSES, code) && code !== "locked";
   if (!known) return failure("failure", String(reached.body.message), { status: 502 });
@@ -436,48 +426,6 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
 
   const visible = (identity: Identity, slug: string) => identity.owned.includes(slug) || identity.scope.slugs.includes(slug);
 
-  const accessUnavailable = () => failure("not-available", "this machine does not carry the access registry yet: the owner must run sitesolide upgrade");
-
-  /** The steward's access answer, as a token reads it: never the admin emails. */
-  function projectAccess(body: Record<string, unknown>): ProjectAccess | null {
-    const { slug, host, url, general, entries, signIn } = body;
-    if (typeof slug !== "string" || typeof host !== "string" || typeof url !== "string" || !Array.isArray(entries) || !isObject(signIn)) return null;
-    return {
-      slug,
-      host,
-      url,
-      general: isObject(general) ? (general as ProjectAccess["general"]) : null,
-      entries: entries as ProjectAccess["entries"],
-      signIn: {
-        configured: signIn.configured === true,
-        allowedDomains: Array.isArray(signIn.allowedDomains) ? (signIn.allowedDomains as string[]) : [],
-        providerName: typeof signIn.providerName === "string" ? signIn.providerName : null,
-      },
-    };
-  }
-
-  /** One change of a project's access by a token, then the access as it stands. */
-  async function change(req: Request, slug: string, giving: boolean): Promise<Response> {
-    const auth = await authenticated(req);
-    if (auth instanceof Response) return auth;
-    if (!visible(auth.identity, slug)) return failure("not-found", `no project ${slug.slice(0, 63)} for this token`);
-    const body = await readJson(req, 4 * 1024);
-    if (body === "too-large" || body === null) {
-      return failure("invalid", giving ? 'send a JSON object: { "who": "<email or @domain>", "role": "visitor" }' : 'send a JSON object: { "who": "<email or @domain>" }');
-    }
-    const unexpected = Object.keys(body).filter((key) => key !== "who" && (!giving || key !== "role"));
-    if (unexpected.length > 0) return failure("invalid", `unexpected field: ${unexpected.join(", ").slice(0, 80)}`);
-    const reached = await reach(
-      () => (giving ? steward.accessPut({ bearer: auth.bearer, slug, who: body.who, role: body.role ?? "visitor" }) : steward.accessRemove({ bearer: auth.bearer, slug, who: body.who })),
-      [auth.bearer],
-    );
-    if (reached.kind === "unavailable") return accessUnavailable();
-    if (reached.kind !== "received" || (reached.status !== 200 && reached.status !== 201)) return relayed(reached);
-    const listed = await reach(() => steward.accessList(auth.bearer, slug), [auth.bearer]);
-    const access = listed.kind === "received" && listed.status === 200 ? projectAccess(listed.body) : null;
-    return json({ entry: reached.body.entry, change: reached.body.change, access }, reached.status);
-  }
-
   /** The restart a change asked for: its verdict, or its refusal in the API's codes. */
   async function restartOf(bearer: string, slug: string): Promise<RestartOutcome> {
     const reached = await reach(() => steward.restart(bearer, slug), [bearer]);
@@ -566,7 +514,7 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
       const slug = manifest.slug;
       const { sites } = await snapshotSites();
       const site = sites.get(slug);
-      const decision = decideManifest(manifest, identity.scope, site === undefined ? null : site.portal.wanted, dependencies.zone, identity.member !== null && identity.member !== undefined);
+      const decision = decideManifest(manifest, identity.scope, site === undefined ? null : site.portal.wanted, dependencies.zone);
       if (decision.kind === "refused") {
         if (decision.error === "reserved") return failure("reserved", decision.message);
         return failure("invalid-manifest", "your token may not deploy this manifest: fix every point in details, or ask the owner of the machine", {
@@ -619,7 +567,7 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
       if (store.countRunning() >= MAX_RUNNING) return failure("busy", "the machine is already running several deployments: try again in a minute");
 
       const id = newDeploymentId(random);
-      store.createDeployment({ id, tokenId: identity.id, email: identity.email, member: identity.member ?? null, slug, creating, manifest: text, createdAt: now, force });
+      store.createDeployment({ id, tokenId: identity.id, email: identity.email, slug, creating, manifest: text, createdAt: now, force });
       const row = store.deployment(id)!;
       return json({ deployment: view(row, null, 0) }, 201, { Location: `/api/v1/deployments/${id}` });
     },
@@ -701,7 +649,7 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
         actor: `token:${identity.id}`,
         action: "deploy.start",
         target: row.slug,
-        detail: { email: identity.email, ...(row.member === null ? {} : { member: row.member }), deployment: row.id, creating: row.creating, bytes: receipt.bytes },
+        detail: { email: identity.email, deployment: row.id, creating: row.creating, bytes: receipt.bytes },
       });
       return json({ deployment: view(store.deployment(row.id)!, null, 0) }, 202);
     },
@@ -761,25 +709,6 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
       if (reached.kind !== "received" || reached.status !== 200) return relayed(reached);
       return json({ lines: reached.body.lines, cursor: reached.body.cursor });
     },
-
-    async projectAccess(req, slug) {
-      const auth = await authenticated(req);
-      if (auth instanceof Response) return auth;
-      if (!visible(auth.identity, slug)) return failure("not-found", `no project ${slug.slice(0, 63)} for this token`);
-      const reached = await reach(() => steward.accessList(auth.bearer, slug), [auth.bearer]);
-      if (reached.kind === "unavailable") return accessUnavailable();
-      if (reached.kind !== "received" || reached.status !== 200) return relayed(reached);
-      const access = projectAccess(reached.body);
-      return access === null ? unreadable() : json({ access });
-    },
-
-    /**
-     * Someone given Can open, or their entry kept: the steward judges the
-     * token, the project, and the access rules, and records the change in its
-     * journal under `token:<id>`. The project's access comes back with it.
-     */
-    putProjectAccess: (req, slug) => change(req, slug, true),
-    removeProjectAccess: (req, slug) => change(req, slug, false),
 
     /** The project's service restarted and observed: 200 with its verdict, even when it did not come back. The steward judges the rest. */
     async restartProject(req, slug) {

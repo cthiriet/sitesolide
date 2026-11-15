@@ -65,8 +65,7 @@ export const ONLINE = PUBLIC_URL.startsWith("https://");
 export const PASSWORD_HASH = process.env.PASSWORD_HASH ?? "";
 
 /**
- * The portal, on the loopback: the dashboard signs people in through it and
- * reads its audit there. The loopback rule opens that port only to
+ * The portal, on the loopback: the dashboard reads its audit there. The loopback rule opens that port only to
  * site-dashboard, among all the services, see bin/cli/loopback.ts.
  */
 export const PORTAL_URL = (process.env.PORTAL_URL ?? `http://127.0.0.1:${PORTAL_PORT}`).replace(/\/+$/, "");

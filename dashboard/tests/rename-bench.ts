@@ -42,7 +42,7 @@ export async function deploy(bench: Bench, manifest: object = APP): Promise<void
     deployment: DEPLOYMENT,
     slug: (manifest as { slug: string }).slug,
     requestedAt: NOW,
-    token: { id: "aaaaaaaaaaaa", email: "ada@test-zone.invalid", member: null },
+    token: { id: "aaaaaaaaaaaa", email: "ada@test-zone.invalid" },
     scope: PUBLIC,
     creating: true,
     manifest: JSON.stringify(manifest),

@@ -14,24 +14,21 @@ import { createControlSteward, isControlPath } from "../src/control/steward";
 import { createControlStore } from "../src/control/store";
 import { createControlSystem, type ControlSystem } from "../src/control/system";
 import { createTracker } from "../src/control/tracker";
-import { createMembersSystem } from "../src/people/system";
 import { reread } from "../src/secrets/log";
 import type { LogEntry } from "../src/secrets/protocol";
 import { createSteward } from "../src/secrets/steward";
 import { DEFAULT_TIMEOUTS } from "../src/secrets/client";
 import { createSystem, type Command, type System } from "../src/secrets/system";
-import { registryOf, writeRegistry, type People } from "./registry-fixtures";
 
 /**
  * A token's restart, and the bounds its refusals spend, both halves.
  *
- * The steward: the real secrets routes (`createSteward`, with the people and
- * the access registry, on a throwaway tree, as people-actions.test.ts mounts
- * them) and the real control routes, wired exactly as dashboard/steward.ts
+ * The steward: the real secrets routes (`createSteward`, with the access
+ * registry, on a throwaway tree) and the real control routes, wired exactly as dashboard/steward.ts
  * wires them, the real store, journal and token registry; `systemctl` alone
- * simulated. The token judged first, its person's role, its project; a
- * restart journaled under `token:<id>`; a refusal, of a restart, of a change
- * of a store or of access, counted against the token's hour; never a value
+ * simulated. The token judged first, its project; a restart journaled under
+ * `token:<id>`; a refusal, of a restart or of a change of a store, counted
+ * against the token's hour; never a value
  * anywhere but in the store itself. A token's store itself is
  * control-store.test.ts's.
  *
@@ -42,7 +39,6 @@ import { registryOf, writeRegistry, type People } from "./registry-fixtures";
 
 const ZONE = "test-zone.invalid";
 const PASSWORD = "Owner-Password-For-The-Tests-1";
-const ALICE = "alice@acme.test";
 /** Planted in every request a test sends, searched for everywhere a value must never go. */
 const CANARY = "leak-canary-7f3a9c";
 
@@ -70,9 +66,7 @@ type Bench = {
   journal: () => LogEntry[];
   /** A project's store's env as it stands, "" when it has none yet. */
   storeEnv: (slug: string) => string;
-  seed: (people: People) => void;
   ownerToken: (scope: Partial<Scope>) => Promise<{ token: TokenView; secret: string }>;
-  personToken: (email: string, scope: Partial<Scope>) => Promise<{ token: TokenView; secret: string }>;
   /** What every console call printed since the bench was mounted. */
   printed: () => string;
   /** Everything a value must never reach: answers, journal, access log, previous versions' names, argv, the registry, the console. */
@@ -125,7 +119,7 @@ async function mount(options: { restartsPerHour?: number; refusalsPerHour?: numb
 
   const hash = await Bun.password.hash(PASSWORD, { algorithm: "bcrypt", cost: 4 });
   writeFileSync(join(secrets, "dashboard.env"), `PASSWORD_HASH=${hash}\n`, { mode: 0o600 });
-  writeFileSync(join(secrets, "portal.env"), "OIDC_ISSUER=https://login.test-zone.invalid\nOIDC_CLIENT_ID=client\nOIDC_CLIENT_SECRET=secret\nOIDC_ALLOWED_DOMAINS=acme.test\n", { mode: 0o600 });
+  writeFileSync(join(secrets, "portal.env"), "", { mode: 0o600 });
 
   const clock = { t: Date.now() };
   const calls: string[][] = [];
@@ -157,9 +151,8 @@ async function mount(options: { restartsPerHour?: number; refusalsPerHour?: numb
       return { code: 0, output: "" };
     },
   };
-  const members = { ...createMembersSystem({ stateFolder: state, sitesDir: sites, secretsFolder: secrets, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "" }), now: () => clock.t };
-  const access = { ...createAccessSystem({ stateFolder: state, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "" }), now: () => clock.t };
-  const handler = createSteward(system, { secretsFolder: secrets, checkAccounts: false, members: { system: members, access, zone: ZONE } });
+  const access = { ...createAccessSystem({ stateFolder: state, sitesDir: sites, portalKeyFolder: portalKey, groupsFile: join(root, "group"), portalGroup: "" }), now: () => clock.t };
+  const handler = createSteward(system, { secretsFolder: secrets, checkAccounts: false, access: { system: access, zone: ZONE } });
 
   const controlReal = createControlSystem({ stateFolder: state, sitesDir: sites, unitsFolder: units, installerFolder: installer, systemctl: "/bin/false", journalctl: "/bin/false", backups: null });
   const controlSystem: ControlSystem = {
@@ -175,9 +168,8 @@ async function mount(options: { restartsPerHour?: number; refusalsPerHour?: numb
     zone: ZONE,
     isUnlocked: handler.isUnlocked,
     uidRoot: null,
-    members: handler.memberAuthority ?? undefined,
-    access: handler.accessForToken,
     forgetAccess: handler.forgetProjectAccess,
+    journal: handler.journal,
     secrets: handler.secretsForToken,
     store: handler.storeForToken,
     storeAside: handler.storeAside,
@@ -197,13 +189,10 @@ async function mount(options: { restartsPerHour?: number; refusalsPerHour?: numb
     answers.push(await response.clone().text());
     return response;
   };
-  const seed = (people: People) => writeRegistry(state, registryOf(people));
-  seed({ [ALICE]: { cms: "developer", blog: "developer" } });
-
   const unlocked = await call("POST", "/unlock", { password: PASSWORD });
   const unlock = ((await unlocked.json()) as { token: string }).token;
-  const mint = async (holder: string, scope: Partial<Scope>) => {
-    const response = await call("POST", "/tokens/create", { token: unlock, label: "agent", holder, expiresAt: null, scope: { ...NONE, ...scope } });
+  const mint = async (scope: Partial<Scope>) => {
+    const response = await call("POST", "/tokens/create", { token: unlock, label: "agent", expiresAt: null, scope: { ...NONE, ...scope } });
     expect(response.status).toBe(201);
     return (await response.json()) as { token: TokenView; secret: string };
   };
@@ -221,9 +210,7 @@ async function mount(options: { restartsPerHour?: number; refusalsPerHour?: numb
     call,
     journal,
     storeEnv: (slug) => readOr(join(secrets, "projects", slug, "env")),
-    seed,
-    ownerToken: (scope) => mint("owner", scope),
-    personToken: (email, scope) => mint(email, scope),
+    ownerToken: (scope) => mint(scope),
     printed: () => printed.map((args) => args.map(String).join(" ")).join("\n"),
     everywhere: () =>
       [
@@ -249,7 +236,6 @@ async function body(response: Response): Promise<{ status: number } & Record<str
 const patch = (b: Bench, secret: string, slug: string, change: { set?: Record<string, string>; remove?: string[] }) => b.call("PATCH", "/control/store", { bearer: secret, slug, ...change });
 const list = (b: Bench, secret: string, slug: string) => b.call("POST", "/control/store/list", { bearer: secret, slug });
 const restart = (b: Bench, secret: string, slug: string) => b.call("POST", "/control/restart", { bearer: secret, slug });
-const grantAccess = (b: Bench, secret: string, slug: string, who: string, role: string) => b.call("PUT", "/control/access", { bearer: secret, slug, who, role });
 
 describe("the steward: what a token's hour bounds", () => {
   test("30 restarts an hour per token: 429 with wait; another token has its own hour", async () => {
@@ -331,57 +317,20 @@ describe("the steward: what a token's hour bounds", () => {
     expect(b.everywhere()).not.toContain(CANARY);
   });
 
-  test("a token's refusals never take another's place in the journal: a person's token refused in the same minute is journaled", async () => {
-    const b = await mount();
-    const idle = await b.ownerToken({ slugs: ["cms"] });
-    const alice = await b.personToken(ALICE, { slugs: ["cms"], secrets: true });
-    b.seed({ [ALICE]: { cms: "viewer" } });
-    for (let i = 0; i < 20; i++) expect((await list(b, idle.secret, "cms")).status).toBe(403);
-    expect((await patch(b, alice.secret, "cms", { set: { X: "y" } })).status).toBe(403);
-    expect(b.journal().at(-1)).toMatchObject({ operation: "set", result: "rejects", actor: `token:${alice.token.id}`, member: ALICE, detail: "role viewer" });
-  });
-
-  test("a token's refused changes of access spend the same hour: a stolen token, even one that manages no secret, cannot push what was changed out of the journal", async () => {
-    const b = await mount();
-    const { token, secret } = await b.ownerToken({ slugs: ["cms"], secrets: true });
-    // A deploy token alone, the kind any agent holds.
-    const idle = await b.ownerToken({ slugs: ["cms"] });
-    expect((await patch(b, secret, "cms", { set: { API_KEY: `${CANARY}-1`, SMTP_URL: "smtp://elsewhere.invalid", EXTRA: "x" } })).status).toBeLessThan(300);
-    const sets = () => b.journal().filter((line) => line.actor === `token:${token.id}` && line.result === "ok" && line.operation === "set");
-    const refusals = () => b.journal().filter((line) => line.actor === `token:${idle.token.id}` && line.result === "rejects");
-    let bounded = 0;
-    // A token gives Can open alone: Admin is refused, and journaled, twenty a minute for most of an hour.
-    for (let minute = 1; minute <= 55; minute++) {
-      b.clock.t += 60_000;
-      for (let i = 0; i < 20; i++) {
-        const answer = await body(await grantAccess(b, idle.secret, "cms", "someone@acme.test", "admin"));
-        if (answer.status === 429) {
-          bounded++;
-          expect(answer).toMatchObject({ error: "too-many-attempts", message: startingWith(`${TOKEN_REFUSALS_PER_HOUR} refused requests per hour at most for a token`) });
-        } else expect(answer.status).toBe(403);
-      }
-    }
-    expect(sets()).toHaveLength(3);
-    expect(refusals()).toHaveLength(TOKEN_REFUSALS_PER_HOUR);
-    expect(bounded).toBe(55 * 20 - TOKEN_REFUSALS_PER_HOUR);
-    // An accepted change is the access registry's to bound, and an entry not there to remove is never journaled: neither costs anything of this one.
-    b.clock.t += 3_600_000;
-    for (let i = 0; i < TOKEN_REFUSALS_PER_HOUR + 1; i++) expect((await grantAccess(b, idle.secret, "cms", "visitor@acme.test", "visitor")).status).toBeLessThan(300);
-    for (let i = 0; i < TOKEN_REFUSALS_PER_HOUR + 1; i++) {
-      expect((await b.call("DELETE", "/control/access", { bearer: idle.secret, slug: "cms", who: "nobody@acme.test" })).status).toBe(404);
-    }
-    expect((await grantAccess(b, idle.secret, "cms", "someone@acme.test", "admin")).status).toBe(403);
-  });
-
-  test("a token's refused changes of access never take another's place in the journal: a failed sign-in, another token, refused in the same minute are journaled", async () => {
+  test("a token's refusals never take another's place in the journal: another token refused in the same minute is journaled", async () => {
     const b = await mount();
     const idle = await b.ownerToken({ slugs: ["cms"] });
     const other = await b.ownerToken({ slugs: ["cms"] });
-    for (let i = 0; i < 20; i++) expect((await grantAccess(b, idle.secret, "cms", "someone@acme.test", "admin")).status).toBe(403);
-    await b.call("POST", "/people/signin", { assertion: "forged" });
-    expect(b.journal().at(-1)).toMatchObject({ operation: "dashboard.signin_failed", result: "rejects", actor: "anonymous" });
-    expect((await grantAccess(b, other.secret, "cms", "someone@acme.test", "admin")).status).toBe(403);
-    expect(b.journal().at(-1)).toMatchObject({ operation: "access.add", result: "rejects", actor: `token:${other.token.id}`, slug: "cms" });
+    for (let i = 0; i < 20; i++) expect((await list(b, idle.secret, "cms")).status).toBe(403);
+    expect((await patch(b, other.secret, "cms", { set: { X: "y" } })).status).toBe(403);
+    expect(b.journal().at(-1)).toMatchObject({ operation: "set", result: "rejects", actor: `token:${other.token.id}`, member: null, detail: "no secrets permission" });
+  });
+
+  test("a token changes no access: the routes are gone", async () => {
+    const b = await mount();
+    const { secret } = await b.ownerToken({ slugs: ["cms"], secrets: true });
+    expect((await b.call("PUT", "/control/access", { bearer: secret, slug: "cms", who: "someone@acme.test", role: "visitor" })).status).toBe(404);
+    expect((await b.call("POST", "/control/access/list", { bearer: secret, slug: "cms" })).status).toBe(404);
   });
 });
 
@@ -399,20 +348,13 @@ describe("the steward: restarting with a token", () => {
     expect((await restart(b, plain.secret, "blog")).status).toBe(200);
   });
 
-  test("busy while a deployment of it runs; a static site has no service; a person's token below Developer is refused", async () => {
+  test("busy while a deployment of it runs; a static site has no service", async () => {
     const b = await mount();
     const { secret } = await b.ownerToken({ slugs: ["cms", "notes"] });
     b.installing.add("sitesolide-installer@cms.service");
     expect(await body(await restart(b, secret, "cms"))).toMatchObject({ status: 409, error: "busy", message: expect.stringContaining("a deployment of cms is running") });
     expect(await body(await restart(b, secret, "notes"))).toMatchObject({ status: 404, error: "not-found", message: "notes is a static site: it has no service to restart" });
     expect(b.calls.some((call) => call[0] === "restart")).toBe(false);
-
-    const alice = await b.personToken(ALICE, { slugs: ["blog"] });
-    b.seed({ [ALICE]: { blog: "viewer" } });
-    expect(await body(await restart(b, alice.secret, "blog"))).toMatchObject({ status: 403, message: `${ALICE} is a Viewer on blog: restarting its service takes a Developer or an Admin` });
-    b.seed({ [ALICE]: { blog: "developer" } });
-    expect((await restart(b, alice.secret, "blog")).status).toBe(200);
-    expect(b.journal().at(-1)).toMatchObject({ operation: "restart", result: "ok", actor: `token:${alice.token.id}`, member: ALICE, slug: "blog" });
   });
 
   test("a token's restart never holds the secrets' lock: a change of a store waits for nothing while a service will not stop; restarts of the same project wait their turn; one at a time per token", async () => {
@@ -499,23 +441,9 @@ describe("the API in front of the real steward", () => {
     return createApiRoutes({ steward, store, spool, limiter: createLimiter(), tracker: createTracker({ store, steward, spool }), stateFile: join(folder, "state.json"), publicUrl: `https://dashboard.${ZONE}`, zone: ZONE });
   }
 
-  test("a person lowered to Viewer: their token reads the steward's refusal naming the role, journaled, never an unknown project", async () => {
+  test("a token reads the steward's refusal, never an unknown project", async () => {
     const b = await mount();
     const api = apiOf(b);
-    const { token, secret } = await b.personToken(ALICE, { slugs: ["cms", "blog"] });
-    const headers = { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" };
-    const send = () => api.restartProject(new Request("http://dashboard/api/v1/projects/cms/restart", { method: "POST", headers }), "cms");
-    expect((await send()).status).toBe(200);
-
-    b.seed({ [ALICE]: { cms: "viewer", blog: "developer" } });
-    const before = b.journal().length;
-    expect(await body(await send())).toEqual({
-      status: 403,
-      error: "out-of-scope",
-      message: `${ALICE} is a Viewer on cms: restarting its service takes a Developer or an Admin`,
-    });
-    expect(b.journal().slice(before).map((line) => [line.operation, line.actor, line.member, line.slug, line.detail])).toEqual([["restart", `token:${token.id}`, ALICE, "cms", "role viewer"]]);
-
     // An owner's token on a project it does not reach: unknown, nothing journaled.
     const plain = await b.ownerToken({ slugs: ["cms"] });
     const journaled = b.journal().length;
@@ -546,8 +474,8 @@ const scopeOf = (slugs: string[], secrets: boolean | undefined): Scope => ({ slu
 const GRACE = tokenOf("g");
 const NOSEC = tokenOf("n");
 const IDENTITIES: Record<string, Identity> = {
-  [GRACE]: { id: "bbbbbbbbbbbb", label: "Grace", email: "owner", expiresAt: null, scope: scopeOf(["kanban"], true), owned: [], member: null },
-  [NOSEC]: { id: "dddddddddddd", label: "Deployer", email: "owner", expiresAt: null, scope: scopeOf(["kanban"], false), owned: [], member: null },
+  [GRACE]: { id: "bbbbbbbbbbbb", label: "Grace", email: "owner", expiresAt: null, scope: scopeOf(["kanban"], true), owned: [] },
+  [NOSEC]: { id: "dddddddddddd", label: "Deployer", email: "owner", expiresAt: null, scope: scopeOf(["kanban"], false), owned: [] },
 };
 
 type Refusal = { status: number; error: string; message: string; wait?: number };
@@ -668,11 +596,4 @@ describe("the steward: a project turned off", () => {
     expect(b.calls).not.toContainEqual(["restart", "blog"]);
   });
 
-  test("nor by a developer's own token", async () => {
-    const b = await mount();
-    turnOff(b);
-    const { secret } = await b.personToken(ALICE, { slugs: ["blog"] });
-    expect((await restart(b, secret, "blog")).status).not.toBe(200);
-    expect(b.calls).not.toContainEqual(["restart", "blog"]);
-  });
 });

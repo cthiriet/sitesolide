@@ -104,6 +104,7 @@ import {
   generateRefusal,
   readGenerateAsk,
   storeMay,
+  machineRefusal,
   storeNameRefusal,
   storeSlugRefusal,
   storeValueRefusal,
@@ -142,19 +143,14 @@ import { isAnchorUnit, showArguments, readShow, restartPending, serviceView, ver
 import type { Command, Permissions, Examination, StorePreviousPart, System } from "./system";
 import { createBackupRoutes } from "../backup/routes";
 import type { BackupReader } from "../backup/reader";
-import { createMemberRoutes, type KeyState } from "../people/steward";
-import type { MembersSystem } from "../people/system";
-import { OWNER_ACTOR, type Roles } from "../people/protocol";
-import { createMemberActions, type Who } from "../people/actions";
-import type { MemberAuthority, SecretsForToken } from "../control/steward";
+import type { ControlEvent, SecretsForToken } from "../control/steward";
 import { readSecretsChange } from "../control/secrets";
-import type { StoreForToken } from "./store-api";
+import type { StoreForToken, Who } from "./store-api";
 import { createServe, errorName, GENERIC_MESSAGE, readJsonBody, type Body, type Handler, type Routes } from "./requests";
-import { machineRefusal, may } from "../people/powers";
-import { portalReading, type PortalAdmin } from "../people/portal";
+import { portalReading, type PortalAdmin } from "../access/portal";
 import { createAccessRoutes, createAccessStore, type AccessRoutes, type AccessStore } from "../access/steward";
 import type { AccessSystem } from "../access/system";
-import { GENERAL_ACCESSES, type GeneralResponse, type GeneralView, type LeavingToken } from "../access/protocol";
+import { GENERAL_ACCESSES, OWNER as OWNER_ACTOR, type GeneralResponse, type GeneralView } from "../access/protocol";
 import { createPasskeySteward, type PasskeySteward } from "../passkeys/steward";
 import type { PasskeySystem } from "../passkeys/system";
 
@@ -201,28 +197,19 @@ export type StewardOptions = {
   /** The backups' folders, read for `/backups`; absent, the routes say backups are not set up. */
   backups?: BackupReader | null;
   /**
-   * Access and the people who sign in to the dashboard, see src/access/ and
-   * src/people/. Absent, their routes do not exist, as on a steward that
-   * predates them, and the owner's socket answers nothing.
+   * Access: the registry of each project's guests and the portal's
+   * projection of it, see src/access/. Absent, its routes do not exist, as on
+   * a steward that predates it, and the owner's socket answers nothing of it.
    */
-  members?: {
-    system: MembersSystem;
-    /** The access registry's files: the registry, the portal's projection, the stores before it. */
-    access: AccessSystem;
+  access?: {
+    /** The access registry's files: the registry, the portal's projection. */
+    system: AccessSystem;
     zone: string;
     /**
-     * The portal's admin API through the relay (src/people/portal.ts), asked
+     * The portal's admin API through the relay (src/access/portal.ts), asked
      * whether the portal reads the projection. Absent, it is not asked.
      */
     portal?: PortalAdmin | null;
-    /**
-     * Someone who no longer signs in: their tokens revoked, `actor` who took
-     * them off. The control routes' (src/control/steward.ts), built after
-     * this handler, hence a function of their own the entry point fills in.
-     */
-    revokeTokens?: (email: string, actor: string) => Promise<LeavingToken[]>;
-    /** A person's live tokens, as a confirmation names them (src/control/steward.ts, `tokensOf`). */
-    tokensOf?: (email: string) => Promise<LeavingToken[]>;
   };
   /**
    * The owner wrote into a project's store, on the dashboard or over SSH:
@@ -261,12 +248,9 @@ export type StewardHandler = Handler & {
   isUnlocked: (token: unknown) => Promise<boolean>;
   /**
    * The handler of the owner's socket, which only root opens: the access
-   * registry, for `sitesolide share` and `sitesolide people` over the
-   * owner's SSH.
+   * registry, for `sitesolide share` over the owner's SSH.
    */
   owner: Handler;
-  /** The sign-in key pair, laid if missing: the entry point asks at startup. */
-  ensureMemberKeys: () => Promise<KeyState | null>;
   /**
    * The access registry made if it is missing, its projection written again,
    * in the background, tried again later and later until it is: the entry
@@ -275,13 +259,11 @@ export type StewardHandler = Handler & {
   startAccess: () => Promise<void>;
   /** The passkey registry read, the portal's projection of it written again: at startup. */
   startPasskeys: () => Promise<void>;
-  /** A project removed from the machine: its people with access dropped (src/access/steward.ts); null without them. */
+  /** A project removed from the machine: its guests dropped (src/access/steward.ts); null without them. */
   forgetProjectAccess: AccessRoutes["forgetProject"] | null;
   renameProjectAccess: AccessRoutes["renameProject"] | null;
-  /** What the control routes ask of the people for a person's own tokens; null without them. */
-  memberAuthority: MemberAuthority | null;
-  /** A token's changes of access, the token judged by the control routes. */
-  accessForToken: AccessRoutes["forToken"] | null;
+  /** A line of the control routes into the journal: a project removed, or taken back from a token. */
+  journal: (event: ControlEvent) => Promise<void>;
   /**
    * A token's secrets and restart, the token judged by the control routes:
    * the listing, a change of `<slug>.env`, a restart, the journal's refusals,
@@ -404,14 +386,12 @@ function createLimit(max: number): <T>(task: () => Promise<T>) => Promise<T> {
 const OWNER: Who = { actor: OWNER_ACTOR, member: null };
 
 /**
- * Is this requester held to a person's bounds, the machine's own projects and
- * files refused and nothing read back unless their role reads it? A person,
- * and any token, the owner's own included: a token is a key on a laptop or in
- * an agent, not the owner's password, and what it may do is what a
- * Developer may.
+ * Is this requester held to a token's bounds, the machine's own projects
+ * refused? Any token, the owner's own included: a token is a key on a laptop
+ * or in an agent, not the owner's password.
  */
 function restricted(who: Who): boolean {
-  return who.member !== null || who.token !== undefined;
+  return who.token !== undefined;
 }
 
 /** What the log can carry of a request: a well-formed name, never the raw text of a field. */
@@ -461,8 +441,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   const { secretsFolder } = options;
   /** What a generated value is drawn from: the injected source in the tests, the system's otherwise. */
   const random = options.random ?? ((bytes: number) => crypto.getRandomValues(new Uint8Array(bytes)));
-  /** The served zone: it names the landing's folder, which, like every platform project, is never a member's. */
-  const memberZone = options.members?.zone ?? "";
+  /** The served zone: it names the landing's folder, which, like every platform project, is never a token's. */
+  const zone = options.access?.zone ?? "";
 
   let state = INITIAL_STATE;
 
@@ -511,8 +491,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
    * name a request carries.
    *
    * Every line goes through here, whoever writes it: the access store, the
-   * access routes, a token's changes through the control routes, the people
-   * and their sessions. An accepted change of access goes to the access log,
+   * access routes, a token's work through the control routes. An accepted change of access goes to the access log,
    * kept 180 days, everything else to the journal (log.ts).
    */
   async function writeLog(
@@ -617,8 +596,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
 
   /**
    * The same lock for any requester: `still` says, once the turn has come,
-   * whether they may still act, the owner's token alive, a member's
-   * session, unlock and role still theirs; its refusal goes back as it stands.
+   * whether they may still act, the owner's token alive, a token still
+   * live; its refusal goes back as it stands.
    */
   function underLockWith(req: Request, still: () => Promise<Response | null>, task: () => Promise<Response>): Promise<Response> {
     const taken = exclusive(async () => {
@@ -697,21 +676,12 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return readSites(await system.listProjects(), await system.listSecrets());
   }
 
-  /**
-   * The site and the file a request names, within the scope. For a member or
-   * a token, never the machine's own: a platform project, or a file kept for
-   * root, whatever role a hand-edited registry would claim
-   * (src/people/powers.ts).
-   */
+  /** The site and the file a request names, within the scope: the owner's. */
   async function target(operation: Operation, body: Body, who: Who = OWNER): Promise<Target | Response> {
     const found = checkSite(await sites(), body.slug);
     if ("refusal" in found) return refuse(operation, body, found.refusal, null, who);
     const file = checkFile(found.site, body.file, secretsFolder);
     if ("refusal" in file) return refuse(operation, body, file.refusal, null, who);
-    if (restricted(who)) {
-      const machine = machineRefusal(found.site.folder, file.declaration, memberZone);
-      if (machine !== null) return refuse(operation, body, { error: "out-of-scope", message: machine }, null, who);
-    }
     return { site: found.site, declaration: file.declaration, path: file.path };
   }
 
@@ -995,7 +965,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   /** The code and the link that carries it, for whoever may see them. */
   function codeView(site: Site, code: string | null): { code: string; url: string | null } | null {
     if (code === null) return null;
-    return { code, url: memberZone === "" ? null : `https://${codeAddress(site.folder, memberZone, site.manifest)}/?key=${code}` };
+    return { code, url: zone === "" ? null : `https://${codeAddress(site.folder, zone, site.manifest)}/?key=${code}` };
   }
 
   // --- The routes ------------------------------------------------------------
@@ -1037,24 +1007,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     const seen = await Promise.all([...(await sites()).values()].map((site) => projectView(site)));
     const body: ProjectsResponse = { projects: seen };
     return Response.json(body);
-  }
-
-  /**
-   * What a member lists of their projects: those where their role lets them
-   * see the secrets, never a platform project, whose files are the owner's
-   * alone. Their store as their role sees it, never a value.
-   */
-  async function memberProjects(roles: Roles): Promise<ProjectView[]> {
-    const all = await sites();
-    const views: ProjectView[] = [];
-    for (const [slug, role] of Object.entries(roles).sort(([a], [b]) => a.localeCompare(b))) {
-      const site = all.get(slug);
-      if (site === undefined || !may(role, "secrets.list") || machineRefusal(slug, null, memberZone) !== null) continue;
-      const restores = may(role, "secrets.restore");
-      const actor: StoreActor = { who: { actor: OWNER_ACTOR, member: OWNER_ACTOR }, kind: "person", creating: false, restores };
-      views.push(await projectView(site, [], actor));
-    }
-    return views;
   }
 
   /** The journal and a window of the access log as one history, read one request at a time and kept by none (log.ts). */
@@ -1521,7 +1473,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return underLock(req, body, () => portalTask(req, body, OWNER));
   }
 
-  /** `POST /portal`'s and `/people/portal`'s body read as a general access, answered in their shape. */
+  /** `POST /portal`'s body read as a general access, answered in its shape. */
   async function portalTask(req: Request, body: Body, who: Who): Promise<Response> {
     const { active, ...rest } = body;
     const changed = await generalChange(req, { ...rest, access: active === true ? "restricted" : "public" }, who, "dashboard");
@@ -1574,7 +1526,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
    * The journal says `portal` and the general access chosen, `on`, `off` or
    * `code`, or `code` and `renew` for a new code: never the code itself, which
    * the gatekeeper draws on the machine. The answer carries it, for the owner and
-   * the project's Admins, read back from the codes file.
+   * read back from the codes file.
    */
   async function generalChange(req: Request, body: Body, who: Who, channel: "dashboard" | "ssh"): Promise<GeneralResponse | Response> {
     if (body.access !== "public" && body.access !== "restricted" && body.access !== "code") return error("invalid", "access: public, restricted or code");
@@ -1590,10 +1542,6 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     const found = checkSite(await sites(), body.slug);
     if ("refusal" in found) return refuse(operation, body, found.refusal, null, who);
     const { site } = found;
-    if (restricted(who)) {
-      const machine = machineRefusal(site.folder, null, memberZone);
-      if (machine !== null) return refuse(operation, body, { error: "out-of-scope", message: machine }, null, who);
-    }
 
     const current = await generalState(site);
     if (!renew && target === "restricted" && current.portal.requested && current.portal.installed) {
@@ -1617,7 +1565,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       return refuse(operation, body, { error: "invalid", message: `type ${site.folder} to confirm ${what}` }, null, who);
     }
     if (target !== "restricted" && access !== null) {
-      const bounded = await access.widen(channel, who.actor);
+      const bounded = await access.widen(channel);
       if (bounded !== null) return bounded;
     }
     // Checked again just before the launch: re-reading the site and its block
@@ -1765,25 +1713,12 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   const turnedOff = (slug: string): Refusal => ({ error: "refused", message: `${slug} is turned off: turn it on first` });
 
   /**
-   * A member's restart, the role already judged by src/people/steward.ts and
-   * judged again here once the lock is taken. Unlike the Secrets section's, it
-   * does not ask whether the unit reads a managed file: a member restarts a
-   * service to restart it, not to apply a secret. The platform's own projects
-   * are never a member's, and the dashboard's restart would cut the relay that
-   * carries the verdict: both are refused. A token's restart is the same
-   * code (`restartFor`).
-   */
-  function memberRestart(req: Request, slug: string, who: Who, allowed: () => Promise<boolean>): Promise<Response> {
-    return restartFor(req, slug, who, async () => ((await allowed()) ? null : error("out-of-scope", `${who.actor} may no longer restart ${slug}`)));
-  }
-
-  /**
-   * A person's restart or a token's, in `turn`: the lock for a person, the
-   * project's own turn for a token (`tokenRestartTurn`). `still` says, once
+   * A restart, in `turn`: the lock for root over its socket, the project's
+   * own turn for a token (`tokenRestartTurn`). `still` says, once
    * the turn has come, whether they may still restart it, and its refusal
    * goes back as it stands, journaled: `busy` for a deployment of the
    * project started meanwhile, "no longer allowed" otherwise. The journal
-   * names `who`: the person, or the token and the person it belongs to.
+   * names `who`: root, or the token.
    */
   async function restartFor(
     req: Request,
@@ -1811,13 +1746,13 @@ export function createSteward(system: System, options: StewardOptions): StewardH
         await writeLog("restart", "rejects", body, refusal.error, null, who);
         return error(refusal.error, refusal.message);
       }
-      // A person's or a token's: never the platform's projects. Root over the
+      // A token's: never the platform's projects. Root over the
       // owner's socket restarts any of them, the dashboard included, whose
       // relay is not in the way there.
       if (restricted(who)) {
         if (site.folder === DASHBOARD_SLUG) return error("out-of-scope", "the dashboard is the owner's to restart");
-        // The second lock, whatever a hand-edited registry or team.json claims.
-        const machine = machineRefusal(site.folder, null, memberZone);
+        // The second lock, whatever a hand-edited team.json claims.
+        const machine = machineRefusal(site.folder, null, zone);
         if (machine !== null) {
           await writeLog("restart", "rejects", body, "out-of-scope", null, who);
           return error("out-of-scope", machine);
@@ -1878,16 +1813,14 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   /** Who works on a store, as this steward verified them. */
   type StoreActor = {
     who: Who;
-    /** The owner in the dashboard, root over its socket, a person, a token. */
-    kind: "owner" | "ssh" | "person" | "token";
+    /** The owner in the dashboard, root over its socket, a token. */
+    kind: "owner" | "ssh" | "token";
     /** A token the control routes let create this slug: its store may be written ahead of its first deployment. */
     creating: boolean;
-    /** May put a previous version back: the owner, an Admin. */
-    restores: boolean;
   };
 
-  const OWNER_STORE: StoreActor = { who: OWNER, kind: "owner", creating: false, restores: true };
-  const SSH_STORE: StoreActor = { who: OWNER, kind: "ssh", creating: false, restores: true };
+  const OWNER_STORE: StoreActor = { who: OWNER, kind: "owner", creating: false };
+  const SSH_STORE: StoreActor = { who: OWNER, kind: "ssh", creating: false };
 
   const isOwnerKind = (actor: StoreActor) => actor.kind === "owner" || actor.kind === "ssh";
 
@@ -1904,9 +1837,9 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     const all = await sites();
     const site = typeof slug === "string" && isSiteFolder(slug) ? (all.get(slug) ?? null) : null;
     const refusal = storeSlugRefusal(slug, {
-      requester: isOwnerKind(actor) ? "owner" : actor.kind === "person" ? "person" : "token",
+      requester: isOwnerKind(actor) ? "owner" : "token",
       creating: actor.creating,
-      zone: memberZone,
+      zone: zone,
       site,
     });
     if (refusal !== null) return refusal;
@@ -2110,7 +2043,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       store: storeState(reading),
       unitReadsStore: unitsReadStore(project, units),
       startedUs: service?.startedUs ?? null,
-      may: storeMay({ kind: actor.kind, restore: actor.restores }),
+      may: storeMay(actor.kind),
       owner: isOwnerKind(actor),
     });
   }
@@ -2549,7 +2482,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     };
   }
 
-  /** `POST /restart { slug }` on the owner's socket: the restart a person's is, with root as who and no refusal for want of a managed file. */
+  /** `POST /restart { slug }` on the owner's socket: the restart a token's is, with root as who and no refusal for want of a managed file. */
   async function ownerRestart(req: Request): Promise<Response> {
     const body = await readBody(req, ["slug"]);
     if (body instanceof Response) return body;
@@ -2557,10 +2490,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return restartFor(req, body.slug, OWNER, async () => null);
   }
 
-  /** A person's store work, the role judged by src/people/actions.ts, under the lock it takes. */
-  const personStore = (task: StoreTask) => (_req: Request, body: Body, who: Who) => task(body, { who, kind: "person", creating: false, restores: who.restores === true });
-
-  const tokenActor = (who: Who, creating: boolean): StoreActor => ({ who, kind: "token", creating, restores: false });
+  const tokenActor = (who: Who, creating: boolean): StoreActor => ({ who, kind: "token", creating });
   /** A token's store work, the token judged by the control routes, its turn under the lock. */
   const storeForToken: StoreForToken = {
     list: (slug, who, creating) => storeListTask(slug, tokenActor(who, creating)),
@@ -2570,46 +2500,29 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     removeFile: (req, request, who, still) => underLockWith(req, still, () => storeFileRemoveTask({ ...request }, tokenActor(who, false))),
   };
 
-  // --- Access and the people who sign in -----------------------------------------
+  // --- Access ---------------------------------------------------------------------
 
-  // The registry is the access store's (src/access/steward.ts); the people's
-  // sessions, keys and unlocks are the members routes' (src/people/steward.ts),
-  // which read their roles from it at every request.
+  // The registry is the access store's (src/access/steward.ts).
   const journalEvent = (event: { operation: Operation; result: "ok" | "rejects"; actor: string; member: string | null; slug?: string; detail: string | null }) =>
     writeLog(event.operation, event.result, event.slug === undefined ? null : { slug: event.slug }, bounded(event.detail), null, { actor: event.actor, member: event.member });
 
   const accessStore: AccessStore | null =
-    options.members === undefined
+    options.access === undefined
       ? null
       : createAccessStore({
-          system: options.members.access,
-          zone: memberZone,
-          hostOf: (slug) => (reservedReason(slug, memberZone) === null ? addressOf(slug, memberZone) : null),
-          journal: journalEvent,
-          logFull: async (share, reserve) => {
+          system: options.access.system,
+          zone,
+          hostOf: (slug) => (reservedReason(slug, zone) === null ? addressOf(slug, zone) : null),
+          logFull: async () => {
             await accessLogPrepared;
             try {
-              return await system.accessLogFull(system.now(), share, reserve);
+              return await system.accessLogFull(system.now());
             } catch (e) {
               // A log that cannot be counted takes nothing more.
               console.error(`access log: not counted (${errorName(e)}), changes of access refused`);
               return true;
             }
           },
-        });
-
-  const members =
-    options.members === undefined || accessStore === null
-      ? null
-      : createMemberRoutes({
-          system: options.members.system,
-          access: accessStore,
-          zone: options.members.zone,
-          readBody: (req, fields) => readBody(req, fields),
-          journal: journalEvent,
-          restart: memberRestart,
-          revokeTokens: options.members.revokeTokens,
-          random: options.random,
         });
 
   /** A project's general access as the machine carries it: the preview lock, the portal, or neither, and what may change. */
@@ -2620,28 +2533,18 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   const access: AccessRoutes | null =
-    members === null || accessStore === null || options.members === undefined
+    accessStore === null || options.access === undefined
       ? null
       : createAccessRoutes({
           store: accessStore,
-          zone: memberZone,
-          hostOf: (slug) => addressOf(slug, memberZone),
-          projectExists: options.members.system.projectExists,
-          signIn: () => options.members!.system.readPortalSettings(),
+          zone,
+          hostOf: (slug) => addressOf(slug, zone),
+          projectExists: options.access.system.projectExists,
           general: generalOf,
-          portalReading: () => portalReading(options.members?.portal ?? null),
+          portalReading: () => portalReading(options.access?.portal ?? null),
           isUnlocked: (token) => isValidToken(state, token, system.now()),
           readBody: (req, fields) => readBody(req, fields),
           journal: journalEvent,
-          // A token's refusal goes to the journal as it stands: the control
-          // routes bound it per token and per hour before asking
-          // (src/control/steward.ts, `accessChange`). Through the people's
-          // bound per minute, shared with everyone, twenty of a token's kept
-          // every other refusal of that minute out, a failed sign-in included.
-          journalRefusal: (event) => (/^token:[0-9a-f]{12}$/.test(event.actor) ? journalEvent(event) : members.journalRefusal(event)),
-          authorize: members.authorize,
-          leave: members.leave,
-          ...(options.members.tokensOf === undefined ? {} : { tokensOf: options.members.tokensOf }),
         });
 
   // --- Backups -----------------------------------------------------------------
@@ -2659,43 +2562,13 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     uidRoot: checked ? uidRoot : null,
   });
 
-  // --- A person's work on their projects ------------------------------------------
-
-  // The operations above, with the person as requester: their role judged by
-  // src/people/actions.ts, their session, unlock and role asked again under
-  // the lock, the machine's own projects and files refused by `target`.
-  const memberActions =
-    members === null
-      ? {}
-      : createMemberActions({
-          members,
-          readBody: (req, fields, max) => readBody(req, fields, max),
-          underLock: underLockWith,
-          ops: {
-            projects: memberProjects,
-            portal: portalTask,
-            general: (req, body, who) => generalTask(req, body, who),
-            storeSet: personStore(storeTasks.set),
-            storeRemove: personStore(storeTasks.remove),
-            storeGenerate: personStore(storeTasks.generate),
-            storeSetFile: personStore(storeTasks.setFile),
-            storeRemoveFile: personStore(storeTasks.removeFile),
-            storeRestore: personStore(storeTasks.restore),
-          },
-          startRestore: backups.start,
-          zone: memberZone,
-          maxContentBytes: MAX_CONTENT_BODY_BYTES,
-        });
-
   // --- A token's secrets and restart ------------------------------------------------
 
   // The token, its role and its flag are judged by src/control/steward.ts;
   // these are the operations above with the token as `who`, held to a
-  // person's bounds (`restricted`). Its refusals are bounded per token there,
-  // charged before they come here: through the people's bound per minute,
-  // shared with everyone, a token refused twenty times a minute kept every
-  // other refusal of that minute, a lowered person's included, out of the
-  // journal, and spent nothing of its own hour.
+  // token's bounds (`restricted`). Its refusals are bounded per token there,
+  // charged before they come here, so that a token refused again and again
+  // spends its own hour.
 
   /**
    * Is this project restricted on the machine, as its general access reads:
@@ -2715,7 +2588,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   // restarts an hour by a token then queued everyone's writes, door changes
   // and restores, past four of them refused `busy`. A write needs nothing of
   // a restart: the file is replaced whole by a rename, so the service starts
-  // with the version before or the version after. A person's restart keeps
+  // with the version before or the version after. The owner's restart keeps
   // its place under the lock, as the Secrets section's.
   const tokenRestartTurns = new Map<string, <T>(task: () => Promise<T>) => Promise<T> | null>();
   function tokenRestartTurn(slug: string): <T>(task: () => Promise<T>) => Promise<T> | null {
@@ -2737,9 +2610,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
 
   const routes: Routes = {
     ...storeRoutes(false),
-    ...(members?.dashboard ?? {}),
     ...(access?.dashboard ?? {}),
-    ...memberActions,
     ...(passkeys?.dashboard ?? {}),
     "/projects": { GET: listProjects },
     "/log": { GET: readLog },
@@ -2772,24 +2643,11 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       "/restart": { POST: ownerRestart },
       ...(passkeys?.owner ?? {}),
     }),
-    ensureMemberKeys: async () => (members === null ? null : members.ensureKeys()),
     startAccess: async () => accessStore?.start(),
     startPasskeys: async () => passkeys?.start(),
     forgetProjectAccess: access?.forgetProject ?? null,
     renameProjectAccess: access?.renameProject ?? null,
-    memberAuthority:
-      members === null
-        ? null
-        : {
-            authorize: members.authorize,
-            unlockedUntil: members.unlockedUntil,
-            rights: members.rights,
-            rightless: members.rightless,
-            recordCreation: members.recordCreation,
-            journal: members.journal,
-            journalRefusal: members.journalRefusal,
-          },
-    accessForToken: access?.forToken ?? null,
+    journal: journalEvent,
     secretsForToken,
     storeAside: (slug: string) =>
       underLockWith(new Request("http://steward/store/aside"), async () => null, async () => {

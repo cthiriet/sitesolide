@@ -1,7 +1,7 @@
 /**
- * The steward's access routes: the one registry of who may do what on each
- * project (registry.ts), the rules of who may change it (rules.ts), and the
- * portal's projection, written after every change.
+ * The steward's access routes: the one registry of the guests of each
+ * project (registry.ts), and the portal's projection, written after every
+ * change.
  *
  * **One queue, the registry's.** Every change reads the registry, judges,
  * writes the portal's projection, then the registry, one at a time: two
@@ -25,85 +25,51 @@
  * meanwhile, and the access routes answer `not-ready` until it is done; an
  * attempt that fails is tried again, later and later.
  *
- * **Who asks.** The owner, over SSH on the owner's socket, or in the
- * dashboard on its own, with the live unlock for what raises someone above
- * Can open, gives password access or a whole domain while the company's
- * domains are not listed; an Admin of the project, through their session,
- * their unlock for the same; a token, through the control routes, Can open
- * alone, never password access. Removing and lowering someone never wait for
- * an unlock. Someone who no longer has a role above Can open anywhere, nor
- * the create right, no longer signs in to the dashboard: their sessions close
- * and their tokens are revoked (`leave`), once the change is written and the
- * registry's queue left (see the queues in src/people/steward.ts).
- *
- * **What reads, what changes.** Anyone with Viewer or above on a project
- * reads its people with access, and the admin emails (`OIDC_ADMIN_EMAILS`),
- * who open it too; only its Admins and the owner change them, and they alone
- * read who a removal would take out of the dashboard (`leaving`). A token
- * reads neither the admin emails nor who would leave.
+ * **Who asks: the owner alone.** Over SSH on the owner's socket, root, or in
+ * the dashboard on its own, with the live unlock to give access, since a
+ * password lets someone in. Removing someone never waits for an unlock. A
+ * token never reaches these routes.
  *
  * **Bounded.** Every accepted change is kept 180 days in the access log
  * (src/secrets/log.ts), whose rows are never pushed out before that. A change
- * that lets more people in, or more done (`widen`), is counted per actor and
- * per hour, the owner over SSH generously, and refused when the log is full
- * of rows younger than its retention, the owner over SSH excepted: the way
- * out when a flood filled it. A change that narrows, removing, lowering,
- * taking the create right back, is never refused for either: the rows it
- * writes are bounded by the widening ones that came before it.
+ * that lets more people in (`widen`) is counted per hour, the owner over SSH
+ * generously, and refused when the log is full of rows younger than its
+ * retention, the owner over SSH excepted: the way out when a flood filled
+ * it. Removing someone is never refused for either: the rows it writes are
+ * bounded by the ones that gave access before it.
  */
-import { atLeast, isRole, rank, type Role } from "../../borrowed/access";
 import { isValidSlug } from "../../borrowed/manifest";
-import { cleanEmail } from "../../borrowed/sharing";
+import { cleanEmail } from "../../borrowed/email";
 import { generatePassword } from "../password";
-import type { MemberPrincipal } from "../people/steward";
 import { createQueue, errorName, type Body, type Handler, type Routes } from "../secrets/requests";
-import {
-  MAX_DASHBOARD_PEOPLE,
-  OWNER,
-  type AccessResponse,
-  type EntryResponse,
-  type GeneralView,
-  type LeavingToken,
-  type Left,
-  type PeopleResponse,
-  type PersonResponse,
-  type SignInSettings,
-} from "./protocol";
+import { OWNER, type AccessResponse, type EntryResponse, type GeneralView } from "./protocol";
 import {
   EMPTY_REGISTRY,
   encodeProjection,
   encodeRegistry,
   entryView,
   entryViews,
-  emailOf,
   entriesOf,
   findEntry,
   forgetProject as dropProject,
   renameProject as moveProject,
-  dashboardPeople,
-  isDashboardPerson,
-  kindOf,
-  peopleViews,
   projectionOf,
   putEntry,
   readRegistry,
   readsBack,
+  readWho,
   removeEntry,
-  removePerson,
-  rolesText,
-  setCreate,
-  type Entry,
   type Registry,
 } from "./registry";
-import { granterName, judgeGrant, judgeRemoval, projectRefusal, readDuration, roleWord, signsInWithAccount, type Granter, type Machine } from "./rules";
+import { projectRefusal, readDuration, type Machine } from "./rules";
 import type { AccessSystem } from "./system";
 
 /** What the journal records of access: the actor this steward verified, never one a request named. */
 export type AccessEvent = {
-  operation: "access.add" | "access.change" | "access.remove" | "people.create" | "project.create" | "project.remove" | "project.rename";
+  operation: "access.add" | "access.remove" | "project.remove" | "project.rename";
   result: "ok" | "rejects";
   actor: string;
-  /** The person the event is about, when it is an email. */
+  /** The guest the event is about, when it is an email. */
   member: string | null;
   slug?: string;
   detail: string | null;
@@ -112,10 +78,8 @@ export type AccessEvent = {
 const STATUSES: Record<string, number> = {
   invalid: 400,
   locked: 401,
-  "signed-out": 401,
   "out-of-scope": 403,
   "not-found": 404,
-  conflict: 409,
   "too-many-changes": 429,
   failure: 500,
   "not-ready": 503,
@@ -127,7 +91,7 @@ function fail(code: string, message: string): Response {
 }
 
 /** The steward's refusal of password access without the unlock: the dashboard turns it into the page's 423. */
-export const PASSWORD_LOCKED = "locked: giving password access needs the unlock, since it lets someone from outside the company in";
+export const PASSWORD_LOCKED = "locked: giving password access needs the unlock, since it lets someone in";
 
 /** The answer while the registry does not read: no path, the steward's log says which file and why. */
 const REGISTRY_UNREADABLE = "the access registry does not read on the machine: the owner must read the steward's log, journalctl -u sitesolide-steward";
@@ -138,23 +102,9 @@ export const BEGINNING =
 
 /** The answer when the access log holds as many rows younger than 180 days as it keeps. */
 export const LOG_FULL =
-  "the access log is full of changes younger than 180 days, which are never pushed out: nobody more is let in until older ones age out, while removing and lowering still work; the owner may still change access from their workstation, with sitesolide share and sitesolide people, and reads journalctl -u sitesolide-steward";
+  "the access log is full of changes younger than 180 days, which are never pushed out: nobody more is let in until older ones age out, while removing still works; the owner may still change access from their workstation, with sitesolide share, and reads journalctl -u sitesolide-steward";
 
-/**
- * The answer to a token once the access log is half full. A token's change
- * that lets someone in is counted against its hour, the one that takes them
- * away is not, and a removal must never wait: a stolen token alternating the
- * two wrote two rows for each one counted, several tokens more, and filled in
- * days a log that keeps every row 180 days and then refuses everyone but the
- * owner over SSH. Half of it stays the people's.
- */
-export const LOG_FULL_FOR_TOKENS =
-  "the access log is half full of changes younger than 180 days, the half a token may fill: a token lets nobody more in until older ones age out, while removing still works; people still give access from the dashboard, and the owner reads journalctl -u sitesolide-steward";
-
-/** The share of the access log a token's changes, and the removals they may still write, may fill: see LOG_FULL_FOR_TOKENS. */
-export const TOKEN_LOG_SHARE = 0.5;
-
-/** Accepted changes per actor and per hour: a person, a token, the owner in the dashboard; and the owner over SSH. */
+/** Accepted changes per hour that let someone in: the owner in the dashboard, and over SSH. */
 export const CHANGES_PER_HOUR = 120;
 export const OWNER_SSH_CHANGES_PER_HOUR = 2_000;
 
@@ -167,15 +117,10 @@ export const BEGIN_RETRY_MAX_MS = 10 * 60_000;
 export type AccessStoreDependencies = {
   system: AccessSystem;
   zone: string;
-  /** The site's address, where the portal keeps its people: `<slug>.<zone>`. Null for none. */
+  /** The site's address, where the portal keeps its guests: `<slug>.<zone>`. Null for none. */
   hostOf: (slug: string) => string | null;
-  journal: (event: AccessEvent) => Promise<void>;
-  /**
-   * Does the access log hold this share of the rows younger than its
-   * retention it keeps, 1 for all of them, once `reserve` rows more are
-   * counted? Absent: never.
-   */
-  logFull?: (share: number, reserve: number) => Promise<boolean>;
+  /** Does the access log hold as many rows younger than its retention as it keeps? Absent: never. */
+  logFull?: () => Promise<boolean>;
   /** The wait between two attempts to begin the registry; the tests hand their own. */
   sleep?: (ms: number) => Promise<void>;
 };
@@ -196,15 +141,17 @@ export type AccessStore = {
   /** The attempts in the background, later and later, until one succeeds; resolves then. */
   start: () => Promise<void>;
   /** Is the access log full of rows younger than its retention? */
-  full: (share: number, reserve?: number) => Promise<boolean>;
+  full: () => Promise<boolean>;
 };
 
 export function createAccessStore(dependencies: AccessStoreDependencies): AccessStore {
-  const { system, journal } = dependencies;
+  const { system } = dependencies;
   const sleep = dependencies.sleep ?? ((ms: number) => Bun.sleep(ms));
   const serially = createQueue();
 
   let projectionNoted: string | null = null;
+  /** The registry's text whose entries of before were said: once per file, not once per read. */
+  let leftOutSaid: string | null = null;
   /** What the projection was last written from, and its file as written: a read that finds either moved writes it again. */
   let projected: { from: string; stamp: string | null } | null = null;
   /** When the projection was last tried while it could not be written: a portal deployed since gets it within the minute. */
@@ -230,7 +177,7 @@ export function createAccessStore(dependencies: AccessStoreDependencies): Access
     const unreadable = readsBack(registry, projectionOf(registry, dependencies.hostOf, system.now()));
     if (unreadable !== null) {
       console.error(`access: a change refused before anything was written, it would not read back (${unreadable})`);
-      return fail("invalid", "this change would leave who may do what in a state the machine could not read back: nothing was changed");
+      return fail("invalid", "this change would leave who may open what in a state the machine could not read back: nothing was changed");
     }
     const text = encodeRegistry(registry);
     await project(registry, text);
@@ -253,7 +200,11 @@ export function createAccessStore(dependencies: AccessStoreDependencies): Access
       console.error(`access: ${read.unreadable}`);
       return fail("failure", REGISTRY_UNREADABLE);
     }
-    return { registry: read, text };
+    if (read.leftOut > 0 && leftOutSaid !== text) {
+      leftOutSaid = text;
+      console.log(`access: access.json names ${read.leftOut} people, domains or creators from company sign-in, which nothing reads any more: they go at its next change (docs/upgrading.md)`);
+    }
+    return { registry: read.registry, text };
   }
 
   /** Has the projection fallen behind the registry, or been touched since it was written? */
@@ -367,7 +318,7 @@ export function createAccessStore(dependencies: AccessStoreDependencies): Access
     change,
     ensure,
     start,
-    full: async (share, reserve = 0) => (dependencies.logFull === undefined ? false : dependencies.logFull(share, reserve)),
+    full: async () => (dependencies.logFull === undefined ? false : dependencies.logFull()),
   };
 }
 
@@ -380,71 +331,47 @@ export type AccessRoutesDependencies = {
   hostOf: (slug: string) => string | null;
   /** Does the machine carry `/srv/sites/<slug>`? */
   projectExists: (slug: string) => boolean;
-  /** What portal.env says of signing in. */
-  signIn: () => Promise<SignInSettings>;
   /** The project's general access as the machine carries it, null when it is not deployed. */
   general: (slug: string) => Promise<GeneralView | null>;
-  /** What the portal says it reads its access from (src/people/portal.ts). */
+  /** What the portal says it reads its access from (portal.ts). */
   portalReading: () => Promise<AccessResponse["portal"]>;
   /** Is this the live unlock token of the owner's secrets routes? */
   isUnlocked: (token: unknown) => Promise<boolean>;
   /** The steward's body reader: bounded in size and in time, the expected fields and those alone. */
   readBody: (req: Request, fields: string[]) => Promise<Body | Response>;
   journal: (event: AccessEvent) => Promise<void>;
-  /** A refusal, bounded per minute so that a flood cannot push the journal's history out. */
-  journalRefusal: (event: AccessEvent) => Promise<void>;
-  /** A person's session, and their unlock when `unlock` is not null; or the refusal. */
-  authorize: (session: unknown, unlock: unknown | null) => Promise<MemberPrincipal | Response>;
-  /**
-   * Someone who may no longer sign in to the dashboard: their sessions
-   * closed, their tokens revoked, under `actor`, unless the registry gives
-   * them a role again by the time it runs. Called once the registry is
-   * written and its queue left. The tokens revoked; null when they stayed.
-   */
-  leave: (email: string, actor: string) => Promise<LeavingToken[] | null>;
-  /** A person's live tokens, what their leaving would revoke; absent, none are named. */
-  tokensOf?: (email: string) => Promise<LeavingToken[]>;
   /** Draws a password access's password; the tests hand their own. */
   drawPassword?: () => string;
   drawId?: () => string;
-  /** Accepted changes per actor and per hour, and the owner's over SSH; the tests hand smaller ones. */
+  /** Accepted changes per hour, in the dashboard and over SSH; the tests hand smaller ones. */
   changesPerHour?: number;
   ownerChangesPerHour?: number;
 };
 
-/** Where a request comes from: the owner's socket, the dashboard's, a token through the control routes. */
-type Channel = "ssh" | "dashboard" | "token";
+/** Where a request comes from: the owner's socket, or the dashboard's. */
+export type Channel = "ssh" | "dashboard";
 
 export type AccessRoutes = {
   /** The owner's socket, which only root opens. */
   owner: Routes;
-  /** The dashboard's socket: the owner's session, and a person's. */
+  /** The dashboard's socket: the owner's session. */
   dashboard: Routes;
-  /** What a token's routes ask (src/control/steward.ts), the token judged by them. */
-  forToken: {
-    /** The token's person, Viewer or above on the project, or the owner's token. */
-    list: (slug: string, granter: Granter) => Promise<Response>;
-    grant: (slug: string, who: unknown, role: unknown, granter: Granter) => Promise<Response>;
-    remove: (slug: string, who: unknown, granter: Granter) => Promise<Response>;
-    /** A project a person's token is about to create, `actor` their email: `widen`, for a token. */
-    widen: (actor: string) => Promise<Response | null>;
-  };
   /**
    * A change of access made elsewhere that lets more people in: a site made
    * public, opened with a code, given a new code (src/secrets/steward.ts).
    * Bounded as the registry's own changes are, the access log's room and the
-   * actor's hour, and counted; the owner over SSH generously, and past a full
-   * access log. Null: go ahead.
+   * hour, and counted; the owner over SSH generously, and past a full access
+   * log. Null: go ahead.
    */
-  widen: (channel: "dashboard" | "token" | "ssh", actor: string) => Promise<Response | null>;
+  widen: (channel: Channel) => Promise<Response | null>;
   /**
    * A project removed from the machine (src/control/steward.ts, over the
-   * owner's socket): its entries go with it, journaled, so that a project
+   * owner's socket): its guests go with it, journaled, so that a project
    * created later under that name starts from nobody. The number dropped,
    * or the refusal.
    */
   forgetProject: (slug: string, actor: string) => Promise<number | Response>;
-  /** A project renamed on the machine: its entries moved to the new slug, journaled. The number moved, or the refusal. */
+  /** A project renamed on the machine: its guests moved to the new slug, journaled. The number moved, or the refusal. */
   renameProject: (from: string, to: string, actor: string) => Promise<number | Response>;
 };
 
@@ -465,7 +392,7 @@ function untilText(expiresAt: number | null): string {
 const HOUR_MS = 3_600_000;
 
 export function createAccessRoutes(dependencies: AccessRoutesDependencies): AccessRoutes {
-  const { store, readBody, journal, journalRefusal } = dependencies;
+  const { store, readBody, journal } = dependencies;
   const drawPassword = dependencies.drawPassword ?? (() => generatePassword(undefined, 4));
   const drawId = dependencies.drawId ?? drawAccessId;
   const machine: Machine = { zone: dependencies.zone, exists: dependencies.projectExists };
@@ -473,53 +400,21 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
   const perHour = dependencies.changesPerHour ?? CHANGES_PER_HOUR;
   const ownerPerHour = dependencies.ownerChangesPerHour ?? OWNER_SSH_CHANGES_PER_HOUR;
 
-  // --- bounds: per actor, and the access log's room ---------------------------------
+  // --- bounds: per channel, and the access log's room --------------------------------
 
-  /** The accepted changes of the hour, per actor and channel: in memory, a restart forgets them. */
-  const counted = new Map<string, number[]>();
+  /** The accepted changes of the hour, per channel: in memory, a restart forgets them. */
+  const counted: Record<Channel, number[]> = { ssh: [], dashboard: [] };
 
-  function bucket(channel: Channel, actor: string): string {
-    return `${channel === "ssh" ? "ssh" : "other"}:${actor}`;
-  }
-
-  /** Has this actor used up their changes of the hour? */
-  function exhausted(channel: Channel, actor: string): boolean {
-    const key = bucket(channel, actor);
-    const recent = (counted.get(key) ?? []).filter((at) => now() - at < HOUR_MS && at <= now());
-    if (recent.length === 0) counted.delete(key);
-    else counted.set(key, recent);
-    return recent.length >= (channel === "ssh" ? ownerPerHour : perHour);
-  }
-
-  function count(channel: Channel, actor: string): void {
-    const key = bucket(channel, actor);
-    counted.set(key, [...(counted.get(key) ?? []), now()]);
-    // A map that keeps only actors seen this hour.
-    if (counted.size > 10_000) for (const old of [...counted.keys()].slice(0, 1_000)) counted.delete(old);
-  }
-
-  function tooMany(channel: Channel): Response {
-    return fail("too-many-changes", `${channel === "ssh" ? ownerPerHour : perHour} changes of access per hour at most: try again later`);
+  /** Has this channel used up its changes of the hour? */
+  function exhausted(channel: Channel): boolean {
+    counted[channel] = counted[channel].filter((at) => now() - at < HOUR_MS && at <= now());
+    return counted[channel].length >= (channel === "ssh" ? ownerPerHour : perHour);
   }
 
   let fullSaidAt = 0;
-  /**
-   * The refusal when the access log has no room left, said in the steward's
-   * log once an hour; for a token, once its half is used.
-   */
-  async function noRoom(channel: Channel): Promise<Response | null> {
-    if (channel === "token" && !(await store.full(1))) {
-      // A removal is never refused nor counted, so the rows a token's
-      // removals may still write count against its half: every entry of the
-      // registry is one. Without them, a token reaching many projects gave
-      // Can open up to the half, then took every entry away, and filled the
-      // rest.
-      const registry = await store.read();
-      if (registry instanceof Response) return registry;
-      const entries = Object.values(registry.projects).reduce((total, list) => total + list.length, 0);
-      if (await store.full(TOKEN_LOG_SHARE, entries)) return fail("log-full", LOG_FULL_FOR_TOKENS);
-    }
-    if (!(await store.full(1))) return null;
+  /** The refusal when the access log has no room left, said in the steward's log once an hour. */
+  async function noRoom(): Promise<Response | null> {
+    if (!(await store.full())) return null;
     if (now() - fullSaidAt >= HOUR_MS || now() < fullSaidAt) {
       fullSaidAt = now();
       console.error("access: ALERT the access log is full of changes younger than 180 days: nobody more is let in until older ones age out, but over the owner's socket");
@@ -528,33 +423,18 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
   }
 
   /**
-   * A change that lets more people in, or more done: refused when the access
-   * log has no room for it (the owner over SSH excepted, their way out) or
-   * when its actor has used up their hour; counted otherwise. A narrowing
-   * change never comes here.
+   * A change that lets more people in: refused when the access log has no
+   * room for it (the owner over SSH excepted, their way out) or when the
+   * hour is used up; counted otherwise. A removal never comes here.
    */
-  async function widen(channel: Channel, actor: string): Promise<Response | null> {
+  async function widen(channel: Channel): Promise<Response | null> {
     if (channel !== "ssh") {
-      const room = await noRoom(channel);
+      const room = await noRoom();
       if (room !== null) return room;
     }
-    if (exhausted(channel, actor)) return tooMany(channel);
-    count(channel, actor);
+    if (exhausted(channel)) return fail("too-many-changes", `${channel === "ssh" ? ownerPerHour : perHour} changes of access per hour at most: try again later`);
+    counted[channel].push(now());
     return null;
-  }
-
-  /**
-   * Someone the change took out of the dashboard leaves it, once the change is
-   * written and the registry's queue left: a change refused, before or at its
-   * writing, takes nobody out. The answer then says so, with the tokens
-   * revoked, which the CLI prints.
-   */
-  async function afterwards(answer: Response, leaving: { email: string; actor: string } | null): Promise<Response> {
-    if (leaving === null || answer.status >= 400) return answer;
-    const tokens = await dependencies.leave(leaving.email, leaving.actor);
-    if (tokens === null) return answer;
-    const left: Left = { who: leaving.email, tokens };
-    return Response.json({ ...((await answer.json()) as object), left }, { status: answer.status });
   }
 
   function hostAndUrl(slug: string): { host: string; url: string } {
@@ -562,375 +442,137 @@ export function createAccessRoutes(dependencies: AccessRoutesDependencies): Acce
     return { host, url: `https://${host}/` };
   }
 
-  /**
-   * By who, the people whom removing from this project, or lowering to Can
-   * open, takes out of the dashboard, and their live tokens.
-   */
-  async function leavingOf(registry: Registry, slug: string): Promise<Record<string, LeavingToken[]>> {
-    const leaving: Record<string, LeavingToken[]> = {};
-    for (const entry of entriesOf(registry, slug)) {
-      const email = emailOf(entry);
-      if (email === null || entry.role === "visitor" || !isDashboardPerson(registry, email)) continue;
-      const without = removeEntry(registry, slug, entry.who);
-      if ("refusal" in without || isDashboardPerson(without.registry, email)) continue;
-      leaving[entry.who] = (await dependencies.tokensOf?.(email)) ?? [];
-    }
-    return leaving;
-  }
-
-  /**
-   * The project's general access and people, and the admin emails, who open
-   * it too; who would leave the dashboard, for those who may change the list.
-   */
-  async function listResponse(slug: string, reader: "owner" | "manager" | "reader" | "token"): Promise<Response> {
+  /** The project's general access and guests. */
+  async function list(req: Request): Promise<Response> {
+    const wanted = new URL(req.url).searchParams.getAll("slug");
+    if (wanted.length !== 1) return fail("invalid", "name one project: ?slug=<slug>");
+    const slug = wanted[0]!;
     const registry = await store.read();
     if (registry instanceof Response) return registry;
     const refusal = projectRefusal(slug, machine, entriesOf(registry, slug).length > 0);
     if (refusal !== null) return fail(refusal.code ?? "invalid", refusal.refusal);
-    const signIn = await dependencies.signIn();
     const body: AccessResponse = {
       slug,
       ...hostAndUrl(slug),
       general: await dependencies.general(slug),
       entries: entryViews(entriesOf(registry, slug), now()),
-      signIn: reader === "token" ? { ...signIn, admins: [] } : signIn,
       portal: await dependencies.portalReading(),
-      leaving: reader === "owner" || reader === "manager" ? await leavingOf(registry, slug) : {},
     };
     return Response.json(body);
   }
 
-  /** The person an entry names, when that is an email and they signed in to the dashboard before a change. */
-  function dashboardBefore(registry: Registry, entry: Entry | null): string | null {
-    const email = entry === null ? null : emailOf(entry);
-    return email !== null && isDashboardPerson(registry, email) ? email : null;
-  }
+  const refuse = async (slug: string, whoValue: unknown, code: string, message: string): Promise<Response> => {
+    await journal({ operation: "access.add", result: "rejects", actor: OWNER, member: typeof whoValue === "string" ? cleanEmail(whoValue) : null, slug, detail: message.slice(0, 150) });
+    return fail(code, message);
+  };
 
   /**
-   * An entry given or changed. `granterNow` reads the granter again from the
-   * registry once the turn has come: an admin lowered while the request
-   * waited gives nothing. `unlocked` is asked only when the change needs
-   * it (`Grant.unlock`).
+   * A password access given, the password drawn and shown once. Asked again
+   * for the same guest, it keeps the one they hold: nothing is drawn, nobody
+   * let in who was not. `unlocked` is asked only for someone new.
    */
-  async function grant(
-    channel: Channel,
-    slugValue: unknown,
-    whoValue: unknown,
-    roleValue: unknown,
-    expiresValue: unknown,
-    granterNow: (registry: Registry) => Promise<Granter | Response>,
-    unlocked: () => Promise<boolean>,
-  ): Promise<Response> {
+  async function grant(channel: Channel, slugValue: unknown, whoValue: unknown, roleValue: unknown, expiresValue: unknown, unlocked: () => Promise<boolean>): Promise<Response> {
     if (typeof slugValue !== "string" || !isValidSlug(slugValue)) return fail("invalid", "slug: a project's slug, lowercase letters, digits and dashes");
     const slug = slugValue;
-    if (!isRole(roleValue)) return fail("invalid", "role: visitor (Can open), viewer, developer or admin");
-    const role: Role = roleValue;
+    // A command of before names the role it gives: Can open, the one a guest holds, is still read.
+    if (roleValue !== undefined && roleValue !== "visitor") return fail("invalid", "role: a guest opens the site and nothing more, the one access given here");
     const duration = readDuration(expiresValue);
     if (typeof duration === "object" && duration !== null) return fail("invalid", duration.refusal);
-    const signIn = await dependencies.signIn();
-    let leaving: { email: string; actor: string } | null = null;
-    const answer = await store.change<Response>(async (registry) => {
-      const granter = await granterNow(registry);
-      if (granter instanceof Response) return granter;
-      const actor = granterName(granter);
-      const refuse = async (code: string, message: string): Promise<Response> => {
-        await journalRefusal({ operation: "access.add", result: "rejects", actor, member: typeof whoValue === "string" ? cleanEmail(whoValue) : null, slug, detail: message.slice(0, 150) });
-        return fail(code, message);
-      };
-      const project = projectRefusal(slug, machine, typeof whoValue === "string" && findEntry(registry, slug, whoValue.trim().toLowerCase()) !== null);
-      if (project !== null) return refuse(project.code ?? "invalid", project.refusal);
-      const judged = judgeGrant(registry, slug, whoValue, role, granter, signIn);
-      if ("refusal" in judged) return refuse(judged.code ?? "invalid", judged.refusal);
-      if (judged.unlock && !(await unlocked())) {
-        return fail(
-          "locked",
-          judged.password
-            ? PASSWORD_LOCKED
-            : judged.who.kind === "domain"
-              ? "locked: giving a whole domain access needs the unlock while the company's domains are not listed on this machine"
-              : "locked: giving someone a role above Can open needs the unlock",
-        );
+    return store.change<Response>(async (registry) => {
+      const who = readWho(whoValue);
+      if (typeof who === "object") return refuse(slug, whoValue, who.code ?? "invalid", who.refusal);
+      const existing = findEntry(registry, slug, who);
+      const project = projectRefusal(slug, machine, existing !== null);
+      if (project !== null) return refuse(slug, whoValue, project.code ?? "invalid", project.refusal);
+      if (existing !== null) {
+        const body: EntryResponse = { slug, entry: entryView(existing, now()), change: "none" };
+        return { registry, value: Response.json(body) };
       }
-      if (atLeast(role, "viewer") && !isDashboardPerson(registry, judged.who.who) && dashboardPeople(registry).length >= MAX_DASHBOARD_PEOPLE) {
-        return fail("invalid", `${MAX_DASHBOARD_PEOPLE} people sign in to the dashboard at most: take someone who left off first`);
-      }
+      if (!(await unlocked())) return fail("locked", PASSWORD_LOCKED);
+      const refused = await widen(channel);
+      if (refused !== null) return refused;
       const at = now();
-      const keeps = judged.existing !== null && judged.existing.role === role;
-      // Lowering lets nobody further in: never refused for the log's room, nor counted.
-      const lowers = judged.existing !== null && rank(role) < rank(judged.existing.role);
-      if (!keeps && !lowers) {
-        const refused = await widen(channel, actor);
-        if (refused !== null) return refused;
-      }
-      let password: string | undefined;
-      let record: { id: string; hash: string; expiresAt: number | null } | undefined;
-      if (judged.password) {
-        password = drawPassword();
-        record = { id: drawId(), hash: passwordHash(password), expiresAt: duration === null ? null : at + (duration as number) * 1000 };
-      }
-      const before = dashboardBefore(registry, judged.existing);
-      const put = putEntry(registry, slug, judged.who.who, role, actor, at, record);
-      if ("refusal" in put) return refuse(put.code ?? "invalid", put.refusal);
-      if (put.change !== "none") {
-        const email = emailOf(put.entry);
-        await journal({
-          operation: put.change === "add" ? "access.add" : "access.change",
-          result: "ok",
-          actor,
-          member: email,
-          slug,
-          detail:
-            put.change === "add"
-              ? `${put.entry.who}: ${roleWord(role)}${record === undefined ? "" : `, password access ${untilText(record.expiresAt)}`}`
-              : `${put.entry.who}: ${roleWord(judged.existing!.role)} -> ${roleWord(role)}`,
-        });
-        console.log(`access: ${put.entry.who} ${put.change === "add" ? "given" : "changed to"} ${role} on ${slug} by ${actor}`);
-      }
-      if (before !== null && !isDashboardPerson(put.registry, before)) leaving = { email: before, actor };
-      const body: EntryResponse = { slug, entry: entryView(put.entry, at), change: put.change, ...(password === undefined ? {} : { password }) };
-      return { registry: put.registry, value: Response.json(body, { status: put.change === "add" ? 201 : 200 }) };
+      const password = drawPassword();
+      const put = putEntry(registry, slug, who, OWNER, at, () => ({ id: drawId(), hash: passwordHash(password), expiresAt: duration === null ? null : at + (duration as number) * 1000 }));
+      if ("refusal" in put) return refuse(slug, whoValue, put.code ?? "invalid", put.refusal);
+      await journal({ operation: "access.add", result: "ok", actor: OWNER, member: who, slug, detail: `${who}: password access ${untilText(put.entry.password.expiresAt)}` });
+      console.log(`access: ${who} given password access to ${slug}`);
+      const body: EntryResponse = { slug, entry: entryView(put.entry, at), change: "add", password };
+      return { registry: put.registry, value: Response.json(body, { status: 201 }) };
     });
-    return afterwards(answer, leaving);
   }
 
-  /** An entry taken away, whoever asks: a narrowing change, never counted nor refused for the log's room. */
-  async function remove(slugValue: unknown, whoValue: unknown, granterNow: (registry: Registry) => Promise<Granter | Response>): Promise<Response> {
-    if (typeof slugValue !== "string" || !isValidSlug(slugValue)) return fail("invalid", "slug: a project's slug, lowercase letters, digits and dashes");
-    const slug = slugValue;
-    let leaving: { email: string; actor: string } | null = null;
-    const answer = await store.change<Response>(async (registry) => {
-      const granter = await granterNow(registry);
-      if (granter instanceof Response) return granter;
-      const actor = granterName(granter);
-      const judged = judgeRemoval(registry, slug, whoValue, granter);
-      if ("refusal" in judged) {
-        if (judged.code !== "not-found") {
-          await journalRefusal({ operation: "access.remove", result: "rejects", actor, member: typeof whoValue === "string" ? cleanEmail(whoValue) : null, slug, detail: judged.refusal.slice(0, 150) });
-        }
-        return fail(judged.code ?? "invalid", judged.refusal);
-      }
-      const before = dashboardBefore(registry, judged.entry);
-      const removed = removeEntry(registry, slug, judged.entry.who);
-      if ("refusal" in removed) return fail(removed.code ?? "invalid", removed.refusal);
-      await journal({ operation: "access.remove", result: "ok", actor, member: emailOf(removed.entry), slug, detail: `${removed.entry.who}: was ${roleWord(removed.entry.role)}${kindOf(removed.entry) === "password" ? ", password access" : ""}` });
-      console.log(`access: ${removed.entry.who} removed from ${slug} by ${actor}`);
-      if (before !== null && !isDashboardPerson(removed.registry, before)) leaving = { email: before, actor };
-      const body: EntryResponse = { slug, entry: entryView(removed.entry, now()), change: "remove" };
-      return { registry: removed.registry, value: Response.json(body) };
-    });
-    return afterwards(answer, leaving);
-  }
-
-  // --- the owner ---------------------------------------------------------------------
-
-  const owner: Granter = { kind: "owner" };
-  const asOwner = async () => owner;
-
-  function ownerList(req: Request): Promise<Response> {
-    const wanted = new URL(req.url).searchParams.getAll("slug");
-    if (wanted.length !== 1) return Promise.resolve(fail("invalid", "name one project: ?slug=<slug>"));
-    return listResponse(wanted[0]!, "owner");
-  }
-
-  /** `asRoot`: the owner's socket, which only root opens, needs no unlock token, password access included. */
-  function ownerGrant(asRoot: boolean): Handler {
-    return async (req) => {
-      const body = await readBody(req, asRoot ? ["slug", "who", "role", "expiresInS"] : ["token", "slug", "who", "role", "expiresInS"]);
-      if (body instanceof Response) return body;
-      return grant(asRoot ? "ssh" : "dashboard", body.slug, body.who, body.role, body.expiresInS, asOwner, async () => asRoot || (await dependencies.isUnlocked(body.token)));
-    };
-  }
-
-  async function ownerRemove(req: Request): Promise<Response> {
+  /** A guest taken away: never counted nor refused for the log's room. */
+  async function remove(req: Request): Promise<Response> {
     const body = await readBody(req, ["slug", "who"]);
     if (body instanceof Response) return body;
-    return remove(body.slug, body.who, asOwner);
-  }
-
-  async function people(): Promise<Response> {
-    const registry = await store.read();
-    if (registry instanceof Response) return registry;
-    const signIn = await dependencies.signIn();
-    const body: PeopleResponse = { ...peopleViews(registry, signIn.admins, now()), signIn };
-    return Response.json(body);
-  }
-
-  function personView(registry: Registry, email: string, admins: readonly string[]) {
-    return peopleViews(registry, admins, now()).people.find((one) => one.who === email) ?? { who: email, roles: {}, create: false, passwords: [], admin: admins.includes(email) };
-  }
-
-  function putPerson(asRoot: boolean): Handler {
-    const channel: Channel = asRoot ? "ssh" : "dashboard";
-    return async (req) => {
-      const body = await readBody(req, asRoot ? ["email", "create"] : ["token", "email", "create"]);
-      if (body instanceof Response) return body;
-      const email = cleanEmail(body.email);
-      if (email === null) return fail("invalid", "email: an address, like alice@acme.com");
-      if (typeof body.create !== "boolean") return fail("invalid", "create: true or false");
-      const create = body.create;
-      const signIn = await dependencies.signIn();
-      if (create && !signsInWithAccount(email, signIn)) {
-        return fail("invalid", `${email} cannot sign in to the dashboard: ${signIn.configured ? `the company's domains are ${signIn.allowedDomains.join(", ")}` : "signing in with a company account is not set up on this machine"}`);
-      }
-      if (create && !asRoot && !(await dependencies.isUnlocked(body.token))) return fail("locked", "locked: letting someone create projects needs the unlock");
-      let leaving = false;
-      const answer = await store.change<Response>(async (registry) => {
-        const set = setCreate(registry, email, create, OWNER, now());
-        if ("refusal" in set) return fail(set.code ?? "invalid", set.refusal);
-        if (set.change) {
-          // Taking the right back narrows: never refused for the log's room, nor counted.
-          if (create) {
-            const refused = await widen(channel, OWNER);
-            if (refused !== null) return refused;
-          }
-          await journal({ operation: "people.create", result: "ok", actor: OWNER, member: email, detail: create ? `${email}: may create projects` : `${email}: may no longer create projects` });
-          console.log(`access: ${email} ${create ? "may" : "may no longer"} create projects`);
-          if (!create && isDashboardPerson(registry, email) && !isDashboardPerson(set.registry, email)) leaving = true;
-        }
-        const response: PersonResponse = { person: personView(set.registry, email, signIn.admins), change: set.change ? "create" : "none" };
-        return { registry: set.registry, value: Response.json(response) };
-      });
-      return afterwards(answer, leaving ? { email, actor: OWNER } : null);
-    };
-  }
-
-  async function removePersonRoute(req: Request): Promise<Response> {
-    const body = await readBody(req, ["email"]);
-    if (body instanceof Response) return body;
-    const email = cleanEmail(body.email);
-    if (email === null) return fail("invalid", "email: the address of the person to take off");
-    const signIn = await dependencies.signIn();
-    let leaving = false;
-    const answer = await store.change<Response>(async (registry) => {
-      const was = personView(registry, email, signIn.admins);
-      const result = removePerson(registry, email);
-      if (result.removed.length === 0 && !result.create) return fail("not-found", `${email} has no access to any project`);
-      leaving = isDashboardPerson(registry, email);
-      const roles = Object.fromEntries(result.removed.map(({ slug, entry }) => [slug, entry.role]));
-      await journal({ operation: "access.remove", result: "ok", actor: OWNER, member: email, detail: `${email}: taken off everywhere, ${rolesText(roles)}${result.create ? "; may create projects" : ""}` });
-      console.log(`access: ${email} taken off every project`);
-      const response: PersonResponse = { person: was, change: "remove" };
-      return { registry: result.registry, value: Response.json(response) };
-    });
-    return afterwards(answer, leaving ? { email, actor: OWNER } : null);
-  }
-
-  // --- a person, through their session -------------------------------------------------
-
-  /** The granter for a slug: the person's own role there, read from the registry in hand. */
-  function asPerson(session: unknown, slug: unknown): (registry: Registry) => Promise<Granter | Response> {
-    return async (registry) => {
-      const principal = await dependencies.authorize(session, null);
-      if (principal instanceof Response) return principal;
-      const role = typeof slug === "string" ? findEntry(registry, slug, principal.email)?.role ?? null : null;
-      return { kind: "admin", email: principal.email, role };
-    };
-  }
-
-  async function personList(req: Request): Promise<Response> {
-    const body = await readBody(req, ["session", "slug"]);
-    if (body instanceof Response) return body;
-    const principal = await dependencies.authorize(body.session, null);
-    if (principal instanceof Response) return principal;
     if (typeof body.slug !== "string" || !isValidSlug(body.slug)) return fail("invalid", "slug: a project's slug, lowercase letters, digits and dashes");
-    const registry = await store.read();
-    if (registry instanceof Response) return registry;
-    const role = findEntry(registry, body.slug, principal.email)?.role ?? null;
-    if (!atLeast(role, "viewer")) return fail("out-of-scope", `People with access to ${body.slug} are read from Viewer up: ${principal.email} holds no such role there`);
-    return listResponse(body.slug, role === "admin" ? "manager" : "reader");
-  }
-
-  async function personGrant(req: Request): Promise<Response> {
-    const body = await readBody(req, ["session", "token", "slug", "who", "role", "expiresInS"]);
-    if (body instanceof Response) return body;
-    return grant("dashboard", body.slug, body.who, body.role, body.expiresInS, asPerson(body.session, body.slug), async () => {
-      if (body.token === undefined) return false;
-      return !((await dependencies.authorize(body.session, body.token)) instanceof Response);
+    const slug = body.slug;
+    return store.change<Response>(async (registry) => {
+      // A name carried over from before the registry is matched as it stands.
+      const read = readWho(body.who);
+      const key = typeof read === "string" ? read : typeof body.who === "string" ? body.who.trim() : "";
+      const removed = key === "" ? null : removeEntry(registry, slug, key);
+      if (removed === null || "refusal" in removed) return fail("not-found", `${key === "" ? "who" : key} has no access to ${slug}`);
+      await journal({ operation: "access.remove", result: "ok", actor: OWNER, member: cleanEmail(removed.entry.who), slug, detail: `${removed.entry.who}: password access` });
+      console.log(`access: ${removed.entry.who} removed from ${slug}`);
+      const answer: EntryResponse = { slug, entry: entryView(removed.entry, now()), change: "remove" };
+      return { registry: removed.registry, value: Response.json(answer) };
     });
   }
 
-  async function personRemove(req: Request): Promise<Response> {
-    const body = await readBody(req, ["session", "slug", "who"]);
-    if (body instanceof Response) return body;
-    return remove(body.slug, body.who, asPerson(body.session, body.slug));
+  /** `asRoot`: the owner's socket, which only root opens, needs no unlock token. */
+  function ownerGrant(asRoot: boolean): Handler {
+    return async (req) => {
+      const body = await readBody(req, asRoot ? ["slug", "who", "role", "expiresInS"] : ["token", "slug", "who", "expiresInS"]);
+      if (body instanceof Response) return body;
+      return grant(asRoot ? "ssh" : "dashboard", body.slug, body.who, body.role, body.expiresInS, async () => asRoot || (await dependencies.isUnlocked(body.token)));
+    };
   }
 
-  // --- a project removed ---------------------------------------------------------------
+  // --- a project removed or renamed ----------------------------------------------------
 
   async function forgetProject(slug: string, actor: string): Promise<number | Response> {
     if (!isValidSlug(slug)) return fail("invalid", "slug: a project's slug, lowercase letters, digits and dashes");
-    const leaving: string[] = [];
-    const answer = await store.change<number>(async (registry) => {
+    return store.change<number>(async (registry) => {
       const result = dropProject(registry, slug);
       if (result.dropped.length === 0) return { registry, value: 0 };
-      for (const entry of result.dropped) {
-        const email = emailOf(entry);
-        if (email !== null && isDashboardPerson(registry, email) && !isDashboardPerson(result.registry, email)) leaving.push(email);
-      }
       await journal({
         operation: "project.remove",
         result: "ok",
         actor,
         member: null,
         slug,
-        detail: `removed from the machine, its people with access dropped: ${result.dropped.map((entry) => `${entry.who} (${roleWord(entry.role)})`).join(", ")}`,
+        detail: `removed from the machine, its guests dropped: ${result.dropped.map((entry) => entry.who).join(", ")}`,
       });
       console.log(`access: ${slug} removed, ${result.dropped.length} entr${result.dropped.length === 1 ? "y" : "ies"} dropped`);
       return { registry: result.registry, value: result.dropped.length };
     });
-    if (!(answer instanceof Response)) for (const email of leaving) await dependencies.leave(email, actor);
-    return answer;
   }
 
   /**
-   * A project renamed on the machine (src/installer/rename.ts): its people
-   * keep their roles under the new name, journaled once, under the old
-   * name with the new one in the detail. Returns how many entries moved.
+   * A project renamed on the machine (src/installer/rename.ts): its guests
+   * open it under the new name, journaled once, under the old name with the
+   * new one in the detail. Returns how many entries moved.
    */
   async function renameProject(from: string, to: string, actor: string): Promise<number | Response> {
     if (!isValidSlug(from) || !isValidSlug(to)) return fail("invalid", "slug: a project's slug, lowercase letters, digits and dashes");
     return store.change<number>(async (registry) => {
       const result = moveProject(registry, from, to);
-      await journal({ operation: "project.rename", result: "ok", actor, member: null, slug: from, detail: `renamed ${to}${result.moved === 0 ? "" : `, its ${result.moved} ${result.moved === 1 ? "person" : "people"} with access kept`}` });
+      await journal({ operation: "project.rename", result: "ok", actor, member: null, slug: from, detail: `renamed ${to}${result.moved === 0 ? "" : `, its ${result.moved} guest${result.moved === 1 ? "" : "s"} kept`}` });
       console.log(`access: ${from} renamed ${to}, ${result.moved} entr${result.moved === 1 ? "y" : "ies"} moved`);
       return { registry: result.registry, value: result.moved };
     });
   }
 
-  /** A token's granter, its person's role on the project read from the registry in hand. */
-  function asToken(granter: Granter, slug: string): (registry: Registry) => Promise<Granter> {
-    return async (registry) => (granter.kind === "token" && granter.email !== null ? { ...granter, role: findEntry(registry, slug, granter.email)?.role ?? null } : granter);
-  }
-
   return {
     owner: {
-      "/access": { GET: ownerList },
-      "/access/entry": { PUT: ownerGrant(true), DELETE: ownerRemove },
-      "/people": { GET: people },
-      "/people/person": { PUT: putPerson(true), DELETE: removePersonRoute },
+      "/access": { GET: list },
+      "/access/entry": { PUT: ownerGrant(true), DELETE: remove },
     },
     dashboard: {
-      "/access": { GET: ownerList },
-      "/access/entry": { PUT: ownerGrant(false), DELETE: ownerRemove },
-      "/people": { GET: people },
-      "/people/person": { PUT: putPerson(false), DELETE: removePersonRoute },
-      "/access/person/list": { POST: personList },
-      "/access/person/entry": { PUT: personGrant, DELETE: personRemove },
-    },
-    forToken: {
-      async list(slug, granter) {
-        // A person's token reads them while that person is Viewer or above there.
-        if (granter.kind === "token" && granter.email !== null) {
-          const registry = await store.read();
-          if (registry instanceof Response) return registry;
-          const role = findEntry(registry, slug, granter.email)?.role ?? null;
-          if (!atLeast(role, "viewer")) return fail("out-of-scope", `People with access to ${slug} are read from Viewer up: ${granter.email} holds no such role there`);
-        }
-        return listResponse(slug, "token");
-      },
-      grant: (slug, who, role, granter) => grant("token", slug, who, role, undefined, asToken(granter, slug), async () => false),
-      remove: (slug, who, granter) => remove(slug, who, asToken(granter, slug)),
-      widen: (actor) => widen("token", actor),
+      "/access": { GET: list },
+      "/access/entry": { PUT: ownerGrant(false), DELETE: remove },
     },
     widen,
     forgetProject,

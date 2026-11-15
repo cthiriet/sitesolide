@@ -1173,7 +1173,7 @@ describe("a project's store, the owner's", () => {
     expect((await read(secrets.setStoreVariable(requested("/store/variable", { method: "PUT", body: { slug: "cms", name: "A", value: content }, cookie: open.cookie })))).status).toBe(400);
   });
 
-  test("server.ts: reading a store's value back and the platform's own files answer a person 403 before any handler; the store's writes and its restore are relayed for a person too, each with the long delay", () => {
+  test("server.ts: every secrets route, the store's included, is the owner's handler with the long delay, and no person's relay is left", () => {
     const source = readFileSync(join(import.meta.dir, "..", "server.ts"), "utf8");
     const entry = (path: string) => {
       const start = source.indexOf(`"/api/secrets${path}": {`);
@@ -1183,14 +1183,11 @@ describe("a project's store, the owner's", () => {
       return tail.slice(0, finish === -1 ? undefined : finish);
     };
     for (const path of ["/store/value", "/value", "/file", "/restore", "/password"]) {
-      const text = entry(path);
-      expect(text).toContain("POST: owner((req, server) => long(req, server, secrets.");
-      expect(text).not.toContain("memberRelay");
+      expect(entry(path)).toContain("POST: (req, server) => long(req, server, secrets.");
     }
     const variable = entry("/variable");
-    expect(variable).toContain("PUT: owner((req, server) => long(req, server, secrets.setVariable))");
-    expect(variable).toContain("DELETE: owner((req, server) => long(req, server, secrets.removeVariable))");
-    expect(variable).not.toContain("memberRelay");
+    expect(variable).toContain("PUT: (req, server) => long(req, server, secrets.setVariable)");
+    expect(variable).toContain("DELETE: (req, server) => long(req, server, secrets.removeVariable)");
     // A file's whole content is no route any more.
     expect(source).not.toContain(`"/api/secrets/content"`);
     for (const [path, verbs] of [
@@ -1199,14 +1196,10 @@ describe("a project's store, the owner's", () => {
       ["/store/file", 2],
       ["/store/restore", 1],
     ] as const) {
-      const text = entry(path);
-      expect({ path, either: text.match(/either\(/g)?.length ?? 0, member: text.match(/memberRelay\.\w+/g)?.length ?? 0, long: text.match(/long\(req, server, /g)?.length ?? 0 }).toEqual({
-        path,
-        either: verbs,
-        member: verbs,
-        long: 2 * verbs,
-      });
+      expect({ path, long: entry(path).match(/long\(req, server, secrets\./g)?.length ?? 0 }).toEqual({ path, long: verbs });
     }
+    expect(source).not.toContain("memberRelay");
+    expect(source).not.toContain("either(");
   });
 });
 
