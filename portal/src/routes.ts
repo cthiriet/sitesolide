@@ -25,6 +25,7 @@ import {
   setCookie,
   isAcceptableRequest,
   isWebSocketHandshake,
+  isFramedElsewhere,
   returnForRequest,
   safeReturnTo,
   type Bearer,
@@ -210,6 +211,9 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       if (!isAcceptableRequest(method, req.headers.get("origin"), host, options.online, isWebSocketHandshake(req.headers))) {
         return refuse("portal: origin refused", 403);
       }
+      // In a frame of another origin, a sibling host's above all: see
+      // isFramedElsewhere in src/gate.ts.
+      if (isFramedElsewhere(req.headers)) return refuse("portal: this site is not shown in another site's frame", 403);
       // Caddy copies these onto the request it sends the site, after taking
       // off any the visitor sent: see portalStanza in bin/cli/portal.ts. A
       // block from before identities copies nothing, and the site simply

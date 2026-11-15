@@ -295,6 +295,10 @@ handle @lock_host_${slug} {
 		# path, and /favicon.ico keeps an HTML page for a year. See the header
 		# of api/src/locks.ts.
 		header Cache-Control "no-store"
+		# No page frames the door: its field is the one a visitor types the
+		# code into.
+		header X-Frame-Options DENY
+		header Content-Security-Policy "frame-ancestors 'none'"
 		file_server {
 			status 401
 		}

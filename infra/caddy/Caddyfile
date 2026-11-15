@@ -99,6 +99,15 @@
 	# that declared the zone, the dashboard among the others, sent none: a first
 	# visit could be stripped to plain HTTP. Not a client's domain, which may
 	# move away from this machine: the matcher names the zone's hosts alone.
+	#
+	# Without includeSubDomains, on purpose. Every host this machine serves
+	# under the zone sends the header itself; the directive would only add the
+	# names it does not serve, the records a zone keeps beside the wildcard (a
+	# shop at a provider, a device on the office network), and pin them to
+	# HTTPS for a year in every browser that once opened the bare domain, with
+	# no way back from here. What it would guard, a cookie set over plain HTTP
+	# for the whole zone, the platform's cookies refuse already: they are all
+	# __Host-. Nor preload, a list nothing here can take a zone off.
 	@sitesolide_zone host {$SITESOLIDE_ZONE} *.{$SITESOLIDE_ZONE}
 	header @sitesolide_zone Strict-Transport-Security "max-age=31536000"
 

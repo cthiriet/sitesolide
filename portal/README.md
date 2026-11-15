@@ -746,6 +746,19 @@ account*, which asks the provider to choose.
   which a proxy may drop on the way (`isWebSocketHandshake`, `src/gate.ts`).
   Every browser sends the Origin with one; a client outside a browser sends
   it too, or is refused.
+- **A protected site is framed by its own origin alone.** A frame from
+  another site carries no `Lax` cookie and shows the sign-in page, which no
+  page may frame (`frame-ancestors 'none'` and `X-Frame-Options: DENY`, the
+  door page of a preview lock too). A frame from a sibling host of the zone,
+  the same site to a browser, does carry it, and a page there could have the
+  visitor click through the app: `/verifier` answers 403 to a request whose
+  `Sec-Fetch-Dest` is a frame and whose `Sec-Fetch-Site` is not
+  `same-origin` (`isFramedElsewhere`, `src/gate.ts`). Here rather than a
+  header in every block, so that no block in service needs deploying again.
+  A browser that sends no `Sec-Fetch-*` is let through as before. A
+  protected site meant to show inside another one of the zone is not
+  supported; a public site keeps whatever framing it chooses, see
+  [the manifest's `headers`](../docs/manifest.md#headers).
 - **`X-Portal-Hote` comes from Caddy, never from the visitor.** `header_up`
   overwrites it, and it is the host the cookie signs. On the portal's own host,
   where Caddy does not set it, only `/sante` and the provider's two steps reach

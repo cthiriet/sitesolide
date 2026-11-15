@@ -208,6 +208,14 @@ describe("stanza", () => {
     expect(rendered).toInclude("header Vary Cookie");
   });
 
+  test("forbids every page to frame the door, and only the door", () => {
+    const guard = rendered.slice(rendered.indexOf("\thandle {\n"));
+    expect(guard).toInclude("header X-Frame-Options DENY");
+    expect(guard).toInclude(`header Content-Security-Policy "frame-ancestors 'none'"`);
+    // The real site, once the code is right, keeps whatever framing it chose.
+    expect(rendered.match(/X-Frame-Options/g)).toHaveLength(1);
+  });
+
   test("redirects with the explicit matcher Caddy expects", () => {
     // "redir / 303" is a silent trap: the first token is read as a path
     // matcher and 303 becomes the destination URL.

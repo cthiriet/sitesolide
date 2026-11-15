@@ -397,6 +397,32 @@ export function isAcceptableRequest(method: string, origin: string | null, host:
   return (SAFE_METHODS.has(method.toUpperCase()) && !handshake) || isAcceptableOrigin(origin, host, online);
 }
 
+/** The destinations of a document loaded inside another one. */
+const FRAMED_DESTINATIONS = new Set(["iframe", "frame", "embed", "object", "fencedframe"]);
+
+/**
+ * Is a protected site being loaded in a frame by a page of another origin?
+ *
+ * The answer to clickjacking of the protected sites, which serve the pages
+ * of an app the owner or a member is signed in to. From another site, the
+ * frame already carries no cookie (`SameSite=Lax`) and shows the sign-in
+ * page, which no page may frame (`doorHeaders`). From a sibling host of the
+ * zone, the same site to a browser, it does carry the cookie, and a page
+ * there could have the visitor click through the app. Refused here rather
+ * than by a header in every block: the blocks in service need not be
+ * deployed again, and the sites' own framing of themselves still works.
+ *
+ * Read from the `Sec-Fetch-*` headers every current browser sends and no
+ * page can set; a request without them (an older browser, a script) is not
+ * a frame this can tell, and goes through as before.
+ */
+export function isFramedElsewhere(headers: Headers): boolean {
+  const destination = (headers.get("sec-fetch-dest") ?? "").toLowerCase();
+  if (!FRAMED_DESTINATIONS.has(destination)) return false;
+  const site = (headers.get("sec-fetch-site") ?? "").toLowerCase();
+  return site !== "" && site !== "same-origin";
+}
+
 /**
  * Is this request the opening of a WebSocket? `Sec-WebSocket-Key` as much as
  * `Upgrade`: the second is a hop-by-hop header a proxy may drop on the way,
@@ -444,6 +470,10 @@ export function doorHeaders(): Record<string, string> {
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store",
     "X-Portal": "connexion",
+    // frame-ancestors below for the browsers that read it, this for those
+    // that do not: a sign-in page in another site's frame is a page whose
+    // password field the visitor can be tricked into.
+    "X-Frame-Options": "DENY",
     "Content-Security-Policy":
       "default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
   };

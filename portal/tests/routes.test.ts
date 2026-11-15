@@ -139,6 +139,30 @@ describe("/verifier", () => {
     expect(routes().verify(verification({ ...withoutUpgrade, Origin: "https://agency.test-zone.invalid" })).status).toBe(403);
   });
 
+  test("a frame of another origin is refused, the site's own frames and pages go through", () => {
+    // A sibling host's page is the same site: its frame carries the Lax
+    // cookie, and could have the visitor click through the app.
+    const token = issueToken(KEY, HOST, 1_800_000_000 + 60);
+    const base = { "X-Portal-Hote": HOST, Cookie: `__Host-portal=${token}`, "X-Forwarded-Method": "GET" };
+    for (const dest of ["iframe", "frame", "embed", "object"]) {
+      expect(routes().verify(verification({ ...base, "Sec-Fetch-Dest": dest, "Sec-Fetch-Site": "same-site" })).status).toBe(403);
+      expect(routes().verify(verification({ ...base, "Sec-Fetch-Dest": dest, "Sec-Fetch-Site": "cross-site" })).status).toBe(403);
+      expect(routes().verify(verification({ ...base, "Sec-Fetch-Dest": dest, "Sec-Fetch-Site": "same-origin" })).status).toBe(200);
+    }
+    // A navigation, a sibling's fetch or image, a browser that sends nothing: as before.
+    expect(routes().verify(verification({ ...base, "Sec-Fetch-Dest": "document", "Sec-Fetch-Site": "same-site" })).status).toBe(200);
+    expect(routes().verify(verification({ ...base, "Sec-Fetch-Dest": "image", "Sec-Fetch-Site": "same-site" })).status).toBe(200);
+    expect(routes().verify(verification({ ...base, "Sec-Fetch-Dest": "iframe" })).status).toBe(200);
+    expect(routes().verify(verification(base)).status).toBe(200);
+  });
+
+  test("the sign-in page is never framed", () => {
+    const response = routes().verify(verification({ "X-Portal-Hote": HOST }));
+    expect(response.status).toBe(401);
+    expect(response.headers.get("x-frame-options")).toBe("DENY");
+    expect(response.headers.get("content-security-policy")).toInclude("frame-ancestors 'none'");
+  });
+
   test("a well signed password access token with no access behind it does not get through", () => {
     const token = issueToken(KEY, HOST, 1_800_000_000 + 60, "AAAAAAAAAAAAAAAA");
     const response = routes().verify(verification({ "X-Portal-Hote": HOST, Cookie: `__Host-portal=${token}` }));

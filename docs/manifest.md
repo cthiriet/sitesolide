@@ -582,6 +582,19 @@ letter.
 "headers": { "Content-Security-Policy": "default-src 'self'; img-src 'self' data:" }
 ```
 
+**Framing is the app's choice.** Caddy adds no `X-Frame-Options` to a public
+site, since an owner may embed one elsewhere on purpose, and a static site
+could not take it back. An app that holds a session of its own and is never
+meant to be shown in another site's frame says so:
+
+```json
+"headers": { "Content-Security-Policy": "frame-ancestors 'self'", "X-Frame-Options": "SAMEORIGIN" }
+```
+
+A protected site needs nothing here: the portal refuses its frames from
+another origin, and no page frames its sign-in page nor a preview's door page
+(see [portal/README.md](../portal/README.md)).
+
 ### `exclude`
 
 Directories the upload leaves behind, on top of `.git` and the manifest.
