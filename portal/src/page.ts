@@ -284,6 +284,7 @@ const STYLE = `
       display: flex;
       align-items: center;
       justify-content: center;
+      gap: 10px;
       width: 100%;
       min-height: 44px;
       margin: 8px 0 0;
@@ -317,8 +318,31 @@ const STYLE = `
     button:focus-visible,
     a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
-    /* With a provider, its button is the primary action: the password goes on
-       one line beside a raised neutral Enter. */
+    /* A drawing inside a button, a key: the button's own colour, set apart
+       from the words by the gap alone. */
+    .glyph { width: 20px; height: 20px; flex: none; }
+
+    /* A button straight under the words, with no form around it: the room a
+       form would have left. */
+    .lede + button { margin-top: 24px; }
+
+    /* A way in that is not the page's first: raised and neutral, as the Enter
+       beside a password that is not the primary action. */
+    a.sso.quiet {
+      margin-top: 8px;
+      color: var(--ink);
+      background: linear-gradient(180deg, var(--raised) 0%, var(--card) 100%);
+      border-color: var(--line-2);
+      box-shadow: var(--sh-btn-2);
+      text-shadow: none;
+    }
+
+    a.sso.quiet:hover { filter: none; border-color: var(--faint); }
+
+    a.sso.quiet:active { box-shadow: var(--sh-btn-2-press); }
+
+    /* With another way in, its button is the primary action: the
+       password goes on one line beside a raised neutral Enter. */
     .or {
       display: flex;
       align-items: center;
@@ -467,46 +491,100 @@ ${form}${footer === "" ? "" : `\n${footer}`}
  *
  * The host name no longer appears in it: the address bar already shows it, and
  * the page of a closed site has no business saying more than the lock's one.
+ *
+ * `aboutPassword` says the message answers a password just typed, so that
+ * the page with a passkey sets it under the field rather than at the top.
  */
-export function signInPage(returnTo: string, message = "", sso: SsoOffer | null = null, passkey = false): string {
-  // The owner's passkey, a link as the provider's: the ceremony runs on the
-  // portal's own host, under the zone every passkey is registered for, and
-  // the browser comes back with a code (src/passkey-signin.ts). Offered only
-  // once the owner has registered one.
-  const passkeyHtml = passkey
-    ? `\n    <p class="another"><a href="${escapeHtml(`/_portal/passkey?${new URLSearchParams({ retour: returnTo })}`)}">Sign in with a passkey</a></p>`
-    : "";
+export function signInPage(
+  returnTo: string,
+  message = "",
+  sso: SsoOffer | null = null,
+  passkey = false,
+  aboutPassword = false,
+): string {
+  if (passkey) return passkeySignInPage(returnTo, message, sso, aboutPassword);
   // Without a provider, every message is the password's and sits under its
   // field. With one, most are the account's (not let in, expired, not
   // available), and they lead the card rather than redden the password.
   const alertHtml = message === "" || sso !== null ? "" : `\n      <p class="alert" role="alert">${escapeHtml(message)}</p>`;
   const noticeHtml = message === "" || sso === null ? "" : `    <p class="alert notice" role="alert">${escapeHtml(message)}</p>\n`;
-  const passwordForm = `    <form method="post" action="/_portal/connexion">
-      <input type="hidden" name="retour" value="${escapeHtml(returnTo)}">
-      <label for="motdepasse">Password</label>
-      <input id="motdepasse" name="motdepasse" type="password" autocomplete="current-password" required${sso === null ? " autofocus" : ""}>${alertHtml}
-      <button type="submit">Enter</button>
-    </form>${passkeyHtml}`;
+  const passwordForm = passwordFormHtml(returnTo, "Password", alertHtml, sso === null);
   if (sso === null) {
     return template({ title: "This site is private.", text: "Enter your password.", form: passwordForm });
   }
+  return template({
+    title: "This site is private.",
+    text: "Sign in with your company account, or enter a password.",
+    form: `${noticeHtml}${ssoHtml(returnTo, sso, false)}
+    <p class="or">or</p>
+${passwordForm}`,
+  });
+}
 
-  // A link and not a form: the flow leaves for the portal's own host, which
-  // the CSP's `form-action 'self'` would refuse to a form's redirect. What the
-  // link starts changes nothing on its own, see src/sso.ts.
+/**
+ * The sign-in once the owner holds a passkey: the owner's password opens
+ * nothing here any more (src/routes.ts), so the passkey leads the card, a
+ * company account follows it, and the password stays below a divider for
+ * the guests who were given one.
+ *
+ * The password is not folded away behind a disclosure: a guest who was sent
+ * a password and finds no field reads the page as closed to them, and one
+ * click saved for the owner is not worth that. Its message, when there is
+ * one, sits under its field as on the page without a passkey; every other
+ * message is the passkey's or the account's, and leads the card.
+ */
+function passkeySignInPage(returnTo: string, message: string, sso: SsoOffer | null, aboutPassword: boolean): string {
+  const alertHtml = message === "" || !aboutPassword ? "" : `\n      <p class="alert" role="alert">${escapeHtml(message)}</p>`;
+  const noticeHtml = message === "" || aboutPassword ? "" : `    <p class="alert notice" role="alert">${escapeHtml(message)}</p>\n`;
+  // A link as the provider's: the ceremony runs on the portal's own host,
+  // under the zone every passkey is registered for, and the browser comes
+  // back with a code (src/passkey-signin.ts). The site's /_portal/passkey
+  // redirects there, which a form's `form-action 'self'` would refuse.
+  const begin = escapeHtml(`/_portal/passkey?${new URLSearchParams({ retour: returnTo })}`);
+  return template({
+    title: "This site is private.",
+    text:
+      sso === null
+        ? "Sign in with your passkey, or enter the password you were given."
+        : "Sign in with your passkey or your company account, or enter the password you were given.",
+    form: `${noticeHtml}    <a class="sso" href="${begin}">${KEY}<span>Sign in with a passkey</span></a>${sso === null ? "" : `\n${ssoHtml(returnTo, sso, true)}`}
+    <p class="or">or</p>
+${passwordFormHtml(returnTo, "Were you given a password?", alertHtml, alertHtml !== "")}`,
+  });
+}
+
+/** The password's form: the fields the portal reads, `retour` and `motdepasse`, under any label. */
+function passwordFormHtml(returnTo: string, label: string, alertHtml: string, autofocus: boolean): string {
+  return `    <form method="post" action="/_portal/connexion">
+      <input type="hidden" name="retour" value="${escapeHtml(returnTo)}">
+      <label for="motdepasse">${label}</label>
+      <input id="motdepasse" name="motdepasse" type="password" autocomplete="current-password" required${autofocus ? " autofocus" : ""}>${alertHtml}
+      <button type="submit">Enter</button>
+    </form>`;
+}
+
+/**
+ * The provider's button, and the way to choose another account. A link and
+ * not a form: the flow leaves for the portal's own host, which the CSP's
+ * `form-action 'self'` would refuse to a form's redirect. What the link
+ * starts changes nothing on its own, see src/sso.ts. Quiet when a passkey
+ * leads the card.
+ */
+function ssoHtml(returnTo: string, sso: SsoOffer, quiet: boolean): string {
   const begin = (choose: boolean) =>
     escapeHtml(`/_portal/oidc?${new URLSearchParams({ retour: returnTo, ...(choose ? { account: "choose" } : {}) })}`);
   const another = sso.chooseAccount
     ? `\n    <p class="another"><a href="${begin(true)}">Use another account</a></p>`
     : "";
-  return template({
-    title: "This site is private.",
-    text: "Sign in with your company account, or enter a password.",
-    form: `${noticeHtml}    <a class="sso" href="${begin(false)}">Sign in with ${escapeHtml(sso.providerName)}</a>${another}
-    <p class="or">or</p>
-${passwordForm}`,
-  });
+  return `    <a class="sso${quiet ? " quiet" : ""}" href="${begin(false)}">Sign in with ${escapeHtml(sso.providerName)}</a>${another}`;
 }
+
+/**
+ * A key, drawn in the button's own colour, for the passkey's buttons. Inline
+ * for the same reason as the logo; hidden from assistive technology, the
+ * button's words say it all.
+ */
+const KEY = `<svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="5" /><path d="M11 12 20.5 2.5" /><path d="M15.5 7.5l3 3" /><path d="M18.5 4.5l2.5 2.5" /></svg>`;
 
 /** The provider the sign-in page offers, and whether to offer choosing another account. */
 export type SsoOffer = { providerName: string; chooseAccount?: boolean };
@@ -535,7 +613,7 @@ export function passkeyPage(flow: string, script: string, back: { href: string; 
   return template({
     title: "Sign in with a passkey.",
     text: "Use a passkey you registered on the dashboard. It lets you in as the owner.",
-    form: `    <button type="button" id="passkey" data-flow="${escapeHtml(flow)}">Continue with a passkey</button>
+    form: `    <button type="button" id="passkey" data-flow="${escapeHtml(flow)}">${KEY}<span>Continue with a passkey</span></button>
     <p class="alert notice" id="passkey-error" role="alert" hidden></p>${backHtml}
     <script>${script}</script>`,
   });

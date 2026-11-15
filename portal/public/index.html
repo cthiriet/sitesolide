@@ -230,6 +230,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      gap: 10px;
       width: 100%;
       min-height: 44px;
       margin: 8px 0 0;
@@ -263,8 +264,31 @@
     button:focus-visible,
     a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
-    /* With a provider, its button is the primary action: the password goes on
-       one line beside a raised neutral Enter. */
+    /* A drawing inside a button, a key: the button's own colour, set apart
+       from the words by the gap alone. */
+    .glyph { width: 20px; height: 20px; flex: none; }
+
+    /* A button straight under the words, with no form around it: the room a
+       form would have left. */
+    .lede + button { margin-top: 24px; }
+
+    /* A way in that is not the page's first: raised and neutral, as the Enter
+       beside a password that is not the primary action. */
+    a.sso.quiet {
+      margin-top: 8px;
+      color: var(--ink);
+      background: linear-gradient(180deg, var(--raised) 0%, var(--card) 100%);
+      border-color: var(--line-2);
+      box-shadow: var(--sh-btn-2);
+      text-shadow: none;
+    }
+
+    a.sso.quiet:hover { filter: none; border-color: var(--faint); }
+
+    a.sso.quiet:active { box-shadow: var(--sh-btn-2-press); }
+
+    /* With another way in, its button is the primary action: the
+       password goes on one line beside a raised neutral Enter. */
     .or {
       display: flex;
       align-items: center;

@@ -128,14 +128,20 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
     message = "",
     headers: Record<string, string> = {},
     chooseAccount = false,
+    aboutPassword = false,
   ) {
     // The provider is offered only where a cookie could follow: a portal with
     // no hash signs nothing, an identity no more than a password.
     const sso = settings === null || options.key === null ? null : { providerName: settings.providerName, chooseAccount };
-    return new Response(signInPage(returnTo, message, sso, options.passkeys?.offered() ?? false), {
+    return new Response(signInPage(returnTo, message, sso, options.passkeys?.offered() ?? false, aboutPassword), {
       status,
       headers: { ...doorHeaders(), ...headers },
     });
+  }
+
+  /** The sign-in page again, answering the password just posted. */
+  function passwordDoor(returnTo: string, status: number, message: string, headers: Record<string, string> = {}) {
+    return door(returnTo, status, message, headers, false, true);
   }
 
   const audit = (event: NewEvent, now: number) => recordQuietly(options.audit, event, now);
@@ -256,13 +262,13 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       const wait = remainingWait(record.failures, record.lastAt, now);
       if (wait > 0) {
         const seconds = Math.ceil(wait / 1000);
-        return door(returnTo, 429, `Too many attempts. Try again in ${seconds} s.`, {
+        return passwordDoor(returnTo, 429, `Too many attempts. Try again in ${seconds} s.`, {
           "Retry-After": String(seconds),
         });
       }
 
       const submitted = form.get("motdepasse");
-      if (!isAcceptableSubmission(submitted)) return door(returnTo, 400, "Password missing.");
+      if (!isAcceptableSubmission(submitted)) return passwordDoor(returnTo, 400, "Password missing.");
 
       // Password access first: it is found back through its hash, without
       // argon2id, and must not wait for another verification to finish. A
@@ -298,7 +304,7 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
       let ok = false;
       if (!passkeyOnly) {
         if (verifying) {
-          return door(returnTo, 429, "A check is in progress. Try again.", { "Retry-After": "1" });
+          return passwordDoor(returnTo, 429, "A check is in progress. Try again.", { "Retry-After": "1" });
         }
         verifying = true;
         try {
@@ -317,7 +323,7 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
         // A single message for every cause: wrong password, revoked access,
         // absent or malformed hash. What the portal knows about its own
         // configuration is not learned here.
-        return door(returnTo, 401, passkeyOnly ? "Password refused. The owner signs in with a passkey." : "Password refused.");
+        return passwordDoor(returnTo, 401, passkeyOnly ? "Password refused. The owner signs in with a passkey." : "Password refused.");
       }
 
       attempts.delete(counter);
