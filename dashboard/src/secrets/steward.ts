@@ -1084,8 +1084,12 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     return Response.json(body);
   }
 
-  /** The hash, or the response that refuses to use it. */
-  async function safeHash(operation: Operation): Promise<string | Response> {
+  /**
+   * The hash, or the response that refuses to use it. `operation` null: the
+   * refusal goes to the service's log alone, never the journal (the
+   * dashboard's sign-in, which anyone on the Internet can call).
+   */
+  async function safeHash(operation: Operation | null): Promise<string | Response> {
     const reading = await system.readHash();
     if (reading.kind === "absent") return "";
     if (checked) {
@@ -1094,8 +1098,8 @@ export function createSteward(system: System, options: StewardOptions): StewardH
         // A deployment mistake, not a wrong password: it is said in the
         // service's log, where the administrator will read it, and the page
         // receives the generic message.
-        console.error(`${operation} refused: the password hash file is not protected (${reason})`);
-        await writeLog(operation, "failure", null, "password hash file not protected");
+        console.error(`${operation ?? "sign-in"} refused: the password hash file is not protected (${reason})`);
+        if (operation !== null) await writeLog(operation, "failure", null, "password hash file not protected");
         return error("failure", GENERIC_MESSAGE);
       }
     }
@@ -1197,6 +1201,41 @@ export function createSteward(system: System, options: StewardOptions): StewardH
       await writeLog("unlock", "ok", null, null);
       const response: UnlockResponse = { token: accepted.token, expiresAt: accepted.expiresAt };
       return Response.json(response);
+    });
+    return taken ?? busy();
+  }
+
+  /**
+   * The owner's sign-in to the dashboard with its password, verified here
+   * against the hash as the file holds it now: a password changed stops
+   * signing in at once, with no restart of the dashboard, and the dashboard
+   * needs no hash of its own to verify it.
+   *
+   * Neither the unlock's counter nor the journal: anyone on the Internet
+   * reaches this through the sign-in page, and the dashboard counts the
+   * failures per client before asking (src/auth.ts). A shared counter here
+   * would hand that stranger the owner's unlock. The verification waits in
+   * the one-at-a-time queue all the same, beside the unlock's and the
+   * password's: two argon2id at once never run in this process, and the
+   * dashboard sends its sign-ins one at a time.
+   */
+  async function signInWithPassword(req: Request): Promise<Response> {
+    const body = await readBody(req, ["password"]);
+    if (body instanceof Response) return body;
+    // Once the owner holds a passkey, the password signs nobody in, which the
+    // dashboard checks first; checked again here, where the registry is.
+    if (passkeys !== null && (await passkeys.count()) !== 0) {
+      return error("out-of-scope", "the dashboard signs in with a passkey on this server, not with the password");
+    }
+    const submitted = body.password;
+    if (!isAcceptableSubmission(submitted)) return error("invalid", "password missing or too long");
+
+    const taken = oneAtATime(async () => {
+      if (req.signal.aborted) return abandoned();
+      const hash = await safeHash(null);
+      if (hash instanceof Response) return hash;
+      if (!(await check(submitted, hash))) return error("refused", "wrong password");
+      return new Response(null, { status: 204 });
     });
     return taken ?? busy();
   }
@@ -2682,6 +2721,7 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     "/projects": { GET: listProjects },
     "/log": { GET: readLog },
     "/unlock": { POST: unlock },
+    "/signin": { POST: signInWithPassword },
     "/lock": { POST: lock },
     "/value": { POST: lockedRoute(["slug", "file", "variable"], readValueTask) },
     "/variable": { PUT: lockedRoute(["slug", "file", "variable", "value"], setVariableTask), DELETE: lockedRoute(["slug", "file", "variable"], removeVariableTask) },

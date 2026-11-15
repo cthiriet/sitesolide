@@ -216,6 +216,27 @@ describe("sign-in", () => {
     expect(store.sessions.size).toBe(0);
   });
 
+  test("the verifier decides, not the hash this process started with", async () => {
+    // A password changed since: the steward refuses the old one at once.
+    const changed = createRoutes(store, options({ verifyPassword: async (submitted) => (submitted === "the new one" ? "valid" : "refused") }), () => clock);
+    expect((await changed.signIn(signIn({ password: PASSWORD }))).status).toBe(401);
+    expect(failuresOf()).toBe(1);
+    expect((await changed.signIn(signIn({ password: "the new one" }))).status).toBe(200);
+  });
+
+  test("a steward that cannot verify opens nothing and counts nothing against the client", async () => {
+    const down = createRoutes(store, options({ verifyPassword: async () => "unavailable" }), () => clock);
+    const response = await down.signIn(signIn({ password: PASSWORD }));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: "unavailable" });
+    expect(failuresOf()).toBe(0);
+    expect(store.sessions.size).toBe(0);
+
+    const passkey = createRoutes(store, options({ verifyPassword: async () => "passkey-only" }), () => clock);
+    expect(await (await passkey.signIn(signIn({ password: PASSWORD }))).json()).toMatchObject({ error: "passkey-only" });
+    expect(failuresOf()).toBe(0);
+  });
+
   test("a burst goes through one attempt at a time: rate limiting stops it at the threshold", async () => {
     // Launched at once, with no queue, the ten attempts would all read a
     // counter at zero, all pass, and run ten argon2id at the same time.

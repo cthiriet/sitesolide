@@ -315,11 +315,18 @@ in the process list. The service holds only the hash, never the password.
 new one drawn by the steward the same way and shown once, or chosen. **That
 password also unlocks every site's secrets**, checked a second time by the
 steward rather than by the service. The steward re-reads the hash on every
-attempt, so a new one counts immediately for unlocking; the service re-reads it
-only at startup, and sign-in keeps the old one until *Restart service*. On that
-restart the service sees the hash has changed and closes every session
-([tests/rotation.test.ts](tests/rotation.test.ts)): you sign in again with the
-new one.
+attempt, and it verifies the sign-in too (`POST /signin` on its socket,
+[src/password-check.ts](src/password-check.ts)): a new password counts at once
+for both, and the old one stops signing in without a restart. The change
+closes every other session of the owner's on the spot, the one it was made
+from staying open. The sign-in failures stay counted by the dashboard, per
+client; the steward adds neither a counter nor a journal line for them, which
+would hand a stranger the owner's unlock, and runs the verification in the
+queue its unlock and *Change password* share, one argon2id at a time. A
+steward from before that route answers 404, and the dashboard then verifies
+with the hash it started with, so that no upgrade order locks the owner out.
+At the next restart the service still sees the hash has changed and closes
+every session ([tests/rotation.test.ts](tests/rotation.test.ts)).
 
 The rest of what guards it:
 

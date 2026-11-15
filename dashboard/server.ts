@@ -41,6 +41,7 @@ import { createPortalAuditRoute, localPortalAudit } from "./src/portal-audit";
 import { localAccessSteward } from "./src/access/client";
 import { createAccessRoutes } from "./src/access/routes";
 import { DEFAULT_TIMEOUTS, localSteward } from "./src/secrets/client";
+import { createPasswordVerifier, stewardPasswordCall } from "./src/password-check";
 import { readMissingSecrets } from "./src/secrets/missing";
 import { createTokens } from "./src/secrets/tokens";
 import { createSecretsRoutes } from "./src/secrets/routes";
@@ -106,6 +107,9 @@ const secrets = createSecretsRoutes({
   steward: localSteward(STEWARD_SOCKET),
   tokens: unlockTokens,
   backups: localBackupSteward(STEWARD_SOCKET),
+  // The password changed: the sessions opened with the old one close now,
+  // rather than at the next restart (applyRotation below catches the rest).
+  passwordChanged: (kept) => closeOtherOwnerSessions(kept),
 });
 
 // The control API: deployments by token, under /api/v1/, and the Tokens page that
@@ -200,6 +204,9 @@ const listing = localSteward(STEWARD_SOCKET, { ...DEFAULT_TIMEOUTS, shortMs: 2_0
 
 const routes = createRoutes(store, {
   hash: PASSWORD_HASH,
+  // The steward verifies the password against the hash as it stands: a
+  // change signs the old one out at once. See src/password-check.ts.
+  verifyPassword: createPasswordVerifier(stewardPasswordCall(STEWARD_SOCKET, DEFAULT_TIMEOUTS.longMs), PASSWORD_HASH),
   publicUrl: PUBLIC_URL,
   online: ONLINE,
   sessionDurationMs: SESSION_DURATION_MS,

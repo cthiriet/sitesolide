@@ -282,6 +282,7 @@ export type Failure = { error: ErrorCode; message: string; wait?: number };
 //          [&limit=<n>[&before=<ms>]] -> LogResponse with `paged`, a page of `n`, dated before `ms`
 //          the journal and the access log read as one history, by date (src/secrets/log.ts)
 //   POST   /unlock  UnlockRequest -> UnlockResponse
+//   POST   /signin  { password }  -> 204, the owner's sign-in to the dashboard
 //   POST   /lock    WithToken             -> 204
 //   POST   /value         VariableRequest       -> ValueResponse
 //   PUT    /variable       SetRequest           -> FileResponse

@@ -43,5 +43,6 @@ describe("the page's half of a passkey ceremony", () => {
     expect(ceremonyMessage(429, { error: "too-many-attempts", wait: 12 })).toBe("Too many attempts. Try again in 12 s.")
     expect(ceremonyMessage(423, null)).toBe("Unlock first.")
     expect(signInRefusal(403, { error: "passkey-only" }).message).toBe("This dashboard signs in with a passkey.")
+    expect(signInRefusal(503, { error: "unavailable" }).message).toContain("cannot be verified right now")
   })
 })

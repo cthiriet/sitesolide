@@ -60,6 +60,12 @@ export type SecretsDependencies = {
   tokens: Tokens;
   /** The steward's backup routes; absent, the Backups section says the steward is unreachable. */
   backups?: BackupSteward;
+  /**
+   * The dashboard's own password changed, from the session whose hash is
+   * given: every other owner's session is closed there, the one that may
+   * have been opened with the old password among them. Absent, they stay.
+   */
+  passwordChanged?: (keptSessionHash: string) => void;
 };
 
 type Handler = (req: Request) => Promise<Response>;
@@ -229,6 +235,9 @@ const extractPassword: Extraction<WithoutToken<PasswordRequest>> = (body) => {
  */
 export const SESSION_ACTOR = "owner";
 
+/** The file that carries the dashboard's own hash, as the steward names it. */
+export const DASHBOARD_HASH_FILE = "dashboard.env";
+
 /** `/backups/restore`: the slug, the snapshot and the retyped slug; the requester is the relay's to say. */
 const extractRestore: Extraction<WithoutToken<RestoreRequest>> = (body) => {
   const names = fields(["slug", "snapshot", "confirmation"] as const)(body);
@@ -384,6 +393,8 @@ export type RouteOptions<D> = {
   max?: number;
   /** The strings of the request that must never come back out. */
   secrets?: (requested: D) => string[];
+  /** After a 2xx from the steward, with the request and the session that made it. */
+  succeeded?: (requested: D, sessionHash: string) => void;
 };
 
 export function createSecretsRoutes(dependencies: SecretsDependencies, clock: () => number = Date.now): SecretsRoutes {
@@ -431,6 +442,7 @@ export function createSecretsRoutes(dependencies: SecretsDependencies, clock: ()
       if (kept === null) return locked();
 
       const received = await reach(() => call({ ...fieldsRead, token: kept.token }), kept.token, options.secrets?.(fieldsRead) ?? []);
+      if (received.kind === "received" && received.status >= 200 && received.status < 300) options.succeeded?.(fieldsRead, open.hash);
 
       // The steward forgot this token before the dashboard: it restarted, or
       // another session has unlocked since. Forgotten only if it is still the
@@ -531,6 +543,10 @@ export function createSecretsRoutes(dependencies: SecretsDependencies, clock: ()
     restoreFile: withToken(fields(FILE_FIELDS), (requested) => steward.restoreFile(requested)),
     changePassword: withToken(extractPassword, (requested) => steward.changePassword(requested), {
       secrets: (requested) => [requested.dashboardPassword, ...(requested.newPassword === null ? [] : [requested.newPassword])],
+      // The portal's password closes nothing here: its sessions are the portal's.
+      succeeded: (requested, sessionHash) => {
+        if (requested.slug === "dashboard" && requested.file === DASHBOARD_HASH_FILE) dependencies.passwordChanged?.(sessionHash);
+      },
     }),
     togglePortal: withToken(extractPortal, (requested) => steward.togglePortal(requested)),
     restart: withToken(fields(PROJECT_FIELDS), (requested) => steward.restart(requested)),

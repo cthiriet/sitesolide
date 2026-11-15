@@ -28,8 +28,23 @@ export type Store = {
   purgeSessions: (before: number, memberBefore?: number) => void;
 };
 
+/**
+ * What a password submitted to the sign-in comes to: opens, refused, refused
+ * because the owner holds a passkey, or not verified at all.
+ */
+export type PasswordVerdict = "valid" | "refused" | "passkey-only" | "unavailable";
+
 export type Options = {
+  /**
+   * The hash in the dashboard's environment: whether a password is
+   * configured, and what `verifyPassword` falls back on in a test.
+   */
   hash: string;
+  /**
+   * Who verifies a submitted password: the steward, against the hash as its
+   * file holds it now (src/password-check.ts). Absent, `hash` above.
+   */
+  verifyPassword?: (submitted: string) => Promise<PasswordVerdict>;
   publicUrl: string;
   online: boolean;
   sessionDurationMs: number;
@@ -211,6 +226,7 @@ export function createRoutes(store: Store, options: Options, clock: () => number
   const session = createSessionReader(store, options);
   const limiter = options.limiter ?? createClientLimiter();
   const openOwnerSession = ownerSessionOpener(store, options);
+  const verify = options.verifyPassword ?? (async (submitted: string): Promise<PasswordVerdict> => ((await isPasswordValid(submitted, options.hash)) ? "valid" : "refused"));
 
   /**
    * The password attempts go through one by one, from the reading of the
@@ -292,7 +308,15 @@ export function createRoutes(store: Store, options: Options, clock: () => number
           );
         }
 
-        if (!(await isPasswordValid(submitted, options.hash))) {
+        const verdict = await verify(submitted);
+        if (verdict === "passkey-only") {
+          return Response.json({ error: "passkey-only", message: "This dashboard signs in with a passkey." }, { status: 403 });
+        }
+        if (verdict === "unavailable") {
+          // Nothing was verified: not counted against the client.
+          return Response.json({ error: "unavailable", message: "The sign-in cannot be verified right now, try again in a moment." }, { status: 503 });
+        }
+        if (verdict !== "valid") {
           limiter.failed(client, now);
           // A single message for every cause: wrong password, missing hash,
           // malformed hash. What the service knows of its own configuration is

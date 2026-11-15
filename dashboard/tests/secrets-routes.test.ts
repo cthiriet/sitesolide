@@ -508,6 +508,37 @@ describe("unlocked", () => {
     }
   });
 
+  test("the dashboard's password changed closes the owner's other sessions, the portal's does not", async () => {
+    const kept: string[] = [];
+    store = createStore();
+    fake = fakeSteward();
+    tokens = createTokens(() => clock);
+    secrets = createSecretsRoutes(
+      {
+        session: createSessionReader(store, { online: true, sessionDurationMs: SESSION_DURATION_MS }),
+        publicUrl: PUBLIC_URL,
+        steward: fake.steward,
+        tokens,
+        passwordChanged: (hash) => kept.push(hash),
+      },
+      () => clock,
+    );
+    const open = await openSession();
+    await unlock(open);
+    const change = (slug: string, file: string) =>
+      read(secrets.changePassword(requested("/password", { body: { slug, file, variable: "PASSWORD_HASH", dashboardPassword: PASSWORD, newPassword: null }, cookie: open.cookie })));
+
+    expect((await change("portal", "portal.env")).status).toBe(200);
+    expect(kept).toEqual([]);
+    expect((await change("dashboard", "dashboard.env")).status).toBe(200);
+    expect(kept).toEqual([open.hash]);
+
+    // Refused by the steward: nothing closes.
+    fake.responses.changePassword = () => Response.json({ error: "refused", message: "wrong password" }, { status: 401 });
+    expect((await change("dashboard", "dashboard.env")).status).toBe(401);
+    expect(kept).toEqual([open.hash]);
+  });
+
   test("a locked 401 from the steward becomes a 423, and the token is forgotten", async () => {
     const open = await openSession();
     await unlock(open);
