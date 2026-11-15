@@ -13,7 +13,8 @@
  *   resolution         this workstation resolves the zone to the machine
  *   caddy-zone ...     bin/deploy-caddy.sh, the drop-in, bin/deploy-caddy.sh again
  *   api ... monitor    every component, in the order docs/install.md verified
- *   backups, installer, egress   the optional ones, left out with --minimal
+ *   backups, egress              the optional ones, left out with --minimal; the
+ *                                installer never is: every deployment goes through it
  *
  * IDEMPOTENT AND RESUMABLE. Every step is a check that only reads, and a run
  * that does only what the check found missing: see bin/cli/steps.ts. A second
@@ -1485,7 +1486,8 @@ export function installSteps(tunnel = false): Step<SetupContext>[] {
     {
       id: "installer",
       title: "installer",
-      skip: optional,
+      // Never left out: every deployment goes through the API and the
+      // installer, the owner's included, none over SSH.
       check: installCheck("setup:installer:check", COMPONENT_CONDITIONS.installer),
       run: (context) => script(context, "deploy-installer.sh"),
       inspect: (context) => `ssh ${context.server} 'ls -l ${LIB}/installer.js'`,
@@ -1899,10 +1901,16 @@ export async function runSetup(given: SetupOptions, deps: SetupDependencies): Pr
   const dashboard = `https://dashboard.${options.zone}`;
   const portal = `https://portal.${options.zone}`;
   const environmentPrefix = privateFolder(deps.home, {}) === folder ? "" : `${CONFIG_DIR_VARIABLE}=${folder} `;
+  // The owner's token last: every deployment goes through the API with one,
+  // the owner's included. Minted by its own command rather than here: a
+  // token is a credential the workstation that deploys keeps, which may not
+  // be the one that ran setup, and the same command mints a new one after a
+  // revocation, without setup. See bin/cli/owner-token.ts.
   const next = [
+    `${environmentPrefix}sitesolide login --owner   your token for every project, minted over SSH into this workstation's vault, never shown`,
     `cd <your project> && ${environmentPrefix}sitesolide deploy`,
     "the monitor's heartbeat, five minutes: monitor/README.md, \"Alerting: healthchecks.io in five minutes\"",
-    ...(options.minimal ? ["backups, the installer and the egress proxy were left out: run setup again without --minimal"] : []),
+    ...(options.minimal ? ["backups and the egress proxy were left out: run setup again without --minimal"] : []),
   ];
   out.say("");
   out.say(ran.length === 0 ? `-> ${server} was already installed: nothing was changed` : `-> sitesolide is installed on ${server}`);

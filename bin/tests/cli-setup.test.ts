@@ -974,12 +974,13 @@ describe("the passwords", () => {
 });
 
 describe("what setup runs", () => {
-  test("--minimal leaves out backups, the installer and the egress proxy", async () => {
+  test("--minimal leaves out backups and the egress proxy, never the installer every deployment goes through", async () => {
     const { b } = world();
     const r = await setup(b, options("--minimal"));
     expect(r.code).toBe(0);
-    expect(r.statuses.slice(-3)).toEqual(["backups:skip", "installer:skip", "egress:skip"]);
+    expect(r.statuses.filter((status) => status.endsWith(":skip"))).toEqual(["backups:skip", "egress:skip"]);
     expect(b.kit.tasks.map((task) => task.name)).not.toContain("deploy-egress.sh");
+    expect(b.kit.tasks.map((task) => task.name)).toContain("deploy-installer.sh");
     expect(r.print.lines.join("\n")).toContain("run setup again without --minimal");
   });
 
