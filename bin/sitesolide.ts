@@ -272,6 +272,7 @@ import { deploysOverSsh, eventOutput, humanOutput, login, promptWithoutEcho, rem
 import { ownerLogin } from "./cli/owner-token";
 import { buildEnv, KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
 import { ownerGeneralCommand, ownerWriteCommand, PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshClaim, sshGeneral, sshLifecycle, sshPeople, sshRename, sshTakeBack } from "./cli/access";
+import { PASSKEY_USAGE, passkeys, sshPasskeys } from "./cli/passkeys";
 import {
   foreignUnit,
   laterBlockPorts,
@@ -4216,6 +4217,9 @@ function usage(zone: string | null): string {
     "  sitesolide people               everyone with access, their roles, who may create projects",
     "     <email> --may-create         let them create projects, Admin of what they create",
     "     <email> --no-create          take that right back",
+    "  sitesolide passkey              the owner's passkeys for the dashboard and protected sites",
+    "     link                         a one-time link that registers one, the way in without a passkey",
+    "     remove <id>                  remove one; the last one gives the dashboard's password back",
     "  sitesolide lock   [--dry-run]   Anyone with the code: the site opens with a code, said once; or the one in force",
     "     --status                     wanted / installed / measured, without touching",
     "     --new-code                   a new code, the old one no longer opens it",
@@ -4272,6 +4276,7 @@ function helpText(arguments_: string[]): string {
   // `share --help`, `people --help` and `secrets --help`: their own usage, short, rather than every command.
   if (arguments_[0] === "share") return SHARE_USAGE.join("\n");
   if (arguments_[0] === "people") return PEOPLE_USAGE.join("\n");
+  if (arguments_[0] === "passkey") return PASSKEY_USAGE.join("\n");
   if (arguments_[0] === "secrets") return STORE_USAGE.join("\n");
   if (remoteMode(arguments_, process.env)) return REMOTE_USAGE.join("\n");
   let zone: string | null = process.env.SITESOLIDE_ZONE ?? null;
@@ -4473,6 +4478,9 @@ if (import.meta.main) {
     case "people":
       // The same registry, machine-wide. It reads no project folder.
       process.exit(await people(arguments_, dashboardAddress(config.zone), sshPeople((remote, input) => executor.execute(config, remote, input)), remoteOutput));
+    case "passkey":
+      // The owner's passkeys, on the steward's owner socket as root: see bin/cli/passkeys.ts. It reads no project folder.
+      process.exit(await passkeys(arguments_, dashboardAddress(config.zone), sshPasskeys((remote, input) => executor.execute(config, remote, input)), remoteOutput));
     case "secrets": {
       // The arguments first, before anything is read: one of them may be a
       // value typed in the wrong place, refused without being quoted.

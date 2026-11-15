@@ -1644,7 +1644,7 @@ export function deploysOverSsh(folder: string): boolean {
 }
 
 /** The commands only the owner's SSH access carries. */
-export const SSH_COMMANDS = ["lock", "unlock", "domain", "remove", "run", "people", "refresh", "backups"];
+export const SSH_COMMANDS = ["lock", "unlock", "domain", "remove", "run", "people", "passkey", "refresh", "backups"];
 
 export const REMOTE_USAGE = [
   "usage, with a token:",

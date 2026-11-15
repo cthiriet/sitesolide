@@ -511,7 +511,7 @@ const SLUG = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
  * quoted, and a quote in it would end the quoting.
  */
 export function ownerReadCommand(
-  path: "/people" | `/access?slug=${string}` | `/store?slug=${string}` | `/tokens/claim?slug=${string}`,
+  path: "/people" | "/passkeys" | `/access?slug=${string}` | `/store?slug=${string}` | `/tokens/claim?slug=${string}`,
 ): string {
   const slug = /\?slug=(.*)$/.exec(path)?.[1];
   if (slug !== undefined && !SLUG.test(slug)) throw new Error("not a project's slug: no read is built from it");
@@ -532,7 +532,9 @@ export type OwnerWritePath =
   | "/tokens/project"
   | "/tokens/owner"
   | "/control/rename"
-  | "/control/lifecycle";
+  | "/control/lifecycle"
+  | "/passkeys/link"
+  | "/passkeys/credential";
 
 /**
  * How long curl waits, in seconds, for the routes not given the thirty of
