@@ -54,6 +54,14 @@ describe("reading the steward's projection", () => {
     expect(readProjection(text)).toEqual(FULL);
   });
 
+  test("each site carries an empty people and domains, which a portal of before requires", () => {
+    const object = JSON.parse(encodeProjection(FULL));
+    for (const site of Object.values(object.sites) as Record<string, unknown>[]) {
+      expect(site.people).toEqual({});
+      expect(site.domains).toEqual([]);
+    }
+  });
+
   test("a projection with no site is nobody, and reads", () => {
     expect(readProjection(encodeProjection(EMPTY_PROJECTION))).toEqual(EMPTY_PROJECTION);
   });

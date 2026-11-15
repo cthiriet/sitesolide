@@ -131,9 +131,17 @@ export function readProjection(text: string): Projection | { unreadable: string 
   return { version: PROJECTION_VERSION, writtenAt: object.writtenAt, sites };
 }
 
-/** The file as the steward writes it. */
+/**
+ * The file as the steward writes it. Each site still carries an empty
+ * `people` and `domains`: a portal of before company sign-in went requires
+ * both and reads a site without them as unreadable, which would shut every
+ * guest out between the steward's deployment and the portal's. Nothing here
+ * reads them; they can go once no portal of before can be in service.
+ */
 export function encodeProjection(projection: Projection): string {
-  return `${JSON.stringify(projection, null, 2)}\n`;
+  const sites: Record<string, SiteAccess & { people: Record<string, never>; domains: never[] }> = {};
+  for (const [host, site] of Object.entries(projection.sites)) sites[host] = { ...site, people: {}, domains: [] };
+  return `${JSON.stringify({ ...projection, sites }, null, 2)}\n`;
 }
 
 // --- the portal's decisions ------------------------------------------------------
