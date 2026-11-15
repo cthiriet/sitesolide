@@ -1,7 +1,7 @@
 # portal
 
-The sign-in in front of every restricted site. Three ways in: the owner's
-password; password access, one password per person and per site for someone
+The sign-in in front of every restricted site. Three ways in: the owner,
+with a passkey or the owner's password; password access, one password per person and per site for someone
 outside the company; and, once an identity provider is configured, **the
 company's own accounts**, Google Workspace, Microsoft Entra, Okta or Keycloak.
 Who may open a site is not the portal's to keep: it is the steward's registry
@@ -76,12 +76,13 @@ redirect after a form; it carries `X-Portal`, so a front end that signs out with
 `fetch` reloads on it. The other sites' cookies are not touched: each lapses on
 its own, or closes with that site's sign-out.
 
-The cookie has three forms, signed by an HMAC whose key mixes a draw kept in
+The cookie has four forms, signed by an HMAC whose key mixes a draw kept in
 `data/key` with the password hash:
 
 | Holder | Cookie | Signed over | Lives | Revocation |
 |---|---|---|---|---|
 | owner | `<expiry>.<signature>` | the host, the expiry | 30 days | change the password, or delete `data/key` and restart: everyone is signed out everywhere |
+| owner, by passkey | `<expiry>.pk.<passkey>.<signature>` | the host, the expiry, the passkey's reference | 30 days | remove the passkey on the dashboard: refused on the very next request |
 | password access | `<expiry>.<access>.<signature>` | the host, the expiry, the access's identifier | 30 days at most, never beyond the access | remove it from the site's people with access: refused on the very next request |
 | identity | `<expiry>.id.<identity>.<signature>` | the host, the expiry, the verified email and name | 24 hours at most, never beyond the portal session it came from | remove the person from the site's people with access: refused on the very next request |
 
@@ -188,6 +189,40 @@ then: 24 hours, 7 days (the default), 30 days or none. A token never gives it.
   its expiry: the passwords handed out and the cookies in circulation keep
   working. One given under a name rather than an email
   keeps that name ("Client Bob"), and signs in as `password:<id>` in the audit.
+
+## The owner's passkey
+
+The sign-in page offers **Sign in with a passkey** once the owner has
+registered one on the dashboard (see
+[dashboard/README.md](../dashboard/README.md#passkeys)). It lets the owner
+in as the owner, `admin`, as the owner's password does; password access and
+company accounts are untouched, and the owner's portal password keeps
+working beside it.
+
+**The ceremony runs on the portal's own host**, `portal.<zone>`, never on
+the site, the road a company account takes: the site's
+`/_portal/passkey` sets a binding cookie and sends the browser to the
+portal with a sealed flow naming the site's host; the portal's page runs the
+ceremony against `POST /passkey/options` and `POST /passkey/verify`, then
+sends the browser back to the site's `/_portal/passkey/complete` with a
+one-time code, redeemed within a minute, on that host alone, by the browser
+that holds the binding, for the owner's cookie alone. A site on its own
+domain takes the same road, so the passkey is offered there too: a passkey
+answers only a page under the zone it was registered for, and the portal's
+host is one.
+
+| Measure | Detail |
+|---|---|
+| Relying party | the zone, so that the dashboard's passkey serves here |
+| Origin | `https://portal.<zone>` alone, never another host of the zone: a hosted site taken over gets assertions naming its own origin, refused here and at the steward |
+| Public keys | the steward's projection, `/etc/sitesolide-portal/passkeys.json`, ids and public keys alone, read again when it changes; the portal keeps no counter and writes nothing back |
+| User verification | required |
+| Rate limiting | per client, as Caddy saw it: twenty challenges and ten verifications a minute, beside caps for the whole machine; failures recorded at most thirty a minute |
+| What it grants | **the one site it was asked for**: the cookie is bound to that host, as every portal cookie is, and opens neither another site nor the dashboard, which asks for its own passkey ceremony |
+| Revocation | the cookie names the passkey, which the gate looks up in the projection on every request: a passkey removed on the dashboard closes every site it opened at their next request |
+
+The audit records `portal.signin` with `method: passkey`, and a refused
+ceremony as `portal.signin_failed`.
 
 ## Signing in with a company account
 
@@ -445,7 +480,7 @@ The steward decides, the portal reads. A restricted site opens to:
 
 | Who | Signs in with | The role the site learns |
 |---|---|---|
-| the owner | the owner's password | `admin` |
+| the owner | the owner's password, or a passkey | `admin` |
 | an admin email, `OIDC_ADMIN_EMAILS` | their company account | `admin`, on every site |
 | a person among the site's people with access | their company account | their entry's role: `visitor` (Can open), `viewer`, `developer` or `admin` |
 | everyone at a domain among them, `@acme.com` | their company account at that domain, subdomains not included | `visitor`, or their own entry's role when it is higher |
@@ -627,7 +662,7 @@ of the repository shares (`id`, `at` in ISO 8601 UTC, `actor`, `action`,
 
 | Action | Actor | Detail |
 |---|---|---|
-| `portal.signin` | `owner`, the email, or for password access the email it was given to, `password:<id>` for a name carried over from before the registry | `method`: `password`, `password-access` or `oidc`, and the `role` for an identity; `name` for a password access given under a name; `count` when repeated |
+| `portal.signin` | `owner`, the email, or for password access the email it was given to, `password:<id>` for a name carried over from before the registry | `method`: `password`, `passkey`, `password-access` or `oidc`, and the `role` for an identity; `name` for a password access given under a name; `count` when repeated |
 | `portal.signin_failed` | `anonymous`, or the email when the provider named one | `method`, and for a provider the `reason`: `bad-signature`, `wrong-audience`, `expired`, `wrong-nonce`, `unverified-email`, `unusable-email`, `domain-not-allowed`, `unmanaged-account`, `not-shared`, `wrong-browser`, `expired-session`...; a dashboard's sign-in refused here names the dashboard's host, and a code carried to the wrong side reads `wrong-audience` too |
 | `portal.signout` | who the cookie names, as for a sign-in | none, or `count` when repeated |
 | `sharing.update`, `guest.create`, `guest.revoke` | in rows written before the registry alone, as they were written | who could open a site changed, a password access given or removed; the portal writes none any more |

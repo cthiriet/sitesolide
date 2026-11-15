@@ -160,7 +160,7 @@ the portal's account reads: a removal holds at the next request. Someone
 inside the company's domains signs in with their company account and may hold
 any role; someone outside them gets password access, Can open alone, a
 password the steward draws and shows once; a domain is Can open alone. The
-owner, whoever holds the dashboard's password, may do everything. See
+owner, whoever holds the dashboard's passkeys, may do everything. See
 [dashboard/README.md](../dashboard/README.md#access).
 
 **The dashboard believes no name it is told.** Someone with a role above Can
@@ -180,7 +180,7 @@ code, a restore, a role above Can open given, password access given, a token
 minted, each waits for the person's own unlock**: a forced sign-in at the provider, which the portal asks for
 (`prompt=login`, `max_age=0`) and reads back in the provider's own ID token,
 and the steward checks again, for ten minutes and that person's session
-alone. The owner's unlock is the dashboard's password, retyped. Password
+alone. The owner's unlock is a fresh passkey assertion, or the dashboard's password while no passkey is registered. Password
 access waits because it lets in someone from outside the company, whom no
 company account vouches for. Giving Can open to a company account or to one
 of the company's listed domains, restricting a site, and taking access away,
@@ -518,7 +518,7 @@ signing in with their company account, Google Workspace, Microsoft Entra or
 any OpenID Connect provider, named by email or as a whole domain, each with a
 role; people outside the company with **password access**, one password per
 person and per site, drawn by the steward, shown once, until an expiry chosen
-when it is given; and everywhere, the owner with the owner's password, and the
+when it is given; and everywhere, the owner with a passkey or the owner's password, and the
 admin emails. They are given from a site's *Access* in the dashboard, or with
 `sitesolide share` from a project's folder, over the owner's SSH, or with a
 token through the dashboard and the steward, which lets a token give Can open
@@ -545,7 +545,7 @@ Every component that acts records what it did in its own database, in one
 shape: an ISO date, an actor, a dotted action, a target, and a detail in JSON
 that never carries a secret value. An actor is an email, of someone with
 access to a project or of someone given password access, `owner` for whoever
-holds the dashboard's password, `token:<id>` for a token, `password:<id>` for
+holds the dashboard's passkeys, `token:<id>` for a token, `password:<id>` for
 a password access given under a name rather than an email (`guest:<id>` on the
 rows written before the access registry), `anonymous` before anyone is known,
 or `system`. The steward writes a person's email as it verified it, never as
@@ -583,7 +583,7 @@ rotates by line count: a refusal stays in the journal.
 | `dashboard.signin` | steward | the person's email | the person's email | a session opened, from an assertion it verified, with their roles and create right |
 | `dashboard.signin_failed` | steward | the email, or `anonymous` when the assertion did not verify | the email, or none | a sign-in refused: `can-open-only` for someone who only opens sites, `no-role` for someone on no list, an assertion replayed, signed by another key, expired, too old; a minute holds twenty refusals at most |
 | `dashboard.signout` | steward | the person's email | the person's email | a person signed out |
-| `portal.signin` | portal | `owner`, an email, or `password:<id>` | host | a sign-in with the owner's password, a company account, or password access (`method: "password-access"`, under the email it was given to, or `password:<id>` with its `name` in the detail), its role; `guest:<id>` on rows of before; repeats within a minute counted on one row |
+| `portal.signin` | portal | `owner`, an email, or `password:<id>` | host | a sign-in with the owner's password or passkey (`method: "passkey"`), a company account, or password access (`method: "password-access"`, under the email it was given to, or `password:<id>` with its `name` in the detail), its role; `guest:<id>` on rows of before; repeats within a minute counted on one row |
 | `portal.signin_failed` | portal | `anonymous` or an email | host | a wrong password, or a company account refused and why |
 | `portal.signout` | portal | as it signed in | host | a sign-out |
 | `sharing.update` | portal | `owner`, `token:<id>` or an email | host | written before the access registry only: who could open a site changed, the mode, the people and domains added and removed |
@@ -594,7 +594,8 @@ rotates by line count: a refusal stays in the journal.
 | `backup.restore` | backups | `owner` or an Admin's email | slug | a restore, its snapshot and how it ended |
 | `backup.restore` | steward | a person's email | slug | a restore refused by role before it reached the backups |
 | `member.invite`, `member.role`, `member.remove`, `member.signin`, `member.signin_failed`, `member.signout` | steward | as they were written | as they were written | written before the access registry only: the dashboard's people of then, their roles and sign-ins |
-| `secrets.unlock`, `secrets.lock` | steward | `owner`, or a person's email | none, or the person's email | changes unlocked, or the password or the forced sign-in refused, and locked again |
+| `secrets.unlock`, `secrets.lock` | steward | `owner`, or a person's email | none, or the person's email | changes unlocked, or the passkey, the password or the forced sign-in refused, and locked again |
+| `passkey.add`, `passkey.remove`, `passkey.link`, `passkey.signin`, `passkey.signin_failed` | steward | `owner` | none | a passkey of the owner registered, removed, a registration link minted by root over SSH, a dashboard sign-in with a passkey or one refused, with its reason; an unlock by passkey is a `secrets.unlock` with `passkey` in its detail |
 | `secrets.read`, `secrets.set`, `secrets.remove` | steward | `owner`, a person's email, or `token:<id>` | slug | a variable read back, set or removed, by its name, or a file of the store removed; the place in `file`, a platform file's name, `store` for the project's store, `store/<name>` for one of its files; a read is the owner's alone, a person's refused by role, with that role; a token's set or removed through the API, the person in `member` for their own, its refusals with their reason, `no secrets permission` among them, 60 an hour at most |
 | `secrets.generate` | steward | `owner`, a person's email, or `token:<id>` | slug | a value drawn on the server for a name, in `store`, its format, `hex` or `base64url`, in the detail; never the value, nor its length |
 | `secrets.list` | steward | `token:<id>` | slug | a token's listing of a project's names refused, with its reason; a listing reads no value, and one that goes through is not journaled |

@@ -244,7 +244,9 @@ restricted sites, is drawn on your workstation, its argon2id hash written to
 the machine, and the password shown once at the end of the run, on standard
 error, even when the run fails afterwards. Neither is ever drawn again
 by a later run, and neither appears in a `--json` event: both are changed from
-the dashboard.
+the dashboard. The dashboard's password signs in until you register a
+passkey, with `sitesolide passkey link`; after that, passkeys alone sign in
+to the dashboard, see [commands.md](commands.md#passkeys).
 
 ## DNS
 

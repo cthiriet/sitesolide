@@ -66,6 +66,9 @@ sitesolide share                this project's general access and people with ac
 sitesolide people               everyone with access, their roles, who may create projects
    <email> --may-create         let them create projects, Admin of what they create
    <email> --no-create          take that right back
+sitesolide passkey              the owner's passkeys for the dashboard and protected sites
+   link                         a one-time link that registers one, the way in without a passkey
+   remove <id>                  remove one; the last one gives the dashboard's password back
 sitesolide lock   [--dry-run]   Anyone with the code: the site opens with a code, said once; or the one in force
    --status                     wanted / installed / measured, without touching
    --new-code                   a new code, the old one no longer opens it
@@ -581,6 +584,43 @@ command is refused before anything is sent: it is the owner's. See
 [access.md](access.md#people-with-access-beside-tokens) for what each person sees,
 and [dashboard/README.md](../dashboard/README.md#access) for the machine's
 side.
+
+## Passkeys
+
+The owner signs in to the dashboard, unlocks it, and enters a protected site
+as the owner with a passkey. The first one, and one after every passkey is
+lost, is registered through a link that only root mints:
+
+```console
+$ sitesolide passkey link
+-> a link that registers a passkey for the owner of https://dashboard.example.com, over SSH, as the owner
+   https://dashboard.example.com/#passkey=...
+   valid until 2026-11-15 10:15 UTC, once; a new link replaces this one
+   open it in your own browser alone: whoever opens it first signs in as the owner
+
+$ sitesolide passkey
+-> passkeys of the owner of https://dashboard.example.com, over SSH, as the owner
+   Laptop  added 2026-11-15 10:02 UTC, last used 2026-11-15 10:02 UTC  id 3q2-7w...
+   only one: register a second on another device, or losing it leaves this command as the way back in
+```
+
+The link lives fifteen minutes and works once; the secret is in the
+fragment, which the browser never sends. Opening it registers a passkey and
+signs in. Register the second one from the dashboard's *Server* page, on
+another device or a security key.
+
+Once a passkey exists, the dashboard's password neither signs in nor
+unlocks. `sitesolide passkey remove <id>` removes one, the last one
+included, which the dashboard refuses: with none left, the password signs in
+again. That is the break-glass when a link cannot be used.
+
+With `--json`, `link`'s `result` carries `url` and `expiresAt`; the listing
+and `remove`, `passkeys` (each `id`, `name`, `createdAt`, `lastUsedAt`),
+`readable` and `changed`. Root on the machine asks the steward on its owner
+socket, which journals the link and every change under `owner`. With a
+token, the command is refused before anything is sent. See
+[access.md](access.md#the-owners-passkeys) and
+[dashboard/README.md](../dashboard/README.md#passkeys).
 
 ## The preview code
 

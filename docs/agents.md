@@ -33,6 +33,7 @@ person let in and every key drawn is yours to approve.
 | check a machine with `setup --dry-run`, and install it when you asked | replace DNS records that point elsewhere (`setup --dns-replace`), unless you decided it |
 | list what a new release would change with `upgrade --dry-run` and `refresh --all --dry-run`, and run them when you asked | redeploy a component by hand, or force over a file edited on the machine |
 | list everyone with access, and who may create projects, with `people` | grant or take back the right to create projects, unless you asked for that person: it lets them into the dashboard |
+| list the owner's passkeys with `passkey` | mint a passkey link or remove a passkey: the link signs in as the owner, and unlocking the dashboard is yours alone |
 | with a token, restart a project's service | read or guess a secret, a provider's token included: no route hands a value back, to anyone but the owner in the dashboard |
 | list a project's secret names, what is missing, its files and its build's names, over the owner's SSH or with a token minted with *Manage secrets* | set a value read from the conversation, or put one on a command line |
 | draw a random key on the server for a name the project checks itself, a session secret, an internal token (`secrets generate`), and remove the names you asked it to | replace a live secret with `secrets generate --replace`: rotating a key is the user's decision |
@@ -365,6 +366,7 @@ What `result` carries:
 | `restart`, with a token | `slug`, `verdict` (`kind`, `state`, `subState`, `restarts`): a `kind` other than `active` ends in an `error` instead |
 | `share` | `slug`, `url`, `general` (`public`, `restricted`, `code`, or null for a project not deployed), `entries` (each `who`, `kind`, `role`, `by`, `createdAt`, `updatedAt`, `password`), `signIn` (`configured`, `allowedDomains`), `message` (null until signing in with a company account is set up), `changed`, and after a change `changes` (each `who`, `change`: `add`, `role`, `none` or `remove`, `role`, and `password` for password access just given) |
 | `people` | listing: `people` (each `who`, `roles` by project, `create`, `passwords`, `admin`), `domains` (each `slug`, `domain`), `signIn`, `changed: false`; `--may-create` and `--no-create`: `email`, `create`, `roles`, `change` (`create`, `none`), `changed` |
+| `passkey` | listing and `remove`: `action`, `passkeys` (each `id`, `name`, `createdAt`, `lastUsedAt`), `readable`, `changed`; `link`: `action`, `url`, `expiresAt`. The owner's alone: an agent never runs `link` or `remove` |
 | `machine create` | `provider`, `created` (false when an earlier run had), `machine`, `resources` (each `kind`, `name`, `id`, `reused`), `next`, the `setup` command to run |
 | `machine list` | `provider`, `machines`, each with `name`, `type`, `location`, `status`, `ipv4`, `ipv6`, `ipv6Network`, `monthlyPrice` (`net`, `gross`, `currency`), `backups`, `managed`, `login` |
 | `machine providers` | `providers`, each with `name`, `title`, `credentials` (whether this workstation holds them), `source` (where from, never the value), `variables`, `backups`, `defaults`, `docs` |

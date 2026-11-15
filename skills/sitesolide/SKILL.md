@@ -180,6 +180,9 @@ Every error carries a `hint`: follow it. The usual ones:
 - Never give access to anyone the user did not name, nor a role they did not
   name, and never make a site Public: general access is theirs, from the
   dashboard.
+- Never run `sitesolide passkey link` or `sitesolide passkey remove`, and
+  never unlock the dashboard: the link signs in as the owner, so the user
+  runs it in their own terminal and opens it in their own browser.
 - Never read, print or guess a secret, nor ask the user to paste one. A
   random key is drawn on the server, `sitesolide secrets generate NAME`, and
   nobody sees it; `sitesolide secrets set NAME --stdin` is for the user to

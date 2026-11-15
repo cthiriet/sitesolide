@@ -81,7 +81,7 @@ The machine itself stays the owner's: the platform's own projects, the
 dashboard and the portal among them, their settings, the tokens of others,
 and the roles people hold on projects they are not Admin of.
 
-**The owner** is whoever holds the dashboard's password, the first account,
+**The owner** is whoever holds the dashboard's passkeys, or its password until the first one ([below](#the-owners-passkeys)), the first account,
 made by `setup`, and may do everything, on every project and on the machine.
 Their *People* page lists everyone across projects, their roles, their
 password access, who may create projects, the domains, and the admin emails,
@@ -154,7 +154,7 @@ restores data, mints a token, gives someone a role above Can open, or gives
 password access asks for the person's own unlock: pressed, the write sends them to the identity provider, which asks them
 to prove themselves once more even if they are signed in there, and brings
 them back unlocked for ten minutes, for their session alone. The owner
-unlocks with the dashboard's password; neither unlock replaces the other, nor
+unlocks with a passkey, or the dashboard's password while none is registered; neither unlock replaces the other, nor
 another person's. Restricting a site, giving Can open to a company account or
 to one of the company's listed domains, removing someone, lowering them and
 restarting a service never wait for an unlock. A whole domain does while the
@@ -162,6 +162,20 @@ company's domains are not listed on the server, `OIDC_ALLOWED_DOMAINS` empty:
 anyone the provider vouches for would then come in. A token minted with
 *Manage secrets* sets secrets without one: minting it took the unlock, and
 that permission is the opt-in, see [Secrets with a token](#secrets-with-a-token).
+
+### The owner's passkeys
+
+The owner signs in to the dashboard with a passkey, and unlocks with a
+fresh one; the same passkey signs them in to a restricted site, as the
+owner, from its sign-in page. Once one exists, the dashboard's password
+neither signs in nor unlocks. The first one comes from root: `sitesolide
+passkey link`, over the owner's SSH, prints a link valid fifteen minutes,
+once, which registers a passkey and signs in. Register a second one from the
+*Server* page, on another device or a security key. Losing them all, root
+mints a new link the same way; `sitesolide passkey remove <id>` removes
+any, the last one included, which gives the password back. See
+[commands.md](commands.md#passkeys) and
+[dashboard/README.md](../dashboard/README.md#passkeys).
 
 ## Your own tokens
 

@@ -1,6 +1,6 @@
 # dashboard
 
-What the machine actually runs, at `dashboard.<zone>`, behind a password, on two
+What the machine actually runs, at `dashboard.<zone>`, behind the owner's passkeys, on two
 levels. **The machine**: *Sites*, the home page, with the state of the machine,
 the discrepancies between what the repositories ask for and what the machine
 does, the only part of the dashboard that teaches you something, and the list
@@ -199,9 +199,71 @@ and one opened by a process that is none of its services reads as
 this carries no links: the page then says the map holds what the manifest
 declares alone.
 
+## Passkeys
+
+The owner signs in with a passkey, and unlocks with a fresh one. Once a
+passkey exists, **the dashboard's password neither signs in nor unlocks**:
+the service answers `403 passkey-only` to a password sign-in, and the
+steward refuses a password unlock. The password below stays the way in on a
+machine that has no passkey yet, and the break-glass once root has removed
+the last one.
+
+**The first passkey**, and one after every passkey was lost, comes from root:
+`sitesolide passkey link`, over the owner's SSH, asks the steward's owner
+socket for a link, `https://dashboard.<zone>/#passkey=<secret>`. It lives
+fifteen minutes, works once, a new one replacing it, and the steward keeps
+its hash alone, in memory. The secret is in the fragment, which the browser
+never sends to a server: the page reads it, runs the registration, and the
+steward checks the link before it writes the passkey; the dashboard then
+opens an owner's session. The next ones are added from the *Server* page,
+during an unlock. The page asks for a second one, on another device or a
+security key, as long as there is one: with a single passkey lost, root's
+link is the way back.
+
+**The steward verifies every ceremony**, never the dashboard's service,
+which the Internet reaches: were it to verify, whoever took it over could
+also write a key of their own and unlock the secrets with it. The registry
+is root's, `/var/lib/sitesolide-steward/passkeys.json`, `0600`: each
+passkey's credential id, public key, algorithm, name, dates and signature
+counter, never a private key, which stays in the authenticator. Public keys
+need integrity, not secrecy. The steward lays a projection of it for the
+portal, the ids and public keys alone, in
+`/etc/sitesolide-portal/passkeys.json`, `root:site-portal 0640`, written
+again on every change and at startup. See
+[portal/README.md](../portal/README.md#the-owners-passkey) for what the
+portal does with it.
+
+| Measure | Detail |
+|---|---|
+| Relying party | the zone, `<zone>`, so that one passkey serves the dashboard and the portal's sign-in page |
+| Origin | `https://dashboard.<zone>` and nothing else: a hosted site of the zone, taken over, can make the owner's browser prompt for the zone's passkey, but what it gets back names its own origin and is refused. The portal accepts its own origin alone |
+| User verification | required, at sign-in, unlock and registration: an authenticator that only saw a touch is refused |
+| Challenge | 32 random bytes, two minutes, once, bound to what it is for (sign-in, unlock, registration) and, for a registration, to the live unlock or root's link |
+| Algorithms | ES256, EdDSA and RS256; attestation `none`, discoverable credentials, the same user handle on every passkey |
+| Counter | a signature counter that goes backwards is a cloned authenticator, refused; one that stays at zero, as synced passkeys do, is not judged |
+| Rate limiting | per client, as Caddy saw it (the last `X-Forwarded-For` entry, an IPv6 address by its /64): twenty challenges and ten verifications a minute each, beside caps for the whole machine, so that a flood never keeps the owner out. Refusals are journaled, thirty a minute at most |
+| Removal | from the *Server* page during an unlock, the last one refused there; it closes the owner's other sessions. `sitesolide passkey remove <id>` removes any, the last one included |
+| A registry that does not read | counts as passkeys present: the password stays refused, and nobody signs in with a passkey until root repairs it |
+| Journal | `passkey.add`, `passkey.remove`, `passkey.link`, `passkey.signin`, `passkey.signin_failed`, and `unlock` with `passkey` as its detail |
+
+The steward's routes, on the dashboard's socket: `GET /passkeys`,
+`POST /passkeys/challenge`, `POST /passkeys/signin`,
+`POST /passkeys/register`, `DELETE /passkeys/credential` with the live
+unlock, and `POST /unlock` with `{ challengeId, credential }`. On the owner's
+socket, root's: `GET /passkeys`, `POST /passkeys/link` and
+`DELETE /passkeys/credential`. [src/passkeys/protocol.ts](src/passkeys/protocol.ts)
+gives their bodies.
+
+**The dashboard's service keeps one flag** in `reglages`, `owner_passkeys`:
+set once a passkey exists, it keeps the password refused while the steward
+does not answer. A steward from before passkeys answers `404`, and the
+password signs in as before: an upgrade in the wrong order locks nobody out.
+
 ## The password
 
-On a new machine, the script draws it, shows it once, and prints its argon2id
+The owner's way in until a first passkey is registered, and again once
+root has removed the last one: see [Passkeys](#passkeys). On a new machine,
+the script draws it, shows it once, and prints its argon2id
 hash:
 
 ```bash
@@ -241,8 +303,8 @@ The rest of what guards it:
 
 | Measure | Detail |
 |---|---|
-| Session | 32-byte token, kept **hashed** in the database, `__Host-` cookie, `HttpOnly`, `SameSite=Strict`, seven days; a person's, signed in with their company account, twelve hours, under their email in the same table (see [Sessions](#sessions)) |
-| Rate limiting | after 3 failures, 5 s doubling up to an hour, **global** rather than per address: one password, and changing address would sidestep a per-IP counter for free. The sign-ins of people with a company account are counted per identity, beside it |
+| Session | 32-byte token, kept **hashed** in the database, `__Host-` cookie, `HttpOnly`, `SameSite=Strict`, seven days, closed after twelve hours without a request; a person's, signed in with their company account, twelve hours, under their email in the same table (see [Sessions](#sessions)) |
+| Rate limiting | after 3 failures, 5 s doubling up to an hour, **per client**, as Caddy saw it (the last `X-Forwarded-For` entry, an IPv6 address by its /64), forgotten after a day. A global counter let anyone lock the owner out by failing on purpose; changing address to try more passwords is what the twenty-four random characters, and passkeys after them, answer. The sign-ins of people with a company account are counted per identity, beside it |
 | `Origin` | compared to the literal `PUBLIC_URL`, on sign-in, sign-out, every change of access and every non-`GET` secrets route, general access included. Behind Caddy, `req.url` announces `127.0.0.1:3022` and cannot serve as a reference. With `SameSite=Strict` it stands in for a CSRF token: `src/sessions.ts` says why a token would add nothing |
 | Sign-in body | read piece by piece, 8 KiB at most, `413 too-large` past it, a longer announced length refused unread: the one body read before there is a session, by anyone who writes the Origin, which a script does. Read whole, a hundred megabytes of it took the service past its `MemoryMax` of 128M, and the owner's dashboard with it |
 | Framing | `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY` on every answer, from the manifest's `headers`. `SameSite` and the Origin do not stop a page on a sibling subdomain, the same site to a browser, from showing the dashboard in a frame and having the owner click through it |
@@ -410,7 +472,10 @@ comment.
 
 ### Unlocking
 
-- **The password is the dashboard's**, retyped, and **checked by the steward**
+- **With a passkey, a fresh assertion**, the user verified, which the steward
+  checks against its registry, as a sign-in but for the purpose `unlock`:
+  the password then unlocks nothing. See [Passkeys](#passkeys).
+- **Without one, the password is the dashboard's**, retyped, and **checked by the steward**
   against `PASSWORD_HASH` in `/etc/sitesolide/dashboard.env`, re-read on every
   attempt. The dashboard's service checks only its shape.
 - **`dashboard.env` belongs to root**, `0600`. The dashboard's service still
@@ -611,7 +676,11 @@ writing the secrets of their projects, never reading one. Without an unlock, it 
 company's people and domains, restrict a site, and take anyone's access away,
 through the steward, which records each under the owner's name (see the [threat model of access](#threat-model)). It never touches Caddy itself, the
 gatekeeper refuses everything its own rules refuse, and restores. It cannot
-rewrite the hash that unlocks the secrets, which belongs to root. It also sees
+rewrite the hash that unlocks the secrets, which belongs to root, nor register
+a passkey of its own outside an owner's unlock: a registration is bound to
+that unlock or to root's link. During one, it could, as it could already
+read every secret; the passkey then shows on the *Server* page and in the
+steward's journal, and root removes it. It also sees
 the values a token with *Manage secrets* or a person sets as they pass, and
 can set them with that token, within its scope: no more than the token,
 which already deploys the code that reads them ([Secrets by
@@ -909,7 +978,7 @@ nobody out.
 |---|---|
 | Lifetime | twelve hours, the steward's and the cookie's alike. The portal spares a dashboard sign-in the provider only while its own session is younger than twelve hours (`DASHBOARD_REAUTH_S`): a person closed at the provider is out of the dashboard a day after they last proved themselves there at most, as out of every site |
 | Assertion | five minutes, once: its nonce is remembered on disk until it would have expired. A sign-in at the provider older than a day opens no session |
-| Rate limiting | per identity, three refusals tolerated then five seconds doubling up to an hour, and ten sign-ins in ten minutes for one email; sixty sign-ins a minute for the whole machine; the owner's password counter unchanged, global (src/people/limiter.ts) |
+| Rate limiting | per identity, three refusals tolerated then five seconds doubling up to an hour, and ten sign-ins in ten minutes for one email; sixty sign-ins a minute for the whole machine; the owner's sign-in counted apart, per client (src/people/limiter.ts, src/auth.ts) |
 | Bounds | ten live sessions per person, the oldest giving way; a thousand on the machine; two hundred people who sign in to the dashboard; six hundred entries per project |
 | Rotation | a new owner's password closes the owner's sessions, never a person's, which do not rest on it |
 | Sign-out | closes the dashboard's row and the steward's session, which journals `dashboard.signout` |

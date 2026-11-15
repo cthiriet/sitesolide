@@ -56,6 +56,10 @@ In particular:
   [egress/README.md](egress/README.md#threat-model);
 - a backup copy, extraction or restore touching another project's data or
   root's;
+- signing in to the dashboard or unlocking it as the owner without a
+  passkey once one is registered, with an assertion made for another origin
+  than the dashboard's or the portal's, or registering a passkey without
+  the owner's unlock or root's link;
 - `setup` or `deploy` leaving the machine weaker than the documentation says.
 
 The sections that go further: the dashboard's
@@ -90,6 +94,13 @@ proving them:
   sets `cpu`.
 - **A project sends what it likes to the hosts its manifest lists.** The list
   is the boundary.
+- **Root's passkey link is the owner's credential for fifteen minutes.**
+  Whoever reads it from the terminal before it is used registers a passkey
+  and signs in as the owner; root over SSH already holds the machine.
+- **A compromised dashboard, during the owner's unlock, can register a
+  passkey of its own**, as it can read every secret then. It shows on the
+  *Server* page and in the steward's journal; root removes it with
+  `sitesolide passkey remove`.
 - **What sitesolide trusts**: the identity provider, Cloudflare and its DNS
   token, the cloud provider and its console, the bucket's provider for
   availability (not for confidentiality: restic encrypts on the machine).
