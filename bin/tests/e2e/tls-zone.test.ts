@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { generateFragment } from "../../cli/fragment";
 import type { Manifest } from "../../cli/manifest";
 import { FIRST_CERTIFICATE_MS, TLS_ZONE_FILE, TLS_ZONE_STATES, ZONE_NAMES_COMMAND, ZONE_NAMES_FILE } from "../../cli/tls";
-import { CLI, REPO, run, TEST_EMAIL, TEST_ZONE } from "./run";
+import { CLI, REPO, run, SSH_ENGINE, TEST_EMAIL, TEST_ZONE } from "./run";
 import { createFakeVm, type FakeVm } from "./fake-vm";
 
 /**
@@ -197,7 +197,7 @@ describe("sitesolide deploy and remove keep the zone's sites for the ask endpoin
     vm.setTlsZoneState(TLS_ZONE_STATES.onDemand);
     vm.writeManifest(SHOWCASE.slug, `${JSON.stringify(SHOWCASE, null, 2)}\n`);
     vm.acceptWrites();
-    const proc = Bun.spawn(["bun", CLI, "deploy"], {
+    const proc = Bun.spawn(["bun", "--preload", SSH_ENGINE, CLI, "deploy"], {
       cwd: project(),
       stdout: "pipe",
       stderr: "pipe",

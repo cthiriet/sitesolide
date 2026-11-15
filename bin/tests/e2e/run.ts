@@ -22,6 +22,14 @@ export const REPO = resolve(TESTS_ROOT, "..", "..", "..");
 
 export const CLI = resolve(REPO, "bin", "sitesolide.ts");
 
+/**
+ * The preload that lets deploy drive the SSH engine with a sample project,
+ * see ssh-engine.ts: `bun --preload SSH_ENGINE CLI deploy`. Every test that
+ * runs the CLI's SSH deploy passes it; one that checks what a workstation
+ * really does leaves it out.
+ */
+export const SSH_ENGINE = resolve(TESTS_ROOT, "ssh-engine.ts");
+
 /** The tests' zone: a reserved TLD, which resolves nowhere. */
 export const TEST_ZONE = "test-zone.invalid";
 
@@ -51,6 +59,8 @@ let emptyVm: FakeVm | null = null;
  * `project` is relative to this folder, or absolute for a project copied
  * elsewhere by the test. `vm` imposes a simulated machine, including outside
  * the dry run mode: a real deployment fails there on the first write, refused.
+ * `sshEngine: false` runs the CLI as a workstation does, its deploy going
+ * through the API (see SSH_ENGINE).
  * `cli` runs a copy of the CLI laid in a test repository, so that it reads and
  * writes its deployment files somewhere other than in this repository. `env`
  * completes the environment, for example a HOME whose configuration aims at a
@@ -59,11 +69,13 @@ let emptyVm: FakeVm | null = null;
 export async function run(
   project: string,
   arguments_: string[],
-  options: { vm?: FakeVm; cli?: string; env?: Record<string, string> } = {},
+  options: { vm?: FakeVm; cli?: string; env?: Record<string, string>; sshEngine?: boolean } = {},
 ): Promise<Result> {
   const vm = options.vm ?? (dryRun(arguments_) ? (emptyVm ??= createFakeVm()) : null);
 
-  const proc = Bun.spawn(["bun", options.cli ?? CLI, ...arguments_], {
+  // The SSH engine unless the test asks for what a workstation runs.
+  const preload = options.sshEngine === false ? [] : ["--preload", SSH_ENGINE];
+  const proc = Bun.spawn(["bun", ...preload, options.cli ?? CLI, ...arguments_], {
     cwd: isAbsolute(project) ? project : join(TESTS_ROOT, project),
     stdout: "pipe",
     stderr: "pipe",

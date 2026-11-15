@@ -104,7 +104,7 @@
  */
 import { resolve4, resolve6 } from "node:dns/promises";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { compareDirectives, countItemized, summariseDivergence } from "./cli/comparison";
 import {
@@ -268,7 +268,8 @@ import { realClock } from "../clouds/src/provider";
 import { declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
 import { machine, sshLogin } from "./cli/machine";
 import { DNS_CHOICES, dnsEntry, shownDns } from "./cli/dns/registry";
-import { eventOutput, humanOutput, login, promptWithoutEcho, remoteMode, REMOTE_USAGE, runRemote, type BuildContext } from "./cli/remote";
+import { deploysOverSsh, eventOutput, humanOutput, login, promptWithoutEcho, remoteMode, REMOTE_USAGE, runRemote, type BuildContext } from "./cli/remote";
+import { ownerLogin } from "./cli/owner-token";
 import { buildEnv, KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
 import { ownerGeneralCommand, ownerWriteCommand, PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshClaim, sshGeneral, sshLifecycle, sshPeople, sshRename, sshTakeBack } from "./cli/access";
 import {
@@ -4177,7 +4178,7 @@ function usage(zone: string | null): string {
     "     --skip-dns                   create the DNS records by hand: setup lists them and waits",
     "     --dns-replace                replace records that point elsewhere, on your decision alone",
     "     --cloudflare-token-stdin     read the Cloudflare token from standard input",
-    "     --minimal                    leave out backups, the installer and the egress proxy",
+    "     --minimal                    leave out backups and the egress proxy",
     "     --any-os                     go on with a system other than Debian 13, at your own risk",
     "     --config-dir <dir>           another installation's own configuration folder",
     "     --dry-run                    check every step, change nothing",
@@ -4195,13 +4196,14 @@ function usage(zone: string | null): string {
     "  sitesolide detect               the sitesolide.json this folder implies, written nowhere",
     "     --write                      write it, never over an existing one",
     "     --slug <name>                name the project, rather than after its folder",
-    "  sitesolide deploy               prepare, build, push, install, restart, verify",
-    "     --dry-run                    show the unit and the fragment, install nothing, build nothing",
+    "  sitesolide deploy               build here, upload through the dashboard with your token, follow the machine's log",
+    "                                  every deployment goes through the API, the owner's too: none over SSH",
+    "     --dry-run                    the machine's plan: the units, the block and the ports, nothing changed",
     "     --build                      with --dry-run: run the build too, the folder's own code, here",
-    "     --compare                    with --dry-run: build, then list what would change on the server",
-    "     --force                      switch a hand-written unit to the generated one",
+    "     --compare                    with --dry-run, in the dashboard's or the portal's folder: what would change on the server",
+    "     --force                      switch a hand-written unit or block to the generated one (the owner's token)",
     "     --yes [--slug <name>]        no sitesolide.json: write the inferred one, then deploy",
-    "     --adopt                      take back a name a token holds that the server does not carry, then deploy",
+    "     --adopt                      take back a name another token holds, then deploy (the owner's token)",
     "  sitesolide status               what the server actually runs",
     "  sitesolide logs [--follow]      journalctl for this project",
     "     --lines <n>                  how many lines back, 50 by default",
@@ -4238,8 +4240,10 @@ function usage(zone: string | null): string {
     "     --restart                    with a change: then restart the service, and say whether it holds",
     "  sitesolide run -- <command>     the workstation's own credentials for this project, from the vault, then run",
     "  sitesolide login --url <https://dashboard.zone>",
-    "                                  a person with a token: deploy, set secrets and restart without SSH",
+    "                                  keep a token, the one every deployment goes through",
     "     --token-stdin                read the token from standard input",
+    "  sitesolide login --owner        the owner's token for every project, minted over SSH into the vault, never shown",
+    "     --replace                    a new one even if the vault holds one the dashboard accepts",
     "  sitesolide machine create|list|destroy --provider <provider>",
     "                                  a VM ordered by API, before setup: sitesolide machine lists the options",
     "  sitesolide machine providers    the clouds it orders from, and which have credentials here",
@@ -4376,18 +4380,23 @@ if (import.meta.main) {
   // there is one to read, and talks to the provider's API, never over SSH.
   // See bin/cli/machine.ts.
   if (command === "machine") process.exit(await machine(arguments_, { environment: process.env, output: remoteOutput, login: sshLogin }));
-  if (command === "login") process.exit(await login(arguments_, { environment: process.env, output: remoteOutput }));
-  if (remoteMode(arguments_, process.env)) {
-    process.exit(
-      await runRemote(command, arguments_, {
-        folder,
-        environment: process.env,
-        output: remoteOutput,
-        build: (project, context) => runBuild(project, executor, context),
-        checkPublic: (project) => checkPublicFolder(project),
-      }),
-    );
-  }
+  // `login --owner` mints the owner's token over SSH: it reads the configuration, below.
+  const ownerLoginAsked = command === "login" && arguments_.includes("--owner");
+  if (command === "login" && !ownerLoginAsked) process.exit(await login(arguments_, { environment: process.env, output: remoteOutput }));
+  const throughApi = () =>
+    runRemote(command, arguments_, {
+      folder,
+      environment: process.env,
+      output: remoteOutput,
+      build: (project, context) => runBuild(project, executor, context),
+      checkPublic: (project) => checkPublicFolder(project),
+    });
+  if (!ownerLoginAsked && remoteMode(arguments_, process.env)) process.exit(await throughApi());
+  // Every deployment goes through the API with a token, the owner's too:
+  // none goes over SSH but the platform's own components, which setup and
+  // upgrade deploy from the kit (see deploysOverSsh in bin/cli/remote.ts).
+  // A workstation with a server and no token is told how to get one.
+  if (command === "deploy" && !deploysOverSsh(folder)) process.exit(await throughApi());
 
   const config = await (async () => {
     try {
@@ -4412,6 +4421,17 @@ if (import.meta.main) {
   process.env.SITESOLIDE_ZONE = config.zone;
   process.env.SITESOLIDE_CONTACT = config.contact ?? "";
 
+  if (ownerLoginAsked) {
+    process.exit(
+      await ownerLogin(arguments_, {
+        environment: process.env,
+        home: homedir(),
+        output: remoteOutput,
+        run: (remote, input) => executor.execute(config, remote, input),
+        zone: config.zone,
+      }),
+    );
+  }
 
   switch (command) {
     case "deploy":

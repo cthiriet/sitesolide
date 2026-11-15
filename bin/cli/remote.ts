@@ -1,9 +1,10 @@
 /**
- * The CLI without root SSH: a team member, or an agent in a sandbox, deploys
- * with a personal token over HTTPS, through the dashboard's control API.
+ * The CLI through the dashboard's control API, with a token over HTTPS: how
+ * every deployment goes, the owner's included, and how a team member or an
+ * agent in a sandbox runs the rest of what a token carries.
  *
  *   sitesolide login --url https://dashboard.example.com
- *   sitesolide deploy      build here, upload, follow the machine's log
+ *   sitesolide deploy      plan, build here, upload, follow the machine's log
  *   sitesolide status      the projects this token may deploy
  *   sitesolide logs [--follow]
  *   sitesolide share [<email>...]   who may open the project, see access.ts
@@ -11,11 +12,13 @@
  *                                   the project's store of secrets, see store-cli.ts
  *   sitesolide restart              the project's service, and whether it holds
  *
- * **Which mode a command runs in.** A configuration with a `server` is the
- * owner's, and runs over SSH exactly as before: nothing here touches that path.
- * A configuration without one, but with the dashboard's address and a token,
- * is a team member's, and runs here. `--api` makes the owner use the API too,
- * to see what a team member sees.
+ * **Which mode a command runs in.** `deploy` runs here whatever the
+ * configuration holds, but in the folder of a platform component, the
+ * dashboard or the portal, which setup and upgrade deploy over SSH
+ * (deploysOverSsh). For the other commands, a configuration with a `server`
+ * is the owner's, and runs over SSH; one without, but with the dashboard's
+ * address and a token, runs here. `--api` makes the owner use the API for
+ * every command, to see what a team member sees.
  *
  * **The token is never in the configuration.** It lives in the workstation's
  * vault, `~/.config/sitesolide/secrets/team-token`, 0600, beside the other
@@ -39,23 +42,36 @@
  * stop (see store-cli.ts).
  *
  * **An option this path does not carry is refused, never passed over.**
- * `deploy --dry-run` used to deploy for real here, and `--json` to print plain
+ * `deploy --dry-run` once deployed for real here, and `--json` printed plain
  * text, so that an agent's dry run replaced the live site and then reported
- * a failure inviting a retry. Both now behave as over SSH: `--json`
- * prints the same events and one final `result` or `error`, and a dry run is
- * refused, saying why, until the control API can judge without deploying.
+ * a failure inviting a retry. `--json` prints the same events as over SSH and
+ * one final `result` or `error`; a dry run is the machine's plan,
+ * `POST /api/v1/deployments/plan`, which judges and writes nothing.
+ *
+ * **What the SSH deploy did, this does too**: a manifest inferred with
+ * `--yes`, refused over a project the server carries; `--force` and
+ * `--adopt`, the owner's token for every project alone, the machine judging
+ * both; the ports the machine chose, the door set from the dashboard and the
+ * former names a rename left, written back into sitesolide.json; and the
+ * status the address answers, in the result.
  */
 import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { bundle, excludedBy, type BundleEntry } from "./bundle";
-import { configPath, defaultPaths, expandHome, projectsRepo, readConfigFile } from "./config";
+import { configPath, dashboardAddress, defaultPaths, expandHome, projectsRepo, readConfigFile } from "./config";
+import { generateFragment } from "./fragment";
+import { inferManifest, renderManifest, slugFromFolder, type Inference } from "./infer";
+import { setPort } from "./ports";
+import { generateUnits, unitFileName } from "./unit";
 import { hintForFailure } from "./hints";
 import { gatherBuildSecrets, missingBuildSecrets, sourceLine, unreadableWorkstation } from "./build-secrets";
 import {
   hasServices,
   hasStore,
   isApp,
+  isSystemName,
+  isValidSlug,
   mainPort,
   missingExclusions,
   NEVER_SENT,
@@ -63,6 +79,9 @@ import {
   readManifest,
   secretsOf,
   servicesOf,
+  setFormerSlugs,
+  setLock,
+  setPortal,
   type Manifest,
   type SecretsDeclaration,
 } from "./manifest";
@@ -87,7 +106,7 @@ export const LIMITS = { bundleBytes: 100 * 1024 * 1024, extractedBytes: 512 * 10
 
 export type Remote = { api: string; token: string };
 
-type Environment = Record<string, string | undefined>;
+export type Environment = Record<string, string | undefined>;
 
 /** The raw configuration file, the `api` key included, which `Config` does not carry. */
 function rawConfig(home: string, environment: Environment): Record<string, unknown> {
@@ -288,6 +307,8 @@ export type Output = {
   /** `said`: a person already read the message, in the machine's log. */
   failed: (failure: Failure, said?: boolean) => void;
   succeeded: (command: string, fields: Record<string, unknown>) => void;
+  /** An event that is no line of text, a file generated or a manifest inferred, as it stands: under --json alone. */
+  emit?: (event: OutputEvent) => void;
 };
 
 export const humanOutput: Output = {
@@ -324,6 +345,7 @@ export function eventOutput(write: (line: string) => void = (line) => console.lo
         hint: hintForFailure(failure.error, failure.message),
       }),
     succeeded: (command, fields) => emit({ type: "result", ok: true, command, ...fields }),
+    emit,
   };
 }
 
@@ -371,10 +393,11 @@ export function checkManifest(raw: string): { manifest?: Manifest; errors: strin
   return errors.length > 0 ? { errors } : { manifest: object as Manifest, errors: [] };
 }
 
-export function readRemoteProject(folder: string): RemoteProject | { errors: string[] } {
+/** `inferred`: the manifest inferred from a folder that has none, which `deploy --yes` writes beside it. */
+export function readRemoteProject(folder: string, inferred?: string): RemoteProject | { errors: string[] } {
   const path = join(folder, "sitesolide.json");
-  if (!existsSync(path)) return { errors: [`sitesolide.json not found in ${folder}`] };
-  const raw = readFileSync(path, "utf8");
+  if (inferred === undefined && !existsSync(path)) return { errors: [`sitesolide.json not found in ${folder}`] };
+  const raw = inferred ?? readFileSync(path, "utf8");
   const { manifest, errors } = checkManifest(raw);
   if (manifest === undefined || errors.length > 0) return { errors: ["sitesolide.json rejected", ...errors] };
   const code = manifest.source === undefined ? folder : resolve(folder, manifest.source);
@@ -476,6 +499,8 @@ export type RemoteDependencies = {
   outputTerminal?: () => boolean;
   /** All of standard input, as bytes: `secrets set --stdin` and `secrets set-file`. */
   stdinBytes?: () => Promise<Uint8Array>;
+  /** The status a deployed project's address answers here, null when it does not: a GET without credential by default. */
+  probe?: (url: string | null) => Promise<number | null>;
 };
 
 /** What a project's build receives besides the workstation's allow list: see buildEnv in ./kit. */
@@ -504,10 +529,13 @@ type Identity = {
   email: string;
   expiresAt: number | null;
   /** `secrets`: absent from a dashboard before the permission, which reads as without it. */
-  scope: { slugs: string[]; create: boolean; outbound: boolean; domain: boolean; public: boolean; secrets?: boolean };
+  scope: { slugs: string[]; create: boolean; outbound: boolean; domain: boolean; public: boolean; secrets?: boolean; all?: boolean };
   owned: string[];
   member?: string | null;
 };
+
+/** The owner's own token for every project, `scope.all`: the one the owner deploys with. */
+export type { Identity as RemoteIdentity };
 
 /** The token held, said in one line: who, and what it may do. */
 export function describeIdentity(identity: Identity): string[] {
@@ -522,8 +550,10 @@ export function describeIdentity(identity: Identity): string[] {
   const projects = [...new Set([...identity.owned, ...identity.scope.slugs])].sort();
   return [
     `   ${identity.email} (${identity.label}), token ${identity.id}`,
-    `   may ${may.join(", ")}`,
-    `   projects: ${projects.length === 0 ? "none yet" : projects.join(", ")}`,
+    `   may ${may.join(", ")}${identity.scope.all === true ? ", take a name back (--adopt), replace a file edited by hand (--force)" : ""}`,
+    identity.scope.all === true
+      ? `   projects: every one the server carries, as the owner${projects.length === 0 ? "" : ` (now ${projects.join(", ")})`}`
+      : `   projects: ${projects.length === 0 ? "none yet" : projects.join(", ")}`,
     ...(identity.expiresAt === null ? [] : [`   expires ${new Date(identity.expiresAt).toISOString().slice(0, 10)}`]),
     ...(typeof identity.member === "string" ? [`   a personal token: never more than ${identity.member}'s roles on the dashboard, read at every request`] : []),
   ];
@@ -565,6 +595,22 @@ export async function login(arguments_: string[], dependencies: Omit<RemoteDepen
   const answer = await call<{ identity: Identity }>(remote, "/api/v1/whoami", {}, dependencies.fetcher);
   if (!answer.ok) return report(output, answer.failure);
 
+  const { path, file } = keepToken(environment, home, api, token);
+
+  output.say(`-> signed in to ${api}`);
+  for (const line of describeIdentity(answer.body.identity)) output.say(line);
+  output.say(`   token kept in ${path}, address in ${configPath(home, environment)}`);
+  if (typeof file.server === "string" && file.server !== "") output.say("   this workstation also has a server: deploy goes through the API, the owner's other commands over SSH unless given --api");
+  output.succeeded("login", { api, identity: answer.body.identity, tokenFile: path });
+  return 0;
+}
+
+/**
+ * The token written into the workstation's vault, 0600, the address it was
+ * checked against beside it, and that address into config.json as `api`:
+ * what `login` and `login --owner` keep. Never printed.
+ */
+export function keepToken(environment: Environment, home: string, api: string, token: string): { path: string; file: Record<string, unknown> } {
   const vault = vaultFolder(environment, home);
   mkdirSync(vault, { recursive: true, mode: 0o700 });
   const path = join(vault, TOKEN_FILE);
@@ -578,13 +624,7 @@ export async function login(arguments_: string[], dependencies: Omit<RemoteDepen
   const file = rawConfig(home, environment);
   mkdirSync(dirname(configPath(home, environment)), { recursive: true });
   writeFileSync(configPath(home, environment), `${JSON.stringify({ ...file, api }, null, 2)}\n`);
-
-  output.say(`-> signed in to ${api}`);
-  for (const line of describeIdentity(answer.body.identity)) output.say(line);
-  output.say(`   token kept in ${path}, address in ${configPath(home, environment)}`);
-  if (typeof file.server === "string" && file.server !== "") output.say("   this workstation also has a server: commands use SSH unless given --api");
-  output.succeeded("login", { api, identity: answer.body.identity, tokenFile: path });
-  return 0;
+  return { path, file };
 }
 
 /**
@@ -606,26 +646,282 @@ function warnOn(output: Output, message: string, details: string[]): void {
   for (const detail of details) output.say(`   ${detail}`);
 }
 
-async function deploy(remote: Remote, dependencies: RemoteDependencies, json: boolean): Promise<number> {
+/** What `sitesolide deploy` was asked, besides the folder: the options it takes with a token. */
+export type DeployOptions = {
+  json: boolean;
+  /** `--dry-run`: the machine judges and plans, nothing is written there nor here. */
+  dryRun: boolean;
+  /** `--build`, in a dry run: the build runs all the same, here. */
+  build: boolean;
+  /** `--yes`: a folder without sitesolide.json deploys the manifest inferred from it, written beside it. */
+  accept: boolean;
+  /** `--slug`: the inferred manifest's name, instead of the folder's. */
+  slug: string | undefined;
+  /** `--force`: replace a unit or a block edited by hand on the machine. The owner's token for every project alone. */
+  force: boolean;
+  /** `--adopt`: take the name back from the token that holds it first. The owner's token for every project alone. */
+  adopt: boolean;
+};
+
+/** Reads the options of `deploy` from its arguments, already judged by unknownOptions. */
+export function deployOptions(arguments_: string[]): DeployOptions {
+  const marker = arguments_.indexOf("--slug");
+  return {
+    json: arguments_.includes("--json"),
+    dryRun: arguments_.includes("--dry-run"),
+    build: arguments_.includes("--build"),
+    accept: arguments_.includes("--yes"),
+    slug: marker === -1 ? undefined : arguments_[marker + 1],
+    force: arguments_.includes("--force"),
+    adopt: arguments_.includes("--adopt"),
+  };
+}
+
+/** The machine's plan of a deployment, `POST /api/v1/deployments/plan`: see PlanResponse in dashboard/src/control/protocol.ts. */
+type PlanView = {
+  slug: string;
+  creating: boolean;
+  existing: boolean;
+  portal: boolean;
+  allocated: { service: string | null; port: number }[];
+  /** The manifest the installer would lay, its ports chosen and the machine's door applied. */
+  manifest: string;
+  placeholders: { zone: string; contact: string };
+};
+
+/** Shows an event: as it stands under --json, as text otherwise. */
+function show(output: Output, event: OutputEvent): void {
+  if (output.emit !== undefined) return output.emit(event);
+  if (event.type === "file") {
+    output.say("");
+    output.say(`--- ${event.name} ---`);
+    output.say(event.content);
+  } else if (event.type === "inferred") {
+    output.say(`   from: ${event.reasons.join("; ")}`);
+    output.say(JSON.stringify(event.manifest, null, 2));
+    for (const line of event.notes) output.say(`   note: ${line}`);
+  }
+}
+
+/**
+ * The manifest a folder without sitesolide.json implies, as `detect` infers
+ * it: `--slug` names it, or the folder's name. The refusal otherwise.
+ */
+function inferredManifest(folder: string, chosen: string | undefined): { raw: string; inference: Exclude<Inference, { kind: "none" }> } | Failure {
+  if (chosen !== undefined && (!isValidSlug(chosen) || chosen === "landing" || isSystemName(chosen))) {
+    return { error: "invalid", message: `--slug: ${chosen} is not a usable slug`, details: ["lowercase letters, digits and dashes, no dot, not landing, nor the name of a service the machine runs"] };
+  }
+  const slug = chosen ?? slugFromFolder(basename(folder));
+  if (slug === null) return { error: "invalid", message: `no usable slug in the folder name: ${basename(folder)}`, details: ["pass one with --slug <name>"] };
+  const inference = inferManifest(folder, slug);
+  if (inference.kind === "none") return { error: "invalid", message: `sitesolide.json not found in ${folder}, and none can be inferred`, details: inference.reasons };
+  return { raw: renderManifest(inference.manifest), inference };
+}
+
+/**
+ * The local manifest once it follows what the machine keeps of it: the door
+ * set from the dashboard (`portal`, `lock`) and the former names a rename
+ * left, read from the plan's final manifest. The SSH path wrote them back the
+ * same way, so that the next deployment from any checkout keeps them. null
+ * when nothing differs.
+ */
+export function followedManifest(raw: string, final: string): { raw: string; changed: string[] } | null {
+  let local: Record<string, unknown>;
+  let machine: Record<string, unknown>;
+  try {
+    local = JSON.parse(raw) as Record<string, unknown>;
+    machine = JSON.parse(final) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  let next = raw;
+  const changed: string[] = [];
+  if ((local.portal === true) !== (machine.portal === true) || (local.lock === true) !== (machine.lock === true)) {
+    next = setLock(setPortal(next, machine.portal === true), machine.lock === true);
+    changed.push("the general access set from the dashboard");
+  }
+  const former = (value: unknown) => (Array.isArray(value) ? value.map(String) : []);
+  if (former(local.formerSlugs).join(",") !== former(machine.formerSlugs).join(",")) {
+    next = setFormerSlugs(next, Array.isArray(machine.formerSlugs) ? former(machine.formerSlugs) : undefined);
+    changed.push("the former names a rename left");
+  }
+  return changed.length === 0 ? null : { raw: next, changed };
+}
+
+/**
+ * The manifest with the ports the machine chose written in, each where a
+ * person would write it: `port` after `start`, a service's own in its entry.
+ * A port the manifest already declares is left as it is. null when none was
+ * missing.
+ */
+export function withAllocatedPorts(raw: string, allocated: readonly { service: string | null; port: number }[]): string | null {
+  let next = raw;
+  let changed = false;
+  for (const { service, port } of allocated) {
+    const parsed = JSON.parse(next) as Record<string, unknown>;
+    if (service === null) {
+      if (typeof parsed.port === "number") continue;
+      next = setPort(next, port);
+      changed = true;
+      continue;
+    }
+    const services = parsed.services;
+    if (typeof services !== "object" || services === null || Array.isArray(services)) continue;
+    const entry = (services as Record<string, unknown>)[service];
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry) || typeof (entry as { port?: unknown }).port === "number") continue;
+    (services as Record<string, unknown>)[service] = { ...(entry as Record<string, unknown>), port };
+    next = `${JSON.stringify(parsed, null, 2)}\n`;
+    changed = true;
+  }
+  return changed ? next : null;
+}
+
+/**
+ * The status the project's address answers once deployed, as the SSH path
+ * reported it: a GET without credential, redirects not followed, 15 seconds
+ * at most. The installer already verified the address from the machine and
+ * judged the answer; this is what the workstation sees, null when it sees
+ * nothing (a name not resolving here yet), never a failure of the deployment.
+ */
+async function probe(url: string | null, fetcher: Fetch): Promise<number | null> {
+  if (url === null) return null;
+  try {
+    const response = await fetcher(url, { redirect: "manual", signal: AbortSignal.timeout(15_000) });
+    await response.body?.cancel();
+    return response.status;
+  } catch {
+    return null;
+  }
+}
+
+async function deploy(remote: Remote, dependencies: RemoteDependencies, options: DeployOptions): Promise<number> {
   const output = dependencies.output ?? humanOutput;
-  const read = readRemoteProject(dependencies.folder);
+  const { dryRun, json } = options;
+  const folder = dependencies.folder;
+  const manifestPath = join(folder, "sitesolide.json");
+
+  // A folder without sitesolide.json: the manifest it implies, shown, and
+  // deployed only with --yes, as over SSH.
+  let inferred: string | null = null;
+  let inferredKind: string | null = null;
+  /** What --adopt took back, as the SSH path reported it. */
+  let takenBack: { from: string | null; variables: string[]; files: string[] } | null = null;
+  if (!existsSync(manifestPath)) {
+    const found = inferredManifest(folder, options.slug);
+    if ("error" in found) return report(output, found);
+    output.say(`-> no sitesolide.json: this folder reads as ${found.inference.kind}`);
+    show(output, { type: "inferred", kind: found.inference.kind, manifest: JSON.parse(found.raw), reasons: found.inference.reasons, notes: found.inference.notes });
+    if (!options.accept) {
+      return report(output, {
+        error: "invalid",
+        message: `no sitesolide.json in ${folder}: inferred one shown above, not written, nothing was sent`,
+        details: ["to write it and deploy:            sitesolide deploy --yes", "to write it and review it first:   sitesolide detect --write"],
+      });
+    }
+    inferred = found.raw;
+    inferredKind = found.inference.kind;
+  } else if (options.slug !== undefined) {
+    warnOn(output, `--slug ${options.slug} ignored: sitesolide.json names the project`, []);
+  }
+
+  const read = readRemoteProject(folder, inferred ?? undefined);
   if ("errors" in read) {
     const [first, ...rest] = read.errors;
     return report(output, { error: "invalid", message: first ?? "sitesolide.json rejected", details: rest });
   }
-  const project = read;
+  let project = read;
   const { manifest } = project;
   const slug = manifest.slug;
-  output.say(`-> project ${slug}, through ${remote.api}`);
+  output.say(`-> project ${slug}, through ${remote.api}${dryRun ? ": a dry run, nothing is changed on the machine nor here" : ""}`);
 
   // The build's secrets first, from whoever deploys: a missing one stops
-  // here, before anything is sent, the manifest included.
+  // here, before anything is sent, the manifest included. A dry run that does
+  // not build only says which are missing.
   const declaration = secretsOf(manifest);
   const workstation = workstationSecretsPath(vaultFolder(dependencies.environment, dependencies.home ?? homedir()), slug);
   const resolved = await gatherBuildSecrets(declaration.build, dependencies.environment, workstation);
-  if (resolved.refusal !== null) return report(output, { error: "build-secrets-unreadable", ...unreadableWorkstation(workstation, resolved.refusal) });
-  if (resolved.missing.length > 0) return report(output, { error: "build-secret-missing", ...missingBuildSecrets(resolved.missing, workstation) });
+  const builds = !dryRun || options.build;
+  if (resolved.refusal !== null && builds) return report(output, { error: "build-secrets-unreadable", ...unreadableWorkstation(workstation, resolved.refusal) });
+  if (resolved.missing.length > 0) {
+    const said = missingBuildSecrets(resolved.missing, workstation);
+    if (builds) return report(output, { error: "build-secret-missing", ...said });
+    warnOn(output, said.message, said.details ?? []);
+  }
   for (const { name, source } of resolved.sources) output.say(`   ${sourceLine(name, source, workstation)}`);
+
+  // --adopt: the name taken back from the token that holds it, before the
+  // plan, which judges the deployment as the owner's token then stands.
+  if (options.adopt) {
+    if (dryRun) {
+      output.say(`[dry-run] take ${slug} back from the token that holds it, its store moved aside as previous versions`);
+    } else {
+      output.say(`-> ${slug} taken back from the token that holds it`);
+      const taken = await call<{ claim: { slug: string; released: string | null; dropped: { variables: string[]; files: string[] } } }>(
+        remote,
+        `/api/v1/projects/${encodeURIComponent(slug)}/claim`,
+        { method: "DELETE" },
+        dependencies.fetcher,
+      );
+      if (!taken.ok) return report(output, taken.failure);
+      const { released, dropped } = taken.body.claim;
+      takenBack = { from: released, variables: dropped.variables, files: dropped.files };
+      output.say(released === null ? "   no token held it" : `   released from token ${released}`);
+      const moved = [...dropped.variables, ...dropped.files];
+      if (moved.length > 0) output.say(`   moved aside, kept as previous versions: ${moved.join(", ")}`);
+    }
+  }
+
+  // The plan: the machine judges the manifest as the deployment would, and
+  // says what it would lay, writing nothing. A dashboard or a steward from
+  // before it plans nothing: a deployment goes on without it, a dry run says so.
+  const asked = (raw: string) => JSON.stringify({ manifest: raw, ...(options.force ? { force: true } : {}) });
+  const planned = await call<{ plan: PlanView }>(
+    remote,
+    "/api/v1/deployments/plan",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: asked(project.raw) },
+    dependencies.fetcher,
+  );
+  let plan: PlanView | null = null;
+  if (planned.ok) plan = planned.body.plan;
+  else if (dryRun && options.adopt && planned.failure.error === "out-of-scope") {
+    output.say("[dry-run] the rest is judged once the name is taken back, which a dry run does not do");
+    output.succeeded("deploy", { slug, dryRun: true, adopt: true, manifestWritten: false, url: null, status: null });
+    return 0;
+  } else if (planned.failure.error !== "not-available" && !predatesRoute(planned)) return report(output, planned.failure);
+  else if (dryRun) {
+    return report(output, { error: "not-available", message: "this machine does not plan a deployment yet: the owner must run sitesolide upgrade", details: ["nothing was sent but the manifest, and nothing was changed"] });
+  }
+
+  // An inferred manifest names the project after its folder: a project of
+  // that name the machine already carries would be replaced. Refused before
+  // anything is written, as over SSH.
+  if (inferred !== null && plan !== null && plan.existing) {
+    return report(output, {
+      error: "invalid",
+      message: `${slug} already exists on the server, and this folder has no sitesolide.json`,
+      details: ["deploying the inferred manifest under that name would replace the project the server carries", "pick another name:  sitesolide deploy --yes --slug <name>"],
+    });
+  }
+  let manifestWritten = false;
+  const write = (raw: string, why: string): void => {
+    if (dryRun) return output.say(`[dry-run] write ${manifestPath}, ${why}`);
+    writeFileSync(manifestPath, raw);
+    manifestWritten = true;
+    output.say(`   written: ${manifestPath}, ${why}: commit it`);
+  };
+  if (inferred !== null) write(inferred, "the inferred manifest");
+
+  // The door and the former names, as the machine keeps them.
+  const followed = plan === null ? null : followedManifest(project.raw, plan.manifest);
+  if (followed !== null) {
+    output.say(`-> ${followed.changed.join(", and ")}, as the server keeps them`);
+    const checked = checkManifest(followed.raw);
+    if (checked.manifest === undefined) return report(output, { error: "invalid", message: "sitesolide.json rejected once the server's values are applied", details: checked.errors });
+    write(followed.raw, followed.changed.join(", "));
+    project = { ...project, manifest: checked.manifest, raw: followed.raw };
+  }
+
+  if (dryRun && plan !== null) return dryRunReport(remote, dependencies, project, plan, resolved, { json, build: options.build, inferred: inferredKind });
 
   // The runtime secrets the store lacks, before anything is sent: asked for
   // at a terminal, warned of otherwise. Never a stop.
@@ -674,29 +970,20 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
   const created = await call<{ deployment: DeploymentView }>(
     remote,
     "/api/v1/deployments",
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ manifest: project.raw }) },
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: asked(project.raw) },
     dependencies.fetcher,
   );
   if (!created.ok) return report(output, created.failure);
   const deployment = created.body.deployment;
-  output.say(`   deployment ${deployment.id}${deployment.creating ? ", a new project" : ""}`);
+  output.say(`   deployment ${deployment.id}${deployment.creating ? ", a new project" : ""}${options.force ? ", --force: a unit or a block edited by hand is replaced" : ""}`);
 
   await dependencies.build(project, { secrets: resolved.values, placeholders: buildPlaceholders(slug, remote.api, deployment.placeholders) });
   dependencies.checkPublic(project);
 
   output.say("-> archive");
-  const { entries, refused } = projectEntries(project);
-  if (refused.length > 0) {
-    return report(output, { error: "invalid", message: "the machine refuses links and special files in the archive", details: [...refused.slice(0, 10), "replace them with the files they point to, or exclude them in sitesolide.json"] });
-  }
-  const files = entries.filter((entry) => entry.kind === "file");
-  const bytes = files.reduce((sum, entry) => sum + (entry.kind === "file" ? entry.content.length : 0), 0);
-  if (entries.length > LIMITS.entries || bytes > LIMITS.extractedBytes) {
-    return report(output, { error: "too-large", message: `${entries.length} entries, ${bytes} bytes: over what the machine accepts (${LIMITS.entries} entries, 512 MiB)`, details: ["exclude dependencies and caches in sitesolide.json: the machine installs dependencies itself"] });
-  }
-  const archive = bundle(entries);
-  if (archive.length > LIMITS.bundleBytes) return report(output, { error: "too-large", message: `the archive is ${archive.length} bytes compressed, over 100 MiB` });
-  output.say(`   ${files.length} file(s), ${bytes} bytes, ${archive.length} compressed`);
+  const archived = archiveOf(project);
+  if ("error" in archived) return report(output, archived);
+  const { archive } = archived;
 
   output.say("-> upload");
   const uploaded = await call<{ deployment: DeploymentView }>(
@@ -723,8 +1010,12 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
     for (const line of view.log) output.say(line);
     next = view.next;
     if (view.state === "succeeded") {
-      for (const { service, port } of view.allocated) {
-        output.say(`   the machine chose port ${port}${service === null ? "" : ` for ${service}`}: write it in sitesolide.json to keep it explicit`);
+      // The ports the machine chose, written into sitesolide.json, as over
+      // SSH: the next deployment, from here or elsewhere, keeps them.
+      const ported = withAllocatedPorts(project.raw, view.allocated);
+      if (ported !== null) {
+        for (const { service, port } of view.allocated) output.say(`   the machine chose port ${port}${service === null ? "" : ` for ${service}`}`);
+        write(ported, "with the ports the machine chose");
       }
       // What the installer found missing once done is the word that counts;
       // one that could not say, or a dashboard before it, leaves the reading
@@ -732,6 +1023,8 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
       let missingSecrets: StoreMissing | null = view.missingSecrets ?? missing;
       if (deferred && io.terminal && !json) missingSecrets = await askAfterCreation(slug, declaration, transport, io, store, output);
       const main = view.allocated.find((entry) => entry.service === null) ?? view.allocated[0];
+      const status = await (dependencies.probe ?? ((url: string | null) => probe(url, dependencies.fetcher ?? fetch)))(view.url);
+      if (status !== null) output.say(`   ${view.url} ${status}, as this workstation sees it`);
       output.succeeded("deploy", {
         slug,
         kind: isApp(manifest) ? (hasServices(manifest) ? "services" : "service") : "static",
@@ -739,8 +1032,12 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
         dryRun: false,
         port: main?.port ?? mainPort(manifest),
         ...(view.allocated.length > 0 ? { portChosen: "free" } : {}),
-        manifestWritten: false,
+        manifestWritten,
+        portal: project.manifest.portal === true,
+        ...(inferredKind === null ? {} : { inferred: inferredKind }),
+        ...(takenBack === null ? {} : { takenBack }),
         url: view.url,
+        status,
         deployment: deployment.id,
         creating: deployment.creating,
         missingSecrets,
@@ -757,6 +1054,91 @@ async function deploy(remote: Remote, dependencies: RemoteDependencies, json: bo
     }
     await pause();
   }
+}
+
+/** The archive a deployment uploads, or why the machine would refuse it. */
+function archiveOf(project: RemoteProject): { archive: Uint8Array; files: number; bytes: number } | Failure {
+  const { entries, refused } = projectEntries(project);
+  if (refused.length > 0) {
+    return { error: "invalid", message: "the machine refuses links and special files in the archive", details: [...refused.slice(0, 10), "replace them with the files they point to, or exclude them in sitesolide.json"] };
+  }
+  const files = entries.filter((entry) => entry.kind === "file");
+  const bytes = files.reduce((sum, entry) => sum + (entry.kind === "file" ? entry.content.length : 0), 0);
+  if (entries.length > LIMITS.entries || bytes > LIMITS.extractedBytes) {
+    return { error: "too-large", message: `${entries.length} entries, ${bytes} bytes: over what the machine accepts (${LIMITS.entries} entries, 512 MiB)`, details: ["exclude dependencies and caches in sitesolide.json: the machine installs dependencies itself"] };
+  }
+  const archive = bundle(entries);
+  if (archive.length > LIMITS.bundleBytes) return { error: "too-large", message: `the archive is ${archive.length} bytes compressed, over 100 MiB` };
+  return { archive, files: files.length, bytes };
+}
+
+/**
+ * The end of a dry run: what the machine would lay, the units and the block
+ * generated from the plan's final manifest as the installer generates them,
+ * what the store lacks, and the archive measured. The build runs with
+ * --build alone; nothing is uploaded, nothing written.
+ */
+async function dryRunReport(
+  remote: Remote,
+  dependencies: RemoteDependencies,
+  project: RemoteProject,
+  plan: PlanView,
+  resolved: { values: Record<string, string>; sources: unknown[] },
+  options: { json: boolean; build: boolean; inferred: string | null },
+): Promise<number> {
+  const output = dependencies.output ?? humanOutput;
+  const slug = project.manifest.slug;
+  const checked = checkManifest(plan.manifest);
+  if (checked.manifest === undefined) return report(output, { error: "failure", message: "the machine's plan carries a manifest this CLI cannot read", details: checked.errors });
+  const final = checked.manifest;
+  output.say(`-> plan: ${plan.creating ? "a new project" : plan.existing ? "the project the server carries, replaced" : "a project the server does not carry yet"}${plan.portal ? ", Restricted" : ""}`);
+  for (const { service, port } of plan.allocated) output.say(`   port ${port}${service === null ? "" : ` for ${service}`}, chosen by the machine`);
+  const placeholders = { slug, zone: plan.placeholders.zone, contact: plan.placeholders.contact };
+  for (const { unit, text } of generateUnits(final, placeholders)) show(output, { type: "file", name: unitFileName(unit), content: text });
+  const fragment = generateFragment(final);
+  if (fragment !== null) show(output, { type: "file", name: `${slug}.caddy`, content: fragment });
+
+  // What the store lacks, said and never asked for: a dry run sets nothing.
+  let missingSecrets: StoreMissing | null = null;
+  const declaration = secretsOf(project.manifest);
+  if (hasStore(project.manifest) && (declaration.runtime.length > 0 || declaration.files.length > 0)) {
+    const store = await import("./store-cli");
+    const listed = await store.apiStore(remote, dependencies.fetcher).list(slug, true);
+    if (listed.ok) {
+      missingSecrets = store.missingOf(store.withDeclared(listed.value, declaration));
+      const names = [...missingSecrets.runtime, ...missingSecrets.files.map((name) => `${name} (file)`)];
+      if (names.length > 0) warnOn(output, `the store lacks ${names.join(", ")}`, [`sitesolide secrets set <NAME> sets one; the deployment asks for each at a terminal`]);
+      else output.say("   every declared runtime secret is set");
+    } else output.say(`   the store was not listed: ${listed.failure.message}`);
+  }
+
+  if (options.build) {
+    await dependencies.build(project, { secrets: resolved.values, placeholders: buildPlaceholders(slug, remote.api, plan.placeholders) });
+    dependencies.checkPublic(project);
+  } else if (project.manifest.build !== undefined) {
+    output.say(`[dry-run] build (${project.manifest.build}), not run: it is this folder's code, run here only for real or with --dry-run --build`);
+  }
+  const archived = archiveOf(project);
+  if ("error" in archived) return report(output, archived);
+  output.say(`[dry-run] upload ${archived.files} file(s), ${archived.bytes} bytes, ${archived.archive.length} compressed${options.build ? "" : ", unbuilt: --build builds first"}`);
+  output.say(`[dry-run] the installer lays it, restarts the services and verifies https://${slug}.${plan.placeholders.zone}/`);
+  const main = plan.allocated.find((entry) => entry.service === null) ?? plan.allocated[0];
+  output.succeeded("deploy", {
+    slug,
+    kind: isApp(final) ? (hasServices(final) ? "services" : "service") : "static",
+    ...(isApp(final) ? { runs: runsOf(servicesOf(final)) } : {}),
+    dryRun: true,
+    port: main?.port ?? mainPort(final),
+    manifestWritten: false,
+    portal: plan.portal,
+    ...(options.inferred === null ? {} : { inferred: options.inferred }),
+    url: `https://${slug}.${plan.placeholders.zone}/`,
+    status: null,
+    creating: plan.creating,
+    missingSecrets,
+    buildSecrets: resolved.sources,
+  });
+  return 0;
 }
 
 /**
@@ -1184,13 +1566,12 @@ export function needsSsh(command: string): Failure {
 /**
  * The options each command takes through the API, and whether one carries a
  * value. Anything else is refused before a request leaves, rather than passed
- * over: `--dry-run` passed over deployed for real, the live site replaced by
- * a run its author believed changed nothing. A dry run needs the owner's SSH
- * reads, which a token does not have, and the control API has no route that
- * judges without deploying; until it does, the option is refused, saying so.
+ * over: `--dry-run` passed over once deployed for real, the live site
+ * replaced by a run its author believed changed nothing. It is the machine's
+ * plan now, `POST /api/v1/deployments/plan`, which writes nothing.
  */
 const REMOTE_OPTIONS: Readonly<Record<string, Readonly<Record<string, boolean>>>> = {
-  deploy: {},
+  deploy: { "--dry-run": false, "--build": false, "--yes": false, "--slug": true, "--force": false, "--adopt": false },
   status: {},
   logs: { "--follow": false, "--lines": true },
   login: { "--url": true, "--token-stdin": false },
@@ -1215,29 +1596,51 @@ export function unknownOptions(command: string, arguments_: string[]): Failure |
       continue;
     }
     if (!option.startsWith("-")) continue;
-    if (command === "deploy" && option === "--dry-run") {
-      return {
-        error: "no-dry-run",
-        message: "deploy --dry-run is not available with a token: nothing was sent",
-        details: [
-          "a dry run reads the machine over the owner's SSH access, which a token does not carry",
-          "through the API, the machine judges the manifest when the deployment starts, before anything is built or uploaded",
-          "review sitesolide.json, then run sitesolide deploy",
-        ],
-      };
-    }
     const takes = Object.keys(known);
     return {
       error: "unknown-option",
       message: `${option}: not an option of sitesolide ${command} with a token: nothing was sent`,
       details: [
         takes.length === 0 ? `with a token, sitesolide ${command} takes no option` : `with a token, sitesolide ${command} takes ${takes.join(", ")}`,
-        ...(option === "--yes" || option === "--slug" ? ["a folder without sitesolide.json: write it first with sitesolide detect --write, review it, then deploy"] : []),
-        ...(option === "--adopt" ? ["taking a name back from a token is the owner's, over SSH: a token never takes another's name"] : []),
+        ...(command === "deploy" && option === "--compare" ? ["--compare measures a component setup and upgrade deploy over SSH; a dry run with a token shows the units and the block the machine would lay"] : []),
       ],
     };
   }
   return null;
+}
+
+/**
+ * The platform's own components, which `sitesolide setup` and `upgrade`
+ * deploy over the owner's SSH access, from the kit: the dashboard, which
+ * serves the API every other deployment goes through, cannot be deployed
+ * through itself, nor can the portal, which no token may touch (RESERVED_SLUGS
+ * in dashboard/src/control/policy.ts). Every other project deploys through
+ * the API, the owner's included.
+ */
+export const PLATFORM_COMPONENTS: readonly string[] = ["dashboard", "portal"];
+
+/**
+ * Set on `globalThis` by bin/tests/e2e/ssh-engine.ts, a preload of the
+ * repository's tests alone, which the kit and the binary never carry: the
+ * end-to-end tests drive the SSH engine with sample projects against a
+ * simulated machine, the engine setup and upgrade still run for the
+ * components. Nothing a workstation runs sets it.
+ */
+export const SSH_ENGINE_FOR_TESTS = Symbol.for("sitesolide.tests.ssh-engine");
+
+/**
+ * Whether `sitesolide deploy` in this folder runs over SSH: a platform
+ * component's folder alone, its slug read from its manifest. Every other
+ * folder, one without a manifest included, deploys through the API.
+ */
+export function deploysOverSsh(folder: string): boolean {
+  if ((globalThis as Record<symbol, unknown>)[SSH_ENGINE_FOR_TESTS] === true) return true;
+  try {
+    const parsed = JSON.parse(readFileSync(join(folder, "sitesolide.json"), "utf8")) as { slug?: unknown } | null;
+    return typeof parsed?.slug === "string" && PLATFORM_COMPONENTS.includes(parsed.slug);
+  } catch {
+    return false;
+  }
 }
 
 /** The commands only the owner's SSH access carries. */
@@ -1248,6 +1651,11 @@ export const REMOTE_USAGE = [
   "  sitesolide login --url <https://dashboard.zone>   keep the token, check it",
   "     --token-stdin                                  read it from standard input",
   "  sitesolide deploy                                 build here, upload, follow the machine's log",
+  "     --dry-run                                      the machine judges and plans it: units, block, ports; nothing changed",
+  "     --build                                        in a dry run, build all the same",
+  "     --yes [--slug <name>]                          a folder without sitesolide.json: deploy the inferred one, written here",
+  "     --force                                        replace a unit or a block edited by hand (the owner's token for every project)",
+  "     --adopt                                        take the name back from the token that holds it first (same)",
   "  sitesolide status                                 the projects this token may deploy",
   "  sitesolide logs [--follow]                        the journal of this folder's project",
   "     --lines <n>                                    how many lines back, 50 by default, 500 at most",
@@ -1271,6 +1679,25 @@ export const REMOTE_USAGE = [
   "SITESOLIDE_API and SITESOLIDE_TOKEN, both in the environment, win over the files.",
 ];
 
+/**
+ * What a workstation without a token runs to deploy: every deployment goes
+ * through the dashboard's API, the owner's included, and none over SSH. The
+ * dashboard's address from the configuration's zone when it has one.
+ */
+export function tokenAdvice(environment: Environment, home: string): string[] {
+  const zone = environment.SITESOLIDE_ZONE ?? rawConfig(home, environment).zone;
+  const dashboard = typeof zone === "string" && zone !== "" ? dashboardAddress(zone) : "https://dashboard.<zone>";
+  const server = environment.SITESOLIDE_SERVER ?? rawConfig(home, environment).server;
+  return [
+    "every deployment goes through the dashboard's API with a token, the owner's too: none goes over SSH any more",
+    ...(typeof server === "string" && server !== ""
+      ? ["the owner mints theirs over SSH, straight into this workstation's vault, never shown:  sitesolide login --owner"]
+      : []),
+    `or mint one on ${dashboard}, Tokens, New token (the owner: Every project, as you), then:  sitesolide login --url ${dashboard}`,
+    "an agent or a CI sets SITESOLIDE_API and SITESOLIDE_TOKEN in its environment instead",
+  ];
+}
+
 /** Runs a command through the API; the exit code is returned, never thrown. */
 export async function runRemote(command: string, arguments_: string[], dependencies: RemoteDependencies): Promise<number> {
   const output = dependencies.output ?? humanOutput;
@@ -1293,10 +1720,13 @@ export async function runRemote(command: string, arguments_: string[], dependenc
   if (command === "logs" && (!/^[0-9]+$/.test(lines) || Number(lines) < 1 || Number(lines) > 500)) {
     return report(output, { error: "invalid", message: `--lines: ${lines || "nothing given"} is not a number of lines between 1 and 500, what the API returns at most` });
   }
-  if ("missing" in remote) return report(output, { error: "unauthenticated", message: remote.missing });
+  if ("missing" in remote) {
+    if (command !== "deploy") return report(output, { error: "unauthenticated", message: remote.missing });
+    return report(output, { error: "unauthenticated", message: `sitesolide deploy needs a token: ${remote.missing}`, details: tokenAdvice(dependencies.environment, dependencies.home ?? homedir()) });
+  }
   switch (command) {
     case "deploy":
-      return deploy(remote, dependencies, arguments_.includes("--json"));
+      return deploy(remote, dependencies, deployOptions(arguments_));
     case "status":
       return status(remote, dependencies);
     case "share":

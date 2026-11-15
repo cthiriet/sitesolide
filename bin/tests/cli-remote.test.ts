@@ -6,6 +6,9 @@ import {
   apiAccess,
   apiOrigin,
   checkManifest,
+  deploysOverSsh,
+  followedManifest,
+  withAllocatedPorts,
   describeIdentity,
   buildPlaceholders,
   keyIn,
@@ -92,7 +95,18 @@ let server: ReturnType<typeof Bun.serve>;
 let api: string;
 let vm: FakeVm;
 
-const identity = { id: "aaaaaaaaaaaa", label: "Ada", email: "ada@test-zone.invalid", expiresAt: null, scope: { slugs: [], create: true, outbound: false, domain: false, public: false }, owned: ["shop"] };
+const identity: { id: string; label: string; email: string; expiresAt: null; scope: { slugs: string[]; create: boolean; outbound: boolean; domain: boolean; public: boolean; all?: boolean }; owned: string[] } = {
+  id: "aaaaaaaaaaaa",
+  label: "Ada",
+  email: "ada@test-zone.invalid",
+  expiresAt: null,
+  scope: { slugs: [], create: true, outbound: false, domain: false, public: false },
+  owned: ["shop"],
+};
+/** The plan: from a dashboard before it, and whether the machine already carries the project, and what it keeps of it (door, former names). */
+let planScenario: "answers" | "old" = "answers";
+let planExisting = false;
+let planOverrides: Record<string, unknown> = {};
 const LOG = ["-> manifest, validated on the machine", "   port 3002 chosen for the service", "-> verify", "   https://shop.test-zone.invalid/ 401, restricted: visitors are asked to sign in"];
 
 beforeAll(() => {
@@ -107,6 +121,24 @@ beforeAll(() => {
       received.push({ method: req.method, path: `${url.pathname}${url.search}`, authorization: req.headers.get("authorization"), body });
       if (req.headers.get("authorization") !== `Bearer ${TOKEN}`) return Response.json({ error: "unauthenticated", message: "missing or unknown token" }, { status: 401 });
       if (url.pathname === "/api/v1/whoami") return Response.json({ identity });
+      if (url.pathname === "/api/v1/deployments/plan" && req.method === "POST") {
+        if (scenario === "refuses") {
+          return Response.json({ error: "invalid-manifest", message: "your token may not deploy this manifest: fix every point in details", details: ['network: your token may not deploy "network": "outbound"'] }, { status: 422 });
+        }
+        if (planScenario === "old") return Response.json({ error: "not-found", message: "no such route: see docs/access.md" }, { status: 404 });
+        const asked = JSON.parse(body as string) as { manifest: string; force?: boolean };
+        if (asked.force === true && identity.scope.all !== true) return Response.json({ error: "out-of-scope", message: "--force: the owner's own token for every project alone may ask it" }, { status: 403 });
+        const manifest = JSON.parse(asked.manifest) as Record<string, unknown>;
+        const allocated = typeof manifest.start === "string" && manifest.port === undefined ? [{ service: null, port: 3002 }] : [];
+        const final = { ...manifest, ...(allocated.length > 0 ? { port: 3002 } : {}), ...planOverrides };
+        return Response.json({
+          plan: { slug: manifest.slug, creating: !planExisting, existing: planExisting, portal: (final as Record<string, unknown>).portal === true, allocated, manifest: JSON.stringify(final), placeholders: { zone: "test-zone.invalid", contact: "ops@test-zone.invalid" } },
+        });
+      }
+      if (url.pathname === "/api/v1/projects/shop/claim" && req.method === "DELETE") {
+        if (identity.scope.all !== true) return Response.json({ error: "out-of-scope", message: "taking a name back is the owner's" }, { status: 403 });
+        return Response.json({ claim: { slug: "shop", released: "bbbbbbbbbbbb", dropped: { variables: ["API_KEY"], files: [] } } });
+      }
       if (url.pathname === "/api/v1/deployments" && req.method === "POST") {
         if (scenario === "refuses") {
           return Response.json({ error: "invalid-manifest", message: "your token may not deploy this manifest: fix every point in details", details: ['network: your token may not deploy "network": "outbound"'] }, { status: 422 });
@@ -223,16 +255,22 @@ describe("deploy through the API", () => {
     received.length = 0;
     const root = project(APP, APP_FILES);
     const home = folder("remote-home-");
+    const before = readFileSync(join(root, "sitesolide.json"), "utf8");
     const result = await cli(root, ["deploy"], { HOME: home, SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN });
     expect(result.code).toBe(0);
-    for (const line of [`-> project shop, through ${api}`, "-> archive", "-> upload", ...LOG, "   the machine chose port 3002: write it in sitesolide.json to keep it explicit"]) {
+    for (const line of [`-> project shop, through ${api}`, "-> archive", "-> upload", ...LOG, "   the machine chose port 3002"]) {
       expect(result.output).toContain(line);
     }
     // Each log line once, though it was read in two goes.
     expect(result.output.split("-> manifest, validated on the machine").length).toBe(2);
 
-    const posted = received.find((entry) => entry.method === "POST")!;
-    expect(JSON.parse(posted.body as string).manifest).toBe(readFileSync(join(root, "sitesolide.json"), "utf8"));
+    // The plan first, then the deployment, both with the file as it was.
+    const posted = received.filter((entry) => entry.method === "POST");
+    expect(posted.map((entry) => entry.path)).toEqual(["/api/v1/deployments/plan", "/api/v1/deployments"]);
+    for (const entry of posted) expect(JSON.parse(entry.body as string)).toEqual({ manifest: before });
+    // The port the machine chose, written after `start`, as over SSH.
+    expect(JSON.parse(readFileSync(join(root, "sitesolide.json"), "utf8"))).toEqual({ ...APP, port: 3002 });
+    expect(Object.keys(JSON.parse(readFileSync(join(root, "sitesolide.json"), "utf8"))).slice(0, 3)).toEqual(["slug", "start", "port"]);
     const put = received.find((entry) => entry.method === "PUT")!;
     // The archive went to the configured address, never to the uploadUrl the answer named.
     expect(put.path).toBe("/api/v1/deployments/0123456789abcdef01234567/bundle");
@@ -335,36 +373,160 @@ function events(output: string): Record<string, unknown>[] {
 }
 
 describe("what a token's run refuses, and --json", () => {
-  test("deploy --dry-run is refused before anything is sent: it used to deploy for real", async () => {
+  test("deploy --dry-run: the machine's plan, its units and block shown, nothing built, uploaded nor written", async () => {
     scenario = "succeeds";
     received.length = 0;
     const root = project({ ...APP, build: "touch build-ran" }, APP_FILES);
+    const before = readFileSync(join(root, "sitesolide.json"), "utf8");
     const env = { HOME: folder("remote-home-"), SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN };
     const human = await cli(root, ["deploy", "--dry-run"], env);
-    expect(human.code).toBe(1);
-    expect(human.error).toContain("!! deploy --dry-run is not available with a token: nothing was sent");
+    expect(human.code).toBe(0);
+    expect(human.output).toContain("--- shop.service ---");
+    expect(human.output).toContain("--- shop.caddy ---");
+    expect(human.output).toContain("port 3002, chosen by the machine");
     const json = await cli(root, ["deploy", "--dry-run", "--json"], env);
-    expect(json.code).toBe(1);
-    const error = events(json.output).at(-1)!;
-    expect(error).toMatchObject({ type: "error", message: "deploy --dry-run is not available with a token: nothing was sent" });
-    expect(error.hint).toContain("without --dry-run once they agree");
-    expect(received).toEqual([]);
+    expect(json.code).toBe(0);
+    const list = events(json.output);
+    const unit = list.find((event) => event.type === "file" && event.name === "shop.service");
+    // Generated from the plan's final manifest, with the machine's placeholders.
+    expect(String(unit?.content)).toContain("3002");
+    expect(list.at(-1)).toMatchObject({ type: "result", command: "deploy", slug: "shop", dryRun: true, port: 3002, manifestWritten: false, url: "https://shop.test-zone.invalid/", creating: true });
+    // The plan alone: no deployment, no archive, no build, the manifest as it was.
+    expect(received.map((entry) => `${entry.method} ${entry.path}`)).toEqual(["POST /api/v1/deployments/plan", "POST /api/v1/deployments/plan"]);
     expect(() => statSync(join(root, "build-ran"))).toThrow();
+    expect(readFileSync(join(root, "sitesolide.json"), "utf8")).toBe(before);
+    // --build: the build runs here all the same, and still nothing leaves.
+    received.length = 0;
+    expect((await cli(root, ["deploy", "--dry-run", "--build"], env)).code).toBe(0);
+    expect(statSync(join(root, "build-ran")).isFile()).toBe(true);
+    expect(received.map((entry) => entry.method)).toEqual(["POST"]);
+  });
+
+  test("a dry run against a machine that plans nothing yet is refused, a deployment goes on without the plan", async () => {
+    scenario = "succeeds";
+    planScenario = "old";
+    try {
+      const env = { HOME: folder("remote-home-"), SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN };
+      const dry = await cli(project(APP, APP_FILES), ["deploy", "--dry-run", "--json"], env);
+      expect(dry.code).toBe(1);
+      expect(events(dry.output).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("sitesolide upgrade") });
+      expect((await cli(project(APP, APP_FILES), ["deploy"], env)).code).toBe(0);
+    } finally {
+      planScenario = "answers";
+    }
+  });
+
+  test("the door and the former names the machine keeps are written back before the deployment, as over SSH", async () => {
+    scenario = "succeeds";
+    planOverrides = { portal: true, formerSlugs: ["boutique"] };
+    received.length = 0;
+    try {
+      const root = project({ ...APP, port: 3002 }, APP_FILES);
+      const result = await cli(root, ["deploy"], { HOME: folder("remote-home-"), SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN });
+      expect(result.code).toBe(0);
+      expect(result.output).toContain("as the server keeps them");
+      const written = JSON.parse(readFileSync(join(root, "sitesolide.json"), "utf8")) as Record<string, unknown>;
+      expect(written).toMatchObject({ portal: true, formerSlugs: ["boutique"] });
+      // The deployment carries the manifest as it now reads.
+      const deployment = received.find((entry) => entry.method === "POST" && entry.path === "/api/v1/deployments")!;
+      expect(JSON.parse(JSON.parse(deployment.body as string).manifest)).toMatchObject({ portal: true, formerSlugs: ["boutique"] });
+    } finally {
+      planOverrides = {};
+    }
+  });
+
+  test("a folder without sitesolide.json: the inferred manifest shown and refused, deployed and written with --yes, refused over a project the server carries", async () => {
+    scenario = "succeeds";
+    const env = { HOME: folder("remote-home-"), SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN };
+    const root = folder("remote-infer-");
+    mkdirSync(join(root, "public"));
+    writeFileSync(join(root, "public", "index.html"), "<h1>hello</h1>");
+    received.length = 0;
+    const shown = await cli(root, ["deploy", "--slug", "shop", "--json"], env);
+    expect(shown.code).toBe(1);
+    expect(events(shown.output).some((event) => event.type === "inferred")).toBe(true);
+    expect(received).toEqual([]);
+    expect(() => statSync(join(root, "sitesolide.json"))).toThrow();
+
+    planExisting = true;
+    try {
+      const over = await cli(root, ["deploy", "--yes", "--slug", "shop", "--json"], env);
+      expect(over.code).toBe(1);
+      expect(events(over.output).at(-1)).toMatchObject({ type: "error", message: "shop already exists on the server, and this folder has no sitesolide.json" });
+      expect(() => statSync(join(root, "sitesolide.json"))).toThrow();
+    } finally {
+      planExisting = false;
+    }
+    const deployed = await cli(root, ["deploy", "--yes", "--slug", "shop", "--json"], env);
+    expect(deployed.code).toBe(0);
+    expect(events(deployed.output).at(-1)).toMatchObject({ type: "result", manifestWritten: true });
+    expect(JSON.parse(readFileSync(join(root, "sitesolide.json"), "utf8"))).toMatchObject({ slug: "shop", publicDir: "public" });
+  });
+
+  test("--force and --adopt: the owner's token for every project alone; it takes the name back first, then deploys with force", async () => {
+    scenario = "succeeds";
+    const env = { HOME: folder("remote-home-"), SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN };
+    received.length = 0;
+    const refused = await cli(project(APP, APP_FILES), ["deploy", "--force", "--json"], env);
+    expect(refused.code).toBe(1);
+    expect(events(refused.output).at(-1)).toMatchObject({ type: "error", message: expect.stringContaining("--force") });
+    expect(received.map((entry) => entry.path)).toEqual(["/api/v1/deployments/plan"]);
+    received.length = 0;
+    expect((await cli(project(APP, APP_FILES), ["deploy", "--adopt", "--json"], env)).code).toBe(1);
+    expect(received.map((entry) => `${entry.method} ${entry.path}`)).toEqual(["DELETE /api/v1/projects/shop/claim"]);
+
+    identity.scope.all = true;
+    try {
+      received.length = 0;
+      const root = project(APP, APP_FILES);
+      const result = await cli(root, ["deploy", "--adopt", "--force"], env);
+      expect(result.code).toBe(0);
+      expect(result.output).toContain("released from token bbbbbbbbbbbb");
+      expect(received.filter((entry) => entry.method !== "GET").map((entry) => `${entry.method} ${entry.path}`)).toEqual([
+        "DELETE /api/v1/projects/shop/claim",
+        "POST /api/v1/deployments/plan",
+        "POST /api/v1/deployments",
+        "PUT /api/v1/deployments/0123456789abcdef01234567/bundle",
+      ]);
+      const deployment = received.find((entry) => entry.path === "/api/v1/deployments")!;
+      expect(JSON.parse(deployment.body as string).force).toBe(true);
+      // A dry run takes nothing back.
+      received.length = 0;
+      expect((await cli(root, ["deploy", "--adopt", "--dry-run"], env)).code).toBe(0);
+      expect(received.map((entry) => entry.method)).toEqual(["POST"]);
+    } finally {
+      delete identity.scope.all;
+    }
+  });
+
+  test("a workstation with a server and no token deploys nothing over SSH: it is told how to mint one", async () => {
+    const root = project(APP, APP_FILES);
+    const before = vm.logs().length;
+    const result = await cli(root, ["deploy", "--json"], { HOME: folder("remote-home-"), SITESOLIDE_SERVER: "deploy@sitesolide-test.invalid", SITESOLIDE_ZONE: "test-zone.invalid", SITESOLIDE_EMAIL: "ops@test-zone.invalid" });
+    expect(result.code).toBe(1);
+    const error = events(result.output).at(-1)!;
+    expect(error).toMatchObject({ type: "error", message: expect.stringContaining("sitesolide deploy needs a token") });
+    expect(error.details).toEqual(expect.arrayContaining([expect.stringContaining("sitesolide login --owner"), expect.stringContaining("https://dashboard.test-zone.invalid")]));
+    expect(vm.logs().slice(before)).toEqual([]);
+  });
+
+  test("over SSH, the platform's components alone: every other folder deploys through the API", () => {
+    expect(deploysOverSsh(project({ slug: "dashboard", start: "x", port: 3001 }))).toBe(true);
+    expect(deploysOverSsh(project({ slug: "portal", start: "x", port: 3002 }))).toBe(true);
+    expect(deploysOverSsh(project(APP, APP_FILES))).toBe(false);
+    expect(deploysOverSsh(folder("remote-empty-"))).toBe(false);
   });
 
   test("an option the token's path does not carry is refused, never passed over", async () => {
     received.length = 0;
     const root = project(APP, APP_FILES);
     const env = { HOME: folder("remote-home-"), SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN };
-    for (const arguments_ of [["deploy", "--yes"], ["deploy", "--force"], ["deploy", "--adopt"], ["status", "--follow"], ["logs", "--lines", "9000"]]) {
+    for (const arguments_ of [["deploy", "--compare"], ["deploy", "--everything"], ["status", "--follow"], ["logs", "--lines", "9000"]]) {
       const result = await cli(root, [...arguments_, "--json"], env);
       expect({ arguments_, code: result.code }).toEqual({ arguments_, code: 1 });
       expect(events(result.output).at(-1)!.type).toBe("error");
     }
     expect(received).toEqual([]);
-    // Taking a name back from a token is the owner's: said so.
-    const adopt = await cli(root, ["deploy", "--adopt", "--json"], env);
-    expect(events(adopt.output).at(-1)).toMatchObject({ type: "error", message: "--adopt: not an option of sitesolide deploy with a token: nothing was sent", details: expect.arrayContaining([expect.stringContaining("a token never takes another's name")]) });
   });
 
   test("deploy --json: the steps and the machine's log as events, and a result carrying the address", async () => {
@@ -1138,5 +1300,23 @@ describe("access through the API, over a fake fetch", () => {
       throw new Error("connection refused");
     });
     expect(await down.remove("shop", "a@acme.test")).toEqual({ ok: false, failure: { error: "unreachable", message: `${remote.api} unreachable: connection refused` } });
+  });
+});
+
+describe("what deploy writes back into sitesolide.json", () => {
+  test("the ports the machine chose, each where a person writes it; one declared is left alone", () => {
+    const single = `${JSON.stringify({ slug: "shop", start: "bun run s.ts", env: { A: "1" } }, null, 2)}\n`;
+    expect(Object.keys(JSON.parse(withAllocatedPorts(single, [{ service: null, port: 3040 }])!))).toEqual(["slug", "start", "port", "env"]);
+    expect(withAllocatedPorts(`${JSON.stringify({ slug: "shop", start: "x", port: 3001 })}\n`, [{ service: null, port: 3040 }])).toBeNull();
+    const services = JSON.stringify({ slug: "shop", services: { web: { start: "x" }, api: { start: "y", port: 3050 } } });
+    expect(JSON.parse(withAllocatedPorts(services, [{ service: "web", port: 3041 }, { service: "api", port: 3051 }])!).services).toEqual({ web: { start: "x", port: 3041 }, api: { start: "y", port: 3050 } });
+  });
+
+  test("the door and the former names as the machine keeps them, null when nothing differs", () => {
+    const raw = JSON.stringify({ slug: "shop", publicDir: "public" });
+    expect(followedManifest(raw, JSON.stringify({ slug: "shop", publicDir: "public", port: 3002 }))).toBeNull();
+    const followed = followedManifest(raw, JSON.stringify({ slug: "shop", publicDir: "public", lock: true, formerSlugs: ["boutique"] }))!;
+    expect(JSON.parse(followed.raw)).toMatchObject({ lock: true, formerSlugs: ["boutique"] });
+    expect(followed.changed).toHaveLength(2);
   });
 });

@@ -428,7 +428,7 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 //   DELETE /tokens/project        { slug }    a project removed: its token ownership and its people with access forgotten
 //   GET    /tokens/claim?slug=<slug>          -> ClaimView: does a token hold or claim a name, and is a deployment of it under way
 //   DELETE /tokens/claim          { slug }    -> ClaimReleased: the owner takes such a name back, its store moved aside
-//   POST   /tokens/owner          OwnerTokenRequest -> CreatedTokenResponse: the owner's own token, every permission, `sitesolide setup`'s last step
+//   POST   /tokens/owner          OwnerTokenRequest -> CreatedTokenResponse: the owner's own token, every permission, `sitesolide login --owner`
 //
 // Any error returns `ControlFailure`. An older steward answers 404 `no such route` to all of
 // them: the dashboard turns that into `not-available`.

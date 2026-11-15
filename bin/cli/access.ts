@@ -530,6 +530,7 @@ export type OwnerWritePath =
   | "/general"
   | "/tokens/claim"
   | "/tokens/project"
+  | "/tokens/owner"
   | "/control/rename"
   | "/control/lifecycle";
 

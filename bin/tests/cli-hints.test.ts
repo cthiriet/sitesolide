@@ -114,7 +114,7 @@ describe("the hints", () => {
   });
 
   test("a refusal through the API is answered by its code, and never with --force", () => {
-    expect(hintForFailure("no-dry-run", "deploy --dry-run is not available with a token: nothing was sent")).toContain("without --dry-run");
+    expect(hintForFailure("unauthenticated", "sitesolide deploy needs a token")).toContain("sitesolide login --owner");
     // A code the table lacks falls back to what the message says.
     expect(hintForFailure("brand-new", "build failed: bun run build")).toBe(hintFor("build failed: bun run build"));
     for (const hint of Object.values(REMOTE_HINTS)) {

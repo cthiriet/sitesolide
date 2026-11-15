@@ -17,7 +17,7 @@ import { generateFragment } from "../../cli/fragment";
 import type { Manifest } from "../../cli/manifest";
 import { utcTime } from "../../cli/caddy-lock";
 import { ZONE_NAMES_COMMAND } from "../../cli/tls";
-import { CLI, REPO, run, TEST_EMAIL, TEST_ZONE } from "./run";
+import { CLI, REPO, run, SSH_ENGINE, TEST_EMAIL, TEST_ZONE } from "./run";
 import { createFakeVm, type FakeVm } from "./fake-vm";
 
 /**
@@ -288,7 +288,7 @@ describe("sitesolide deploy takes the lock before its first deposit", () => {
   const INSTALL = "ACCEPTED sudo install -m 644 -o sample -g sample /dev/stdin /srv/sites/sample-lock/sitesolide.json";
 
   function deploy(env: Record<string, string> = {}) {
-    return Bun.spawn(["bun", CLI, "deploy"], {
+    return Bun.spawn(["bun", "--preload", SSH_ENGINE, CLI, "deploy"], {
       cwd: project(SHOWCASE),
       stdout: "pipe",
       stderr: "pipe",
@@ -348,7 +348,7 @@ describe("sitesolide deploy takes the lock before its first deposit", () => {
     // the same free port and deposits its manifest while this one prepares
     // its service.
     vm.onFirstAccepted("/srv/sites/sample-rival/sitesolide.json", text({ ...RACE, slug: "sample-rival" }));
-    const proc = Bun.spawn(["bun", CLI, "deploy"], {
+    const proc = Bun.spawn(["bun", "--preload", SSH_ENGINE, CLI, "deploy"], {
       cwd: project(RACE),
       stdout: "pipe",
       stderr: "pipe",

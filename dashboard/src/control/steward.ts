@@ -659,11 +659,11 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   /**
    * `POST /tokens/owner { label, expiresAt }` on the owner's socket, which
    * root alone opens: the owner's own token, every permission and every
-   * project (`all`), minted for the workstation that runs `sitesolide setup`
-   * over SSH, as the Tokens page mints one under the unlock. Root over SSH
-   * is the proof the unlock stands for: whoever opens this socket already
-   * holds the machine. The secret goes back in this answer alone, which
-   * setup writes into the workstation's vault, never on a screen.
+   * project (`all`), minted for the workstation that runs `sitesolide login
+   * --owner` over SSH, as the Tokens page mints one under the unlock. Root
+   * over SSH is the proof the unlock stands for: whoever opens this socket
+   * already holds the machine. The secret goes back in this answer alone,
+   * which the CLI writes into the workstation's vault, never on a screen.
    */
   async function ownerToken(req: Request): Promise<Response> {
     const body = await readBody(req, ["label", "expiresAt"]);

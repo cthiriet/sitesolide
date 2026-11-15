@@ -228,7 +228,6 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
  */
 export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   // --- refused before a request leaves
-  "no-dry-run": "review sitesolide.json with the user, then run `sitesolide deploy` without --dry-run once they agree: the machine judges the manifest before anything is built or uploaded",
   "unknown-option": "run the command without that option; `details` lists the ones it takes with a token",
   "needs-ssh": "this command is the owner's: ask the owner of the machine to run it; with a token, only deploy, status, logs, share, secrets, restart and login run",
   "value-in-arguments":
@@ -242,7 +241,7 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   cancelled: "nothing was sent: run the same command again once the value is at hand",
   usage: "run one of the commands `details` lists",
   // --- the control API
-  unauthenticated: "the token is missing, unknown, expired or revoked: ask the owner of the machine for one, then run `sitesolide login`; never guess a token or borrow another one",
+  unauthenticated: "the token is missing, unknown, expired or revoked: ask the owner of the machine for one, then run `sitesolide login` (the owner mints their own with `sitesolide login --owner`); never guess a token or borrow another one",
   "too-many-attempts": "wait the seconds `details` names, then run the same command once; never retry in a loop",
   "out-of-scope": "this may not be done by whoever asks: change what the message names (in sitesolide.json for a deployment, in the command for access), or ask the owner of the machine, who may widen the token or do it themselves; never pick another slug, role or token to get around it, nor another file for a secret",
   reserved:
@@ -286,7 +285,7 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "no-portal": "the project is not restricted: its general access is the dashboard's Access section",
   // --- a deployment that failed on the machine
   "install-failed": "run the install command from the message in the project folder, fix what it reports, then deploy again",
-  "edited-by-hand": "do not re-run with --force, a token has none: tell the owner of the machine, who reads the file and decides",
+  "edited-by-hand": "do not re-run with --force on your own: tell the owner of the machine, who reads the file and decides; only the owner's own token for every project carries --force",
   "system-unit": "pick another slug in sitesolide.json: this one names a service of the machine",
   "caddy-busy": LOCK_BUSY,
   "access-changed": "the project's general access changed from the dashboard while the deployment ran: deploy again",
