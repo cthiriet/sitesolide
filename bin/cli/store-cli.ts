@@ -72,7 +72,7 @@ export const NAME_MAX_HERE = 64;
  * long, or starting as a provider's key does (VALUE_LIKE_PREFIXES in
  * ./variables). `sitesolide secrets set sk_live_...` has the shape of a
  * variable name: sent, the key would become a name, journaled for good and
- * listed to every Developer of the project.
+ * listed in the project's Activity.
  */
 export function looksLikeValue(argument: string): boolean {
   return argument.length > NAME_MAX_HERE || VALUE_LIKE_PREFIXES.some((prefix) => argument.startsWith(prefix));

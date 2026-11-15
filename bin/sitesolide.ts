@@ -10,15 +10,14 @@
  *   sitesolide status               what the VM actually carries
  *   sitesolide logs [--follow]      journalctl for the service
  *   sitesolide backups              the project's data snapshots, read only
- *   sitesolide share [<email|@domain>...]   general access and people with access
- *   sitesolide people               everyone with access, and who may create projects
+ *   sitesolide share [<email>...]   general access and guests with password access
  *   sitesolide remove --confirm <slug>  take the project off the machine
  *   sitesolide rename <new-slug>    the project and its address renamed on the machine
  *   sitesolide disable | enable     the project turned off, kept whole, or on again
  *   sitesolide secrets [set|generate|remove|set-file|remove-file]
  *                                   the project's store of secrets, see bin/cli/store-cli.ts
  *   sitesolide run -- <command>     the workstation's own credentials for it, then run
- *   sitesolide login --url <url>    a team member: a token instead of SSH
+ *   sitesolide login --url <url>    a token instead of SSH, for an agent or a CI
  *   sitesolide machine create       a VM from a cloud provider's API, see cli/machine.ts
  *   sitesolide setup                alone at a terminal, the wizard: see cli/wizard.ts
  *   sitesolide help, --version      without any configuration
@@ -30,8 +29,8 @@
  * event per line, for agents: see the output section below, bin/cli/output.ts
  * and docs/agents.md.
  *
- * A workstation with no `server`, but a dashboard address and a token, is a
- * team member's: `deploy`, `status`, `logs`, `share`, `secrets` and `restart`
+ * A workstation with no `server`, but a dashboard address and a token, is an
+ * agent's or a CI's: `deploy`, `status`, `logs`, `secrets` and `restart`
  * then go through the dashboard's control API, and nothing below runs. See
  * bin/cli/remote.ts.
  *
@@ -271,7 +270,7 @@ import { DNS_CHOICES, dnsEntry, shownDns } from "./cli/dns/registry";
 import { deploysOverSsh, eventOutput, humanOutput, login, promptWithoutEcho, remoteMode, REMOTE_USAGE, runRemote, type BuildContext } from "./cli/remote";
 import { ownerLogin } from "./cli/owner-token";
 import { buildEnv, KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
-import { ownerGeneralCommand, ownerWriteCommand, PEOPLE_USAGE, people, SHARE_USAGE, share, sshAccess, sshClaim, sshGeneral, sshLifecycle, sshPeople, sshRename, sshTakeBack } from "./cli/access";
+import { ownerGeneralCommand, ownerWriteCommand, SHARE_USAGE, share, sshAccess, sshClaim, sshGeneral, sshLifecycle, sshRename, sshTakeBack } from "./cli/access";
 import { PASSKEY_USAGE, passkeys, sshPasskeys } from "./cli/passkeys";
 import {
   foreignUnit,
@@ -3598,7 +3597,7 @@ async function remove(
   releaseCaddyLock();
   step("token ownership, on the steward");
   if (executor.simulated) {
-    say(`   [dry-run] release ${slug} from the token that created it, if one did, and drop its people with access: the steward's owner socket`);
+    say(`   [dry-run] release ${slug} from the token that created it, if one did, and drop its guests: the steward's owner socket`);
     say("-> dry run, nothing was removed");
     return;
   }
@@ -3607,9 +3606,9 @@ async function remove(
   const release = readOwnershipRelease(await executor.execute(config, ownershipReleaseCommand(), JSON.stringify({ slug })));
   if (release.kind === "released") say(`   ${slug} created by token ${release.token}: its name is free again for another token`);
   else if (release.kind === "none") say(`   no token created ${slug}`);
-  else if (release.kind === "outdated") warn(`the steward on the server keeps no record to release, or predates it: run sitesolide upgrade, then this command again, if a token created ${slug} or people had access to it`);
-  else warn(`the steward kept ${slug} as its token's, or kept its people with access (${release.reason}): run this command again`);
-  if ((release.kind === "released" || release.kind === "none") && release.access > 0) say(`   its people with access dropped: ${release.access}, so that a project created later under that name starts from nobody`);
+  else if (release.kind === "outdated") warn(`the steward on the server keeps no record to release, or predates it: run sitesolide upgrade, then this command again, if a token created ${slug} or guests had access to it`);
+  else warn(`the steward kept ${slug} as its token's, or kept its guests (${release.reason}): run this command again`);
+  if ((release.kind === "released" || release.kind === "none") && release.access > 0) say(`   its guests dropped: ${release.access}, so that a project created later under that name starts from nobody`);
 
   say("");
   say("-> gone from the machine. What is left, and this command will not do it:");
@@ -4219,14 +4218,10 @@ function usage(zone: string | null): string {
     "  sitesolide logs [--follow]      journalctl for this project",
     "     --lines <n>                  how many lines back, 50 by default",
     "  sitesolide backups              this project's data snapshots, read only",
-    "  sitesolide share                this project's general access and people with access",
-    "     <email|@domain>...           give them access, Can open by default",
-    "     --role <role>                can-open, viewer, developer or admin",
-    "     --expires <24h|7d|30d|never> for password access, 7d by default",
-    "     --remove <email|@domain>...  take their access away; password access by the name it is listed under",
-    "  sitesolide people               everyone with access, their roles, who may create projects",
-    "     <email> --may-create         let them create projects, Admin of what they create",
-    "     <email> --no-create          take that right back",
+    "  sitesolide share                this project's general access and guests",
+    "     <email>...                   give them password access to the site, nothing more",
+    "     --expires <24h|7d|30d|never> how long it lasts, 7d by default",
+    "     --remove <email>...          take it away; a guest of before by the name it is listed under",
     "  sitesolide passkey              the owner's passkeys for the dashboard and protected sites",
     "     link                         a one-time link that registers one, the way in without a passkey",
     "     remove <id>                  remove one; the last one gives the dashboard's password back",
@@ -4278,14 +4273,13 @@ function asksForHelp(arguments_: string[]): boolean {
 }
 
 /**
- * The list for this workstation: a team member's, with a token and no
+ * The list for this workstation: a token's, an agent's or a CI's, with no
  * server, gets the commands the token runs. Neither reads more than the
  * configuration file, and an unreadable one only loses the zone.
  */
 function helpText(arguments_: string[]): string {
-  // `share --help`, `people --help` and `secrets --help`: their own usage, short, rather than every command.
+  // `share --help` and `secrets --help`: their own usage, short, rather than every command.
   if (arguments_[0] === "share") return SHARE_USAGE.join("\n");
-  if (arguments_[0] === "people") return PEOPLE_USAGE.join("\n");
   if (arguments_[0] === "passkey") return PASSKEY_USAGE.join("\n");
   if (arguments_[0] === "secrets") return STORE_USAGE.join("\n");
   if (remoteMode(arguments_, process.env)) return REMOTE_USAGE.join("\n");
@@ -4383,7 +4377,7 @@ if (import.meta.main) {
     process.exit(await (await import("./cli/upgrade")).upgradeCommand(arguments_.slice(1)));
   }
 
-  // A team member's workstation has no server and no root: `login`, and the
+  // A token's workstation has no server and no root: `login`, and the
   // commands the dashboard's control API carries, go through it instead of
   // SSH. The owner's path below is untouched. See bin/cli/remote.ts.
   //
@@ -4488,10 +4482,7 @@ if (import.meta.main) {
     case "share":
       // The steward's access registry, on its owner socket, as root over SSH:
       // see bin/cli/access.ts.
-      process.exit(await share(arguments_, readProject(folder).manifest.slug, sshAccess((remote, input) => executor.execute(config, remote, input), dashboardAddress(config.zone)), remoteOutput));
-    case "people":
-      // The same registry, machine-wide. It reads no project folder.
-      process.exit(await people(arguments_, dashboardAddress(config.zone), sshPeople((remote, input) => executor.execute(config, remote, input)), remoteOutput));
+      process.exit(await share(arguments_, readProject(folder).manifest.slug, sshAccess((remote, input) => executor.execute(config, remote, input)), remoteOutput));
     case "passkey":
       // The owner's passkeys, on the steward's owner socket as root: see bin/cli/passkeys.ts. It reads no project folder.
       process.exit(await passkeys(arguments_, dashboardAddress(config.zone), sshPasskeys((remote, input) => executor.execute(config, remote, input)), remoteOutput));

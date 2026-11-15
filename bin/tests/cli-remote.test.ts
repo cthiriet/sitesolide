@@ -3,7 +3,6 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  apiAccess,
   apiOrigin,
   checkManifest,
   deploysOverSsh,
@@ -22,7 +21,6 @@ import {
   SSH_COMMANDS,
   TOKEN_FILE,
   type Failure,
-  type Fetch,
   type HiddenTerminal,
   type Output,
 } from "../cli/remote";
@@ -30,7 +28,7 @@ import { createFakeVm, type FakeVm } from "./e2e/fake-vm";
 import { CLI } from "./e2e/run";
 
 /**
- * The CLI's remote mode, the way a team member or an agent runs it: the real
+ * The CLI's remote mode, the way an agent or a CI runs it: the real
  * bin/sitesolide.ts in a child process, a temporary HOME, and a local fake of
  * the dashboard's control API on a random port. The fake machine's `ssh` and
  * `rsync` come first on PATH, as for every CLI test: they refuse and log, and
@@ -1205,101 +1203,15 @@ describe("the pure parts", () => {
 describe("the token held, in words", () => {
   const identity = { id: "aaaaaaaaaaaa", label: "laptop", email: "ada@acme.test", expiresAt: null, scope: { slugs: ["alpha"], create: false, outbound: false, domain: false, public: false }, owned: [] };
 
-  test("a member's own says whose roles bound it; an owner's, and one from an older dashboard, say nothing of it", () => {
-    expect(describeIdentity({ ...identity, member: "ada@acme.test" }).at(-1)).toBe("   a personal token: never more than ada@acme.test's roles on the dashboard, read at every request");
-    expect(describeIdentity({ ...identity, member: "ada@acme.test" })[1]).toBe("   may open no site to the public");
-    expect(describeIdentity({ ...identity, member: null })[1]).toBe("   may deploy private sites only");
-    expect(describeIdentity({ ...identity, member: null }).join("\n")).not.toContain("member");
-    expect(describeIdentity(identity).join("\n")).not.toContain("member");
+  test("a token is the owner's: no person's roles bound it, whatever an older dashboard sends", () => {
+    expect(describeIdentity(identity)[1]).toBe("   may deploy private sites only");
+    expect(describeIdentity({ ...identity, member: "ada@acme.test" } as typeof identity).join("\n")).not.toContain("ada@acme.test's");
   });
 
   test("a token that may manage secrets says so; one without, or from a dashboard before the permission, says nothing of it", () => {
     expect(describeIdentity({ ...identity, scope: { ...identity.scope, secrets: true } })[1]).toBe("   may deploy private sites only, manage secrets");
     expect(describeIdentity({ ...identity, scope: { ...identity.scope, secrets: false } })[1]).toBe("   may deploy private sites only");
     expect(describeIdentity(identity).join("\n")).not.toContain("secrets");
-  });
-});
-
-describe("access through the API, over a fake fetch", () => {
-  const remote = { api: "https://dashboard.test-zone.invalid", token: TOKEN };
-  const entry = { who: "alice@acme.test", kind: "person", role: "visitor", by: "token:aaaaaaaaaaaa", createdAt: 1, updatedAt: 1, password: null };
-  const access = {
-    slug: "shop",
-    host: "shop.test-zone.invalid",
-    url: "https://shop.test-zone.invalid/",
-    general: { access: "restricted", modifiable: true, reason: null },
-    entries: [entry],
-    signIn: { configured: true, allowedDomains: ["acme.test"], providerName: null },
-    portal: { reading: "steward", writtenAt: 1 },
-  };
-
-  /** A fetch that records each request and answers what `respond` returns. */
-  function fakeFetch(respond: (method: string, path: string) => Response) {
-    const asked: { method: string; url: string; authorization: string | null; body: unknown }[] = [];
-    const fetcher: Fetch = async (input, init = {}) => {
-      const method = init.method ?? "GET";
-      const headers = new Headers(init.headers);
-      asked.push({ method, url: input, authorization: headers.get("authorization"), body: typeof init.body === "string" ? JSON.parse(init.body) : null });
-      return respond(method, new URL(input).pathname);
-    };
-    return { asked, fetcher };
-  }
-
-  test("GET, PUT and DELETE on the project's access, the bearer on each, the slug encoded", async () => {
-    const { asked, fetcher } = fakeFetch((method) =>
-      method === "GET" ? Response.json({ access }) : Response.json({ entry, change: method === "PUT" ? "add" : "remove", access }, { status: method === "PUT" ? 201 : 200 }),
-    );
-    const transport = apiAccess(remote, fetcher);
-    expect(transport.via).toBe(`through ${remote.api}`);
-    expect(await transport.list("shop")).toEqual({ ok: true, value: access as never });
-    expect(await transport.give("shop", "alice@acme.test", "visitor", undefined)).toEqual({ ok: true, value: { entry, change: "add", access } as never });
-    // A token never draws a password: the expiry is not sent.
-    await transport.give("shop", "bob@acme.test", "viewer", 86_400);
-    expect(await transport.remove("shop", "alice@acme.test")).toMatchObject({ ok: true, value: { change: "remove" } });
-    await transport.list("a b");
-    expect(asked).toEqual([
-      { method: "GET", url: `${remote.api}/api/v1/projects/shop/access`, authorization: `Bearer ${TOKEN}`, body: null },
-      { method: "PUT", url: `${remote.api}/api/v1/projects/shop/access`, authorization: `Bearer ${TOKEN}`, body: { who: "alice@acme.test", role: "visitor" } },
-      { method: "PUT", url: `${remote.api}/api/v1/projects/shop/access`, authorization: `Bearer ${TOKEN}`, body: { who: "bob@acme.test", role: "viewer" } },
-      { method: "DELETE", url: `${remote.api}/api/v1/projects/shop/access`, authorization: `Bearer ${TOKEN}`, body: { who: "alice@acme.test" } },
-      { method: "GET", url: `${remote.api}/api/v1/projects/a%20b/access`, authorization: `Bearer ${TOKEN}`, body: null },
-    ]);
-  });
-
-  test("an old dashboard's catch-all is not-available, on every route; a project the token cannot see stays not-found", async () => {
-    const old = apiAccess(remote, fakeFetch(() => Response.json({ error: "not-found", message: "no such route: see docs/team.md" }, { status: 404 })).fetcher);
-    const notAvailable = {
-      ok: false,
-      failure: { error: "not-available", message: `the dashboard at ${remote.api} does not carry access yet: the owner of the machine runs sitesolide upgrade` },
-    };
-    expect(await old.list("shop")).toEqual(notAvailable as never);
-    expect(await old.give("shop", "a@acme.test", "visitor", undefined)).toEqual(notAvailable as never);
-    expect(await old.remove("shop", "a@acme.test")).toEqual(notAvailable as never);
-    const unseen = apiAccess(remote, fakeFetch(() => Response.json({ error: "not-found", message: "no project shop for this token" }, { status: 404 })).fetcher);
-    expect(await unseen.list("shop")).toEqual({ ok: false, failure: { error: "not-found", message: "no project shop for this token" } });
-  });
-
-  test("the dashboard's refusals come back as they stand, its details and wait included", async () => {
-    const refusing = apiAccess(
-      remote,
-      fakeFetch(() => Response.json({ error: "out-of-scope", message: "a token gives people Can open alone", details: ["viewer: from the dashboard"], wait: 3 }, { status: 403 })).fetcher,
-    );
-    expect(await refusing.give("shop", "a@acme.test", "viewer", undefined)).toEqual({
-      ok: false,
-      failure: { error: "out-of-scope", message: "a token gives people Can open alone", details: ["viewer: from the dashboard"], wait: 3 },
-    });
-  });
-
-  test("an answer that is not the control API's access is unreadable, and a dashboard that does not answer unreachable", async () => {
-    const wrong = apiAccess(remote, fakeFetch(() => Response.json({ sharing: { url: "x", policy: {} }, entry: null })).fetcher);
-    expect(await wrong.list("shop")).toEqual({ ok: false, failure: { error: "unreadable", message: `${remote.api} answered with something that is not the control API's access` } });
-    expect(await wrong.give("shop", "a@acme.test", "visitor", undefined)).toEqual({ ok: false, failure: { error: "unreadable", message: `${remote.api} answered with something that is not the control API's access` } });
-    const html = apiAccess(remote, fakeFetch(() => new Response("<html>", { status: 200 })).fetcher);
-    expect(await html.list("shop")).toMatchObject({ ok: false, failure: { error: "unreadable" } });
-    const down = apiAccess(remote, async () => {
-      throw new Error("connection refused");
-    });
-    expect(await down.remove("shop", "a@acme.test")).toEqual({ ok: false, failure: { error: "unreachable", message: `${remote.api} unreachable: connection refused` } });
   });
 });
 

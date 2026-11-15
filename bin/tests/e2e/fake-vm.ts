@@ -62,9 +62,8 @@ export type FakeVm = {
   /** A unit systemd reads from `file`, a package's own: `caddy`, `/lib/systemd/system/caddy.service`. */
   systemUnit(unit: string, file: string, content?: string): void;
   /**
-   * Lays the steward's access registry `share` and `people` find on the owner
-   * socket, over the default: kanban deployed and restricted, nobody on it,
-   * acme.test the company's domain.
+   * Lays the steward's access registry `share` finds on the owner socket,
+   * over the default: kanban deployed and restricted, nobody on it.
    */
   setAccess(state: Partial<AccessRegistry>): void;
   /** The access registry as it stands, after the writes accepted. */

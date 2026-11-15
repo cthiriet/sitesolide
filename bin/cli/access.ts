@@ -1,61 +1,32 @@
 /**
- * `sitesolide share` and `sitesolide people`: who may do what on a project,
- * from the project's folder, and who may do what on the machine, from
- * anywhere.
+ * `sitesolide share`: who may open a project's site, from the project's
+ * folder, over the owner's SSH.
  *
- *   sitesolide share                                   general access and people with access
- *   sitesolide share <email|@domain>... [--role <role>] [--expires <24h|7d|30d|never>]
- *                                                      give access, or change a role; Can open by default
- *   sitesolide share --remove <email|@domain|name>...  take access away
- *   sitesolide people                                  everyone, their roles, who may create projects
- *   sitesolide people <email> --may-create|--no-create the right to create projects
+ *   sitesolide share                                  general access and guests
+ *   sitesolide share <email>... [--expires <24h|7d|30d|never>]
+ *                                                     give them password access, 7 days by default
+ *   sitesolide share --remove <email|name>...         take it away
  *
- * A role is one rung of a ladder, each including the ones below: `can-open`
- * (`visitor`, the name the machine keeps, is read too), `viewer`,
- * `developer`, `admin`. A domain is Can open only. A
- * person outside the company's domains, or anyone when signing in with a
- * company account is not set up, is Can open only, with password access:
- * the machine draws the password, which the command shows once.
+ * A guest opens the site and nothing more: no dashboard, no token. The
+ * machine draws their password, which the command shows once and keeps
+ * only as a hash.
  *
- * **One registry, the steward's.** Both commands speak to the steward,
- * which judges every change (dashboard/src/access/rules.ts) and writes the
- * registry and the portal's projection of it:
- *
- * - the owner goes over SSH, as root, to the steward's owner socket,
- *   `/run/sitesolide-steward-owner/owner.sock`, with `curl`, the JSON body on
- *   standard input so that no address goes through a shell;
- * - a token goes through the dashboard's control API,
- *   `/api/v1/projects/<slug>/access` (remote.ts builds that transport): it
- *   gives Can open alone, to people inside the company's domains or to one
- *   of those domains, and removes Can open entries, when its person is an
- *   Admin of the project. `people` is the owner's alone.
+ * **One registry, the steward's.** The command speaks to the steward, which
+ * judges every change (dashboard/src/access/rules.ts) and writes the
+ * registry and the portal's projection of it: root on the machine, over the
+ * owner's SSH, asks the steward's owner socket,
+ * `/run/sitesolide-steward-owner/owner.sock`, with `curl`, the JSON body on
+ * standard input so that no address goes through a shell. A token never
+ * gives anyone access.
  *
  * **What is never done here.** General access is the dashboard's Access
  * section, or `sitesolide lock` and `unlock` for the code, which reach the
  * steward's owner socket through `sshGeneral` below. No email is sent: the
- * command prints the line to send, and a password once.
+ * command prints the password once, for the owner to send.
  *
  * The decisions are pure; the transports and the output are handed in.
  */
 import type { Failure, Output } from "./remote";
-
-export const ROLES = ["visitor", "viewer", "developer", "admin"] as const;
-export type Role = (typeof ROLES)[number];
-
-/** What a person reads for each role. */
-export const ROLE_WORDS: Readonly<Record<Role, string>> = { visitor: "Can open", viewer: "Viewer", developer: "Developer", admin: "Admin" };
-
-/**
- * The roles as the command takes and prints them: `can-open` for the first
- * rung, which the machine keeps as `visitor`; `visitor` is read too, the
- * name scripts written before may carry.
- */
-export const ROLE_ARGUMENTS: Readonly<Record<string, Role>> = { "can-open": "visitor", visitor: "visitor", viewer: "viewer", developer: "developer", admin: "admin" };
-
-/** A role as the command prints it in `--json` and takes it back: `can-open`, never `visitor`. */
-export function roleName(role: Role): string {
-  return role === "visitor" ? "can-open" : role;
-}
 
 /** The durations of password access the steward accepts, by what the command takes. */
 export const DURATIONS: Readonly<Record<string, number | null>> = { "24h": 24 * 3600, "7d": 7 * 24 * 3600, "30d": 30 * 24 * 3600, never: null };
@@ -64,14 +35,14 @@ export const OWNER_SOCKET = "/run/sitesolide-steward-owner/owner.sock";
 
 // --- what the steward answers, as far as the command reads it -----------------------
 
+/** A guest, as the steward lists them: never their password, its hash or its identifier. */
 export type EntryView = {
   who: string;
-  kind: "person" | "domain" | "password";
-  role: Role;
   by: string;
   createdAt: number;
   updatedAt: number;
-  password: { expiresAt: number | null; expired: boolean } | null;
+  expiresAt: number | null;
+  expired: boolean;
 };
 
 export type AccessState = {
@@ -80,82 +51,59 @@ export type AccessState = {
   url: string;
   general: { access: "public" | "restricted" | "code"; modifiable: boolean; reason: string | null } | null;
   entries: EntryView[];
-  signIn: { configured: boolean; allowedDomains: string[]; admins?: string[]; providerName?: string | null };
   portal?: { reading: string; writtenAt: number | null };
 };
 
-/** Someone a change took out of the dashboard, and the tokens of theirs it revoked. */
-export type Left = { who: string; tokens: { label: string; madeBy: "them" | "owner" }[] };
-
-export type EntryAnswer = { entry: EntryView; change: "add" | "role" | "none" | "remove"; password?: string; left?: Left };
+export type EntryAnswer = { entry: EntryView; change: "add" | "none" | "remove"; password?: string };
 
 export type Reading<T> = { ok: true; value: T } | { ok: false; failure: Failure };
 
-/** How `share` reaches the steward: over the owner's SSH, or through the control API. */
+/** How `share` reaches the steward. */
 export type AccessTransport = {
-  /** For the first line: "through https://dashboard.example.com", "over SSH, as the owner". */
+  /** For the first line: "over SSH, as the owner". */
   via: string;
-  /** Is it the owner who asks: the tokens they made are "made by you". */
-  owner: boolean;
-  /** The dashboard's address, for the line to send someone given a role above Can open; null when not known. */
-  dashboard: string | null;
   list: (slug: string) => Promise<Reading<AccessState>>;
-  give: (slug: string, who: string, role: Role, expiresInS: number | null | undefined) => Promise<Reading<EntryAnswer>>;
+  give: (slug: string, who: string, expiresInS: number | null | undefined) => Promise<Reading<EntryAnswer>>;
   remove: (slug: string, who: string) => Promise<Reading<EntryAnswer>>;
 };
 
 // --- what was asked ----------------------------------------------------------------
 
 /** The options `share` takes, and whether one carries a value. */
-export const SHARE_OPTIONS: Readonly<Record<string, boolean>> = { "--role": true, "--expires": true, "--remove": true };
+export const SHARE_OPTIONS: Readonly<Record<string, boolean>> = { "--expires": true, "--remove": true };
 
 export const SHARE_USAGE = [
-  "sitesolide share                 this project's general access and people with access",
-  "   <email|@domain>...            give them access, Can open by default",
-  "   --role <role>                 can-open, viewer, developer or admin",
-  "   --expires <24h|7d|30d|never>  for password access, 7d by default",
-  "   --remove <email|@domain>...   take their access away; password access by the name it is listed under",
+  "sitesolide share                 this project's general access and guests",
+  "   <email>...                    give them password access to the site, nothing more",
+  "   --expires <24h|7d|30d|never>  how long it lasts, 7d by default",
+  "   --remove <email>...           take it away; a guest of before by the name it is listed under",
 ];
 
-export const PEOPLE_USAGE = [
-  "sitesolide people                everyone with access, their roles, who may create projects",
-  "   <email> --may-create          let them create projects, Admin of what they create",
-  "   <email> --no-create           take that right back",
-];
-
-export type ShareRequest =
-  | { action: "list" }
-  | { action: "give"; who: string[]; role: Role; expiresInS: number | null | undefined }
-  | { action: "remove"; who: string[] };
+export type ShareRequest = { action: "list" } | { action: "give"; who: string[]; expiresInS: number | null | undefined } | { action: "remove"; who: string[] };
 
 function usage(message: string, details: string[]): Failure {
   return { error: "usage", message, details };
 }
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const DOMAIN = /^@[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
-
 
 /**
- * An email or a `@domain`, lowercase, or why not. The steward judges it
- * again by the portal's own rules; this only catches a typo before anything
- * is sent. A bare domain is said to need its `@`.
+ * An email, lowercase, or why not. The steward judges it again by the
+ * portal's own rules; this only catches a typo before anything is sent.
  */
 export function readWho(value: string): string | Failure {
   const text = value.trim().toLowerCase();
-  if (EMAIL.test(text) && !text.startsWith("@")) return text;
-  if (DOMAIN.test(text)) return text;
-  if (DOMAIN.test(`@${text}`)) return { error: "invalid", message: `${value}: write a whole domain with its @, like @${text}; nothing was changed` };
-  return { error: "invalid", message: `${value} is neither an email address nor a domain like @acme.com: nothing was changed` };
+  if (text.startsWith("@")) return { error: "invalid", message: `${value}: a whole domain is given access no more, name its people one by one; nothing was changed` };
+  if (EMAIL.test(text)) return text;
+  return { error: "invalid", message: `${value} is not an email address: nothing was changed` };
 }
 
 /** The request the arguments make, or what is wrong with them. Nothing is read or sent before this passes. */
 export function readShareArguments(arguments_: string[]): ShareRequest | Failure {
-  const rest = (arguments_[0] === "share" ? arguments_.slice(1) : arguments_).filter((argument) => argument !== "--json" && argument !== "--api");
+  const rest = (arguments_[0] === "share" ? arguments_.slice(1) : arguments_).filter((argument) => argument !== "--json");
   const who: string[] = [];
   let removing = false;
   let given = false;
-  let role: Role | null = null;
   let expires: number | null | undefined;
   for (let i = 0; i < rest.length; i++) {
     const argument = rest[i]!;
@@ -164,68 +112,37 @@ export function readShareArguments(arguments_: string[]): ShareRequest | Failure
       removing = true;
       continue;
     }
-    if (argument === "--role" || argument === "--expires") {
+    if (argument === "--expires") {
       const value = rest[i + 1];
       i++;
-      if (value === undefined || value.startsWith("-")) {
-        return usage(`${argument}: ${argument === "--role" ? "can-open, viewer, developer or admin" : "24h, 7d, 30d or never"} must follow`, SHARE_USAGE);
-      }
-      if (argument === "--role") {
-        if (!Object.hasOwn(ROLE_ARGUMENTS, value)) return { error: "invalid", message: `${value} is not a role: can-open, viewer, developer or admin; nothing was changed` };
-        role = ROLE_ARGUMENTS[value]!;
-      } else {
-        if (!Object.hasOwn(DURATIONS, value)) return { error: "invalid", message: `${value} is not a duration: 24h, 7d, 30d or never; nothing was changed` };
-        expires = DURATIONS[value];
-      }
+      if (value === undefined || value.startsWith("-")) return usage("--expires: 24h, 7d, 30d or never must follow", SHARE_USAGE);
+      if (!Object.hasOwn(DURATIONS, value)) return { error: "invalid", message: `${value} is not a duration: 24h, 7d, 30d or never; nothing was changed` };
+      expires = DURATIONS[value];
       continue;
     }
-    if (argument === "--domain" || argument === "--only-admins") {
-      return usage(`${argument} is gone: write a domain as @acme.com, take people off with --remove, and choose who may open the site from the dashboard's General access`, SHARE_USAGE);
+    if (argument === "--role" || argument === "--domain" || argument === "--only-admins" || argument === "--api") {
+      return usage(`${argument} is gone: a guest opens the site with a password and nothing more, and general access is chosen in the dashboard's Access section`, SHARE_USAGE);
     }
     if (argument.startsWith("-")) return { error: "unknown-option", message: `${argument}: not an option of sitesolide share: nothing was changed`, details: SHARE_USAGE };
     let read = readWho(argument);
     // A name a password access was carried over under ("Client Bob", "Bob @
     // the agency") is taken away as it stands, and given never. One starting
-    // with @ is a domain, typed wrong.
+    // with @ is a domain.
     if (typeof read !== "string" && removing && /^[\x20-\x7e]{1,254}$/.test(argument) && argument.trim() !== "" && !argument.trim().startsWith("@")) read = argument.trim();
     if (typeof read !== "string") return read;
     if (!removing) given = true;
     if (!who.includes(read)) who.push(read);
   }
   if (removing) {
-    if (who.length === 0) return usage("--remove: an email address or a @domain must follow", SHARE_USAGE);
-    if (role !== null || expires !== undefined) return usage("--remove takes access away: it takes no --role nor --expires", SHARE_USAGE);
+    if (who.length === 0) return usage("--remove: an email address must follow", SHARE_USAGE);
+    if (expires !== undefined) return usage("--remove takes access away: it takes no --expires", SHARE_USAGE);
     return { action: "remove", who };
   }
   if (who.length === 0) {
-    if (role !== null || expires !== undefined) return usage(`${role !== null ? "--role" : "--expires"}: name who to give access to first`, SHARE_USAGE);
+    if (expires !== undefined) return usage("--expires: name who to give access to first", SHARE_USAGE);
     return { action: "list" };
   }
-  return { action: "give", who, role: role ?? "visitor", expiresInS: expires };
-}
-
-export type PeopleRequest = { action: "list" } | { action: "create"; email: string; create: boolean };
-
-export function readPeopleArguments(arguments_: string[]): PeopleRequest | Failure {
-  const rest = (arguments_[0] === "people" ? arguments_.slice(1) : arguments_).filter((argument) => argument !== "--json");
-  if (rest.length === 0) return { action: "list" };
-  let email: string | null = null;
-  let create: boolean | null = null;
-  for (const argument of rest) {
-    if (argument === "--may-create" || argument === "--no-create") {
-      if (create !== null) return usage("--may-create or --no-create, once", PEOPLE_USAGE);
-      create = argument === "--may-create";
-      continue;
-    }
-    if (argument.startsWith("-")) return { error: "unknown-option", message: `${argument}: not an option of sitesolide people: nothing was changed`, details: PEOPLE_USAGE };
-    if (email !== null) return usage("one email at a time", PEOPLE_USAGE);
-    const text = argument.trim().toLowerCase();
-    if (!EMAIL.test(text)) return { error: "invalid", message: `${argument} is not an email address: nothing was changed` };
-    email = text;
-  }
-  if (email === null) return usage("sitesolide people: the email must come before --may-create or --no-create", PEOPLE_USAGE);
-  if (create === null) return usage(`sitesolide people ${email}: --may-create or --no-create must follow; their roles are given per project, with sitesolide share`, PEOPLE_USAGE);
-  return { action: "create", email, create };
+  return { action: "give", who, expiresInS: expires };
 }
 
 // --- what is shown -------------------------------------------------------------------
@@ -236,14 +153,8 @@ function day(ms: number): string {
 }
 
 /** `password access until 2026-10-14 10:00 UTC`, `expired ...`, or `with no expiry`. */
-function passwordWords(password: { expiresAt: number | null; expired: boolean }): string {
-  return `password access ${password.expiresAt === null ? "with no expiry" : `${password.expired ? "expired" : "until"} ${day(password.expiresAt)}`}`;
-}
-
-/** `Can open, password access until 2026-10-14 10:00 UTC`. */
 export function entryText(entry: EntryView): string {
-  if (entry.password === null) return ROLE_WORDS[entry.role];
-  return `${ROLE_WORDS[entry.role]}, ${passwordWords(entry.password)}`;
+  return `password access ${entry.expiresAt === null ? "with no expiry" : `${entry.expired ? "expired" : "until"} ${day(entry.expiresAt)}`}`;
 }
 
 const GENERAL: Readonly<Record<"public" | "restricted" | "code", string>> = {
@@ -252,57 +163,17 @@ const GENERAL: Readonly<Record<"public" | "restricted" | "code", string>> = {
   code: "Anyone with the code: the preview code opens it.",
 };
 
-/**
- * Who opens a restricted site without being on its list, said once under
- * it, in the dashboard's words: the owner, and the admin emails set on the
- * server.
- */
-export function alsoOpens(admins: readonly string[]): string {
-  if (admins.length === 0) return "The owner also opens it.";
-  return `Also open it without being listed: the owner, and ${admins.join(", ")}, set on the server to open every site.`;
-}
-
-/**
- * What a change took with it, as the dashboard says it before confirming:
- * `chloe@example.com no longer signs in to the dashboard. Also revoked 2
- * tokens: ci (made by them), laptop (made by you).` `byYou`: the owner reads
- * it, who made the tokens the owner made.
- */
-export function leftText(left: Left, byYou: boolean): string {
-  const first = `${left.who} no longer signs in to the dashboard.`;
-  if (left.tokens.length === 0) return first;
-  // A label is its maker's text, and one minted before the steward refused C1
-  // controls may hold one: a single-byte OSC 52 would write the owner's
-  // clipboard from their own terminal. Shown, never obeyed.
-  const named = left.tokens.map((token) => `${token.label.replace(/[\u0000-\u001f\u007f-\u009f]/g, "?")} (made by ${token.madeBy === "them" ? "them" : byYou ? "you" : "the owner"})`).join(", ");
-  return `${first} Also revoked ${left.tokens.length === 1 ? "1 token" : `${left.tokens.length} tokens`}: ${named}.`;
-}
-
-/**
- * The line to send someone given access with an account: where to go, with
- * what; from Viewer up the dashboard too, and from Developer up how to
- * deploy. The dashboard's line as it says it after the same change.
- */
-export function accessMessage(state: AccessState, role: Role = "visitor", dashboard: string | null = null): string | null {
-  if (!state.signIn.configured) return null;
-  const name = state.signIn.providerName ?? null;
-  const account = name === null || name === "your work account" ? "your company account" : `your ${name} account`;
-  if (role === "visitor" || dashboard === null) return `Open ${state.url} and sign in with ${account}.`;
-  const line = `${state.slug} is at ${state.url}, and in the dashboard at ${dashboard}. Sign in with ${account}.`;
-  return role === "viewer" ? line : `${line} To deploy, create a token on the Tokens page, then run sitesolide login --url ${dashboard}.`;
-}
-
 /** The project's access in lines, for a person. */
 export function describeAccess(state: AccessState): string[] {
   const width = Math.max(10, ...state.entries.map((entry) => entry.who.length));
   const lines = [
-    `   general access: ${state.general === null ? "not deployed: its people with access are kept, its site serves nothing" : GENERAL[state.general.access]}`,
-    state.entries.length === 0 ? "   people with access: nobody yet" : "   people with access:",
+    `   general access: ${state.general === null ? "not deployed: its guests are kept, its site serves nothing" : GENERAL[state.general.access]}`,
+    state.entries.length === 0 ? "   guests: nobody yet" : "   guests:",
     ...state.entries.map((entry) => `     ${entry.who.padEnd(width)}  ${entryText(entry)}`),
-    `   ${alsoOpens(state.signIn.admins ?? [])}`,
+    "   The owner also opens it.",
   ];
-  if (state.general?.access === "public" && state.entries.some((entry) => entry.role === "visitor")) {
-    lines.push(`   ${state.slug} is public, so anyone can open it. Viewer, Developer and Admin still apply; Can open matters once you restrict it.`);
+  if (state.general?.access === "public" && state.entries.length > 0) {
+    lines.push(`   ${state.slug} is public, so anyone can open it: its guests matter once you restrict it.`);
   }
   return lines;
 }
@@ -310,35 +181,17 @@ export function describeAccess(state: AccessState): string[] {
 /** Warnings about the machine itself: a portal that cannot read the registry's projection. */
 export function accessWarnings(state: AccessState): string[] {
   const reading = state.portal?.reading;
-  if (reading === "unreadable") return ["!! the portal cannot read who may open a site: only the owner's password and the admin emails open one; tell the owner of the machine (journalctl -u portal)"];
+  if (reading === "unreadable") return ["!! the portal cannot read who may open a site: only the owner opens one; tell the owner of the machine (journalctl -u portal)"];
   return [];
 }
 
-/** An entry as `--json` prints it: its role named as the command takes it, `can-open` for the first rung. */
-function printedEntry(entry: EntryView): Omit<EntryView, "role"> & { role: string } {
-  return { ...entry, role: roleName(entry.role) };
-}
-
-/** Roles per project as `--json` prints them. */
-function printedRoles(roles: Record<string, Role>): Record<string, string> {
-  return Object.fromEntries(Object.entries(roles).map(([slug, role]) => [slug, roleName(role)]));
-}
-
 function resultFields(state: AccessState, extra: Record<string, unknown>): Record<string, unknown> {
-  return {
-    slug: state.slug,
-    url: state.url,
-    general: state.general?.access ?? null,
-    entries: state.entries.map(printedEntry),
-    signIn: { configured: state.signIn.configured, allowedDomains: state.signIn.allowedDomains },
-    message: accessMessage(state),
-    ...extra,
-  };
+  return { slug: state.slug, url: state.url, general: state.general?.access ?? null, entries: state.entries, ...extra };
 }
 
 /**
  * The command: read, change each one asked, say. Returns the exit code,
- * never throws. A refusal for one person stops before the next: what was
+ * never throws. A refusal for one guest stops before the next: what was
  * already given stays given, and is said.
  */
 export async function share(arguments_: string[], slug: string, transport: AccessTransport, output: Output): Promise<number> {
@@ -362,125 +215,28 @@ export async function share(arguments_: string[], slug: string, transport: Acces
     return 0;
   }
 
-  const changes: { who: string; change: string; role: string | null; password?: string; left?: Left }[] = [];
+  const changes: { who: string; change: string; password?: string }[] = [];
   for (const who of request.who) {
-    const done = request.action === "give" ? await transport.give(slug, who, request.role, request.expiresInS) : await transport.remove(slug, who);
+    const done = request.action === "give" ? await transport.give(slug, who, request.expiresInS) : await transport.remove(slug, who);
     if (!done.ok) {
       if (changes.length > 0) output.say(`   already done: ${changes.map((one) => one.who).join(", ")}`);
       output.failed(done.failure);
       return 1;
     }
-    const { entry, change, password, left } = done.value;
-    changes.push({ who: entry.who, change, role: change === "remove" ? null : roleName(entry.role), ...(password === undefined ? {} : { password }), ...(left === undefined ? {} : { left }) });
+    const { entry, change, password } = done.value;
+    changes.push({ who: entry.who, change, ...(password === undefined ? {} : { password }) });
     if (change === "remove") output.say(`-> ${entry.who} no longer has access to ${slug}: refused from their next request`);
-    else if (change === "none") output.say(`   nothing to change: ${entry.who} already has ${entryText(entry)}`);
-    else output.say(`-> ${entry.who}: ${entryText(entry)} on ${slug}${change === "role" ? ", from their next request" : ""}`);
-    if (left !== undefined) output.say(`   ${leftText(left, transport.owner)}`);
+    else if (change === "none") output.say(`   nothing to change: ${entry.who} already has ${entryText(entry)}; remove them first to draw a new password`);
+    else output.say(`-> ${entry.who}: ${entryText(entry)} on ${slug}`);
     if (password !== undefined) {
       output.say(`   password for ${entry.who}: ${password}`);
-      output.say("   shown once: send it to them yourself, with the address; the machine keeps only its hash");
+      output.say(`   shown once: send it to them yourself, with ${before.url}; the machine keeps only its hash`);
     }
   }
   const after = await transport.list(slug);
   const state = after.ok ? after.value : before;
   for (const line of describeAccess(state)) output.say(line);
-  const message = request.action === "give" ? accessMessage(state, request.role, transport.dashboard) : accessMessage(state);
-  if (message !== null && request.action === "give" && changes.some((one) => one.password === undefined && one.change !== "none" && !one.who.startsWith("@"))) {
-    output.say(`   send: ${message}`);
-  }
-  output.succeeded("share", resultFields(state, { changed: changes.some((one) => one.change !== "none"), changes, message }));
-  return 0;
-}
-
-// --- people ----------------------------------------------------------------------------
-
-export type PersonView = {
-  who: string;
-  roles: Record<string, Role>;
-  create: boolean;
-  passwords: { slug: string; expiresAt: number | null; expired: boolean }[];
-  admin: boolean;
-};
-
-export type PeopleState = {
-  people: PersonView[];
-  domains: { slug: string; domain: string }[];
-  signIn: { configured: boolean; allowedDomains: string[]; admins: string[] };
-};
-
-export type PeopleTransport = {
-  list: () => Promise<Reading<PeopleState>>;
-  setCreate: (email: string, create: boolean) => Promise<Reading<{ person: PersonView; change: string; left?: Left }>>;
-};
-
-/** `alpha: Developer, beta: Admin; may create projects`. */
-export function personText(person: PersonView): string {
-  const roles = Object.entries(person.roles).sort(([a], [b]) => a.localeCompare(b));
-  const parts = roles.map(([slug, role]) => {
-    const password = person.passwords.find((one) => one.slug === slug);
-    return password === undefined ? `${slug}: ${ROLE_WORDS[role]}` : `${slug}: ${ROLE_WORDS[role]}, ${passwordWords(password)}`;
-  });
-  const text = parts.length === 0 ? "no project" : parts.join(", ");
-  const extra = [person.create ? "may create projects" : null, person.admin ? "every site, as admin: set on the server in OIDC_ADMIN_EMAILS" : null].filter((one): one is string => one !== null);
-  return extra.length === 0 ? text : `${text}; ${extra.join("; ")}`;
-}
-
-/** Each domain with access once, and the projects it opens, as the dashboard's People lists them. */
-export function domainGroups(domains: readonly { slug: string; domain: string }[]): { domain: string; slugs: string[] }[] {
-  const groups = new Map<string, string[]>();
-  for (const { slug, domain } of domains) groups.set(domain, [...(groups.get(domain) ?? []), slug]);
-  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([domain, slugs]) => ({ domain, slugs: slugs.sort() }));
-}
-
-export function describePeople(state: PeopleState): string[] {
-  const width = Math.max(10, ...state.people.map((person) => person.who.length));
-  const lines =
-    state.people.length === 0
-      ? ["   nobody yet: sitesolide share <email> --role <role>, from a project's folder"]
-      : state.people.map((person) => `   ${person.who.padEnd(width)}  ${personText(person)}`);
-  for (const { domain, slugs } of domainGroups(state.domains)) lines.push(`   ${domain.padEnd(width)}  Can open: ${slugs.join(", ")}`);
-  if (!state.signIn.configured) {
-    lines.push("!! signing in with a company account is not set up on this machine: only password access opens a site, and nobody signs in to the dashboard but the owner (portal/README.md)");
-  } else if (state.signIn.allowedDomains.length > 0) {
-    lines.push(`   the company's domains: ${state.signIn.allowedDomains.join(", ")}; anyone else gets password access`);
-  }
-  return lines;
-}
-
-/** The command: read, change, say. Returns the exit code, never throws. */
-export async function people(arguments_: string[], dashboardUrl: string, transport: PeopleTransport, output: Output): Promise<number> {
-  const request = readPeopleArguments(arguments_);
-  if ("error" in request) {
-    output.failed(request);
-    return 1;
-  }
-  const read = await transport.list();
-  if (!read.ok) {
-    output.failed(read.failure);
-    return 1;
-  }
-  output.say(`-> people of ${dashboardUrl}, over SSH, as the owner`);
-  if (request.action === "list") {
-    for (const line of describePeople(read.value)) output.say(line);
-    output.succeeded("people", { people: read.value.people.map((person) => ({ ...person, roles: printedRoles(person.roles) })), domains: read.value.domains, signIn: read.value.signIn, changed: false });
-    return 0;
-  }
-  const set = await transport.setCreate(request.email, request.create);
-  if (!set.ok) {
-    output.failed(set.failure);
-    return 1;
-  }
-  const { person, change, left } = set.value;
-  output.say(
-    change === "none"
-      ? `   nothing to change: ${request.email} ${request.create ? "may already" : "may not"} create projects`
-      : request.create
-        ? `-> ${request.email} may create projects, Admin of each one they create: open ${dashboardUrl} and sign in with their company account`
-        : `-> ${request.email} may no longer create projects`,
-  );
-  output.say(`   ${person.who}  ${personText(person)}`);
-  if (left !== undefined) output.say(`   ${leftText(left, true)}`);
-  output.succeeded("people", { email: request.email, create: person.create, roles: printedRoles(person.roles), change, changed: change !== "none", ...(left === undefined ? {} : { left }) });
+  output.succeeded("share", resultFields(state, { changed: changes.some((one) => one.change !== "none"), changes }));
   return 0;
 }
 
@@ -511,7 +267,7 @@ const SLUG = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
  * quoted, and a quote in it would end the quoting.
  */
 export function ownerReadCommand(
-  path: "/people" | "/passkeys" | `/access?slug=${string}` | `/store?slug=${string}` | `/tokens/claim?slug=${string}`,
+  path: "/passkeys" | `/access?slug=${string}` | `/store?slug=${string}` | `/tokens/claim?slug=${string}`,
 ): string {
   const slug = /\?slug=(.*)$/.exec(path)?.[1];
   if (slug !== undefined && !SLUG.test(slug)) throw new Error("not a project's slug: no read is built from it");
@@ -521,7 +277,6 @@ export function ownerReadCommand(
 /** The owner socket's routes that change something, each taking its JSON body on standard input. */
 export type OwnerWritePath =
   | "/access/entry"
-  | "/people/person"
   | "/store"
   | "/store/variable"
   | "/store/generate"
@@ -573,7 +328,7 @@ export async function askSteward(
   words: {
     outdated: string;
     unchanged: boolean;
-  } = { outdated: "the steward on the server does not keep people with access yet: run sitesolide upgrade first", unchanged: true },
+  } = { outdated: "the steward on the server does not keep guests yet: run sitesolide upgrade first", unchanged: true },
 ): Promise<Reading<Record<string, unknown>>> {
   const done = await run(command, input);
   if (done.code === 255) {
@@ -611,7 +366,7 @@ export async function askSteward(
 }
 
 function readAccess(body: Record<string, unknown>): AccessState | null {
-  if (typeof body.slug !== "string" || typeof body.url !== "string" || !Array.isArray(body.entries) || !isObject(body.signIn)) return null;
+  if (typeof body.slug !== "string" || typeof body.url !== "string" || !Array.isArray(body.entries)) return null;
   return body as unknown as AccessState;
 }
 
@@ -630,11 +385,9 @@ function entryRead(read: Reading<Record<string, unknown>>): Reading<EntryAnswer>
 }
 
 /** The owner's transport for `share`: root on the machine asks the steward's owner socket. */
-export function sshAccess(run: RunOnMachine, dashboard: string | null = null): AccessTransport {
+export function sshAccess(run: RunOnMachine): AccessTransport {
   return {
     via: "over SSH, as the owner",
-    owner: true,
-    dashboard,
     async list(slug) {
       if (!SLUG.test(slug)) return { ok: false, failure: { error: "invalid", message: `${slug} is not a project's slug` } };
       const read = await askSteward(run, ownerReadCommand(`/access?slug=${slug}`));
@@ -642,28 +395,9 @@ export function sshAccess(run: RunOnMachine, dashboard: string | null = null): A
       const state = readAccess(read.value);
       return state === null ? unreadable("access list") : { ok: true, value: state };
     },
-    give: async (slug, who, role, expiresInS) =>
-      entryRead(await askSteward(run, ownerWriteCommand("PUT", "/access/entry"), JSON.stringify({ slug, who, role, ...(expiresInS === undefined ? {} : { expiresInS }) }))),
+    give: async (slug, who, expiresInS) =>
+      entryRead(await askSteward(run, ownerWriteCommand("PUT", "/access/entry"), JSON.stringify({ slug, who, ...(expiresInS === undefined ? {} : { expiresInS }) }))),
     remove: async (slug, who) => entryRead(await askSteward(run, ownerWriteCommand("DELETE", "/access/entry"), JSON.stringify({ slug, who }))),
-  };
-}
-
-/** The owner's transport for `people`. */
-export function sshPeople(run: RunOnMachine): PeopleTransport {
-  return {
-    async list() {
-      const read = await askSteward(run, ownerReadCommand("/people"));
-      if (!read.ok) return read;
-      const { people: listed, domains, signIn } = read.value;
-      if (!Array.isArray(listed) || !Array.isArray(domains) || !isObject(signIn)) return unreadable("list of people");
-      return { ok: true, value: read.value as unknown as PeopleState };
-    },
-    async setCreate(email, create) {
-      const read = await askSteward(run, ownerWriteCommand("PUT", "/people/person"), JSON.stringify({ email, create }));
-      if (!read.ok) return read;
-      if (!isObject(read.value.person) || typeof read.value.change !== "string") return unreadable("answer");
-      return { ok: true, value: read.value as unknown as { person: PersonView; change: string; left?: Left } };
-    },
   };
 }
 

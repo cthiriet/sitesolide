@@ -226,7 +226,7 @@ export const HINTS: ReadonlyArray<readonly [RegExp, string]> = [
  * deployment that failed on the machine, and the CLI's for what it refuses
  * before a request leaves. Their messages are worded on the machine, where no
  * pattern of HINTS reads them; a code this table lacks falls back to them.
- * `share` and `people` report by code whichever way they run, over the
+ * `share` reports by code, over the
  * owner's SSH too: bin/tests/cli-hints.test.ts fails on a code of
  * bin/cli/access.ts this table lacks, and on one of bin/cli/remote.ts, whose
  * `secrets` and `restart` add their own. So does `machine`, which talks to a cloud provider's API rather
@@ -269,9 +269,9 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   unconfirmed:
     "the change was sent and its answer never came, so it may be written: run `sitesolide secrets --json` to read the store's names, then run the same set or remove once more, which is harmless; never retry in a loop; if the dashboard stays unreachable, check the network and the address (`sitesolide login --url`)",
   unreadable: "the address answered with something that is not the control API: check it with `sitesolide login --url https://dashboard.<zone>`",
-  // --- access, with a token or over the owner's SSH
+  // --- access, over the owner's SSH
   "ssh-failed": "a command over SSH failed, nothing was changed: run the same command again; if it fails twice, check that `ssh <server> true` connects without a prompt (load the key with ssh-add)",
-  "steward-outdated": "the steward on the machine predates what this command needs, people with access or the store of secrets: run `sitesolide upgrade` from this workstation, then the same command again",
+  "steward-outdated": "the steward on the machine predates what this command needs, guests or the store of secrets: run `sitesolide upgrade` from this workstation, then the same command again",
   // --- the store of secrets, see bin/cli/store-cli.ts
   "build-secret-missing": BUILD_SECRET_MISSING,
   "build-secrets-unreadable": BUILD_SECRETS_UNREADABLE,

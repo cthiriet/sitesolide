@@ -3,7 +3,7 @@
  * one asks of the project the machine carries.
  *
  * A project turned off keeps everything, its code, its data, its store of
- * secrets, its account, its units, its people with access and its tokens: its
+ * secrets, its account, its units, its guests and its tokens: its
  * services are stopped and disabled, and every address it has answers a 503
  * that says it is off (disabledFragment in fragment.ts). Its manifest carries
  * `disabled`, which the machine writes, as it writes `lock`: a deployment, a
@@ -13,7 +13,7 @@
  *
  * Removed from the dashboard, it goes as `sitesolide remove` takes it: its
  * units, its folder and data, its store, its account and its block; its
- * people with access and the token that created it let go of it; its backup
+ * guests and the token that created it let go of it; its backup
  * snapshots stay.
  *
  * Pure, and borrowed by the dashboard: the steward and the machine's run

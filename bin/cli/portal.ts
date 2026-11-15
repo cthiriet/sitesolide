@@ -102,7 +102,7 @@ export const ANNOUNCED_HOST = "{host}";
  *
  * The portal signs its cookies, checks origins and sends people back with the
  * first, the host the browser is on, and finds who may open the site with the
- * second: the steward's projection files a site's people under its address,
+ * second: the steward's projection files a site's guests under its address,
  * and a domain is not one, nor written anywhere the portal reads. The block
  * knows whose domain it serves, it is generated from that site's manifest,
  * and says so on every request.

@@ -178,7 +178,7 @@ export function hasNoncharacter(value: string): boolean {
  *
  * Refused as a value in a manifest's `env`, which is committed, and as a name
  * on the CLI, where a key pasted in place of a name would become a name,
- * journaled for good and listed to every Developer of the project. Compared
+ * journaled for good and listed in the project's Activity. Compared
  * in the provider's own case: `SK_LIVE_KEY` is a variable, `sk_live_` a key.
  *
  * A guard against a slip, not a boundary: the boundary is that the machine

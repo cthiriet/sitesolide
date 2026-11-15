@@ -1,13 +1,12 @@
 /**
  * The CLI through the dashboard's control API, with a token over HTTPS: how
- * every deployment goes, the owner's included, and how a team member or an
- * agent in a sandbox runs the rest of what a token carries.
+ * every deployment goes, the owner's included, and how an agent in a sandbox
+ * or a CI runs the rest of what a token carries.
  *
  *   sitesolide login --url https://dashboard.example.com
  *   sitesolide deploy      plan, build here, upload, follow the machine's log
  *   sitesolide status      the projects this token may deploy
  *   sitesolide logs [--follow]
- *   sitesolide share [<email>...]   who may open the project, see access.ts
  *   sitesolide secrets [set|generate|remove|set-file|remove-file]
  *                                   the project's store of secrets, see store-cli.ts
  *   sitesolide restart              the project's service, and whether it holds
@@ -18,7 +17,7 @@
  * (deploysOverSsh). For the other commands, a configuration with a `server`
  * is the owner's, and runs over SSH; one without, but with the dashboard's
  * address and a token, runs here. `--api` makes the owner use the API for
- * every command, to see what a team member sees.
+ * every command, to see what a token sees.
  *
  * **The token is never in the configuration.** It lives in the workstation's
  * vault, `~/.config/sitesolide/secrets/team-token`, 0600, beside the other
@@ -86,7 +85,6 @@ import {
   type SecretsDeclaration,
 } from "./manifest";
 import { eventFor, formatEvent, runsOf, type OutputEvent } from "./output";
-import { share, SHARE_OPTIONS, type AccessState, type AccessTransport, type EntryAnswer, type Reading } from "./access";
 import { sourceRefusal } from "./source";
 import { workstationSecretsPath } from "./store";
 import type { MissingIo, StoreTransport } from "./store-cli";
@@ -146,7 +144,7 @@ export function apiOrigin(raw: string): string | null {
 /**
  * Does this command run through the API? `--api` says so; otherwise a
  * configuration with a server is the owner's, and one with an API address and
- * no server is a team member's.
+ * no server is a token's: an agent's or a CI's.
  */
 export function remoteMode(arguments_: string[], environment: Environment, home = homedir()): boolean {
   if (arguments_.includes("--api")) return true;
@@ -522,7 +520,6 @@ type DeploymentView = {
   missingSecrets?: StoreMissing | null;
 };
 
-/** `member`: the dashboard's member whose own token it is, narrowed to their roles; absent from a dashboard before them. */
 type Identity = {
   id: string;
   label: string;
@@ -531,7 +528,6 @@ type Identity = {
   /** `secrets`: absent from a dashboard before the permission, which reads as without it. */
   scope: { slugs: string[]; create: boolean; outbound: boolean; domain: boolean; public: boolean; secrets?: boolean; all?: boolean };
   owned: string[];
-  member?: string | null;
 };
 
 /** The owner's own token for every project, `scope.all`: the one the owner deploys with. */
@@ -541,8 +537,7 @@ export type { Identity as RemoteIdentity };
 export function describeIdentity(identity: Identity): string[] {
   const may = [
     identity.scope.create ? "create projects" : null,
-    // A member's token deploys its projects behind the door they have, and opens none without the option.
-    identity.scope.public ? "deploy public sites" : typeof identity.member === "string" ? "open no site to the public" : "deploy private sites only",
+    identity.scope.public ? "deploy public sites" : "deploy private sites only",
     identity.scope.outbound ? "use network: outbound" : null,
     identity.scope.domain ? "declare a domain" : null,
     identity.scope.secrets === true ? "manage secrets" : null,
@@ -555,7 +550,6 @@ export function describeIdentity(identity: Identity): string[] {
       ? `   projects: every one the server carries, as the owner${projects.length === 0 ? "" : ` (now ${projects.join(", ")})`}`
       : `   projects: ${projects.length === 0 ? "none yet" : projects.join(", ")}`,
     ...(identity.expiresAt === null ? [] : [`   expires ${new Date(identity.expiresAt).toISOString().slice(0, 10)}`]),
-    ...(typeof identity.member === "string" ? [`   a personal token: never more than ${identity.member}'s roles on the dashboard, read at every request`] : []),
   ];
 }
 
@@ -1268,47 +1262,6 @@ export function predatesRoute(answer: Answer<unknown>): boolean {
   return !answer.ok && answer.failure.error === "not-found" && answer.failure.message.startsWith("no such route");
 }
 
-/**
- * Access through the control API: the steward judges the token and the
- * access rules, a token giving Can open alone.
- */
-export function apiAccess(remote: Remote, fetcher?: Fetch): AccessTransport {
-  const path = (slug: string) => `/api/v1/projects/${encodeURIComponent(slug)}/access`;
-  const outdated = (answer: Answer<unknown>): Reading<never> | null =>
-    predatesRoute(answer)
-      ? { ok: false, failure: { error: "not-available", message: `the dashboard at ${remote.api} does not carry access yet: the owner of the machine runs sitesolide upgrade` } }
-      : null;
-  const change = async (slug: string, method: "PUT" | "DELETE", body: object): Promise<Reading<EntryAnswer>> => {
-    const answer: Answer<EntryAnswer> = await call(remote, path(slug), { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, fetcher);
-    const old = outdated(answer);
-    if (old !== null) return old;
-    if (!answer.ok) return { ok: false, failure: answer.failure };
-    if (typeof answer.body !== "object" || answer.body === null || typeof answer.body.change !== "string") {
-      return { ok: false, failure: { error: "unreadable", message: `${remote.api} answered with something that is not the control API's access` } };
-    }
-    return { ok: true, value: answer.body };
-  };
-  return {
-    via: `through ${remote.api}`,
-    owner: false,
-    // A token gives Can open alone: the line to send names the site, not the dashboard.
-    dashboard: null,
-    async list(slug) {
-      const answer: Answer<{ access: AccessState }> = await call(remote, path(slug), {}, fetcher);
-      const old = outdated(answer);
-      if (old !== null) return old;
-      if (!answer.ok) return { ok: false, failure: answer.failure };
-      const state = answer.body.access;
-      if (typeof state !== "object" || state === null || typeof state.url !== "string" || !Array.isArray(state.entries)) {
-        return { ok: false, failure: { error: "unreadable", message: `${remote.api} answered with something that is not the control API's access` } };
-      }
-      return { ok: true, value: state };
-    },
-    give: (slug, who, role) => change(slug, "PUT", { who, role }),
-    remove: (slug, who) => change(slug, "DELETE", { who }),
-  };
-}
-
 // --- secrets and restarts --------------------------------------------------------
 //
 // `sitesolide secrets` and `sitesolide restart` live in ./store-cli, one parser
@@ -1557,7 +1510,7 @@ export function needsSsh(command: string): Failure {
     error: "needs-ssh",
     message: `sitesolide ${command} needs the owner's SSH access to the machine`,
     details: [
-      "with a token, this workstation runs: deploy, status, logs, share, secrets, restart, login",
+      "with a token, this workstation runs: deploy, status, logs, secrets, restart, login",
       "ask the owner of the machine, who runs it from a workstation configured with sitesolide init",
     ],
   };
@@ -1575,7 +1528,6 @@ const REMOTE_OPTIONS: Readonly<Record<string, Readonly<Record<string, boolean>>>
   status: {},
   logs: { "--follow": false, "--lines": true },
   login: { "--url": true, "--token-stdin": false },
-  share: SHARE_OPTIONS,
   // Read by readStoreArguments in ./store-cli, which never quotes what it refuses.
   secrets: { "--stdin": false, "--restart": false, "--format": true, "--bytes": true, "--replace": false },
   restart: {},
@@ -1644,7 +1596,7 @@ export function deploysOverSsh(folder: string): boolean {
 }
 
 /** The commands only the owner's SSH access carries. */
-export const SSH_COMMANDS = ["lock", "unlock", "domain", "remove", "run", "people", "passkey", "refresh", "backups"];
+export const SSH_COMMANDS = ["lock", "unlock", "domain", "remove", "run", "share", "passkey", "refresh", "backups"];
 
 export const REMOTE_USAGE = [
   "usage, with a token:",
@@ -1659,9 +1611,6 @@ export const REMOTE_USAGE = [
   "  sitesolide status                                 the projects this token may deploy",
   "  sitesolide logs [--follow]                        the journal of this folder's project",
   "     --lines <n>                                    how many lines back, 50 by default, 500 at most",
-  "  sitesolide share                                  this folder's project's general access and people with access",
-  "     <email|@domain>...                             give them Can open: people inside the company's domains, or one of them",
-  "     --remove <email|@domain>...                    take their Can open away",
   "  sitesolide secrets                                this folder's project's secrets: names, sources, states, never a value",
   "  sitesolide secrets set <NAME>                     set a variable in the project's store, typed at a prompt that does not echo it",
   "     --stdin                                        the value from standard input, one trailing line break dropped",
@@ -1703,7 +1652,7 @@ export async function runRemote(command: string, arguments_: string[], dependenc
   const output = dependencies.output ?? humanOutput;
   const remote = readRemote(dependencies.environment, dependencies.home ?? homedir());
   if (SSH_COMMANDS.includes(command)) return report(output, needsSsh(command));
-  if (!["deploy", "status", "logs", "share", "secrets", "restart"].includes(command)) {
+  if (!["deploy", "status", "logs", "secrets", "restart"].includes(command)) {
     const [title, ...usage] = REMOTE_USAGE;
     return report(output, { error: "usage", message: command === "" ? (title ?? "usage") : `unknown command with a token: ${command}`, details: command === "" ? usage : REMOTE_USAGE });
   }
@@ -1729,13 +1678,11 @@ export async function runRemote(command: string, arguments_: string[], dependenc
       return deploy(remote, dependencies, deployOptions(arguments_));
     case "status":
       return status(remote, dependencies);
-    case "share":
     case "secrets":
     case "restart": {
       const manifest = folderManifest(dependencies.folder);
       if ("error" in manifest) return report(output, manifest);
       const slug = manifest.slug;
-      if (command === "share") return share(arguments_, slug, apiAccess(remote, dependencies.fetcher), output);
       const transport = store!.apiStore(remote, dependencies.fetcher);
       if (command === "restart") return store!.restartCommand(slug, transport, output);
       if (!hasStore(manifest)) return report(output, store!.storelessRefusal(manifest));

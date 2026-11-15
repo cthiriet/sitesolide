@@ -272,13 +272,13 @@ describe("the block in service follows the dashboard's door", () => {
 });
 
 /**
- * The portal's own upgrade to the provider's two steps, as portal/README.md
- * tells the author to run it: its block in service only routes /sante, the new
- * manifest routes the two steps too, and that is a change of the manifest, not
- * an earlier generation of the same one. `deploy` stops and says so; `--force`
- * is the deliberate act the README asks for.
+ * The portal's own block changed by its manifest: the block in service only
+ * routes /sante, the new manifest routes the passkey ceremony too, and that is
+ * a change of the manifest, not an earlier generation of the same one. A
+ * block edited by hand stops `deploy`, which says so; `--force` is the
+ * deliberate act.
  */
-describe("the portal's own block, upgraded to the provider's steps", () => {
+describe("the portal's own block, its routes changed by its manifest", () => {
   const current = JSON.parse(readFileSync(join(REPO, "portal", "sitesolide.json"), "utf8")) as Manifest;
   // No build: the copy lives outside the repository, where borrow.ts has nothing to copy.
   const { build: _, ...PORTAL } = current;
@@ -295,14 +295,14 @@ describe("the portal's own block, upgraded to the provider's steps", () => {
     expect(r.error).not.toContain("no longer matches the manifest");
   });
 
-  test("is refused without --force, naming the two routes, before anything is written, when the block was edited by hand", async () => {
+  test("is refused without --force, naming the routes, before anything is written, when the block was edited by hand", async () => {
     vm = createFakeVm();
     vm.writeManifest("portal", text(BEFORE));
     vm.writeBlock("portal", `${generateFragment(BEFORE)!}\n# edited by hand\nheader X-Hand "kept"\n`);
     const r = await run(project(PORTAL), ["deploy"], { vm });
     expect(r.code).toBe(1);
     expect(r.error).toContain("no longer matches the manifest");
-    expect(r.error).toContain("@dynamic path /sante /oidc/start /oidc/callback");
+    expect(r.error).toContain("@dynamic path /sante /passkey /passkey/options /passkey/verify");
     expect(vm.logs().some((line) => line.startsWith("ACCEPTED"))).toBe(false);
   });
 
@@ -749,7 +749,7 @@ describe("sitesolide remove also removes the block laid from the dashboard", () 
     vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
     const r = await run(project(SHOWCASE), ["remove", "--confirm", SHOWCASE.slug, "--dry-run"], { vm });
     expect(r.code).toBe(0);
-    expect(r.output).toContain(`[dry-run] release ${SHOWCASE.slug} from the token that created it, if one did, and drop its people with access`);
+    expect(r.output).toContain(`[dry-run] release ${SHOWCASE.slug} from the token that created it, if one did, and drop its guests`);
     expect(vm.logs().some((line) => line.startsWith("OWNERSHIP"))).toBe(false);
   });
 

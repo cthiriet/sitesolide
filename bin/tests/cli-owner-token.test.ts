@@ -15,7 +15,7 @@ const API = `https://dashboard.${ZONE}`;
 const SECRET = `sst_${"S".repeat(43)}`;
 const OLD = `sst_${"O".repeat(43)}`;
 const EVERY = { slugs: [], create: true, outbound: true, domain: true, public: true, secrets: true, all: true };
-const VIEW = { id: "aaaaaaaaaaaa", label: "Owner, laptop", email: "owner", expiresAt: null, scope: EVERY, member: null };
+const VIEW = { id: "aaaaaaaaaaaa", label: "Owner, laptop", email: "owner", expiresAt: null, scope: EVERY };
 
 const toClean: string[] = [];
 afterEach(() => {

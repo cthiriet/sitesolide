@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { DOMAIN_TABLE, generateFragment, ZONE_HOST } from "../cli/fragment";
 import { readManifest, type Manifest } from "../cli/manifest";
 import { PORTAL_PORT } from "../cli/portal";
-import { startProvider, type MockProvider } from "../../portal/tests/provider";
 import { encodeProjection, PROJECTION_VERSION, type Projection, type SiteAccess } from "../../portal/src/access";
 import { guestHash } from "../../portal/src/gate";
 import { block, freePort, waitFor } from "./caddy-lab";
@@ -25,8 +24,7 @@ import { block, freePort, waitFor } from "./caddy-lab";
  * Four sites in one Caddy: the protected site as the CLI generates it now, a
  * second one as the release before identities generated it, an open site
  * with its customer domain, and the portal's own block, from
- * portal/sitesolide.json, which a sign-in with the provider goes through. The
- * provider is the tests' own, the portal its real server.ts, who may open a
+ * portal/sitesolide.json. The portal is its real server.ts, who may open a
  * site the steward's projection, which the test writes as the steward does.
  * Caddy runs with `admin off` on free ports, stopped by its PID.
  *
@@ -73,7 +71,6 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
   let openSite: ReturnType<typeof Bun.serve>;
   let portal: ReturnType<typeof Bun.spawn> | null = null;
   let caddy: ReturnType<typeof Bun.spawn>;
-  let provider: MockProvider;
 
   /** What a fake service received: its path, and every header naming sitesolide, any spelling, lowercased. */
   function echo(name: string) {
@@ -107,7 +104,7 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
 
     /**
      * A request as the browser sends it. The sites and the portal's host go to
-     * Caddy, which tells them apart by Host; the provider is reached directly.
+     * Caddy, which tells them apart by Host.
      */
     async get(url: string, init: RequestInit = {}): Promise<Response> {
       const target = new URL(url);
@@ -125,17 +122,6 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
       });
       this.keep(target.hostname, response);
       return response;
-    }
-
-    async follow(url: string): Promise<{ response: Response; url: string }> {
-      let current = url;
-      for (let i = 0; i < 10; i++) {
-        const response = await this.get(current);
-        const location = response.headers.get("location");
-        if (response.status < 300 || response.status >= 400 || location === null) return { response, url: current };
-        current = new URL(location, current).toString();
-      }
-      throw new Error("too many redirects");
     }
 
     async signInWithPassword(host: string): Promise<void> {
@@ -164,14 +150,13 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
     const projection: Projection = {
       version: PROJECTION_VERSION,
       writtenAt,
-      sites: Object.fromEntries(Object.entries(sites).map(([host, site]) => [host, { slug: host.split(".")[0]!, people: {}, domains: [], passwords: [], ...site }])),
+      sites: Object.fromEntries(Object.entries(sites).map(([host, site]) => [host, { slug: host.split(".")[0]!, passwords: [], ...site }])),
     };
     writeFileSync(`${accessFile}.new`, encodeProjection(projection));
     renameSync(`${accessFile}.new`, accessFile);
   }
 
   beforeAll(async () => {
-    provider = await startProvider();
     const hash = await Bun.password.hash(PASSWORD, { algorithm: "argon2id", memoryCost: 8, timeCost: 1 });
     Bun.spawnSync(["bun", join(REPO_ROOT, "portal", "scripts", "borrow.ts")], { stdout: "ignore" });
 
@@ -249,10 +234,6 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
         ACCESS_FILE: accessFile,
         NODE_ENV: "test",
         PUBLIC_URL: `http://${PORTAL_HOST}:${caddyPort}`,
-        OIDC_ISSUER: provider.url,
-        OIDC_CLIENT_ID: provider.clientId,
-        OIDC_CLIENT_SECRET: provider.clientSecret,
-        OIDC_ADMIN_EMAILS: "owner@acme.test",
       },
       stdout: "ignore",
       stderr: "ignore",
@@ -271,7 +252,6 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
     site?.stop(true);
     legacySite?.stop(true);
     openSite?.stop(true);
-    provider?.stop();
     rmSync(folder, { recursive: true, force: true });
   });
 
@@ -309,34 +289,6 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
     project({});
   });
 
-  test("signed in with the provider, through the portal's own block: the site learns the real person", async () => {
-    project({ [SITE]: { people: { "alice@acme.test": "developer" } } });
-    const browser = new Browser();
-    provider.next = { email: "alice@acme.test", name: "Alice Martin" };
-    const { url } = await browser.follow(`http://${SITE}/_portal/oidc?retour=%2Flist`);
-    expect(new URL(url).pathname).toBe("/list");
-
-    expect(await received(browser, "/list")).toEqual({
-      status: 200,
-      identity: {
-        "x-sitesolide-user": "alice@acme.test",
-        "x-sitesolide-user-name": "Alice%20Martin",
-        "x-sitesolide-role": "developer",
-      },
-    });
-
-    // Lowered, the site learns it at the next request.
-    project({ [SITE]: { people: { "alice@acme.test": "visitor" } } });
-    expect((await received(browser, "/list")).identity?.["x-sitesolide-role"]).toBe("visitor");
-    // Everyone at the domain opens it as a visitor.
-    project({ [SITE]: { domains: ["acme.test"] } });
-    expect((await received(browser, "/list")).identity?.["x-sitesolide-role"]).toBe("visitor");
-
-    // Removed from the people with access, out at the next request: Caddy was not touched.
-    project({});
-    expect(await received(browser, "/list")).toEqual({ status: 401 });
-  });
-
   test("a block from before identities keeps working with this portal, and passes nothing", async () => {
     const browser = new Browser();
     expect((await browser.get(`http://${LEGACY}/list`)).status).toBe(401);
@@ -356,28 +308,6 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
         "x-sitesolide-impersonate": "yes",
       },
     });
-  });
-
-  test("signing out of a site ends the portal's session too, through the portal's own block", async () => {
-    project({ [SITE]: { people: { "alice@acme.test": "visitor" } } });
-    const browser = new Browser();
-    provider.next = { email: "alice@acme.test", name: "Alice Martin" };
-    await browser.follow(`http://${SITE}/_portal/oidc?retour=%2Flist`);
-    expect(browser.jars.get(PORTAL_HOST)?.has("portal-session")).toBe(true);
-
-    const page = await browser.get(`http://${SITE}/_portal/deconnexion`, {
-      method: "POST",
-      headers: { Origin: `http://${SITE}:${caddyPort}` },
-    });
-    expect(page.status).toBe(200);
-    const next = (await page.text()).match(/<meta http-equiv="refresh" content="0; url=([^"]+)">/)![1]!.replaceAll("&amp;", "&");
-    expect(new URL(next).host).toBe(`${PORTAL_HOST}:${caddyPort}`);
-    const { response, url } = await browser.follow(next);
-    expect(url).toBe(`http://${SITE}/`);
-    expect(response.status).toBe(401);
-    expect(browser.jars.get(PORTAL_HOST)?.has("portal-session")).toBe(false);
-    expect(browser.jars.get(PORTAL_HOST)?.get("portal-signed-out")).toBe("1");
-    project({});
   });
 
   test("a site not behind the portal hands its app nobody, whatever the visitor claims", async () => {
@@ -405,11 +335,9 @@ describe.skipIf(CADDY === null)("the identity headers, in Caddy", () => {
     expect((await browser.get(`http://${PORTAL_HOST}/sante`)).status).toBe(200);
   });
 
-  test("the portal's own host serves the provider's two steps, and nothing of the site side nor the admin", async () => {
+  test("the portal's own host serves nothing of the site side nor the admin, nor a company sign-in", async () => {
     const browser = new Browser();
-    expect((await browser.get(`http://${PORTAL_HOST}/oidc/start?flow=x`)).status).toBe(400);
-    expect((await browser.get(`http://${PORTAL_HOST}/oidc/signout?ticket=x`)).status).toBe(400);
-    for (const path of ["/_portal/oidc", "/_portal/oidc/complete?code=x", "/admin/access", "/admin/sharing", "/admin/audit", "/verifier"]) {
+    for (const path of ["/oidc/start?flow=x", "/oidc/signout?ticket=x", "/_portal/oidc", "/_portal/oidc/complete?code=x", "/admin/access", "/admin/sharing", "/admin/audit", "/verifier"]) {
       const response = await browser.get(`http://${PORTAL_HOST}${path}`);
       expect({ path, status: response.status }).toEqual({ path, status: 404 });
     }

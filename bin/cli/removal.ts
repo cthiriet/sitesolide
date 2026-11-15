@@ -195,7 +195,7 @@ export function leftToDo(slug: string, siteFolder: string | null): string[] {
 /**
  * The steward's last word on a removed project: the token that created it,
  * if one did, no longer owns its name, so that another token may create a
- * project of that name later, and its people with access are dropped, so that
+ * project of that name later, and its guests are dropped, so that
  * such a project starts from nobody. Root asks the steward's owner socket on
  * the machine, the slug on standard input; the steward refuses while the
  * machine still carries the project, so this comes once the folder is gone.
@@ -205,7 +205,7 @@ export function ownershipReleaseCommand(): string {
 }
 
 export type OwnershipRelease =
-  /** `access`: the people with access dropped with it, 0 from a steward that kept none. */
+  /** `access`: the guests dropped with it, 0 from a steward that kept none. */
   | { kind: "released"; token: string; access: number }
   | { kind: "none"; access: number }
   /** A steward from before it, or one with no owner's socket: nothing released. */

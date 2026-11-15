@@ -32,11 +32,11 @@ TARGET_JS="/usr/local/lib/sitesolide/steward.js"
 SOCKET_FOLDER="/run/$UNIT"
 SOCKET="$SOCKET_FOLDER/secretaire.sock"
 # The owner's socket, which only root opens: `sitesolide share` and
-# `sitesolide people` speak to it.
+# `sitesolide passkey` speak to it.
 OWNER_FOLDER="/run/$UNIT-owner"
 OWNER_SOCKET="$OWNER_FOLDER/owner.sock"
-# Where the steward lays the private key the portal signs dashboard sign-ins
-# with, and the projection of the access registry the portal reads.
+# Where the steward lays the projections the portal reads: the access
+# registry's and the passkeys'.
 PORTAL_KEY_FOLDER="/etc/sitesolide-portal"
 # The steward's relay to the portal's admin API, asked whether the portal
 # reads the access projection: a socket root's alone, and systemd-socket-proxyd
@@ -234,10 +234,10 @@ esac
 # as nobody is by the dashboard's.
 permissions="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' $OWNER_FOLDER $OWNER_SOCKET 2>/dev/null | tr '\n' ' '")"
 [ "$permissions" = "700 root:root 600 root:root " ] || fail "$OWNER_FOLDER and its socket are '$permissions', expected 700 root:root and 600 root:root"
-code="$(ssh -n "$SITESOLIDE_SERVER" "sudo curl -s -o /dev/null -w '%{http_code}' --max-time 30 --unix-socket $OWNER_SOCKET http://steward/people" || true)"
-[ "$code" = "200" ] || fail "root does not get 200 on the owner's socket /people (got: ${code:-nothing})" \
-  "the access registry may not read, or may not be begun yet: the journal says why"
-code="$(ssh -n "$SITESOLIDE_SERVER" "sudo -u site-dashboard curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket $OWNER_SOCKET http://steward/people" || true)"
+code="$(ssh -n "$SITESOLIDE_SERVER" "sudo curl -s -o /dev/null -w '%{http_code}' --max-time 30 --unix-socket $OWNER_SOCKET http://steward/passkeys" || true)"
+[ "$code" = "200" ] || fail "root does not get 200 on the owner's socket /passkeys (got: ${code:-nothing})" \
+  "the passkey registry may not read, or may not be begun yet: the journal says why"
+code="$(ssh -n "$SITESOLIDE_SERVER" "sudo -u site-dashboard curl -s -o /dev/null -w '%{http_code}' --max-time 10 --unix-socket $OWNER_SOCKET http://steward/passkeys" || true)"
 [ "$code" = "000" ] || fail "site-dashboard reaches the owner's socket (code ${code:-nothing}): it must be root's alone"
 
 # The access registry, root's alone, and its projection for the portal.
@@ -248,14 +248,6 @@ case "$projection" in
   "640 root:site-portal") echo "   access registry 600 root:root, its projection for the portal 640 root:site-portal" ;;
   missing) echo "   note: no access projection yet, the portal is not deployed: it is written at the first change once it is" ;;
   *) fail "$PORTAL_KEY_FOLDER/access.json is '$projection', expected 640 root:site-portal" ;;
-esac
-
-# The sign-in key pair: laid at startup once the portal's account exists.
-key="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%a %U:%G' $PORTAL_KEY_FOLDER/assertion.key 2>/dev/null || echo missing")"
-case "$key" in
-  "640 root:site-portal") echo "   dashboard sign-in key laid for the portal, 640 root:site-portal" ;;
-  missing) echo "   note: no dashboard sign-in key yet, the portal is not deployed: it is laid at the first sign-in once it is" ;;
-  *) fail "$PORTAL_KEY_FOLDER/assertion.key is '$key', expected 640 root:site-portal" ;;
 esac
 
 # The relay to the portal: root's alone, as the owner's socket, and root

@@ -36,8 +36,8 @@
  *   progress;
  * - `system-units.json`: `{ <unit>: <file> }`, the units systemd knows from
  *   elsewhere than /etc/systemd/system, as a package's own;
- * - `access.json`: the steward's access registry, which `share` and `people`
- *   ask on the steward's owner socket, see `AccessRegistry`: answered from
+ * - `access.json`: the steward's access registry, which `share` asks on the
+ *   steward's owner socket, see `AccessRegistry`: answered from
  *   there, and changed there by an accepted write, judged by the steward's
  *   rules as far as the tests need them;
  * - `accounts`: the static accounts the machine carries, one passwd line each,
@@ -90,7 +90,7 @@ import { GENERATOR_MARK, listUnitsCommand, loopbackStateCommand, MARKER_DONE, sc
 import { loopbackRule } from "../../cli/loopback";
 import { egressStateCommand, EGRESS_MARKER } from "../../cli/egress";
 import { backupComponentCommand, BACKUP_COMPONENT_MARKER } from "../../cli/backups";
-import { ownerGeneralCommand, ownerReadCommand, ownerWriteCommand, type EntryView, type PersonView, type Role } from "../../cli/access";
+import { ownerGeneralCommand, ownerReadCommand, ownerWriteCommand, type EntryView } from "../../cli/access";
 import { ownershipReleaseCommand } from "../../cli/removal";
 import { STORE_READY, STORE_REFUSED, storePaths, storePrepareCommand } from "../../cli/store";
 import { NOT_ON_DEMAND, TLS_ZONE_STATE_COMMAND, TLS_ZONE_STATES, ZONE_NAMES_COMMAND } from "../../cli/tls";
@@ -203,20 +203,17 @@ export function addAccount(vm: string, name: string, uid?: number): void {
 }
 
 /**
- * The steward's access registry as `share` and `people` find it on the owner
- * socket: answering with this release's routes, from before the registry
- * (`old`, a 404 `no such route`), or with no owner socket at all (`down`,
- * curl's 7). Per project, its general access as the machine carries it, null
- * when it is not deployed, and its people with access, as the steward shows
- * them; machine-wide, who may create projects.
+ * The steward's access registry as `share` finds it on the owner socket:
+ * answering with this release's routes, from before the registry (`old`, a
+ * 404 `no such route`), or with no owner socket at all (`down`, curl's 7).
+ * Per project, its general access as the machine carries it, null when it is
+ * not deployed, and its guests, as the steward shows them.
  */
 export type AccessRegistry = {
   state: "current" | "old" | "down";
   zone: string;
-  signIn: { configured: boolean; allowedDomains: string[]; admins: string[]; providerName: string | null };
   portal: { reading: "steward" | "unreadable" | "unknown"; writtenAt: number | null };
   projects: Record<string, { general: "public" | "restricted" | "code" | null; entries: EntryView[] }>;
-  creators: string[];
 };
 
 /** What every change is dated, and the password a password access is given: the tests read both back. */
@@ -226,17 +223,13 @@ export const FAKE_PASSWORD = "fake-password-for-tests-only";
 export const FAKE_CODE = "K7M2PQ";
 export const FAKE_NEW_CODE = "W4XN8R";
 
-/** kanban deployed and restricted, nobody on it, acme.test the company's domain, Google set up. */
+/** kanban deployed and restricted, nobody on it. */
 export const DEFAULT_ACCESS: AccessRegistry = {
   state: "current",
   zone: "test-zone.invalid",
-  signIn: { configured: true, allowedDomains: ["acme.test"], admins: [], providerName: "Google" },
   portal: { reading: "steward", writtenAt: FAKE_NOW },
   projects: { kanban: { general: "restricted", entries: [] } },
-  creators: [],
 };
-
-const ROLE_ORDER: readonly Role[] = ["visitor", "viewer", "developer", "admin"];
 
 /** The steward's answer to `GET /access?slug=`, from the registry. */
 function accessAnswer(registry: AccessRegistry, slug: string): object {
@@ -248,33 +241,8 @@ function accessAnswer(registry: AccessRegistry, slug: string): object {
     url: `https://${host}/`,
     general: project.general === null ? null : { access: project.general, modifiable: project.general !== "code", reason: null },
     entries: project.entries,
-    signIn: registry.signIn,
     portal: registry.portal,
   };
-}
-
-/** Everyone across projects, as `GET /people` answers. */
-function peopleAnswer(registry: AccessRegistry): { people: PersonView[]; domains: { slug: string; domain: string }[]; signIn: AccessRegistry["signIn"] } {
-  const people = new Map<string, PersonView>();
-  const person = (who: string): PersonView => {
-    const found = people.get(who) ?? { who, roles: {}, create: registry.creators.includes(who), passwords: [], admin: registry.signIn.admins.includes(who) };
-    people.set(who, found);
-    return found;
-  };
-  const domains: { slug: string; domain: string }[] = [];
-  for (const [slug, project] of Object.entries(registry.projects)) {
-    for (const entry of project.entries) {
-      if (entry.kind === "domain") {
-        domains.push({ slug, domain: entry.who });
-        continue;
-      }
-      const one = person(entry.who);
-      one.roles[slug] = entry.role;
-      if (entry.password !== null) one.passwords.push({ slug, ...entry.password });
-    }
-  }
-  for (const creator of registry.creators) person(creator);
-  return { people: [...people.values()].sort((a, b) => a.who.localeCompare(b.who)), domains, signIn: registry.signIn };
 }
 
 /**
@@ -681,12 +649,6 @@ if (import.meta.main) {
     if (!Object.hasOwn(current.projects, readSlug)) refusal(404, "not-found", `${readSlug} is not deployed on this machine`);
     answer(200, accessAnswer(current, readSlug));
   }
-  if (command === ownerReadCommand("/people")) {
-    record("PEOPLE GET");
-    const current = registry();
-    answerOwner(current.state);
-    answer(200, peopleAnswer(current));
-  }
   if (command === ownerWriteCommand("PUT", "/access/entry") || command === ownerWriteCommand("DELETE", "/access/entry")) {
     if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
     const method = command === ownerWriteCommand("PUT", "/access/entry") ? "PUT" : "DELETE";
@@ -694,7 +656,7 @@ if (import.meta.main) {
     record(`ACCESS ${method} ${body}`);
     const current = registry();
     answerOwner(current.state);
-    const asked = JSON.parse(body) as { slug: string; who: string; role?: Role; expiresInS?: number | null };
+    const asked = JSON.parse(body) as { slug: string; who: string; expiresInS?: number | null };
     const project = current.projects[asked.slug];
     if (project === undefined) refusal(404, "not-found", `${asked.slug} is not deployed on this machine`);
     const existing = project!.entries.find((entry) => entry.who === asked.who) ?? null;
@@ -705,45 +667,14 @@ if (import.meta.main) {
       save();
       answer(200, { slug: asked.slug, entry: existing!, change: "remove" });
     }
-    const role = asked.role ?? "visitor";
-    const domain = asked.who.startsWith("@");
-    if (domain && role !== "visitor") refusal(400, "invalid", `${asked.who}: a domain can only open the site (Can open); give people roles one by one`);
-    if (existing?.password != null && role !== "visitor") {
-      refusal(403, "out-of-scope", `${asked.who} has password access, which opens the site and nothing more: remove it first to give them a role`);
-    }
-    const inside = current.signIn.configured && (current.signIn.allowedDomains.length === 0 || current.signIn.allowedDomains.includes(asked.who.slice(asked.who.lastIndexOf("@") + 1)));
-    const outside = !domain && !inside && (existing === null || existing.password !== null);
-    if (outside && ROLE_ORDER.indexOf(role) > 0) refusal(400, "invalid", `${asked.who} can only be given Can open, with password access: ${asked.who.slice(asked.who.lastIndexOf("@") + 1)} is not among the company's domains`);
-    const drawn = outside && existing === null;
+    if (asked.who.startsWith("@")) refusal(400, "invalid", `${asked.who}: a whole domain is given access no more, name its people one by one`);
+    if (existing !== null) answer(200, { slug: asked.slug, entry: existing, change: "none" });
     const expiresInS = asked.expiresInS === undefined ? 7 * 24 * 3600 : asked.expiresInS;
-    const entry: EntryView = {
-      who: asked.who,
-      kind: domain ? "domain" : drawn || existing?.password != null ? "password" : "person",
-      role,
-      by: existing?.by ?? "owner",
-      createdAt: existing?.createdAt ?? FAKE_NOW,
-      updatedAt: FAKE_NOW,
-      password: drawn ? { expiresAt: expiresInS === null ? null : FAKE_NOW + expiresInS * 1000, expired: false } : (existing?.password ?? null),
-    };
-    const change = existing === null ? "add" : existing.role === role ? "none" : "role";
-    if (change !== "none") {
-      project!.entries = [...project!.entries.filter((one) => one.who !== asked.who), entry];
-      save();
-    }
-    answer(change === "add" ? 201 : 200, { slug: asked.slug, entry: change === "none" ? existing! : entry, change, ...(drawn ? { password: FAKE_PASSWORD } : {}) });
-  }
-  if (command === ownerWriteCommand("PUT", "/people/person")) {
-    if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
-    const body = await Bun.stdin.text();
-    record(`PEOPLE PUT ${body}`);
-    const current = registry();
-    answerOwner(current.state);
-    const asked = JSON.parse(body) as { email: string; create: boolean };
-    const had = current.creators.includes(asked.email);
-    current.creators = asked.create ? [...new Set([...current.creators, asked.email])] : current.creators.filter((one) => one !== asked.email);
-    writeFileSync(accessFile, JSON.stringify(current));
-    const person = peopleAnswer(current).people.find((one) => one.who === asked.email) ?? { who: asked.email, roles: {}, create: false, passwords: [], admin: false };
-    answer(200, { person, change: had === asked.create ? "none" : asked.create ? "create" : "remove" });
+    const expiresAt = expiresInS === null ? null : FAKE_NOW + expiresInS * 1000;
+    const entry: EntryView = { who: asked.who, by: "owner", createdAt: FAKE_NOW, updatedAt: FAKE_NOW, expiresAt, expired: false };
+    project!.entries = [...project!.entries, entry];
+    save();
+    answer(201, { slug: asked.slug, entry, change: "add", password: FAKE_PASSWORD });
   }
   // The steward's owner socket again: a site's general access, the
   // gatekeeper's work simulated on the VM's own manifest, the body recorded as
@@ -773,7 +704,7 @@ if (import.meta.main) {
     });
   }
   // The steward's owner socket again: a removed project's token ownership
-  // released and its people with access dropped, the slug on standard input,
+  // released and its guests dropped, the slug on standard input,
   // recorded with it.
   if (command === ownershipReleaseCommand()) {
     if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
