@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { signInRefusal } from "../src/lib/signin"
-import { ceremonyMessage, creationOptions, fromB64url, linkFromHash, requestOptions, toB64url } from "../src/lib/webauthn"
+import { NO_PASSKEYS, ceremonyMessage, creationOptions, fromB64url, linkFromHash, ownerPasskeys, requestOptions, toB64url } from "../src/lib/webauthn"
 
 describe("the page's half of a passkey ceremony", () => {
   test("base64url goes both ways, without padding", () => {
@@ -36,6 +36,21 @@ describe("the page's half of a passkey ceremony", () => {
     expect(linkFromHash("#passkey=short")).toBeNull()
     expect(linkFromHash("#passkey=abcdefghijklmnop&x=1")).toBeNull()
     expect(linkFromHash("")).toBeNull()
+  })
+
+  test("the owner holds a passkey by the session's word, the listing counting them", () => {
+    const listing = (count: number, readable = true) => ({ passkeys: Array.from({ length: count }, (_, i) => ({ id: `k${i}`, name: "Key", createdAt: 0, lastUsedAt: null })), readable })
+    expect(ownerPasskeys({ registered: true }, listing(2))).toEqual({ registered: true, count: 2 })
+    // The session's word stands, the steward's remembered flag behind it, even when the listing could not be read.
+    expect(ownerPasskeys({ registered: true }, null)).toEqual({ registered: true, count: null })
+    expect(ownerPasskeys({ registered: false }, listing(0))).toEqual({ registered: false, count: 0 })
+    // A dashboard with no word on passkeys: the listing alone, an unreadable registry counting as passkeys.
+    expect(ownerPasskeys(undefined, listing(1))).toEqual({ registered: true, count: 1 })
+    expect(ownerPasskeys(undefined, listing(0, false))).toEqual({ registered: true, count: null })
+    expect(ownerPasskeys(undefined, listing(0))).toEqual({ registered: false, count: 0 })
+    // Nothing known: as before passkeys.
+    expect(ownerPasskeys(null, null)).toEqual(NO_PASSKEYS)
+    expect(NO_PASSKEYS.registered).toBe(false)
   })
 
   test("a refusal says what to do", () => {

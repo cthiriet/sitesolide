@@ -179,7 +179,29 @@ export function removePasskey(id: string) {
   return send<PasskeysResponse & Partial<CeremonyFailure>>("DELETE", "/api/passkeys/credential", { id })
 }
 
-/** The fragment root's link carries: `#passkey=<link>`, which never reaches a server. */
+/**
+ * Does the owner hold a passkey, and how many? `registered` is the session's
+ * word, the steward's registry with the dashboard's remembered flag
+ * (`owner_passkeys`) when the steward does not answer; a listing alone
+ * stands in for it on a dashboard that predates it, an unreadable registry
+ * counting as passkeys as it does there. Unknown until read, never "held":
+ * without a passkey the page behaves as it did before passkeys.
+ */
+export type OwnerPasskeys = { registered: boolean; count: number | null }
+
+export const NO_PASSKEYS: OwnerPasskeys = { registered: false, count: null }
+
+export function ownerPasskeys(offer: { registered?: unknown } | null | undefined, listing: PasskeysResponse | null): OwnerPasskeys {
+  const count = listing !== null && listing.readable && Array.isArray(listing.passkeys) ? listing.passkeys.length : null
+  if (typeof offer?.registered === "boolean") return { registered: offer.registered, count }
+  if (listing === null) return NO_PASSKEYS
+  return { registered: !listing.readable || (count ?? 0) > 0, count }
+}
+
+/** Said on the window once a passkey is added or removed here: whoever shows the owner's passkeys reads them again. */
+export const PASSKEYS_CHANGED = "sitesolide:passkeys-changed"
+
+/** The fragment root's link carries:`#passkey=<link>`, which never reaches a server. */
 export function linkFromHash(hash: string): string | null {
   const match = /^#passkey=([A-Za-z0-9_-]{16,128})$/.exec(hash)
   return match === null ? null : match[1]!

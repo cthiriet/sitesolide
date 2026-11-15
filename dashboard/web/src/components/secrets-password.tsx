@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject, type SyntheticEvent } from "react"
-import { Check, Copy } from "lucide-react"
+import { Check, Copy, KeyRound } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -16,6 +16,7 @@ import { CopyFallback, useAnnounce, useCopy } from "@/components/copy"
 import { Banner, FormError, INPUT_DIALOG } from "@/components/page"
 import { NO_PASSWORD_MANAGER, ShowToggle, type FocusReturn, type OnRefusal } from "@/components/secrets-dialogs"
 import { changePassword } from "@/lib/api"
+import { ceremonyMessage, changePasswordWithPasskey } from "@/lib/webauthn"
 import { waitMessage } from "@/lib/signin"
 import { closeOutcome } from "@/lib/access"
 import {
@@ -33,7 +34,8 @@ import { cn } from "@/lib/utils"
 /**
  * Changing a password of which the steward only keeps the hash:
  * `PASSWORD_HASH` for the dashboard and for the portal. Never a hash on screen
- * or to paste: the dashboard password retyped, then a password drawn by the
+ * or to paste: the owner's proof, the dashboard password retyped or, once
+ * they hold a passkey, a fresh assertion of it, then a password drawn by the
  * steward, shown once, or a chosen password, typed twice.
  */
 
@@ -48,6 +50,7 @@ export function PasswordDialog({
   onChange,
   onRefusal,
   focusReturn,
+  withPasskey = false,
 }: {
   target: PasswordTarget | null
   open: boolean
@@ -56,6 +59,8 @@ export function PasswordDialog({
   onChange: () => void
   onRefusal: OnRefusal
   focusReturn: FocusReturn
+  /** The owner holds a passkey: they confirm with it, the steward refusing the dashboard password. */
+  withPasskey?: boolean
 }) {
   // What the dialog needs to know of its own path to decide on closing, with no extra render.
   const guard = useRef<Guard | null>(null)
@@ -78,6 +83,7 @@ export function PasswordDialog({
             onChange={onChange}
             onRefusal={onRefusal}
             guard={guard}
+            withPasskey={withPasskey}
           />
         )}
       </DialogContent>
@@ -95,12 +101,14 @@ function PasswordFlow({
   onChange,
   onRefusal,
   guard,
+  withPasskey,
 }: {
   target: PasswordTarget
   onClose: () => void
   onChange: () => void
   onRefusal: OnRefusal
   guard: RefObject<Guard | null>
+  withPasskey: boolean
 }) {
   const announce = useAnnounce()
   const texts = passwordTexts(target.slug, target.variable)
@@ -176,6 +184,7 @@ function PasswordFlow({
         setInProgress={setInProgress}
         onChange={change}
         onRefusal={onRefusal}
+        withPasskey={withPasskey}
       />
     </>
   )
@@ -223,12 +232,14 @@ function PasswordForm({
   setInProgress,
   onChange,
   onRefusal,
+  withPasskey,
 }: {
   target: PasswordTarget
   inProgress: boolean
   setInProgress: (inProgress: boolean) => void
   onChange: (password: string | null) => void
   onRefusal: OnRefusal
+  withPasskey: boolean
 }) {
   const [dashboard, setDashboardPassword] = useState("")
   const [mode, setMode] = useState<PasswordMode>("draw")
@@ -268,13 +279,30 @@ function PasswordForm({
   async function submit(event: SyntheticEvent) {
     event.preventDefault()
     if (inProgress || remainingS > 0) return
-    const faults = checkEntry({ dashboard, mode, newPassword, confirmation })
+    const faults = checkEntry({ dashboard, mode, newPassword, confirmation }, withPasskey)
     setErrors(faults)
     setFormError("")
     const first = firstFaultyField(faults)
     if (first !== null) return fields[first].current?.focus()
 
     setInProgress(true)
+    if (withPasskey) {
+      try {
+        const names = { slug: target.slug, file: target.file, variable: target.variable }
+        const result = await changePasswordWithPasskey(names, passwordToSend({ mode, newPassword }))
+        if (result.ok) {
+          setNewPassword("")
+          setConfirmation("")
+          return onChange(typeof result.body.password === "string" ? result.body.password : null)
+        }
+        if (result.status === -1 || result.status === 0) return setFormError(ceremonyMessage(result.status, null))
+        const message = onRefusal(refusalOf(result.status, result.body))
+        if (message !== null) setFormError(message)
+      } finally {
+        setInProgress(false)
+      }
+      return
+    }
     try {
       const { status, body } = await changePassword({
         slug: target.slug,
@@ -310,36 +338,45 @@ function PasswordForm({
     }
   }
 
-  const label = inProgress ? "Changing…" : remainingS > 0 ? waitMessage(remainingS) : "Change password"
+  const label = withPasskey
+    ? inProgress
+      ? "Waiting for the passkey…"
+      : "Confirm with a passkey"
+    : inProgress
+      ? "Changing…"
+      : remainingS > 0
+        ? waitMessage(remainingS)
+        : "Change password"
   const fieldType = visible ? "text" : "password"
 
   return (
     <form noValidate onSubmit={submit} className="grid gap-5">
-      {/* The same username as the sign-in: the password manager offers the dashboard's. */}
-      <input type="text" name="username" autoComplete="username" value="sitesolide" readOnly hidden />
-      <Field
-        id={dashboardPasswordId}
-        labelText="Dashboard password"
-        help="Entered again to confirm it's you."
-        error={errors.dashboard}
-      >
-        <Input
-          ref={fields.dashboard}
-          id={dashboardPasswordId}
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          autoFocus
-          value={dashboard}
-          onChange={(event) => {
-            setDashboardPassword(event.target.value)
-            if (remainingS === 0) setErrors(({ dashboard: _, ...remaining }) => remaining)
-          }}
-          aria-invalid={errors.dashboard !== undefined || undefined}
-          aria-describedby={describedBy(dashboardPasswordId, errors.dashboard, true)}
-          className="h-10 sm:h-9"
-        />
-      </Field>
+      {withPasskey ? (
+        <p className="text-xs text-pretty text-muted-foreground">Your passkey confirms it's you: the dashboard password no longer does.</p>
+      ) : (
+        <>
+          {/* The same username as the sign-in: the password manager offers the dashboard's. */}
+          <input type="text" name="username" autoComplete="username" value="sitesolide" readOnly hidden />
+          <Field id={dashboardPasswordId} labelText="Dashboard password" help="Entered again to confirm it's you." error={errors.dashboard}>
+            <Input
+              ref={fields.dashboard}
+              id={dashboardPasswordId}
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              autoFocus
+              value={dashboard}
+              onChange={(event) => {
+                setDashboardPassword(event.target.value)
+                if (remainingS === 0) setErrors(({ dashboard: _, ...remaining }) => remaining)
+              }}
+              aria-invalid={errors.dashboard !== undefined || undefined}
+              aria-describedby={describedBy(dashboardPasswordId, errors.dashboard, true)}
+              className="h-10 sm:h-9"
+            />
+          </Field>
+        </>
+      )}
 
       <fieldset className="grid gap-2">
         <legend className="mb-2 text-sm leading-none font-medium">New password</legend>
@@ -422,6 +459,7 @@ function PasswordForm({
           Cancel
         </DialogClose>
         <Button type="submit" disabled={inProgress || remainingS > 0} className="tabular-nums max-sm:h-11">
+          {withPasskey && <KeyRound />}
           {label}
         </Button>
       </DialogFooter>

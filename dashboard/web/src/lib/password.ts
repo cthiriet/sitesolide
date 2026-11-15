@@ -54,6 +54,33 @@ export function passwordTexts(slug: string, variable: string): PasswordTexts {
   }
 }
 
+// --- Once the owner holds a passkey -------------------------------------------
+
+/**
+ * The owner's own passwords: the dashboard's, which signs in and unlocks,
+ * and the portal's, which lets the owner into every restricted site. A
+ * passkey replaces both: once one exists, the steward refuses them, and they
+ * come back only once root removes every passkey.
+ */
+export function isOwnerPassword({ slug, file, variable }: { slug: string; file: string; variable: string }): boolean {
+  if (variable !== "PASSWORD_HASH") return false
+  return (slug === "dashboard" && file === "dashboard.env") || (slug === "portal" && file === "portal.env")
+}
+
+/** Is Change password offered for this variable? Not for the owner's own once they hold a passkey: it would change a password nothing accepts. */
+export function offersPasswordChange(target: { slug: string; file: string; variable: string }, passkeys: boolean): boolean {
+  return !passkeys || !isOwnerPassword(target)
+}
+
+/** What the page says in place of changing them. */
+export const BREAK_GLASS =
+  "You sign in with a passkey. The dashboard and portal passwords are only the break-glass: they work again once root removes every passkey with sitesolide passkey remove."
+
+/** The same, for one of the two, on its row. */
+export function breakGlassLine(which: "dashboard" | "portal"): string {
+  return `Break-glass only: you sign in with a passkey. The ${which} password works again once root removes every passkey with sitesolide passkey remove.`
+}
+
 /** `draw`: the steward draws it and returns it once. `choose`: typed twice here. */
 export type PasswordMode = "draw" | "choose"
 
@@ -66,10 +93,14 @@ export type PasswordEntry = {
 
 export type PasswordErrors = Partial<Record<"dashboard" | "newPassword" | "confirmation", string>>
 
-/** What is missing before sending. Nothing about password strength, which the steward judges. */
-export function checkEntry(entry: PasswordEntry): PasswordErrors {
+/**
+ * What is missing before sending. Nothing about password strength, which the
+ * steward judges. `withPasskey`: the owner confirms with a passkey, and no
+ * dashboard password is typed.
+ */
+export function checkEntry(entry: PasswordEntry, withPasskey = false): PasswordErrors {
   const errors: PasswordErrors = {}
-  if (entry.dashboard === "") errors.dashboard = "Enter your dashboard password."
+  if (!withPasskey && entry.dashboard === "") errors.dashboard = "Enter your dashboard password."
   if (entry.mode === "choose") {
     if (entry.newPassword === "") errors.newPassword = "Enter the new password."
     else if (entry.confirmation !== entry.newPassword) errors.confirmation = "The two passwords don't match."

@@ -6,6 +6,10 @@ import {
   firstFaultyField,
   passwordTexts,
   checkEntry,
+  BREAK_GLASS,
+  breakGlassLine,
+  isOwnerPassword,
+  offersPasswordChange,
 } from "../src/lib/password"
 
 describe("what the change says", () => {
@@ -65,6 +69,33 @@ describe("input", () => {
     expect(firstFaultyField({ confirmation: "x", dashboard: "y" })).toBe("dashboard")
     expect(firstFaultyField({ confirmation: "x" })).toBe("confirmation")
     expect(firstFaultyField({})).toBeNull()
+  })
+})
+
+describe("once the owner holds a passkey", () => {
+  const base = { dashboard: "", mode: "draw" as const, newPassword: "", confirmation: "" }
+
+  test("no dashboard password is asked for: the passkey confirms, the new password is checked as before", () => {
+    expect(checkEntry(base, true)).toEqual({})
+    expect(checkEntry(base, false)).toEqual({ dashboard: "Enter your dashboard password." })
+    expect(checkEntry({ ...base, mode: "choose", newPassword: "abc", confirmation: "abd" }, true)).toEqual({ confirmation: "The two passwords don't match." })
+  })
+
+  test("the owner's two passwords are no longer offered for a change, any other project's still is", () => {
+    const dashboard = { slug: "dashboard", file: "dashboard.env", variable: "PASSWORD_HASH" }
+    const portal = { slug: "portal", file: "portal.env", variable: "PASSWORD_HASH" }
+    const other = { slug: "cms", file: "env", variable: "ADMIN_HASH" }
+    // A hash of the dashboard's that is not its sign-in's: the monitor's, for instance.
+    const monitor = { slug: "dashboard", file: "dashboard-monitor.env", variable: "PASSWORD_HASH" }
+    expect([dashboard, portal, other, monitor].map(isOwnerPassword)).toEqual([true, true, false, false])
+    expect([dashboard, portal, other, monitor].map((target) => offersPasswordChange(target, true))).toEqual([false, false, true, true])
+    expect([dashboard, portal, other, monitor].map((target) => offersPasswordChange(target, false))).toEqual([true, true, true, true])
+  })
+
+  test("what the page says in their place names the way back", () => {
+    expect(BREAK_GLASS).toContain("passkey")
+    expect(BREAK_GLASS).toContain("sitesolide passkey remove")
+    expect(breakGlassLine("portal")).toContain("The portal password works again")
   })
 })
 

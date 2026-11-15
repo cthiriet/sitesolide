@@ -755,7 +755,11 @@ export function BackupsSection({ slug }: { slug: string }) {
             <p>
               The server saves {slug}'s data folder every hour. Restoring puts a snapshot in place of the current data, which is
               saved first, so a restore can be undone.{" "}
-              {actions.person ? "It asks you to sign in again with your provider." : "It asks for the dashboard password."}
+              {actions.person
+                ? "It asks you to sign in again with your provider."
+                : actions.passkeys.registered
+                  ? "It asks for your passkey."
+                  : "It asks for the dashboard password."}
             </p>
           ) : undefined
         }

@@ -15,6 +15,9 @@ import {
   type OnRefusal,
 } from "@/components/secrets-dialogs"
 import { PasswordDialog } from "@/components/secrets-password"
+import { useOwnerPasskeys } from "@/hooks/use-owner-passkeys"
+import { offersPasswordChange } from "@/lib/password"
+import type { OwnerPasskeys } from "@/lib/webauthn"
 import type { ReadResult } from "@/components/secrets-variables"
 import {
   createSecretFile,
@@ -88,6 +91,12 @@ export type SecretsActions = {
    * sign-in at the provider, and their role decides what the steward accepts.
    */
   person: boolean
+  /**
+   * The owner's passkeys: once they hold one, the dashboard password
+   * neither signs in nor unlocks nor confirms, and the owner's two passwords
+   * are the break-glass alone (lib/password.ts, `offersPasswordChange`).
+   */
+  passkeys: OwnerPasskeys
   /** Changes after every operation: the log is read again. */
   revision: number
   /** The key of the file whose creation is in flight. */
@@ -221,6 +230,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   const announce = useAnnounce()
   const { secrets: data, now, offset, sessionExpired, refresh, identity, sso } = useData()
   const person = isPerson(identity)
+  const passkeys = useOwnerPasskeys(!person)
   const state = unlockStatus(data.until, now, offset)
   const serverNow = now + offset
   const { projects, reload, setUnlockedUntil, reportUnreachable } = data
@@ -468,6 +478,8 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
   // --- Changing a password
 
   function changePassword(target: VariableTarget, options: RequireOptions = {}) {
+    // Never offered then, and refused here too: a password nothing accepts is not worth an unlock.
+    if (!offersPasswordChange(target, passkeys.registered)) return
     require(() => {
       openings.current += 1
       setPassword({ ...target, opening: openings.current, open: true })
@@ -672,6 +684,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
     unlockNotice,
     resumeNote: resumeLabel !== null && state.open ? `Unlocked. Press ${resumeLabel} to finish.` : null,
     person,
+    passkeys,
     revision,
     creation,
     errors: fileErrors,
@@ -741,6 +754,7 @@ export function SecretsActionsProvider({ children }: { children: ReactNode }) {
         onChange={() => afterAction()}
         onRefusal={onRefusal}
         focusReturn={actionFocusReturn}
+        withPasskey={passkeys.registered}
       />
 
       <GeneralAccessDialog
