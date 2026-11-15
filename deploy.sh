@@ -7,6 +7,8 @@
 #   export SITESOLIDE_API=https://dashboard.<zone>
 #   read -rs SITESOLIDE_TOKEN && export SITESOLIDE_TOKEN   # typed, kept out of the history
 #   bash deploy.sh [folder]
+#   bash deploy.sh --dry-run [folder]          the machine's plan, nothing built, sent nor changed
+#   bash deploy.sh --force [folder]            replace a unit or a block edited by hand (the owner's token)
 #   bash deploy.sh --archive <file> [folder]   build, write the archive, send nothing
 #
 # The folder is the one holding sitesolide.json, the current one by default.
@@ -105,6 +107,8 @@ Deploys the sitesolide project in [folder], the current one by default, with a t
   export SITESOLIDE_API=https://dashboard.<zone>
   read -rs SITESOLIDE_TOKEN && export SITESOLIDE_TOKEN   # typed, kept out of the history
   bash deploy.sh [folder]
+  bash deploy.sh --dry-run [folder]          the machine's plan, nothing built, sent nor changed
+  bash deploy.sh --force [folder]            replace a unit or a block edited by hand (the owner's token)
   bash deploy.sh --archive <file> [folder]   build, write the archive, send nothing
 
 SITESOLIDE_API   the dashboard's address, https://dashboard.<zone>
@@ -116,11 +120,21 @@ EOF
 
 archive_to=""
 folder=""
+dry_run=""
+force=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h | --help)
       usage
       exit 0
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    --force)
+      force=1
+      shift
       ;;
     --archive)
       [ "$#" -ge 2 ] || fail "--archive takes the file to write"
@@ -135,6 +149,7 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+[ -z "$dry_run" ] || [ -z "$archive_to" ] || fail "--dry-run sends the manifest alone, --archive sends nothing: one or the other"
 folder="${folder:-.}"
 [ -d "$folder" ] || fail "no such folder: $folder"
 folder="$(cd "$folder" && pwd -P)"
@@ -258,9 +273,20 @@ elif value is not None and value != []:
   esac
 }
 
-# The request that opens a deployment: the manifest's text, as a JSON string,
-# which the machine keeps as it was written, key order and all.
+# The request that opens a deployment, or plans one: the manifest's text, as
+# a JSON string, which the machine keeps as it was written, key order and
+# all; `"force": true` before it for --force, which the machine refuses to
+# any token but the owner's own for every project.
 manifest_request() {
+  if [ -n "$force" ]; then
+    local body
+    body="$(manifest_object)"
+    printf '{"force":true,%s' "${body#\{}"
+  else
+    manifest_object
+  fi
+}
+manifest_object() {
   case "$JSON" in
     jq) (cd "$work" && jq -Rs '{manifest: .}') ;;
     node | bun) (cd "$work" && "$JSON" -e 'let text = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (chunk) => (text += chunk)).on("end", () => process.stdout.write(JSON.stringify({ manifest: text })));') ;;
@@ -405,6 +431,32 @@ answer() {
 }
 
 # --- the run -------------------------------------------------------------------
+
+# A dry run: the machine judges the manifest as a deployment would, and says
+# what it would lay, the ports it would choose and the door it keeps, writing
+# nothing. Nothing is built nor sent but the manifest.
+if [ -n "$dry_run" ]; then
+  echo "-> project $slug, through $API: a dry run, nothing is changed"
+  manifest_request <"$manifest" >"$work/request.json"
+  call POST /api/v1/deployments/plan --max-time 120 -H 'Content-Type: application/json' --data-binary @"$work/request.json" ||
+    fail "$API unreachable"
+  succeeded || refused
+  if [ "$(answer plan.creating)" = true ]; then
+    echo "   a new project"
+  elif [ "$(answer plan.existing)" = true ]; then
+    echo "   the project the server carries, replaced"
+  fi
+  [ "$(answer plan.portal)" != true ] || echo "   Restricted: visitors are asked to sign in"
+  answer plan.allocated >"$work/allocated"
+  while IFS= read -r chosen; do
+    [ -n "$chosen" ] || continue
+    echo "   port $(printf '%s' "$chosen" | json_get port), chosen by the machine$(service="$(printf '%s' "$chosen" | json_get service)"; [ -z "$service" ] || printf ' for %s' "$service")"
+  done <"$work/allocated"
+  echo "--- the manifest the machine would lay ---"
+  answer plan.manifest
+  echo "[dry-run] nothing was built, sent nor changed: run it again without --dry-run to deploy"
+  exit 0
+fi
 
 if [ -z "$archive_to" ]; then
   echo "-> project $slug, through $API"

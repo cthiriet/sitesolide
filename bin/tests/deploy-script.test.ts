@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { projectEntries, readRemoteProject } from "../cli/remote";
@@ -457,6 +457,28 @@ describe("against the control API", () => {
     expect(uploaded!.type).toBe("application/gzip");
     expect(read(uploaded!.body)).toEqual(cli(folder));
   }, 30_000);
+
+  for (const reader of READERS) {
+    test(`--dry-run: the machine's plan alone, nothing built nor sent, --force carried, read with ${reader}`, async () => {
+      requests = [];
+      const final = JSON.stringify({ slug: "app", start: "/usr/local/bin/bun run server.ts", port: 3007, exclude: ["node_modules"] });
+      answer = (request) =>
+        request.path === "/api/v1/deployments/plan"
+          ? Response.json({ plan: { slug: "app", creating: true, existing: false, portal: true, allocated: [{ service: null, port: 3007 }], manifest: final, placeholders: { zone: "test-zone.invalid", contact: "" } } })
+          : new Response("unexpected", { status: 500 });
+      const folder = project({ slug: "app", start: "/usr/local/bin/bun run server.ts", build: "touch build-ran", exclude: ["node_modules"] }, { "server.ts": "Bun.serve({})" });
+      const result = await run(folder, ["--dry-run", "--force"], { reader, env: { SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN } });
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain("   a new project");
+      expect(result.stdout).toContain("   Restricted: visitors are asked to sign in");
+      expect(result.stdout).toContain("   port 3007, chosen by the machine");
+      expect(result.stdout).toContain(final);
+      expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual(["POST /api/v1/deployments/plan"]);
+      expect(JSON.parse(new TextDecoder().decode(requests[0]!.body))).toEqual({ force: true, manifest: readFileSync(join(folder, "sitesolide.json"), "utf8") });
+      expect(existsSync(join(folder, "build-ran"))).toBe(false);
+    }, 30_000);
+  }
 
   for (const reader of READERS) {
     test(`a deployment where the machine chose no port, its log read with ${reader}`, async () => {
