@@ -106,7 +106,7 @@ export function ownerLabel(token: Pick<TokenView, "member" | "email">): string {
 // --- What a token may do --------------------------------------------------------------
 
 /** What a token may do beyond deploying its projects, one key each. */
-export type PermissionKey = "public" | "secrets" | "domain" | "outbound" | "create"
+export type PermissionKey = "all" | "public" | "secrets" | "domain" | "outbound" | "create"
 
 export type PermissionWords = {
   /** The row's chip: short, "Public sites". */
@@ -120,6 +120,12 @@ export type PermissionWords = {
 }
 
 export const PERMISSION_WORDS: Readonly<Record<PermissionKey, PermissionWords>> = {
+  all: {
+    chip: "Every project",
+    title: "Deploys every project, as you",
+    sentence: "Every project on the server, and every permission below: what you deploy with, now that no deployment goes over SSH. It may also take a name back from another token, and replace a unit or a block edited by hand (--force).",
+    phrase: "every project, as you",
+  },
   public: { chip: "Public sites", title: "Can deploy public sites", sentence: "Sites anyone opens without signing in.", phrase: "public sites" },
   secrets: {
     chip: "Secrets",
@@ -133,7 +139,7 @@ export const PERMISSION_WORDS: Readonly<Record<PermissionKey, PermissionWords>> 
 }
 
 /** The order of the chips and the sheet's lines: what opens a site to anyone first. */
-export const PERMISSION_ORDER: readonly PermissionKey[] = ["public", "secrets", "domain", "outbound", "create"]
+export const PERMISSION_ORDER: readonly PermissionKey[] = ["all", "public", "secrets", "domain", "outbound", "create"]
 
 /** A permission a token holds, and why it is paused, when it is: "no longer allowed". */
 export type Permission = { key: PermissionKey; pause: string | null }
@@ -141,7 +147,7 @@ export type Permission = { key: PermissionKey; pause: string | null }
 /** A scope's permissions, what is on alone: nothing is said of what is off, which is every token's default. */
 function heldPermissions(scope: Scope): PermissionKey[] {
   // `secrets` absent from a scope minted before the permission: none.
-  const on: Record<PermissionKey, boolean> = { public: scope.public, secrets: scope.secrets === true, domain: scope.domain, outbound: scope.outbound, create: scope.create }
+  const on: Record<PermissionKey, boolean> = { all: scope.all === true, public: scope.public, secrets: scope.secrets === true, domain: scope.domain, outbound: scope.outbound, create: scope.create }
   return PERMISSION_ORDER.filter((key) => on[key])
 }
 
@@ -347,8 +353,8 @@ export function messageText(origin: string, secret: string): string {
  * permission, which refuses any field it does not know.
  */
 export function requestScope(choices: Omit<Scope, "slugs">, slugs: readonly string[]): Scope {
-  const { secrets, ...rest } = choices
-  return { ...rest, slugs: [...slugs], ...(secrets === true ? { secrets: true } : {}) }
+  const { secrets, all, ...rest } = choices
+  return { ...rest, slugs: [...slugs], ...(secrets === true ? { secrets: true } : {}), ...(all === true ? { all: true } : {}) }
 }
 
 /** What an older steward says of a scope carrying a field it does not know: `secrets`, the only one the dialog may add. */

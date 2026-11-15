@@ -211,9 +211,13 @@ export function CreateTokenDialog({
   const needed = options ? neededOptions(projects, chosen, target !== null) : NO_OPTION
   // A person's options fall as soon as their choice no longer allows them; one a project needs is on.
   // Managing secrets stays as ticked: a Developer may already.
-  const effective = options
-    ? { ...scope, public: scope.public || needed.public.length > 0, domain: scope.domain || needed.domain.length > 0 }
-    : { ...scope, outbound: false, domain: false, public: false }
+  // Every project, as the owner: the owner's own token alone, every permission with it, as the steward mints it.
+  const every = target === null && person === null && scope.all === true
+  const effective = every
+    ? { create: true, outbound: true, domain: true, public: true, secrets: true, all: true }
+    : options
+      ? { ...scope, all: false, public: scope.public || needed.public.length > 0, domain: scope.domain || needed.domain.length > 0 }
+      : { ...scope, all: false, outbound: false, domain: false, public: false }
   const [errors, setErrors] = useState<TokenErrors>({})
   const [formError, setFormError] = useState("")
   const [inProgress, setInProgress] = useState(false)
@@ -286,7 +290,9 @@ export function CreateTokenDialog({
   const shown = filter.trim() === "" ? offered : offered.filter(({ slug }) => slug.includes(filter.trim().toLowerCase()))
   const allShown = shown.length > 0 && shown.every(({ slug }) => chosen.includes(slug))
   const someShown = shown.some(({ slug }) => chosen.includes(slug))
-  const held = PERMISSION_ORDER.filter((key): key is Exclude<PermissionKey, "create"> => key !== "create" && (key === "secrets" ? effective.secrets === true : effective[key]))
+  const held = PERMISSION_ORDER.filter(
+    (key): key is Exclude<PermissionKey, "create"> => key !== "create" && (key === "secrets" ? effective.secrets === true : key === "all" ? effective.all === true : effective[key]),
+  )
   const neededBy = [...new Set([...needed.public, ...needed.domain])].sort()
   const summary = tokenSummary({ slugs: chosen, create: effective.create, permissions: held, expiryDays: expiry })
 
@@ -380,7 +386,21 @@ export function CreateTokenDialog({
 
               <fieldset ref={projectsField} aria-describedby={errors.slugs !== undefined ? `${projectsId}-error` : undefined}>
                 <legend className="mb-2 text-sm leading-none font-medium">Projects it may deploy</legend>
-                <div className="overflow-clip rounded-lg border border-input">
+                {target === null && person === null && (
+                  <div className="mb-2 overflow-clip rounded-lg border border-input p-1">
+                    <Choice
+                      checked={every}
+                      onChange={(next) => {
+                        setScope({ ...scope, all: next })
+                        setErrors(({ slugs: _, ...rest }) => rest)
+                      }}
+                      title="Every project, as you"
+                    >
+                      Every project on the server and every permission below: the token you deploy with. Also takes a name back from another token, and replaces a unit or a block edited by hand.
+                    </Choice>
+                  </div>
+                )}
+                <div className={cn("overflow-clip rounded-lg border border-input", every && "pointer-events-none opacity-50")} aria-disabled={every || undefined}>
                   {offered.length === 0 ? (
                     <p className="px-3 py-2.5 text-xs text-muted-foreground">{empty}</p>
                   ) : (
