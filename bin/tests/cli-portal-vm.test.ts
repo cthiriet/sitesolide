@@ -8,7 +8,6 @@ import { fragmentIsProtected } from "../cli/portal";
 import {
   accessOf,
   generalOf,
-  switchAnnouncement,
   readManifestsCommand,
   confirmDoorUnderLock,
   decidePortal,
@@ -199,25 +198,6 @@ describe("the general access that deploy applies", () => {
       expect(decision.details.join("\n")).toContain("/srv/sites/cms/sitesolide.json: not valid JSON");
       expect(decision.details.join("\n")).toContain("nothing was sent");
     }
-  });
-
-  test("the announcement says the general access, that the manifest is rewritten, and that it must be committed", () => {
-    expect(switchAnnouncement(G.restricted, false).title).toBe(
-      "general access was set to Restricted from the dashboard; sitesolide.json updated, commit it",
-    );
-    expect(switchAnnouncement(G.public, false).title).toBe(
-      "general access was set to Public from the dashboard; sitesolide.json updated, commit it",
-    );
-    expect(switchAnnouncement(G.code, false).title).toBe(
-      "general access was set to Anyone with the code from the dashboard; sitesolide.json updated, commit it",
-    );
-  });
-
-  test("in a dry run, the announcement does not claim to have rewritten anything", () => {
-    const { title } = switchAnnouncement(G.restricted, true);
-    expect(title).toContain("general access was set to Restricted from the dashboard");
-    expect(title).not.toContain("updated,");
-    expect(title).toContain("commit it");
   });
 });
 

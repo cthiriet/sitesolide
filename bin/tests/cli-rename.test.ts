@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readManifest, setFormerSlugs, setSlug, validate } from "../cli/manifest";
-import { followMachine, renamedTo, renameRefusal } from "../cli/rename";
+import { readManifest, setSlug, validate } from "../cli/manifest";
+import { renameRefusal } from "../cli/rename";
 
 const ZONE = "test-zone.invalid";
 const manifest = (object: object) => `${JSON.stringify(object, null, 2)}\n`;
@@ -81,30 +81,3 @@ describe("renameRefusal", () => {
   });
 });
 
-describe("followMachine", () => {
-  const renamed = setSlug(OLDSITE, "cybersolide");
-
-  test("a checkout under a former name follows the project to its new name", () => {
-    const followed = followMachine(OLDSITE, "oldsite", new Map([["cybersolide", renamed]]));
-    expect(followed.kind).toBe("renamed");
-    if (followed.kind !== "renamed") return;
-    expect(followed.to).toBe("cybersolide");
-    expect(readManifest(followed.text).manifest).toMatchObject({ slug: "cybersolide", formerSlugs: ["oldsite"], port: 3035 });
-  });
-
-  test("the machine's former names are written in, every one of them", () => {
-    const twice = setSlug(renamed, "mailguard");
-    const followed = followMachine(OLDSITE, "oldsite", new Map([["mailguard", twice]]));
-    expect(followed.kind === "renamed" && readManifest(followed.text).manifest?.formerSlugs).toEqual(["oldsite", "cybersolide"]);
-    // A checkout that has the new name but lost the list gets it back.
-    const lost = setFormerSlugs(twice, undefined);
-    const back = followMachine(lost, "mailguard", new Map([["mailguard", twice]]));
-    expect(back.kind === "former" && readManifest(back.text).manifest?.formerSlugs).toEqual(["oldsite", "cybersolide"]);
-  });
-
-  test("a project in its place, or a new one, is left as it is", () => {
-    expect(followMachine(renamed, "cybersolide", new Map([["cybersolide", renamed]])).kind).toBe("same");
-    expect(followMachine(OLDSITE, "oldsite", new Map()).kind).toBe("same");
-    expect(renamedTo(new Map([["blog", manifest({ slug: "blog", publicDir: "public" })]]), "oldsite")).toBeNull();
-  });
-});

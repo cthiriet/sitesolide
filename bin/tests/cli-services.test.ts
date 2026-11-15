@@ -25,7 +25,6 @@ import {
   portConflicts,
   laterBlockPorts,
   readLoopbackState,
-  readScheduleCheck,
   readSecondBlockState,
   secondBlockRefusal,
   secondBlockStateCommand,
@@ -40,7 +39,6 @@ import {
   readUidsAnswer,
   readUnitsAnswer,
   removeUnitsCommand,
-  scheduleCheckCommand,
   stabilityCommand,
   staleUnits,
   uidsCommand,
@@ -1138,49 +1136,6 @@ describe("the units of workers and scheduled services, on the machine", () => {
     const anchored = lab({ report: { start: "/x", schedule: "daily" } });
     const [anchor] = removalActions({ slug: "lab", isApplication: true, units: unitNames(anchored) });
     expect(anchor!.command).toStartWith("sudo systemctl disable --now lab.report.timer lab lab.report.service 2>/dev/null || true");
-  });
-});
-
-describe("the schedules, read by systemd on the machine", () => {
-  /** What `systemd-analyze calendar` accepts here: these three expressions, nothing else. */
-  function check(schedules: string[]): string {
-    const root = mkdtempSync(join(tmpdir(), "sitesolide-calendar-"));
-    try {
-      writeFileSync(
-        join(root, "systemd-analyze"),
-        ["#!/bin/sh", '[ "$1" = calendar ] || exit 2', 'case "$2" in', '  hourly|"*:0/15"|"Mon..Fri 08:00") exit 0 ;;', "esac", "exit 1", ""].join("\n"),
-        { mode: 0o755 },
-      );
-      const script = scheduleCheckCommand(schedules).replace(/^sh -c '/, "").replace(/'$/, "");
-      return Bun.spawnSync(["sh", "-c", script], { env: { PATH: `${root}:/usr/bin:/bin` }, cwd: root }).stdout.toString();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  }
-
-  test("each expression asked as written, a star and a space included, one answer each and the end marker", () => {
-    expect(scheduleCheckCommand(["hourly", "Mon..Fri 08:00"])).toBe(
-      `sh -c 'if systemd-analyze calendar "hourly" >/dev/null 2>&1; then echo OK; else echo BAD; fi; ` +
-        `if systemd-analyze calendar "Mon..Fri 08:00" >/dev/null 2>&1; then echo OK; else echo BAD; fi; echo ${MARKER_DONE}'`,
-    );
-    const schedules = ["hourly", "*:0/15", "every day", "Mon..Fri 08:00"];
-    expect(readScheduleCheck(check(schedules), schedules)).toEqual(["every day"]);
-    expect(readScheduleCheck(check(["hourly"]), ["hourly"])).toEqual([]);
-  });
-
-  test("an expression validate() refuses is never sent to a shell", () => {
-    for (const schedule of ["daily'; reboot; '", "$(reboot)", 'daily" ; reboot ; "', "daily\nreboot"]) {
-      expect(() => scheduleCheckCommand([schedule])).toThrow(/invalid schedule/);
-    }
-  });
-
-  test("an answer without its marker, or with an answer missing or unknown, is unreadable", () => {
-    expect(readScheduleCheck("", ["hourly"])).toBeNull();
-    expect(readScheduleCheck("OK\n", ["hourly"])).toBeNull();
-    expect(readScheduleCheck(`${MARKER_DONE}\n`, ["hourly"])).toBeNull();
-    expect(readScheduleCheck(`OK\nOK\n${MARKER_DONE}\n`, ["hourly"])).toBeNull();
-    expect(readScheduleCheck(`MAYBE\n${MARKER_DONE}\n`, ["hourly"])).toBeNull();
-    expect(readScheduleCheck(`BAD\nOK\n${MARKER_DONE}\n`, ["daily", "hourly"])).toEqual(["daily"]);
   });
 });
 

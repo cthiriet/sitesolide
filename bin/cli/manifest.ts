@@ -397,10 +397,10 @@ export function isValidCpu(cpu: unknown): cpu is string {
  * of the characters such an expression uses, nothing systemd would read as a
  * specifier (`%`) or a continuation (`\`).
  *
- * Whether systemd understands it is systemd's to say: `deploy` asks
+ * Whether systemd understands it is systemd's to say: the installer asks
  * `systemd-analyze calendar` on the machine before anything is written, see
- * scheduleCheckCommand in services.ts. What passes here is only safe to
- * write, not necessarily a time.
+ * refusedSchedules in dashboard/src/installer/real.ts. What passes here is
+ * only safe to write, not necessarily a time.
  */
 export function isValidSchedule(schedule: unknown): schedule is string {
   return (

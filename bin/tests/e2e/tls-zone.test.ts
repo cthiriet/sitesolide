@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { generateFragment } from "../../cli/fragment";
 import type { Manifest } from "../../cli/manifest";
 import { FIRST_CERTIFICATE_MS, TLS_ZONE_FILE, TLS_ZONE_STATES, ZONE_NAMES_COMMAND, ZONE_NAMES_FILE } from "../../cli/tls";
-import { CLI, REPO, run, SSH_ENGINE, TEST_EMAIL, TEST_ZONE } from "./run";
+import { CLI, REPO, run, TEST_EMAIL, TEST_ZONE } from "./run";
 import { createFakeVm, type FakeVm } from "./fake-vm";
 
 /**
@@ -157,13 +157,15 @@ describe("bin/deploy-caddy.sh and a policy already in place", () => {
 });
 
 describe("sitesolide deploy and remove keep the zone's sites for the ask endpoint", () => {
+  // Removed as any site is; deployed over SSH, a platform component alone.
   const SHOWCASE: Manifest = { slug: "sample-zone", publicDir: "public" };
-  const INSTALL = `ACCEPTED sudo install -m 644 -o sample -g sample /dev/stdin /srv/sites/${SHOWCASE.slug}/sitesolide.json`;
+  const COMPONENT: Manifest = { slug: "dashboard", start: "/usr/local/bin/bun run server.ts", port: 3022, publicDir: "public" };
+  const INSTALL = `ACCEPTED sudo install -m 644 -o sample -g sample /dev/stdin /srv/sites/${COMPONENT.slug}/sitesolide.json`;
 
-  function project(): string {
+  function project(manifest: Manifest = COMPONENT): string {
     const folder = realpathSync(mkdtempSync(join(tmpdir(), "project-zone-")));
     TEMP_DIRS.push(folder);
-    writeFileSync(join(folder, "sitesolide.json"), `${JSON.stringify(SHOWCASE, null, 2)}\n`);
+    writeFileSync(join(folder, "sitesolide.json"), `${JSON.stringify(manifest, null, 2)}\n`);
     mkdirSync(join(folder, "public"));
     writeFileSync(join(folder, "public", "index.html"), "<p>test</p>\n");
     return folder;
@@ -178,13 +180,21 @@ describe("sitesolide deploy and remove keep the zone's sites for the ask endpoin
     return { HOME: folder, SITESOLIDE_CONFIG_DIR: join(folder, ".config", "sitesolide") };
   }
 
-  test("a provider's zone: written again once the files are in place, nothing said, and the check fails at once as before", async () => {
+  /** A machine carrying the component, whose Caddy accepts the block. No landing: its addresses would resolve nowhere. */
+  function carrying(state?: string): void {
     vm = createFakeVm();
-    vm.writeManifest(SHOWCASE.slug, `${JSON.stringify(SHOWCASE, null, 2)}\n`);
-    vm.acceptWrites();
+    if (state !== undefined) vm.setTlsZoneState(state);
+    vm.writeManifest(COMPONENT.slug, `${JSON.stringify(COMPONENT, null, 2)}\n`);
+    vm.acceptWrites([`ls -A /srv/sites/${TEST_ZONE}/public`]);
+    vm.answer("test -f /etc/systemd/system/dashboard.service", "ABSENT\n");
+    vm.answer("caddy validate", "Valid configuration\n");
+  }
+
+  test("a provider's zone: written again once the files are in place, nothing said, and the check fails at once as before", async () => {
+    carrying();
     const started = Date.now();
     const r = await run(project(), ["deploy"], { vm, env: home() });
-    expect(r.error).toContain(`https://${SHOWCASE.slug}.${TEST_ZONE}/ unreachable`);
+    expect(r.error).toContain(`https://${COMPONENT.slug}.${TEST_ZONE}/ unreachable`);
     expect(Date.now() - started).toBeLessThan(FIRST_CERTIFICATE_MS / 3);
     const logs = vm.logs();
     expect(logs.indexOf(`ACCEPTED ${ZONE_NAMES_COMMAND}`)).toBeGreaterThan(logs.indexOf(INSTALL));
@@ -193,11 +203,8 @@ describe("sitesolide deploy and remove keep the zone's sites for the ask endpoin
   });
 
   test("manual DNS: written again, said, and the check waits for the site's first certificate", async () => {
-    vm = createFakeVm();
-    vm.setTlsZoneState(TLS_ZONE_STATES.onDemand);
-    vm.writeManifest(SHOWCASE.slug, `${JSON.stringify(SHOWCASE, null, 2)}\n`);
-    vm.acceptWrites();
-    const proc = Bun.spawn(["bun", "--preload", SSH_ENGINE, CLI, "deploy"], {
+    carrying(TLS_ZONE_STATES.onDemand);
+    const proc = Bun.spawn(["bun", CLI, "deploy"], {
       cwd: project(),
       stdout: "pipe",
       stderr: "pipe",
@@ -226,7 +233,7 @@ describe("sitesolide deploy and remove keep the zone's sites for the ask endpoin
     vm.setTlsZoneState(TLS_ZONE_STATES.onDemand);
     vm.writeManifest(SHOWCASE.slug, `${JSON.stringify(SHOWCASE, null, 2)}\n`);
     vm.acceptWrites();
-    const r = await run(project(), ["remove", "--confirm", SHOWCASE.slug], { vm, env: home() });
+    const r = await run(project(SHOWCASE), ["remove", "--confirm", SHOWCASE.slug], { vm, env: home() });
     const logs = vm.logs();
     const gone = logs.indexOf(`ACCEPTED sudo rm -rf /srv/sites/${SHOWCASE.slug}`);
     expect(gone).toBeGreaterThan(-1);

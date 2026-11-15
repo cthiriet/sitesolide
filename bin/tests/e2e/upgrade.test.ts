@@ -2,6 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { generateFragment } from "../../cli/fragment";
+import type { Manifest } from "../../cli/manifest";
+import { generateUnits, unitFileName } from "../../cli/unit";
 import { upgradeComponents } from "../../cli/upgrade";
 import { createFakeVm, type FakeVm } from "./fake-vm";
 import { TEST_HOST } from "./fake-ssh";
@@ -149,51 +152,70 @@ describe("sitesolide upgrade, in front of the fake machine", () => {
 });
 
 describe("sitesolide deploy --dry-run --compare", () => {
-  const PROJECT = "projects/simple-site";
+  // The one deployment over SSH, a platform component's, which upgrade compares.
+  const PROJECT = "projects/component";
   const manifest = readFileSync(join(TESTS_ROOT, PROJECT, "sitesolide.json"), "utf8");
   const env = { SITESOLIDE_SERVER: TEST_HOST, SITESOLIDE_ZONE: TEST_ZONE, SITESOLIDE_EMAIL: TEST_EMAIL };
+
+  /** A machine carrying the component as this checkout lays it: its manifest, its units and its block. */
+  function carrying(deposited = manifest): void {
+    if (vm === null) throw new Error("no fake machine");
+    const parsed = JSON.parse(manifest) as Manifest;
+    vm.writeManifest("dashboard", deposited);
+    for (const { unit, text } of generateUnits(parsed, { slug: "dashboard", zone: TEST_ZONE, contact: "" })) {
+      vm.writeFile(`/etc/systemd/system/${unitFileName(unit)}`, text);
+    }
+    vm.writeBlock("dashboard", generateFragment(parsed)!);
+  }
 
   test("the deployment's rsync in a dry run that compares contents, the manifest read, nothing written", async () => {
     vm = createFakeVm();
     vm.acceptWrites();
-    vm.writeManifest("sample-static", manifest);
+    carrying();
     const r = await run(PROJECT, ["deploy", "--dry-run", "--compare", "--json"], { vm, env });
     expect(r.error).toBe("");
     expect(r.code).toBe(0);
     expect(events(r.output).at(-1)).toMatchObject({ type: "result", command: "deploy", dryRun: true, compared: true, changes: [], kept: [] });
     const accepted = vm.logs().filter((line) => line.startsWith("ACCEPTED"));
-    // The only command that is not a recognised read: rsync, in a dry run.
-    expect(accepted).toHaveLength(1);
-    expect(accepted[0]).toStartWith("ACCEPTED rsync -a --dry-run --itemize-changes --checksum --delete --delete-excluded");
-    expect(accepted[0]).toContain(`${TEST_HOST}:/srv/sites/sample-static/public/`);
-    expect(vm.logs()).toContain("FILE /srv/sites/sample-static/sitesolide.json");
+    // The only commands that are not a recognised read: rsync, in a dry run,
+    // of the code and of public/.
+    expect(accepted).toHaveLength(2);
+    for (const line of accepted) expect(line).toStartWith("ACCEPTED rsync -a --dry-run --itemize-changes --checksum --delete");
+    expect(accepted[0]).toContain(`${TEST_HOST}:/srv/sites/dashboard/app/`);
+    expect(accepted[1]).toContain(`${TEST_HOST}:/srv/sites/dashboard/public/`);
+    expect(vm.logs()).toContain("FILE /srv/sites/dashboard/sitesolide.json");
   });
 
   test("a deposited manifest that differs, or none, is a change", async () => {
     vm = createFakeVm();
     vm.acceptWrites();
-    vm.writeManifest("sample-static", manifest.replace('"public"', '"public", "description": "older"'));
+    carrying(manifest.replace('"memory": "128M"', '"memory": "64M"'));
     const differs = await run(PROJECT, ["deploy", "--dry-run", "--compare", "--json"], { vm, env });
-    expect(events(differs.output).at(-1)).toMatchObject({ compared: true, changes: ["/srv/sites/sample-static/sitesolide.json"] });
-    expect(differs.output).toContain("differs    /srv/sites/sample-static/sitesolide.json");
+    expect(events(differs.output).at(-1)).toMatchObject({ compared: true, changes: ["/srv/sites/dashboard/sitesolide.json"] });
+    expect(differs.output).toContain("differs    /srv/sites/dashboard/sitesolide.json");
   });
 
-  test("a project the server does not carry yet: everything would be sent, and rsync is not asked", async () => {
+  test("a component the server does not carry yet: everything would be sent, its unit and block written, and rsync is not asked", async () => {
     vm = createFakeVm();
     vm.acceptWrites();
     const r = await run(PROJECT, ["deploy", "--dry-run", "--compare", "--json"], { vm, env });
     expect(r.code).toBe(0);
-    expect(events(r.output).at(-1)).toMatchObject({ compared: true, changes: ["/srv/sites/sample-static: not on the server yet, everything would be sent"] });
+    expect(events(r.output).at(-1)).toMatchObject({ compared: true, changes: [
+        "/srv/sites/dashboard: not on the server yet, everything would be sent",
+        "/etc/systemd/system/dashboard.service",
+        "/etc/caddy/sites/dashboard.caddy",
+      ],
+    });
     expect(vm.logs().filter((line) => line.startsWith("ACCEPTED"))).toEqual([]);
   });
 
   test("an rsync that fails is a refusal, never a guess", async () => {
     vm = createFakeVm();
-    vm.writeManifest("sample-static", manifest);
+    carrying();
     const r = await run(PROJECT, ["deploy", "--dry-run", "--compare", "--json"], { vm, env });
     expect(r.code).toBe(1);
     const last = events(r.output).at(-1)!;
-    expect(last).toMatchObject({ type: "error", message: "cannot compare /srv/sites/sample-static/public with the server: rsync failed (1)" });
+    expect(last).toMatchObject({ type: "error", message: "cannot compare /srv/sites/dashboard/app with the server: rsync failed (1)" });
     expect(String(last.hint)).toContain("nothing was changed");
   });
 

@@ -10,7 +10,9 @@ import { createFakeVm, type FakeVm } from "./fake-vm";
  * A project turned off on the machine: every gesture that deposits the
  * checkout's manifest is refused, since that manifest carries no `disabled`
  * and would switch it back on in the machine's eyes. A checkout that carries
- * `disabled` itself is refused too: the machine alone writes it.
+ * `disabled` itself is refused too: the machine alone writes it. `deploy`
+ * over SSH lays a platform component alone; a project's deployment goes
+ * through the installer, see dashboard/tests/installer-pipeline.test.ts.
  */
 const dirs: string[] = [];
 let vm: FakeVm;
@@ -19,6 +21,8 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 const SITE: Manifest = { slug: "shop-off", publicDir: "public", domain: { name: "shop-off.example", active: false } };
+/** The one shape `deploy` lays over SSH. */
+const COMPONENT: Manifest = { slug: "dashboard", port: 3022, publicDir: "public", start: "/usr/local/bin/bun run server.ts" };
 const text = (m: object) => `${JSON.stringify(m, null, 2)}\n`;
 function project(m: Manifest): string {
   const folder = realpathSync(mkdtempSync(join(tmpdir(), "shop-off-")));
@@ -29,10 +33,10 @@ function project(m: Manifest): string {
   return folder;
 }
 
-test("deploy refuses a disabled project", async () => {
+test("deploy refuses a disabled component", async () => {
   vm = createFakeVm();
-  vm.writeManifest(SITE.slug, setDisabled(text(SITE), true));
-  const r = await run(project(SITE), ["deploy", "--dry-run"], { vm });
+  vm.writeManifest(COMPONENT.slug, setDisabled(text(COMPONENT), true));
+  const r = await run(project(COMPONENT), ["deploy", "--dry-run"], { vm });
   expect(r.code).toBe(1);
   expect(r.error).toContain("turned off");
 });
@@ -48,7 +52,7 @@ test("domain --activate refuses it too, before anything is deposited", async () 
 
 test("a checkout that says disabled itself is refused", async () => {
   vm = createFakeVm();
-  const r = await run(project({ ...SITE, disabled: true }), ["deploy", "--dry-run"], { vm });
+  const r = await run(project({ ...COMPONENT, disabled: true }), ["deploy", "--dry-run"], { vm });
   expect(r.code).toBe(1);
   expect(r.error).toContain("only the machine writes");
 });
@@ -59,4 +63,12 @@ test("domain --activate refuses to drop the former names the machine keeps", asy
   const r = await run(project(SITE), ["domain", "--activate", "--dry-run", "--force"], { vm });
   expect(r.code).toBe(1);
   expect(r.error).toContain("former names");
+});
+
+test("deploy refuses a component whose former names differ on the machine", async () => {
+  vm = createFakeVm();
+  vm.writeManifest(COMPONENT.slug, text({ ...COMPONENT, formerSlugs: ["old-name"] }));
+  const r = await run(project(COMPONENT), ["deploy", "--dry-run"], { vm });
+  expect(r.code).toBe(1);
+  expect(r.error).toContain("the former names of dashboard differ on the server");
 });

@@ -266,7 +266,7 @@ describe("deploy through the API", () => {
     const posted = received.filter((entry) => entry.method === "POST");
     expect(posted.map((entry) => entry.path)).toEqual(["/api/v1/deployments/plan", "/api/v1/deployments"]);
     for (const entry of posted) expect(JSON.parse(entry.body as string)).toEqual({ manifest: before });
-    // The port the machine chose, written after `start`, as over SSH.
+    // The port the machine chose, written after `start`.
     expect(JSON.parse(readFileSync(join(root, "sitesolide.json"), "utf8"))).toEqual({ ...APP, port: 3002 });
     expect(Object.keys(JSON.parse(readFileSync(join(root, "sitesolide.json"), "utf8"))).slice(0, 3)).toEqual(["slug", "start", "port"]);
     const put = received.find((entry) => entry.method === "PUT")!;
@@ -414,7 +414,7 @@ describe("what a token's run refuses, and --json", () => {
     }
   });
 
-  test("the door and the former names the machine keeps are written back before the deployment, as over SSH", async () => {
+  test("the door and the former names the machine keeps are written back before the deployment", async () => {
     scenario = "succeeds";
     planOverrides = { portal: true, formerSlugs: ["boutique"] };
     received.length = 0;

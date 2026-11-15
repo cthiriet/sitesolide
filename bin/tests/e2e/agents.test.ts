@@ -6,15 +6,16 @@ import { createFakeVm, type FakeVm } from "./fake-vm";
 import { run, TESTS_ROOT, type Result } from "./run";
 
 /**
- * The CLI as an agent drives it: `--json`, a folder with no manifest, an app
- * with no port.
+ * The CLI as an agent drives it: `--json`, a folder with no manifest, the
+ * reading commands. Its deployments are those that still go over SSH, a
+ * platform component's; a project's go through the API, see
+ * bin/tests/cli-remote.test.ts.
  *
  * **Nothing here touches a machine.** Every test runs in front of the fake VM
  * of fake-vm.ts: an ssh that answers only the reads it recognises, or accepts
  * writes without running anything when a test asks it to, and a zone that
  * resolves nowhere. A deployment run without --dry-run goes as far as the
- * first refused write, which is how what it writes on the workstation before
- * that, the port it chose, is checked for real.
+ * first refused write.
  */
 
 const TEMP_DIRS: string[] = [];
@@ -71,6 +72,9 @@ function ended(r: Result, type: "result" | "error"): Record<string, unknown> {
 
 const APP = { slug: "agent-shop", start: "/usr/local/bin/bun run server.ts", exclude: ["node_modules"] };
 
+/** A platform component's manifest, the one shape `deploy` lays over SSH. */
+const COMPONENT = { slug: "dashboard", start: "/usr/local/bin/bun run server.ts", port: 3022, exclude: ["node_modules"] };
+
 /** A project folder with this manifest and a public/ page. */
 function project(manifest: object, name = "agent-shop"): string {
   const folder = copyOf("../infer/bun-app", name);
@@ -80,51 +84,45 @@ function project(manifest: object, name = "agent-shop"): string {
 
 describe("deploy --json", () => {
   test("a dry run prints nothing but events, and ends with the site's address", async () => {
-    const r = await run("projects/bun-mixed", ["deploy", "--json", "--dry-run"], { vm: fakeVm() });
+    const r = await run("projects/component", ["deploy", "--json", "--dry-run"], { vm: fakeVm() });
     expect(r.code).toBe(0);
     const result = ended(r, "result");
     expect(result).toMatchObject({
       ok: true,
       command: "deploy",
-      slug: "sample-bun",
+      slug: "dashboard",
       kind: "service",
       dryRun: true,
-      port: 3031,
+      port: 3022,
       portal: false,
-      url: "https://sample-bun.test-zone.invalid/",
+      url: "https://dashboard.test-zone.invalid/",
       status: null,
     });
   });
 
   test("the generated unit and block are files, the commands not run are planned, the build among them", async () => {
-    const r = await run("projects/bun-mixed", ["deploy", "--json", "--dry-run"], { vm: fakeVm() });
+    const r = await run("projects/component", ["deploy", "--json", "--dry-run"], { vm: fakeVm() });
     const list = events(r);
     const files = list.filter((event) => event.type === "file").map((event) => event.name);
-    expect(files).toEqual(["sample-bun.service", "sample-bun.caddy"]);
-    expect(String(list.find((event) => event.name === "sample-bun.service")?.content)).toContain("User=site-sample-bun");
+    expect(files).toEqual(["dashboard.service", "dashboard.caddy"]);
+    expect(String(list.find((event) => event.name === "dashboard.service")?.content)).toContain("User=site-dashboard");
     expect(list.some((event) => event.type === "planned" && String(event.message).startsWith("rsync -a --delete"))).toBe(true);
     // A dry run never runs the folder's own code: the build is planned, not run.
     expect(list.some((event) => event.type === "planned" && String(event.message).startsWith("build (bun run build.ts), not run"))).toBe(true);
     expect(list.some((event) => event.type === "step" && String(event.message).startsWith("build"))).toBe(false);
     // --build asks for it, and its own output is relayed.
-    const built = events(await run("projects/bun-mixed", ["deploy", "--json", "--dry-run", "--build"], { vm: fakeVm() }));
+    const built = events(await run("projects/component", ["deploy", "--json", "--dry-run", "--build"], { vm: fakeVm() }));
     expect(built.some((event) => event.type === "step" && event.message === "build (bun run build.ts)")).toBe(true);
     expect(built.some((event) => event.type === "output")).toBe(true);
     // The same run without --json: the human output, not one event.
-    const human = await run("projects/bun-mixed", ["deploy", "--dry-run"], { vm: fakeVm() });
-    expect(human.output).toContain("-> project sample-bun, service");
-    expect(human.output).toContain("--- sample-bun.service ---");
+    const human = await run("projects/component", ["deploy", "--dry-run"], { vm: fakeVm() });
+    expect(human.output).toContain("-> project dashboard, service");
+    expect(human.output).toContain("--- dashboard.service ---");
     expect(human.output.split("\n").some((line) => line.startsWith('{"type"'))).toBe(false);
   });
 
-  test("a static site", async () => {
-    const r = await run("projects/simple-site", ["deploy", "--json", "--dry-run"], { vm: fakeVm() });
-    expect(r.code).toBe(0);
-    expect(ended(r, "result")).toMatchObject({ command: "deploy", slug: "sample-static", kind: "static", port: null });
-  });
-
   test("a refusal is one error event, with its details and a hint, and a non-zero exit", async () => {
-    const r = await run("rejects/path-escapes", ["deploy", "--json", "--dry-run"], { vm: fakeVm() });
+    const r = await run(project({ ...COMPONENT, publicDir: "../.." }, "dashboard"), ["deploy", "--json", "--dry-run"], { vm: fakeVm() });
     expect(r.code).toBe(1);
     const error = ended(r, "error");
     expect(error.message).toBe("sitesolide.json rejected");
@@ -134,67 +132,67 @@ describe("deploy --json", () => {
     expect(r.error).not.toContain("!!");
   });
 
-  test("a port another project declares: the hint says how to let deploy pick one", async () => {
+  test("a port another project declares: the hint says the component keeps its own", async () => {
     const machine = fakeVm();
-    machine.writeManifest("taken", JSON.stringify({ slug: "taken", start: "/usr/local/bin/bun run server.ts", port: 3031 }));
-    const r = await run("projects/bun-mixed", ["deploy", "--json", "--dry-run"], { vm: machine });
+    machine.writeManifest("taken", JSON.stringify({ slug: "taken", start: "/usr/local/bin/bun run server.ts", port: 3022 }));
+    const r = await run("projects/component", ["deploy", "--json", "--dry-run"], { vm: machine });
     expect(r.code).toBe(1);
     const error = ended(r, "error");
     expect(error.message).toBe("port already taken on the server");
-    expect(error.hint).toContain("delete the key and let deploy pick one");
+    expect(error.hint).toContain("never change the component's port");
   });
 
   test("a slug systemd already gives to a package's service is refused before anything is written, --force included", async () => {
     const machine = fakeVm();
-    machine.systemUnit("agent-shop", "/lib/systemd/system/agent-shop.service");
-    const r = await run(project({ ...APP, port: 3040 }), ["deploy", "--json", "--dry-run"], { vm: machine });
+    machine.systemUnit("dashboard", "/lib/systemd/system/dashboard.service");
+    const r = await run(project(COMPONENT, "dashboard"), ["deploy", "--json", "--dry-run"], { vm: machine });
     expect(r.code).toBe(1);
     const error = ended(r, "error");
-    expect(error.message).toBe("agent-shop is already the name of a service of the server, which deploy never replaces");
-    expect((error.details as string[]).join(" ")).toContain("read from /lib/systemd/system/agent-shop.service");
+    expect(error.message).toBe("dashboard is already the name of a service of the server, which deploy never replaces");
+    expect((error.details as string[]).join(" ")).toContain("read from /lib/systemd/system/dashboard.service");
     expect(error.hint).toContain("pick another slug");
     // For real: the refusal falls before the first write, and --force does not lift it.
     machine.acceptWrites();
-    const forced = await run(project({ ...APP, port: 3040 }), ["deploy", "--json", "--force"], { vm: machine });
+    const forced = await run(project(COMPONENT, "dashboard"), ["deploy", "--json", "--force"], { vm: machine });
     expect(ended(forced, "error").message).toBe(error.message);
     expect(machine.logs().filter((line) => line.startsWith("ACCEPTED"))).toEqual([]);
   });
 
   test("a unit in /etc stays the project's when it serves the project's folder, and is refused otherwise", async () => {
     const machine = fakeVm();
-    const unit = "/etc/systemd/system/agent-shop.service";
-    machine.writeFile(unit, "[Service]\nWorkingDirectory=/srv/sites/agent-shop/app\nExecStart=/usr/local/bin/bun run server.ts\n");
-    expect((await run(project({ ...APP, port: 3040 }), ["deploy", "--json", "--dry-run"], { vm: machine })).code).toBe(0);
+    const unit = "/etc/systemd/system/dashboard.service";
+    machine.writeFile(unit, "[Service]\nWorkingDirectory=/srv/sites/dashboard/app\nExecStart=/usr/local/bin/bun run server.ts\n");
+    expect((await run(project(COMPONENT, "dashboard"), ["deploy", "--json", "--dry-run"], { vm: machine })).code).toBe(0);
     machine.writeFile(unit, "[Service]\nExecStart=/usr/sbin/postfix start-fg\n");
-    const refused = await run(project({ ...APP, port: 3040 }), ["deploy", "--json", "--dry-run"], { vm: machine });
+    const refused = await run(project(COMPONENT, "dashboard"), ["deploy", "--json", "--dry-run"], { vm: machine });
     expect((ended(refused, "error").details as string[]).join(" ")).toContain(`${unit} is a unit deploy did not write`);
   });
 
   test("install runs as the project's account in its service's walls, the command on standard input", async () => {
     const machine = fakeVm();
     machine.acceptWrites();
-    machine.answer("test -f /etc/systemd/system/agent-shop.service", "ABSENT\n");
+    machine.answer("test -f /etc/systemd/system/dashboard.service", "ABSENT\n");
     const install = "/usr/local/bin/bun install --production";
     // No --dry-run: the run goes past the install, as far as the Caddy step,
     // which the simulated machine cannot carry.
-    const r = await run(project({ ...APP, port: 3040, install }), ["deploy", "--json"], { vm: machine });
+    const r = await run(project({ ...COMPONENT, install }, "dashboard"), ["deploy", "--json"], { vm: machine });
     ended(r, "error");
     const logs = machine.logs();
     const ran = logs.find((line) => line.includes("systemd-run"))!;
-    expect(ran).toStartWith("ACCEPTED sudo sh -c 'chown -hR site-agent-shop:site-agent-shop /srv/sites/agent-shop/app && \"/usr/bin/systemd-run\"");
-    for (const property of ['"User=site-agent-shop"', '"BindPaths=/srv/sites/agent-shop/app:/srv/sites/agent-shop/app"', '"IPAddressDeny=localhost"', '"IPAddressDeny=link-local"', '"IPAddressDeny=multicast"', '"IPAddressDeny=0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 fc00::/7"', '"InaccessiblePaths=-/etc/sitesolide"', '"/bin/sh" "-s"']) {
+    expect(ran).toStartWith("ACCEPTED sudo sh -c 'chown -hR site-dashboard:site-dashboard /srv/sites/dashboard/app && \"/usr/bin/systemd-run\"");
+    for (const property of ['"User=site-dashboard"', '"BindPaths=/srv/sites/dashboard/app:/srv/sites/dashboard/app"', '"IPAddressDeny=localhost"', '"IPAddressDeny=link-local"', '"IPAddressDeny=multicast"', '"IPAddressDeny=0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 fc00::/7"', '"InaccessiblePaths=-/etc/sitesolide"', '"/bin/sh" "-s"']) {
       expect(ran).toContain(property);
     }
     // app/ back to the deployment account, whatever the outcome.
-    expect(ran).toEndWith("; code=$?; chown -hR sample:sample /srv/sites/agent-shop/app; exit $code'");
+    expect(ran).toEndWith("; code=$?; chown -hR sample:sample /srv/sites/dashboard/app; exit $code'");
     expect(ran).not.toContain("bun install");
     expect(logs[logs.indexOf(ran) + 1]).toBe(`STDIN ${install}`);
     // Never again as the deployment account, in app/.
-    expect(logs.some((line) => line.includes(`cd /srv/sites/agent-shop/app && ${install}`))).toBe(false);
+    expect(logs.some((line) => line.includes(`cd /srv/sites/dashboard/app && ${install}`))).toBe(false);
   });
 
   test("a cloned manifest whose source climbs out of its repository is refused before the machine is read", async () => {
-    const folder = project({ ...APP, port: 3040, source: "../../..", build: "touch ran-outside" });
+    const folder = project({ ...COMPONENT, source: "../../..", build: "touch ran-outside" }, "dashboard");
     mkdirSync(join(folder, ".git"));
     const machine = fakeVm();
     const r = await run(folder, ["deploy", "--json", "--dry-run", "--build"], { vm: machine });
@@ -208,17 +206,17 @@ describe("deploy --json", () => {
   test("the final event is the last line, even when releasing the Caddy lock has something to say", async () => {
     const machine = fakeVm();
     // The manifest's deposit, under the lock, is refused: the run dies holding it.
-    machine.acceptWrites(["/dev/stdin"]);
-    machine.pause("READ agent-site#2");
-    const running = run(project({ slug: "agent-site", publicDir: "public" }, "agent-site"), ["deploy", "--json"], { vm: machine });
-    for (let i = 0; i < 400 && !machine.logs().includes("PAUSE READ agent-site"); i++) await Bun.sleep(25);
+    machine.acceptWrites(["/srv/sites/dashboard/sitesolide.json"]);
+    machine.pause("READ *#2");
+    const running = run(project(COMPONENT, "dashboard"), ["deploy", "--json"], { vm: machine });
+    for (let i = 0; i < 400 && !machine.logs().includes("PAUSE READ *"); i++) await Bun.sleep(25);
     // Meanwhile the lock went to someone else: its release will warn.
     machine.setLock(`gatekeeper 4242 ${Date.now()}`);
     machine.resume();
     const r = await running;
     expect(r.code).toBe(1);
     const list = events(r);
-    expect(ended(r, "error").message).toBe("write refused: /srv/sites/agent-site/sitesolide.json");
+    expect(ended(r, "error").message).toBe("write refused: /srv/sites/dashboard/sitesolide.json");
     const warning = list.findIndex((event) => event.type === "warning" && String(event.message).includes("the Caddy lock was taken over"));
     expect(warning).toBeGreaterThan(-1);
     expect(warning).toBeLessThan(list.length - 1);
@@ -253,48 +251,6 @@ describe("deploy --json", () => {
 });
 
 describe("an app that declares no port", () => {
-  test("a dry run says which port it would take, the lowest the machine leaves, and writes nothing", async () => {
-    const machine = fakeVm();
-    machine.writeManifest("blog", JSON.stringify({ slug: "blog", start: "/usr/local/bin/bun run server.ts", port: 3002 }));
-    machine.writeManifest("notes", JSON.stringify({ slug: "notes", start: "/usr/local/bin/bun run server.ts", port: 3003 }));
-    const folder = project(APP);
-    const before = readFileSync(join(folder, "sitesolide.json"), "utf8");
-    const r = await run(folder, ["deploy", "--dry-run"], { vm: machine });
-    expect(r.code).toBe(0);
-    expect(r.output).toContain("-> port 3004, the lowest free one on the server");
-    expect(r.output).toContain(`[dry-run] write ${join(folder, "sitesolide.json")} with "port": 3004`);
-    // The unit and the block generated with it.
-    expect(r.output).toContain("Environment=PORT=3004");
-    expect(r.output).toContain("reverse_proxy 127.0.0.1:3004");
-    expect(readFileSync(join(folder, "sitesolide.json"), "utf8")).toBe(before);
-  });
-
-  test("for real, the port is written into sitesolide.json before anything leaves", async () => {
-    const machine = fakeVm();
-    machine.writeManifest("blog", JSON.stringify({ slug: "blog", start: "/usr/local/bin/bun run server.ts", port: 3002 }));
-    const folder = project(APP);
-    // No --dry-run: the fake ssh refuses the first write, which is as far as
-    // this deployment goes.
-    const r = await run(folder, ["deploy", "--json"], { vm: machine });
-    expect(r.code).toBe(1);
-    const written = JSON.parse(readFileSync(join(folder, "sitesolide.json"), "utf8"));
-    expect(written).toEqual({ ...APP, port: 3003 });
-    expect(Object.keys(written)).toEqual(["slug", "start", "port", "exclude"]);
-    const list = events(r);
-    expect(list.some((event) => event.type === "step" && event.message === "port 3003, the lowest free one on the server")).toBe(true);
-    // The refusal fell on the machine's side, after the port was written.
-    expect(ended(r, "error").message).toStartWith("failed (");
-    expect(machine.logs().some((line) => line.startsWith("REFUSED ") && line.includes("useradd"))).toBe(true);
-  });
-
-  test("a project the machine already carries keeps its port, as on a fresh clone", async () => {
-    const machine = fakeVm();
-    machine.writeManifest("agent-shop", JSON.stringify({ ...APP, port: 3057 }));
-    const r = await run(project(APP), ["deploy", "--json", "--dry-run"], { vm: machine });
-    expect(r.code).toBe(0);
-    expect(ended(r, "result")).toMatchObject({ port: 3057, portChosen: "kept", manifestWritten: false });
-  });
-
   test("the other commands point at deploy rather than refusing the manifest blindly", async () => {
     const r = await run(project(APP), ["logs", "--json"], { vm: fakeVm() });
     expect(r.code).toBe(1);
@@ -342,62 +298,6 @@ describe("a folder with no sitesolide.json", () => {
     const error = ended(r, "error");
     expect(error.message).toStartWith("nothing deployable recognised in");
     expect((error.details as string[]).join(" ")).toContain("move the site into public/");
-  });
-
-  test("deploy shows the inferred manifest and stops, giving the command that accepts it", async () => {
-    const folder = copyOf("../infer/bun-app", "agent-shop");
-    const r = await run(folder, ["deploy", "--json", "--dry-run"], { vm: fakeVm() });
-    expect(r.code).toBe(1);
-    const list = events(r);
-    const inferred = list.find((event) => event.type === "inferred");
-    expect(inferred).toMatchObject({ kind: "bun", manifest: { slug: "agent-shop", start: "/usr/local/bin/bun run server.ts" } });
-    const error = ended(r, "error");
-    expect(error.message).toBe(`no sitesolide.json in ${folder}: inferred one shown above, not written`);
-    expect(error.hint).toContain("sitesolide deploy --yes");
-    expect(existsSync(join(folder, "sitesolide.json"))).toBe(false);
-
-    const human = await run(folder, ["deploy", "--dry-run"], { vm: fakeVm() });
-    expect(human.output).toContain("-> no sitesolide.json: this folder reads as a Bun app");
-    expect(human.error).toContain("to write it and deploy:            sitesolide deploy --yes");
-  });
-
-  test("deploy --yes in a dry run goes through with the inferred manifest and its port, writing nothing", async () => {
-    const folder = copyOf("../infer/bun-app", "agent-shop");
-    const r = await run(folder, ["deploy", "--json", "--dry-run", "--yes"], { vm: fakeVm() });
-    expect(r.code).toBe(0);
-    expect(ended(r, "result")).toMatchObject({
-      slug: "agent-shop",
-      inferred: "bun",
-      port: 3002,
-      portChosen: "free",
-      manifestWritten: false,
-      url: "https://agent-shop.test-zone.invalid/",
-    });
-    expect(existsSync(join(folder, "sitesolide.json"))).toBe(false);
-  });
-
-  test("deploy --yes for real writes the manifest, then its port, before anything leaves", async () => {
-    const folder = copyOf("../infer/bun-app", "agent-shop");
-    const r = await run(folder, ["deploy", "--yes"], { vm: fakeVm() });
-    expect(r.code).toBe(1);
-    const written = JSON.parse(readFileSync(join(folder, "sitesolide.json"), "utf8"));
-    expect(written).toMatchObject({ slug: "agent-shop", start: "/usr/local/bin/bun run server.ts", port: 3002 });
-    expect(r.output).toContain(`written: ${join(folder, "sitesolide.json")}, commit it`);
-  });
-
-  test("an inferred manifest never takes over a project the machine already serves under that name", async () => {
-    const machine = fakeVm();
-    machine.writeManifest("agent-shop", JSON.stringify({ slug: "agent-shop", publicDir: "public" }));
-    const folder = copyOf("../infer/bun-app", "agent-shop");
-    const r = await run(folder, ["deploy", "--json", "--yes"], { vm: machine });
-    expect(r.code).toBe(1);
-    const error = ended(r, "error");
-    expect(error.message).toBe("agent-shop already exists on the server, and this folder has no sitesolide.json");
-    expect(error.hint).toContain("--slug");
-    expect(existsSync(join(folder, "sitesolide.json"))).toBe(false);
-    // Another name goes through.
-    const renamed = await run(folder, ["deploy", "--json", "--dry-run", "--yes", "--slug", "agent-shop-2"], { vm: machine });
-    expect(ended(renamed, "result")).toMatchObject({ slug: "agent-shop-2" });
   });
 });
 
@@ -508,7 +408,7 @@ describe("ssh under --json", () => {
     const bin = join(machine.root, "bin");
     mkdirSync(bin, { recursive: true });
     writeFileSync(join(bin, "ssh"), '#!/bin/sh\necho "askpass=$SSH_ASKPASS_REQUIRE" >&2\nexit 255\n', { mode: 0o755 });
-    const r = await run("projects/bun-mixed", ["deploy", "--json", "--dry-run"], { vm: machine });
+    const r = await run("projects/component", ["deploy", "--json", "--dry-run"], { vm: machine });
     expect(r.code).toBe(1);
     const relayed = events(r).filter((event) => event.type === "warning").map((event) => event.message);
     expect(relayed.join(" ")).toContain("askpass=force");

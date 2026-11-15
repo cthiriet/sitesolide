@@ -301,24 +301,6 @@ export function confirmDoorUnderLock(slug: string, applied: General, reading: De
   };
 }
 
-/**
- * What `deploy` says about a door changed from the dashboard. The local
- * manifest is rewritten, and it must be committed: without that commit, the
- * repository goes on saying the opposite of the machine.
- */
-export function switchAnnouncement(general: General, dryRun: boolean): { title: string; details: string[] } {
-  const access = WORDS[accessOf(general)];
-  return {
-    title: dryRun
-      ? `general access was set to ${access} from the dashboard; a real deploy updates sitesolide.json, then commit it`
-      : `general access was set to ${access} from the dashboard; sitesolide.json updated, commit it`,
-    details: [
-      "the server is the source of truth for the general access of a deployed site:",
-      "change it from the dashboard, an edit of this field in sitesolide.json is put back",
-    ],
-  };
-}
-
 export type Agreement = { kind: "agreed" } | { kind: "rejects"; message: string; details: string[] };
 
 /**

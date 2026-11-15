@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { cpSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,9 +11,12 @@ import { run, TESTS_ROOT, type Result } from "./e2e/run";
  * its manifest, its file names and its links are someone else's text, as
  * bin/cli/source.ts already says of `source`.
  *
- * Every run is the real CLI in front of the fake machine of e2e/fake-vm.ts,
- * a dry run unless said otherwise, with a configuration folder of its own so
- * that nothing of the workstation's configuration is read.
+ * Every run is the real CLI, with a configuration folder of its own so that
+ * nothing of the workstation's configuration is read. `deploy` goes through
+ * the API, to a local fake of the dashboard that answers the plan and the
+ * creation of a deployment, and refuses the upload: what the CLI must refuse,
+ * it refuses before the upload. The owner's commands go to the fake machine
+ * of e2e/fake-vm.ts, in a dry run.
  */
 
 const TEMP_DIRS: string[] = [];
@@ -23,6 +26,50 @@ afterEach(() => {
   for (const vm of VMS.splice(0)) vm.cleanup();
   for (const folder of TEMP_DIRS.splice(0)) rmSync(folder, { recursive: true, force: true });
 });
+
+const TEAM_TOKEN = `sst_${"T".repeat(43)}`;
+/** What the fake dashboard was asked, method and path. */
+const asked: string[] = [];
+let dashboard: ReturnType<typeof Bun.serve>;
+
+beforeAll(() => {
+  dashboard = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(req) {
+      const url = new URL(req.url);
+      asked.push(`${req.method} ${url.pathname}`);
+      if (url.pathname === "/api/v1/deployments/plan" && req.method === "POST") {
+        const { manifest } = (await req.json()) as { manifest: string };
+        const slug = (JSON.parse(manifest) as { slug: string }).slug;
+        return Response.json({ plan: { slug, creating: true, existing: false, portal: false, allocated: [], manifest, placeholders: { zone: "test-zone.invalid", contact: "" } } });
+      }
+      if (url.pathname === "/api/v1/deployments" && req.method === "POST") {
+        const { manifest } = (await req.json()) as { manifest: string };
+        const slug = (JSON.parse(manifest) as { slug: string }).slug;
+        return Response.json(
+          { deployment: { id: "0123456789abcdef01234567", slug, state: "awaiting-bundle", creating: true, log: [], next: 0, error: null, url: null, allocated: [], placeholders: { zone: "test-zone.invalid", contact: "" } } },
+          { status: 201 },
+        );
+      }
+      return Response.json({ error: "not-found", message: "no such route" }, { status: 404 });
+    },
+  });
+});
+
+afterAll(() => {
+  dashboard.stop(true);
+});
+
+/** The configuration a deployment through the fake dashboard needs, a token given beside its address. */
+function throughApi(): Record<string, string> {
+  return { SITESOLIDE_CONFIG_DIR: join(temporary(), "config"), SITESOLIDE_API: `http://127.0.0.1:${dashboard.port}`, SITESOLIDE_TOKEN: TEAM_TOKEN };
+}
+
+/** Nothing was uploaded: no archive reached the dashboard. */
+function nothingSent(): void {
+  expect(asked.some((line) => line.endsWith("/bundle"))).toBe(false);
+}
 
 function fakeVm(): FakeVm {
   const vm = createFakeVm();
@@ -40,6 +87,28 @@ function temporary(): string {
 /** The CLI with a configuration folder that holds nothing, and no sites repository. */
 function cli(folder: string, arguments_: string[], vm: FakeVm): Promise<Result> {
   return run(folder, arguments_, { vm, env: { SITESOLIDE_CONFIG_DIR: join(temporary(), "config"), SITESOLIDE_SITES_REPO: "" } });
+}
+
+/**
+ * `deploy` through the fake dashboard, with no sites repository unless given
+ * one. For real: the public files are checked once the build has run, right
+ * before the archive, which a dry run without --build never reaches.
+ */
+function deploy(folder: string, sitesRepo = ""): Promise<Result> {
+  asked.length = 0;
+  return run(folder, ["deploy", "--json"], { vm: fakeVm(), env: { ...throughApi(), SITESOLIDE_SITES_REPO: sitesRepo } });
+}
+
+/** What reaching the upload looks like: every check passed, and the fake dashboard refused the archive. */
+/** A dry run through the fake dashboard: the manifest is judged before anything else. */
+function planned(folder: string): Promise<Result> {
+  asked.length = 0;
+  return run(folder, ["deploy", "--dry-run", "--json"], { vm: fakeVm(), env: { ...throughApi(), SITESOLIDE_SITES_REPO: "" } });
+}
+
+function reachedUpload(r: Result): void {
+  expect(asked.some((line) => line.endsWith("/bundle"))).toBe(true);
+  expect(String(errorOf(r)?.message)).toBe("no such route");
 }
 
 type Event = Record<string, unknown>;
@@ -87,19 +156,18 @@ describe("a cloned repository's publicDir", () => {
     const { repository } = clone({ slug: "sample-leak", publicDir: "public" });
     // `public` is the workstation's ~/.ssh, two levels up from the clone.
     symlinkSync("../../.ssh", join(repository, "public"));
-    const r = await cli(repository, ["deploy", "--dry-run", "--json"], fakeVm());
+    const r = await deploy(repository);
     expect(r.code).toBe(1);
     expect(String(errorOf(r)?.message)).toContain("publicDir leads outside the repository");
-    // Nothing of the folder was even planned for sending.
-    expect(said(r)).not.toContain("rsync");
+    // Nothing of the folder was even read into an archive.
+    expect(said(r)).not.toContain("-> archive");
+    nothingSent();
   });
 
   test("a publicDir that is a link inside the repository is still sent", async () => {
     const { repository } = clone({ slug: "sample-inside", publicDir: "public" }, { "site/index.html": "<h1>hello</h1>\n" });
     symlinkSync("site", join(repository, "public"));
-    const r = await cli(repository, ["deploy", "--dry-run", "--json"], fakeVm());
-    expect(errorOf(r)).toBeUndefined();
-    expect(r.code).toBe(0);
+    reachedUpload(await deploy(repository));
   });
 
   test("the folder of a project in the sites repository is the owner's, and may lead anywhere", async () => {
@@ -107,12 +175,7 @@ describe("a cloned repository's publicDir", () => {
     mkdirSync(join(home, "shared"), { recursive: true });
     writeFileSync(join(home, "shared", "index.html"), "<h1>shared</h1>\n");
     symlinkSync("../../shared", join(repository, "public"));
-    const r = await run(repository, ["deploy", "--dry-run", "--json"], {
-      vm: fakeVm(),
-      env: { SITESOLIDE_CONFIG_DIR: join(temporary(), "config"), SITESOLIDE_SITES_REPO: join(home, "Code") },
-    });
-    expect(errorOf(r)).toBeUndefined();
-    expect(r.code).toBe(0);
+    reachedUpload(await deploy(repository, join(home, "Code")));
   });
 });
 
@@ -121,29 +184,32 @@ describe("links in the public files", () => {
     const { repository } = clone({ slug: "sample-links", publicDir: "public" }, { "public/index.html": "<h1>hello</h1>\n" });
     // Readable by Caddy's group on the machine, the DNS token of the zone.
     symlinkSync("/etc/caddy/cloudflare.env", join(repository, "public", "robots.txt"));
-    const r = await cli(repository, ["deploy", "--dry-run", "--json"], fakeVm());
+    const r = await deploy(repository);
     expect(r.code).toBe(1);
     const error = errorOf(r);
     expect(String(error?.message)).toContain("links that lead out of publicDir");
     expect((error?.details as string[]).join("\n")).toContain("robots.txt -> /etc/caddy/cloudflare.env");
-    expect(said(r)).not.toContain("rsync");
+    nothingSent();
   });
 
   test("a relative link that climbs out of the public folder is refused too", async () => {
     const { repository } = clone({ slug: "sample-climb", publicDir: "public" }, { "public/index.html": "<h1>hello</h1>\n" });
     mkdirSync(join(repository, "public", "assets"));
     symlinkSync("../../../../../../../../../../var/lib/caddy/.local/share/caddy", join(repository, "public", "assets", "certificates"));
-    const r = await cli(repository, ["deploy", "--dry-run", "--json"], fakeVm());
+    const r = await deploy(repository);
     expect(r.code).toBe(1);
     expect((errorOf(r)?.details as string[]).join("\n")).toContain("assets/certificates -> ../../../../");
+    nothingSent();
   });
 
-  test("a link that stays inside the public folder is sent, as rsync carries it", async () => {
+  test("a link that stays inside the public folder is refused by the archive, which carries no link", async () => {
     const { repository } = clone({ slug: "sample-alias", publicDir: "public" }, { "public/v2/index.html": "<h1>v2</h1>\n" });
     symlinkSync("v2", join(repository, "public", "latest"));
-    const r = await cli(repository, ["deploy", "--dry-run", "--json"], fakeVm());
-    expect(errorOf(r)).toBeUndefined();
-    expect(r.code).toBe(0);
+    const r = await deploy(repository);
+    expect(r.code).toBe(1);
+    expect(String(errorOf(r)?.message)).toBe("the machine refuses links and special files in the archive");
+    expect((errorOf(r)?.details as string[]).join("\n")).toContain("public/latest is a symbolic link");
+    nothingSent();
   });
 });
 
@@ -159,23 +225,23 @@ function secretApp(slug: string, secrets: string[]): string {
 describe("a manifest that names a file of /etc/sitesolide", () => {
   test("is refused before anything is sent, the machine's own files and another project's alike: a secret is a variable's name", async () => {
     for (const secrets of [["dashboard-backup.env"], ["cms.env"], ["sample-thief.env"], ["../../etc/shadow"]]) {
-      const r = await cli(secretApp("sample-thief", secrets), ["deploy", "--dry-run", "--json"], fakeVm());
+      const r = await planned(secretApp("sample-thief", secrets));
       expect(r.code).toBe(1);
       expect(String(errorOf(r)?.message)).toBe("sitesolide.json rejected");
       expect((errorOf(r)?.details as string[]).join("\n")).toContain("secrets: entry 1 is not a variable name");
-      expect(said(r)).not.toContain("rsync");
+      expect(asked).toEqual([]);
     }
   });
 
   test("the dashboard declares none either: its unit reads its own file, which no manifest names", async () => {
-    const r = await cli(secretApp("dashboard", ["dashboard.env"]), ["deploy", "--dry-run", "--json"], fakeVm());
+    const r = await planned(secretApp("dashboard", ["dashboard.env"]));
     expect(r.code).toBe(1);
     expect((errorOf(r)?.details as string[]).join("\n")).toContain("secrets: dashboard keeps its password hash in dashboard.env, which its unit reads: it declares no secret");
-    expect(said(r)).not.toContain("rsync");
+    expect(asked).toEqual([]);
   });
 
   test("a manifest that names its variables passes", async () => {
-    const r = await cli(secretApp("sample-secret", ["API_KEY", "SMTP_URL"]), ["deploy", "--dry-run", "--json"], fakeVm());
+    const r = await planned(secretApp("sample-secret", ["API_KEY", "SMTP_URL"]));
     expect(errorOf(r)).toBeUndefined();
     expect(r.code).toBe(0);
   });

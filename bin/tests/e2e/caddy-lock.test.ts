@@ -17,7 +17,7 @@ import { generateFragment } from "../../cli/fragment";
 import type { Manifest } from "../../cli/manifest";
 import { utcTime } from "../../cli/caddy-lock";
 import { ZONE_NAMES_COMMAND } from "../../cli/tls";
-import { CLI, REPO, run, SSH_ENGINE, TEST_EMAIL, TEST_ZONE } from "./run";
+import { CLI, REPO, run, TEST_EMAIL, TEST_ZONE } from "./run";
 import { createFakeVm, type FakeVm } from "./fake-vm";
 
 /**
@@ -284,36 +284,49 @@ describe("bin/deploy-caddy.sh holds the guard's lock to the end", () => {
 });
 
 describe("sitesolide deploy takes the lock before its first deposit", () => {
-  const SHOWCASE: Manifest = { slug: "sample-lock", publicDir: "public" };
-  const INSTALL = "ACCEPTED sudo install -m 644 -o sample -g sample /dev/stdin /srv/sites/sample-lock/sitesolide.json";
+  // The one shape deploy still lays over SSH: a platform component's.
+  const COMPONENT: Manifest = { slug: "dashboard", start: "/usr/local/bin/bun run server.ts", port: 3022, publicDir: "public" };
+  const INSTALL = "ACCEPTED sudo install -m 644 -o sample -g sample /dev/stdin /srv/sites/dashboard/sitesolide.json";
+
+  /** A machine that already carries the component, under its own manifest. */
+  function carrying(): void {
+    vm = createFakeVm();
+    vm.writeManifest(COMPONENT.slug, text(COMPONENT));
+    // No landing: its addresses would be checked by deploy-caddy.sh too, and
+    // resolve nowhere.
+    vm.acceptWrites([`ls -A /srv/sites/${TEST_ZONE}/public`]);
+    vm.answer("test -f /etc/systemd/system/dashboard.service", "ABSENT\n");
+    vm.answer("caddy validate", "Valid configuration\n");
+  }
 
   function deploy(env: Record<string, string> = {}) {
-    return Bun.spawn(["bun", "--preload", SSH_ENGINE, CLI, "deploy"], {
-      cwd: project(SHOWCASE),
+    return Bun.spawn(["bun", CLI, "deploy"], {
+      cwd: project(COMPONENT),
       stdout: "pipe",
       stderr: "pipe",
       env: { ...process.env, ...vm.env, ...offlineHome(), ...env },
     });
   }
 
-  test("the door is read again under the lock, and the lock given back at the end of the Caddy step", async () => {
-    vm = createFakeVm();
-    vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
-    vm.acceptWrites();
+  test("the manifests are read again under the lock, and the lock given back at the end of the Caddy step", async () => {
+    carrying();
     const r = await waitFor(deploy());
     // The final check aims at a zone that does not resolve.
-    expect(r.error).toContain("https://sample-lock.test-zone.invalid/ unreachable");
+    expect(r.error).toContain("https://dashboard.test-zone.invalid/ unreachable");
     const logs = vm.logs();
-    const reads = logs.flatMap((line, i) => (line === `READ ${SHOWCASE.slug}` ? [i] : []));
+    const door = logs.indexOf("READ dashboard");
     const taken = logs.indexOf("LOCK take deploy");
+    // The first reading under the lock is deploy's; bin/deploy-caddy.sh reads them all again.
+    const reread = logs.indexOf("READ *", taken);
     const repo = logs.indexOf(INSTALL);
     const release = logs.indexOf("LOCK release deploy");
-    expect(reads).toHaveLength(2);
-    // The files leave before the lock; the manifest, under it, after the
-    // second reading.
+    // The door before anything leaves; the files before the lock; the
+    // manifest, under it, after the second reading.
+    expect(door).toBeGreaterThan(-1);
+    expect(door).toBeLessThan(taken);
     expect(logs.findIndex((line) => line.startsWith("ACCEPTED rsync"))).toBeLessThan(taken);
-    expect(taken).toBeLessThan(reads[1]!);
-    expect(reads[1]!).toBeLessThan(repo);
+    expect(taken).toBeLessThan(reread);
+    expect(reread).toBeLessThan(repo);
     expect(repo).toBeLessThan(release);
     // Then only the zone's sites for the ask endpoint, which Caddy does not
     // read and the lock does not cover, before the final check.
@@ -322,57 +335,43 @@ describe("sitesolide deploy takes the lock before its first deposit", () => {
   });
 
   test("a door laid from the dashboard during the deployment stops everything before the deposit", async () => {
-    vm = createFakeVm();
-    vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
-    vm.acceptWrites();
+    carrying();
     // The gatekeeper closes the site while the files are leaving.
-    const closed = text({ ...SHOWCASE, portal: true });
-    vm.onFirstAccepted(`/srv/sites/${SHOWCASE.slug}/sitesolide.json`, closed);
+    const closed = text({ ...COMPONENT, portal: true });
+    vm.onFirstAccepted(`/srv/sites/${COMPONENT.slug}/sitesolide.json`, closed);
     const r = await waitFor(deploy());
     expect(r.code).toBe(1);
     expect(r.error).toContain(
-      "general access of sample-lock changed from the dashboard during this deploy: run `sitesolide deploy` again",
+      "general access of dashboard changed from the dashboard during this deploy: run `sitesolide deploy` again",
     );
     expect(vm.logs()).not.toContain(INSTALL);
     expect(vm.logs().at(-1)).toBe("LOCK release deploy");
     expect(vm.lock()).toBeNull();
-    expect(readFileSync(join(vm.root, "srv", "sites", SHOWCASE.slug, "sitesolide.json"), "utf8")).toBe(closed);
+    expect(readFileSync(join(vm.root, "srv", "sites", COMPONENT.slug, "sitesolide.json"), "utf8")).toBe(closed);
   });
 
-  test("an app's ports are measured again under the lock: one deposited meanwhile stops it before its manifest", async () => {
-    const RACE: Manifest = { slug: "sample-race", start: "/usr/local/bin/bun run server.ts", port: 3044 };
+  test("the ports are measured again under the lock: one deposited meanwhile stops it before its manifest", async () => {
     vm = createFakeVm();
     vm.acceptWrites();
-    vm.answer("test -f /etc/systemd/system/sample-race.service", "ABSENT\n");
-    // Another deployment, from another workstation or the installer, checked
-    // the same free port and deposits its manifest while this one prepares
-    // its service.
-    vm.onFirstAccepted("/srv/sites/sample-rival/sitesolide.json", text({ ...RACE, slug: "sample-rival" }));
-    const proc = Bun.spawn(["bun", "--preload", SSH_ENGINE, CLI, "deploy"], {
-      cwd: project(RACE),
-      stdout: "pipe",
-      stderr: "pipe",
-      env: { ...process.env, ...vm.env, ...offlineHome() },
-    });
-    const r = await waitFor(proc);
+    vm.answer("test -f /etc/systemd/system/dashboard.service", "ABSENT\n");
+    // A deployment through the API deposits a manifest on the component's
+    // port while this one prepares its service.
+    vm.onFirstAccepted("/srv/sites/sample-rival/sitesolide.json", text({ ...COMPONENT, slug: "sample-rival" }));
+    const r = await waitFor(deploy());
     expect(r.code).toBe(1);
     expect(r.error).toContain("port already taken on the server, by a deployment that ran meanwhile");
-    expect(r.error).toContain("port 3044 is already declared by project sample-rival");
+    expect(r.error).toContain("port 3022 is already declared by project sample-rival");
     const logs = vm.logs();
-    // Read once for a renamed project, the machine not carrying this one,
-    // once before the build, then again under the lock, where it decides.
-    expect(logs.filter((line) => line === "READ *")).toHaveLength(3);
+    // Read once before the build, then again under the lock, where it decides.
+    expect(logs.filter((line) => line === "READ *")).toHaveLength(2);
     expect(logs.indexOf("LOCK take deploy")).toBeLessThan(logs.lastIndexOf("READ *"));
-    // Never deposited; read once, for the units its previous version made.
-    expect(logs.some((line) => line.includes("/srv/sites/sample-race/sitesolide.json") && !line.startsWith("FILE "))).toBe(false);
+    expect(logs).not.toContain(INSTALL);
     expect(logs.at(-1)).toBe("LOCK release deploy");
     expect(vm.lock()).toBeNull();
   });
 
   test("held by the gatekeeper: refusal before the deposit, and its lock stays in place", async () => {
-    vm = createFakeVm();
-    vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
-    vm.acceptWrites();
+    carrying();
     const since = Date.now();
     vm.setLock(`gatekeeper 4242 ${since}`);
     const r = await waitFor(deploy());
@@ -384,23 +383,20 @@ describe("sitesolide deploy takes the lock before its first deposit", () => {
   });
 
   test("a failure under the lock gives it back", async () => {
-    vm = createFakeVm();
-    vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
-    vm.acceptWrites(["/dev/stdin"]);
+    carrying();
+    vm.acceptWrites(["/srv/sites/dashboard/sitesolide.json"]);
     const r = await waitFor(deploy());
     expect(r.code).toBe(1);
-    expect(r.error).toContain("write refused: /srv/sites/sample-lock/sitesolide.json");
+    expect(r.error).toContain("write refused: /srv/sites/dashboard/sitesolide.json");
     expect(vm.logs().at(-1)).toBe("LOCK release deploy");
     expect(vm.lock()).toBeNull();
   });
 
   test("an interruption under the lock gives it back", async () => {
-    vm = createFakeVm();
-    vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
-    vm.acceptWrites();
-    vm.pause(`READ ${SHOWCASE.slug}#2`);
+    carrying();
+    vm.pause("READ *#2");
     const proc = deploy();
-    await interruptAtPause(proc.pid, `READ ${SHOWCASE.slug}`);
+    await interruptAtPause(proc.pid, "READ *");
     const r = await waitFor(proc);
     expect(r.code).toBe(143);
     expect(vm.logs()).not.toContain(INSTALL);
@@ -409,16 +405,14 @@ describe("sitesolide deploy takes the lock before its first deposit", () => {
   });
 
   test("an interruption during the taking lets it succeed, then gives the lock back", async () => {
-    vm = createFakeVm();
-    vm.writeManifest(SHOWCASE.slug, text(SHOWCASE));
-    vm.acceptWrites();
+    carrying();
     vm.pause("LOCK take deploy");
     const proc = deploy();
     await interruptAtPause(proc.pid, "LOCK take deploy", "SIGINT");
     const r = await waitFor(proc);
     expect(r.code).toBe(130);
     const logs = vm.logs();
-    expect(logs.filter((line) => line === `READ ${SHOWCASE.slug}`)).toHaveLength(1);
+    expect(logs.filter((line) => line === "READ *")).toHaveLength(1);
     expect(logs.at(-1)).toBe("LOCK release deploy");
     expect(vm.lock()).toBeNull();
   });
@@ -622,49 +616,20 @@ describe("bin/deploy-gatekeeper.sh does not install under a transaction", () => 
  * business.
  */
 describe("sitesolide deploy leaves the other sites' blocks alone", () => {
-  const APP: Manifest = { slug: "sample-door", port: 3035, publicDir: "public", start: "bun run server.ts" };
+  const COMPONENT: Manifest = { slug: "dashboard", port: 3022, publicDir: "public", start: "bun run server.ts" };
 
   test("another site changed from the dashboard stops nothing, and its block is not even read", async () => {
     vm = createFakeVm();
     vm.writeManifest("tool", text({ ...TOOL, portal: true }));
     const repo = testRepo([TOOL]);
-    const folder = project(APP, "touch built");
+    const folder = project(COMPONENT, "touch built");
     const r = await run(folder, ["deploy", "--dry-run", "--build"], { vm, cli: join(repo, "bin", "sitesolide.ts") });
     expect(r.code).toBe(0);
     expect(r.all).not.toContain("general access of tool");
     expect(existsSync(join(folder, "built"))).toBe(true);
     // Its manifest is read with every other one, for the ports it declares;
     // its block is not.
-    // The claim on its name, whether a token holds it, the machine not carrying
-    // it; and every manifest, for a project renamed since under another name.
-    expect(vm.logs()).toEqual(["READ sample-door", "READ *", "UNITS sample-door", "READ *", "SECOND-BLOCK", "CLAIM GET sample-door"]);
-  });
-
-  test("the site in progress, whose door the dashboard changed, follows it", async () => {
-    // Its block will follow the VM's door: see decideBlock.
-    vm = createFakeVm();
-    vm.writeManifest("sample-door", text({ ...APP, portal: true }));
-    vm.writeManifest("tool", text(TOOL));
-    const repo = testRepo([APP, TOOL]);
-    const folder = project(APP, "touch built");
-    const r = await run(folder, ["deploy", "--dry-run", "--build"], { vm, cli: join(repo, "bin", "sitesolide.ts") });
-    expect(r.code).toBe(0);
-    expect(r.output).toContain("general access was set to Restricted from the dashboard");
-    expect(existsSync(join(folder, "built"))).toBe(true);
-  });
-
-  test("a static site, which does not go through deploy-caddy.sh, reads its own door alone", async () => {
-    vm = createFakeVm();
-    vm.writeManifest("tool", text({ ...TOOL, portal: true }));
-    const repo = testRepo([TOOL]);
-    const r = await run(project({ slug: "sample-static", publicDir: "public" }), ["deploy", "--dry-run"], {
-      vm,
-      cli: join(repo, "bin", "sitesolide.ts"),
-    });
-    expect(r.code).toBe(0);
-    // Its own door, every manifest for a project renamed since, and whether
-    // a token holds its name, the machine not carrying it.
-    expect(vm.logs()).toEqual(["READ sample-static", "READ *", "CLAIM GET sample-static"]);
+    expect(vm.logs().filter((line) => line.startsWith("READ "))).toEqual(["READ dashboard", "READ *"]);
   });
 });
 
@@ -774,22 +739,5 @@ describe("bin/deploy-caddy.sh checks every site but the one whose block it remov
     expect(r.output).toContain(`https://${CMS.slug}.${TEST_ZONE}/`);
     expect(r.output).not.toContain(`https://${TOOL.slug}.${TEST_ZONE}/`);
     expect(r.error).toContain("1 address(es) no longer answer");
-  });
-});
-
-describe("sitesolide deploy of a project renamed on the server", () => {
-  test("a checkout under the former name follows it, rather than create the project again", async () => {
-    vm = createFakeVm();
-    vm.writeManifest("sample-renamed", text({ slug: "sample-renamed", formerSlugs: ["sample-static"], publicDir: "public" }));
-    const repo = testRepo([]);
-    const r = await run(project({ slug: "sample-static", publicDir: "public" }), ["deploy", "--dry-run"], {
-      vm,
-      cli: join(repo, "bin", "sitesolide.ts"),
-    });
-    expect(r.code).toBe(0);
-    expect(r.all).toContain("sample-static was renamed sample-renamed on the server: this deployment goes to sample-renamed");
-    expect(r.all).toContain('with "slug": "sample-renamed"');
-    // The deployment starts again under the new name, whose door it reads.
-    expect(vm.logs()).toContain("READ sample-renamed");
   });
 });

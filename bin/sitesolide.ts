@@ -121,7 +121,7 @@ import {
   readConfigFile,
   type Config,
 } from "./cli/config";
-import { backupComponentCommand, backupsReport, readBackupComponent } from "./cli/backups";
+import { backupsReport } from "./cli/backups";
 import { linksOut, publicRefusal, sourceRefusal } from "./cli/source";
 import { excludedBy } from "./cli/bundle";
 import { decideBlock, domainLeftOpen, gatesDomain, generateFragment, INACTIVE_HEADER, isSwitchedOff, LOCKS_FRAGMENT, type Served } from "./cli/fragment";
@@ -141,16 +141,13 @@ import {
   missingExclusions,
   NEVER_SENT,
   readManifest,
-  scheduledServices,
   servicesOf,
   setDomainActive,
   setLock,
   setPortal,
-  setFormerSlugs,
   setSlug,
   slugRefusal,
   validate,
-  PORTAL_SLUG,
   FIRST_BLOCK,
   isServicePort,
   servicePortsProse,
@@ -168,11 +165,9 @@ import {
   STATUS_SCRIPT,
   type OutputEvent,
 } from "./cli/output";
-import { choosePort, needsPort, setPort } from "./cli/ports";
-import { followMachine } from "./cli/rename";
+import { needsPort } from "./cli/ports";
 import { disabledRefusal } from "./cli/lifecycle";
 import {
-  switchAnnouncement,
   depositedManifestPath,
   readManifestsCommand,
   readDepositedManifests,
@@ -193,8 +188,8 @@ import {
 } from "./cli/removal";
 import { CREDENTIALS_EXIT_STATUS, credentialsFailure, readStorePrepareAnswer, slugHasStore, storePaths, storePrepareCommand, workstationSecretsPath } from "./cli/store";
 import { envValue, keys, parseEnv } from "./cli/envfile";
-import { gatherBuildSecrets, missingBuildSecrets, readWorkstationSecrets, sourceLine, unreadableWorkstation, type BuildSecretsResolution } from "./cli/build-secrets";
-import { handleMissing, readStoreArguments, runStore, sshStore, STORE_USAGE, storelessRefusal, takenBackWarning, withDeclared, type StoreTransport } from "./cli/store-cli";
+import { readWorkstationSecrets } from "./cli/build-secrets";
+import { handleMissing, readStoreArguments, runStore, sshStore, STORE_USAGE, storelessRefusal, withDeclared, type StoreTransport } from "./cli/store-cli";
 import {
   projectPaths,
   decideUnit,
@@ -264,18 +259,16 @@ import { tunnelRecordLines } from "./cli/cloudflare";
 import { shellQuote } from "./cli/harden";
 import { askAddress, VERIFY_RETRY_MS, WARM_UP_MS } from "./cli/verify";
 import { realClock } from "../clouds/src/provider";
-import { declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
 import { machine, readConfiguredConnection, sshLogin } from "./cli/machine";
 import { DNS_CHOICES, dnsEntry, shownDns } from "./cli/dns/registry";
 import { deploysOverSsh, eventOutput, humanOutput, login, promptWithoutEcho, remoteMode, REMOTE_USAGE, runRemote, type BuildContext } from "./cli/remote";
 import { ownerLogin } from "./cli/owner-token";
 import { buildEnv, KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
-import { ownerGeneralCommand, ownerWriteCommand, readShareArguments, SHARE_USAGE, share, sshAccess, sshClaim, sshGeneral, sshLifecycle, sshRename, sshTakeBack } from "./cli/access";
+import { ownerGeneralCommand, ownerWriteCommand, readShareArguments, SHARE_USAGE, share, sshAccess, sshGeneral, sshLifecycle, sshRename } from "./cli/access";
 import { commandRefusal } from "./cli/commands";
 import { PASSKEY_USAGE, passkeys, sshPasskeys } from "./cli/passkeys";
 import {
   foreignUnit,
-  laterBlockPorts,
   listUnitsCommand,
   loopbackStateCommand,
   domainConflicts,
@@ -285,14 +278,11 @@ import {
   currentPairsCommand,
   readLoopbackState,
   readSecondBlockState,
-  readScheduleCheck,
   readStability,
   readUidsAnswer,
   readUnitOrigins,
   readUnitsAnswer,
   removeUnitsCommand,
-  scheduleCheckCommand,
-  secondBlockRefusal,
   secondBlockStateCommand,
   unguardedWarning,
   stabilityCommand,
@@ -770,20 +760,20 @@ class Executor {
 // --- reading the project -----------------------------------------------------
 
 /**
- * `raw` stands for a manifest not on disk: the one inferred for a dry run,
- * which writes nothing. `portLater` is `deploy`'s: an app without a port is
- * judged as if it had the one `deploy` is about to give it, see allocatePort.
+ * `portLater` is for the commands that need the slug alone, rename and turn:
+ * an app without a port is judged as if it had the one the machine gives it
+ * at its first deployment, see allocatePorts in dashboard/src/control/policy.ts.
  */
-function readProject(folder: string, options: { raw?: string; portLater?: boolean } = {}): Project {
+function readProject(folder: string, options: { portLater?: boolean } = {}): Project {
   const path = join(folder, MANIFEST_NAME);
-  if (options.raw === undefined && !existsSync(path)) {
+  if (!existsSync(path)) {
     die(`${MANIFEST_NAME} not found in ${folder}`, [
       "a deployable project declares its slug and what to do with it,",
       "with the keys listed in bin/cli/manifest.ts of the platform",
     ]);
   }
 
-  const raw = options.raw ?? readFileSync(path, "utf8");
+  const raw = readFileSync(path, "utf8");
   const read = readManifest(raw);
   const manifest = read.manifest;
   let errors = read.errors;
@@ -1013,163 +1003,6 @@ async function runBuild(project: Project, executor: Executor, context: BuildCont
   if ((await proc.exited) !== 0) die(`build failed: ${build}`);
 }
 
-/**
- * The build secrets the manifest names, resolved from whoever deploys: the
- * environment, then the workstation's `<vault>/<slug>.env`. Each found one
- * is said with where it came from, never its value. A missing one stops the
- * deployment before anything is read on the machine or sent, and so does a
- * file that does not read; in a dry run whose build does not run, both are
- * warnings, the build being what needs them.
- */
-async function buildSecretsFor(project: Project, config: Config, executor: Executor): Promise<BuildSecretsResolution> {
-  const names = secretsOf(project.manifest).build;
-  const path = workstationSecretsPath(config.vault, project.manifest.slug);
-  const resolution = await gatherBuildSecrets(names, process.env, path);
-  if (names.length === 0) return resolution;
-  const runs = buildRuns(project, executor);
-  const stop = (refusal: { message: string; details: string[] }): void => {
-    if (runs) die(refusal.message, refusal.details);
-    warn(refusal.message, [...refusal.details, "the build does not run in this dry run: for real, this stops the deployment"]);
-  };
-  if (resolution.refusal !== null) stop(unreadableWorkstation(path, resolution.refusal));
-  else if (resolution.missing.length > 0) stop(missingBuildSecrets(resolution.missing, path));
-  for (const { name, source } of resolution.sources) say(`   ${sourceLine(name, source, path)}`);
-  note({ buildSecrets: resolution.sources });
-  return resolution;
-}
-
-/**
- * The declared runtime secrets the store lacks, read over the owner's socket
- * before the build and the Caddy lock, for every app but the dashboard and
- * the portal. At a terminal, each is asked for: set, typed without echo,
- * generated on the server, or left unset; otherwise one warning names them,
- * with the commands. A missing secret never stops a deployment: an app that
- * cannot live without one stops at start, which the stability check reports,
- * and a store that cannot be listed is warned of the same way. Not in a dry
- * run, which asks the machine nothing it would write.
- */
-async function runtimeSecrets(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
-  if (!hasStore(manifest)) return;
-  const declaration = secretsOf(manifest);
-  if (declaration.runtime.length === 0 && declaration.files.length === 0) return;
-  step("runtime secrets");
-  if (executor.simulated) {
-    say("   [dry-run] the declared runtime secrets the store lacks asked for at a terminal, warned of otherwise");
-    note({ missingSecrets: null });
-    return;
-  }
-  const transport = ownerStore(config, executor);
-  const listed = await transport.list(manifest.slug);
-  if (!listed.ok) {
-    warn(`cannot tell which declared runtime secrets the store lacks: ${listed.failure.message}`, [
-      ...(listed.failure.details ?? []),
-      "sitesolide secrets lists them once the store answers",
-    ]);
-    note({ missingSecrets: null });
-    return;
-  }
-  const missing = await handleMissing(withDeclared(listed.value, declaration), transport, {
-    terminal: !jsonOutput && process.stdin.isTTY === true && process.stdout.isTTY === true,
-    json: jsonOutput,
-    ask: async (question) => prompt(question),
-    secret: (question) => promptWithoutEcho(question),
-    say,
-    warn,
-  });
-  if (missing.runtime.length === 0 && missing.files.length === 0) say("   every declared runtime secret is set");
-  note({ missingSecrets: missing });
-}
-
-/** What --adopt does, said where a held name stops the deployment. */
-const ADOPT_MOVES =
-  "--adopt forgets the token's hold and moves what the project's store holds aside, kept as its previous versions, then deploys, asking for what the manifest declares; nothing was sent";
-
-/**
- * A name a token holds, asked of the steward on every deployment over SSH,
- * before the prompts: a token's deployment of it accepted, or its write that
- * made the project's store, and on a project the machine carries, the token
- * a creation made it Admin's. Deploying over it would put the owner's
- * project, and the values the owner sets in its store, under a name that
- * token may deploy code to read.
- *
- * A deployment of it under way is waited for first, --adopt or not: what it
- * lays would land over the owner's. Then a name a token holds stops, naming
- * the token, unless the owner takes it back with `--adopt`, which drops the
- * token's hold before anything is written, and moves what the project's
- * store holds aside, kept as its previous versions: its names said, the
- * prompts that follow ask for what the manifest declares. A read, hence in
- * a dry run too; the taking back is not done there.
- *
- * A steward from before claims holds none, and one without an owner's
- * socket is warned of. Claims that do not read stop it, unless --adopt:
- * the file is restored from the steward's backups, never deleted, a claim
- * dropped handing the name to whoever deploys it next.
- */
-async function settleClaim(slug: string, carried: boolean, config: Config, executor: Executor, adopt: boolean): Promise<void> {
-  const run = (command: string, input?: string) => executor.execute(config, command, input);
-  const read = await sshClaim(run, slug);
-  if (!read.ok) {
-    const { error, message, details = [] } = read.failure;
-    if (error === "steward-outdated") {
-      warn(`cannot tell whether a token holds ${slug}: ${message}`, details);
-      return;
-    }
-    // The steward's 500, or an answer that does not read: its claims, or
-    // its registry of tokens, cannot be read.
-    const unreadable = error === "failure";
-    const said = unreadable ? `the tokens' claims on ${slug} do not read on the server: ${message}` : `cannot tell whether a token holds ${slug}: ${message}`;
-    const advice = unreadable ? ["restore the file the message names from the steward's backups, never delete it: a claim dropped hands a token's name, and the store it made, to whoever deploys it next"] : details;
-    if (!adopt) die(said, [...advice, "sitesolide deploy --adopt deploys all the same, over whatever a token holds there: the owner's decision", "nothing was sent"]);
-    warn(said, [...advice, "--adopt deploys all the same: no token's hold can be dropped while the claims do not read"]);
-    return;
-  }
-  const claim = read.value;
-  // A steward of 0.8's first claims answered for names it did not carry alone.
-  const onMachine = claim.onMachine ?? carried;
-  const holder = claim.token === null ? "a token" : `token ${claim.token.label === "" ? claim.token.id : `${claim.token.label} (${claim.token.id}${claim.token.email === "" ? "" : `, ${claim.token.email}`})`}`;
-  // First, whether it is claimed or not: what that deployment lays would land over this one's.
-  if (claim.deploying) {
-    const by = claim.token === null ? "" : ` by ${holder}`;
-    die(`${slug} is being deployed${by}: wait for its deployment to end, then deploy again`, [
-      "nothing was sent",
-      "once it ended, deploy again; if a token holds the name then, sitesolide deploy --adopt takes it back",
-    ]);
-  }
-  if (!claim.claimed) return;
-  if (!adopt) {
-    die(
-      onMachine
-        ? `${slug} is held by ${holder}: sitesolide deploy --adopt takes the name back`
-        : `${slug} is held by ${holder}, and the server does not carry it yet: sitesolide deploy --adopt takes the name back`,
-      onMachine
-        ? [
-            "the server carries the project, and that token holds it: it may deploy it again, and your values in its store would reach the code it deploys",
-            ADOPT_MOVES,
-          ]
-        : [
-            claim.store ? "the token's write made the project's store, which holds what it set there" : "the token's deployment of it was accepted",
-            "deployed as it is, your project and the values you set in its store would sit under a name that token may deploy code to",
-            ADOPT_MOVES,
-          ],
-    );
-  }
-  if (executor.simulated) {
-    say(`   [dry-run] take ${slug} back from ${holder}, what its store holds moved aside`);
-    return;
-  }
-  step(`take ${slug} back from ${holder}`);
-  const taken = await sshTakeBack(run, slug);
-  if (!taken.ok) die(`${slug} could not be taken back from ${holder}: ${taken.failure.message}`, ["nothing was sent"]);
-  const { released, dropped } = taken.value;
-  say(`   ${released === null ? "no token held it any more" : `taken back from token ${released}`}`);
-  // What the token set there, names only: the owner sets what the project needs, the prompts next.
-  if (dropped.variables.length > 0 || dropped.files.length > 0) {
-    const moved = takenBackWarning(slug, holder, dropped);
-    warn(moved.message, moved.details);
-  }
-  note({ takenBack: { from: released, variables: dropped.variables, files: dropped.files } });
-}
-
 /** The store over the owner's SSH: root on the machine asks the steward's owner socket, every body on standard input. */
 function ownerStore(config: Config, executor: Executor): StoreTransport {
   return sshStore((command, input) => executor.execute(config, command, input));
@@ -1229,16 +1062,9 @@ function checkPublicFolder(project: Project, executor?: Executor): void {
  * and is writable by it: the code and the public files stay with the deployment
  * account, and a deployment never makes them modifiable by the service.
  */
-export function directoryCommands(slug: string, isApplication: boolean, owner: string): string[] {
+export function directoryCommands(slug: string, owner: string): string[] {
   const paths = projectPaths(slug);
   const account = systemUser(slug);
-  if (!isApplication) {
-    return [
-      `sudo mkdir -p ${paths.publicDir}`,
-      `sudo chown ${owner}:${owner} ${paths.root} ${paths.publicDir}`,
-      `sudo chmod 755 ${paths.root} ${paths.publicDir}`,
-    ];
-  }
   return [
     `sudo mkdir -p ${paths.app} ${paths.publicDir} ${paths.dataDir}`,
     `sudo chown ${owner}:${owner} ${paths.root} ${paths.app} ${paths.publicDir}`,
@@ -1292,123 +1118,68 @@ function publicSync(publicDir: string, project: Project, config: Config): string
   ];
 }
 
-async function deploy(
-  rawProject: Project,
-  config: Config,
-  executor: Executor,
-  replace = false,
-  adopt = false,
-): Promise<void> {
+/**
+ * `sitesolide deploy` over the owner's SSH access: the platform's own
+ * components alone, the dashboard and the portal, which `setup` and `upgrade`
+ * deploy from the kit (see deploysOverSsh in bin/cli/remote.ts). Every other
+ * project deploys through the dashboard's API, whose installer runs these
+ * steps on the machine, and those of every other shape a project may take
+ * (dashboard/src/installer/pipeline.ts).
+ *
+ * A component is one service with a port and a public folder, no store and
+ * no door: neither declares secrets, schedules, egress or a backup command,
+ * validate() refuses either a store, and the gatekeeper sets no door on
+ * either. What a project of another shape
+ * would need is the installer's, and is not repeated here.
+ */
+async function deploy(rawProject: Project, config: Config, executor: Executor, replace = false): Promise<void> {
   const slug = rawProject.manifest.slug;
   const paths = projectPaths(slug);
-  const isApplication = isApp(rawProject.manifest);
-
   const services = servicesOf(rawProject.manifest);
-  // What the project runs, by kind: `kind` keeps the three words it always
-  // had, and `runs` counts its servers, workers and scheduled services.
+  // validate() already refuses a store to either (STORELESS_SLUGS in bin/cli/manifest.ts).
+  if (!isApp(rawProject.manifest) || services.length !== 1 || isProtected(rawProject.manifest) || rawProject.manifest.lock === true) {
+    die(`${slug} is not shaped as a platform component: over SSH, deploy lays the dashboard and the portal alone`, [
+      "one service with a port and no door, as dashboard/sitesolide.json and portal/sitesolide.json",
+      "every other project deploys through the dashboard's API: sitesolide login --url https://dashboard.<zone>",
+      "nothing was read on the server nor sent",
+    ]);
+  }
   const runs = runsOf(services);
-  say(`-> project ${slug}, ${describeRuns(isApplication, runs)}`);
-  if (rawProject.code !== rawProject.folder) say(`   code from ${rawProject.code}`);
-  note({
-    slug,
-    kind: isApplication ? (services.length > 1 ? "services" : "service") : "static",
-    ...(isApplication ? { runs } : {}),
-    dryRun: executor.simulated,
-    manifestWritten: outcome.manifestWritten === true,
-    missingSecrets: { runtime: [], files: [] },
-    buildSecrets: [],
-  });
-  // The build's secrets, from whoever deploys, before anything is read on
-  // the machine or sent: a missing one stops here.
-  const buildSecrets = await buildSecretsFor(rawProject, config, executor);
+  say(`-> project ${slug}, ${describeRuns(true, runs)}`);
+  note({ slug, kind: "service", runs, dryRun: executor.simulated, manifestWritten: false });
 
-  // The door before everything else, in a dry run as for real: the block shown,
-  // the block checked, the order of the steps and the deposited manifest all
-  // depend on it. From here on, `project` carries the value the VM makes
-  // authoritative, and `rawProject` is of no further use. An app that declares
-  // no port gets one first: every read of the manifest after this needs it.
-  const reconciled = await reconcilePortal(await allocatePort(rawProject, config, executor), config, executor);
-  // Renamed on the server: the deployment starts again under its new name.
-  if ("renamed" in reconciled) return deploy(reconciled.renamed, config, executor, replace, adopt);
-  const { project, switched, doorConfirmed } = reconciled;
+  // The machine's word before everything else, in a dry run as for real:
+  // the block checked and the deposited manifest depend on it.
+  const { project, doorConfirmed } = await reconcileDoor(rawProject, config, executor);
   const { manifest } = project;
-  note({ port: mainPort(manifest), portal: isProtected(manifest) });
-  if (switched) note({ manifestWritten: !executor.simulated });
-  if (isApplication && executor.simulated) showGeneratedFiles(manifest);
+  note({ port: mainPort(manifest), portal: false });
+  if (executor.simulated) showGeneratedFiles(manifest);
 
   // Before the build and before anything is pushed: a refusal that falls after
   // the rsync and the restart leaves the new code served by the old block. The
   // blocks of the other sites are not this deployment's business: it deposits
   // its own, and leaves theirs as the machine carries them.
-  if (isApplication) await checkRemoteBlock(manifest, config, executor, replace, doorConfirmed);
-  if (isApplication) await checkUnitNames(manifest, config, executor);
-  if (isApplication) await checkPorts(manifest, config, executor);
-  if (isApplication) await checkSecondBlock(manifest, config, executor);
-  if (scheduledServices(manifest).length > 0) await checkSchedules(manifest, config, executor);
-  // A backup command reaches its service on its port, through the same set.
-  if (reachesOwnPorts(manifest)) await requireProjectSet(config, executor);
-  if (declaresEgress(manifest)) await requireEgress(config, executor);
-  if (servicesOf(manifest).some((service) => service.backup !== null)) await checkBackupComponent(config, executor);
-  const behindPortal = isProtected(manifest);
-  if (behindPortal) await requirePortal(config, executor);
+  await checkRemoteBlock(manifest, config, executor, replace, doorConfirmed);
+  await checkUnitNames(manifest, config, executor);
+  await checkPorts(manifest, config, executor);
+  await checkSecondBlock(manifest, config, executor);
 
-  // A name a token holds, before the prompts, which would set values in a
-  // store the token may then deploy code to read.
-  await settleClaim(slug, doorConfirmed, config, executor, adopt);
-  // What the store lacks, before the build and before the Caddy lock: a
-  // person thinking at a prompt never holds the lock the gatekeeper and every
-  // other deployment wait for.
-  await runtimeSecrets(manifest, config, executor);
-
-  await runBuild(project, executor, { secrets: buildSecrets.values, placeholders: { slug, zone: config.zone, contact: config.contact ?? "" } });
+  // A component's build takes no secret: it declares none.
+  await runBuild(project, executor, { secrets: {}, placeholders: { slug, zone: config.zone, contact: config.contact ?? "" } });
   checkPublicFolder(project, executor);
   if (executor.simulated && compareInDryRun) {
     await compareWithServer(project, config, executor, doorConfirmed);
     return;
   }
 
-  // The lock shared with the gatekeeper, taken just before the first deposit of
-  // the manifest or of the block, and the door read again under it: it is that
-  // read which decides, the one from the start being several minutes old. It is
-  // held until the end of the Caddy step, the manifest deposit included, and
-  // released before the verification, which changes nothing.
-  let alreadyUnderLock = false;
-  const enterUnderLock = async (): Promise<void> => {
-    if (alreadyUnderLock) return;
-    alreadyUnderLock = true;
-    await takeCaddyLock(
-      config,
-      executor,
-      "neither the manifest nor the Caddy block was deposited: rerun `sitesolide deploy` in a moment",
-    );
-    await rereadUnderLock(manifest, config, executor, isApplication);
-  };
-
-  // rsync only creates the last folder of the path: without this mkdir, a first
-  // deployment fails on a project never put online. An application project has
-  // more to prepare than a folder, and `deploy` takes care of it itself: see
+  // rsync only creates the last folder of the path: without the preparation,
+  // a first deployment fails on a component never put online. See
   // prepareService, which puts in place what is missing and replaces nothing.
-  if (isApplication) {
-    await prepareService(project, config, executor, replace);
-    // A protected site receives its door BEFORE its files: put in place first,
-    // they would be served in the clear by the zone's wildcard block until the
-    // fragment arrives. The reverse order, the one of the other projects,
-    // avoids a 404 that would make deploy-caddy.sh restore; here the door
-    // answers 401 whether the site exists or not, and the verification passes.
-    if (behindPortal) {
-      await enterUnderLock();
-      await installFragment(manifest, config, executor);
-    }
-  } else {
-    step("directories");
-    await executor.ssh(config, directoryCommands(slug, false, deploymentAccount(config.server)).join(" && "));
-  }
+  await prepareService(project, config, executor, replace);
 
-  if (isApplication) {
-    step("application code");
-    await executor.run(codeSync(project, config));
-    await executor.ssh(config, sentModesCommand(paths.app));
-  }
+  step("application code");
+  await executor.run(codeSync(project, config));
+  await executor.ssh(config, sentModesCommand(paths.app));
 
   const publicDir = publicFolder(project);
   if (publicDir !== null) {
@@ -1417,52 +1188,37 @@ async function deploy(
     await executor.ssh(config, sentModesCommand(paths.publicDir));
   }
 
-  await enterUnderLock();
+  // The lock shared with the gatekeeper, taken just before the deposit of the
+  // manifest, and the machine read again under it: it is that read which
+  // decides, the one from the start being several minutes old. It is held
+  // until the block is deposited, and released before the verification,
+  // which changes nothing.
+  await takeCaddyLock(config, executor, "neither the manifest nor the Caddy block was deposited: rerun `sitesolide deploy` in a moment");
+  await rereadUnderLock(manifest, config, executor);
   await depositManifest(project, config, executor);
-  // Under the lock, like the manifest it reads back from the machine: two
-  // deployments rebuilding the set side by side would each drop the other's
-  // project. Before the restart, which is when the services start calling
-  // each other. A single service follows along too: a project that no longer
-  // declares several must drop out of the set, before another project takes
-  // its former ports.
-  if (isApplication) await rebuildProjectPorts(config, executor, reachesOwnPorts(manifest) ? "services" : "follow");
-  // With no Caddy step to follow, the lock has nothing left to protect: a
-  // static site has none, a protected site has already put its door in place.
-  if (!isApplication || behindPortal) releaseCaddyLock();
 
-  // How the services stood right after their restart, read again once the
-  // Caddy step and the verify are done: see STABILITY_WINDOW.
-  let stability: Standings | null = null;
-  if (isApplication) {
-    if (manifest.install !== undefined) {
-      step(`dependencies (${manifest.install}), as ${systemUser(slug)} in its service's walls`);
-      await installAsProject(manifest, config, executor);
-    }
-
-    stability = await restartServices(manifest, config, executor);
-
-    if (!behindPortal) await installFragment(manifest, config, executor);
+  if (manifest.install !== undefined) {
+    step(`dependencies (${manifest.install}), as ${systemUser(slug)} in its service's walls`);
+    await installAsProject(manifest, config, executor);
   }
+
+  // How the service stood right after its restart, read again once the
+  // Caddy step and the verify are done: see STABILITY_WINDOW. The block
+  // after the restart: set before the code answers, it would make the
+  // address answer 404, and deploy-caddy.sh restore the previous one.
+  const stability = await restartServices(manifest, config, executor);
+  await installFragment(manifest, config, executor);
 
   // The end of the Caddy step. The release is also guaranteed by the `exit`
   // event on every failure path, `die` unwinding no finally.
   releaseCaddyLock();
-  // The site's folder exists: with manual DNS, the ask endpoint must find it
-  // before the verification's handshake obtains its first certificate, which
-  // is then given the time an issuance takes. A static site goes through no
-  // other step that would list it.
+  // The component's folder exists: with manual DNS, the ask endpoint must
+  // find it before the verification's handshake obtains its first
+  // certificate, which is then given the time an issuance takes.
   const onDemand = await refreshZoneNames(config, executor);
   await verify(manifest, config, executor, note, onDemand === true ? FIRST_CERTIFICATE_MS : 0);
   if (stability !== null) await checkStability(stability, config, executor);
-  if (executor.simulated) {
-    say("-> dry run, nothing was installed");
-    return;
-  }
-  if (switched) {
-    say("");
-    say(`   commit ${MANIFEST_NAME}:`);
-    say("   the dashboard changed its general access, and git should say what the server does.");
-  }
+  if (executor.simulated) say("-> dry run, nothing was installed");
 }
 
 /**
@@ -1589,30 +1345,21 @@ async function readDepositedDoor(
  * The door read again under the lock, just before the first deposit: it is what
  * decides. In a dry run, nothing is read again: no lock is taken.
  *
- * For an application project, every manifest is read, and its ports measured
- * once more against them, as the installer does. The check before the build
- * is minutes old by now: two deployments started side by side, from two
- * workstations, two agents or a workstation and a token, chose and checked
- * their ports on the same reading, and the first to get here has deposited
- * its own since. Without this, the second deposited the same port, and the
- * next reboot decided which project Caddy's visitors reached.
+ * Every manifest is read, and the component's port measured once more against
+ * them, as the installer does for every other project. The check before the
+ * build is minutes old by now: a token's deployment may have deposited the
+ * same port since, and the next reboot would decide which project Caddy's
+ * visitors reached.
  */
-async function rereadUnderLock(
-  manifest: Manifest,
-  config: Config,
-  executor: Executor,
-  isApplication: boolean,
-): Promise<void> {
+async function rereadUnderLock(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
   if (executor.simulated) {
-    say(`   [dry-run] read the portal${isApplication ? " and the ports" : ""} again under the lock, and decide on them`);
+    say("   [dry-run] read the portal and the ports again under the lock, and decide on them");
     return;
   }
   const slug = manifest.slug;
-  const output = await executor.read(config, readManifestsCommand(isApplication ? "*" : slug));
-  const door = isApplication ? readManifestAmongAll(output, slug) : readDepositedManifest(output, slug);
-  const agreement = confirmDoorUnderLock(slug, { portal: isProtected(manifest), lock: manifest.lock === true }, door);
+  const output = await executor.read(config, readManifestsCommand("*"));
+  const agreement = confirmDoorUnderLock(slug, { portal: false, lock: false }, readManifestAmongAll(output, slug));
   if (agreement.kind === "rejects") die(agreement.message, agreement.details);
-  if (!isApplication) return;
   const reading = readDepositedManifests(output);
   if (reading.kind === "unreadable") {
     die("cannot read the manifests on the server to check the ports again under the lock", [
@@ -1628,7 +1375,7 @@ async function rereadUnderLock(
   if (conflicts.length > 0) {
     die("port already taken on the server, by a deployment that ran meanwhile", [
       ...conflicts,
-      "neither the manifest nor the Caddy block was deposited: delete `port` from sitesolide.json, or pick another free one, then deploy again",
+      "neither the manifest nor the Caddy block was deposited: pick another free port in sitesolide.json, then deploy again",
     ]);
   }
 }
@@ -1666,84 +1413,36 @@ function refuseLocalDisabled(manifest: Manifest): void {
 }
 
 /**
- * The door this deployment applies: the one the VM carries for a site already
- * deployed, the repository's one for a first run.
+ * The machine's word on a component, read before anything leaves: the
+ * manifest deposited by its previous deployment. A component's door is its
+ * manifest's alone, open to everyone: the gatekeeper sets none on the
+ * dashboard or the portal (fixedRefusal in dashboard/src/gatekeeper/rules.ts),
+ * so a deposited manifest that says otherwise was edited by hand, and stops
+ * the deployment rather than being followed. So does a component turned off
+ * on the machine, whose services and block this deployment would serve
+ * again, and former names the machine keeps that the checkout lacks.
  *
- * The dashboard's gatekeeper sets and removes the portal on the machine without
- * touching the repository. Taking the local manifest's value here would
- * silently reopen a site the dashboard has just closed, or close the one it has
- * reopened. The deposited manifest is therefore read first, and if it says
- * something else, it is the one that wins: the local sitesolide.json is
- * rewritten by setPortal, which touches only that field, and the output asks
- * for it to be committed.
- *
- * The read is never short-circuited by the dry-run mode: it changes nothing,
- * and a dry run that ignored the door in service would show a block that is not
- * the one the deployment would set. Only the local write is skipped. An
- * unreadable read stops everything, dry run included: nothing then says which
- * door the machine holds.
- *
- * The decision is taken in bin/cli/portal-vm.ts, on the raw answer.
- *
- * Also returns `switched`, true when the local manifest has just been rewritten,
- * and `doorConfirmed`, true as soon as the VM carries a manifest for this
- * site: the door applied is then the machine's one, and the repository's block
- * may follow it.
+ * The read is never short-circuited by the dry-run mode: it changes nothing.
+ * An unreadable read stops everything, dry run included. `doorConfirmed` is
+ * true once the machine carries a manifest for the component.
  */
-async function reconcilePortal(
-  project: Project,
-  config: Config,
-  executor: Executor,
-): Promise<{ project: Project; switched: boolean; doorConfirmed: boolean } | { renamed: Project }> {
-  let { manifest } = project;
+async function reconcileDoor(project: Project, config: Config, executor: Executor): Promise<{ project: Project; doorConfirmed: boolean }> {
+  const { manifest } = project;
   const reading = await readDepositedDoor(manifest.slug, config, executor);
-  // Absent: a new project, or one renamed on the server since this checkout.
-  if (reading.kind === "absent") {
-    const renamed = await renamedOnServer(project, config, executor);
-    if (renamed !== null) return { renamed };
-  }
-  // Turned off on the machine: its own block and its services would serve it again.
   if (reading.kind === "present" && reading.disabled === true) die(disabledRefusal(manifest.slug), ["nothing was pushed"]);
   refuseLocalDisabled(manifest);
-  // The former names a rename left are the machine's, as the door is.
   if (reading.kind === "present" && (reading.formerSlugs ?? []).join(",") !== (manifest.formerSlugs ?? []).join(",")) {
-    const raw = setFormerSlugs(project.raw, reading.formerSlugs);
-    const read = readManifest(raw);
-    if (read.manifest === undefined || read.errors.length > 0) die(`${MANIFEST_NAME} rejected once the server's formerSlugs are applied`, read.errors);
-    step("the project's former names, as the server keeps them");
-    const path = join(project.folder, MANIFEST_NAME);
-    if (executor.simulated) say(`   [dry-run] write ${path}`);
-    else {
-      writeFileSync(path, raw);
-      say(`   written into ${path}: commit it`);
-    }
-    manifest = read.manifest;
-    project = { ...project, manifest, raw };
+    die(`the former names of ${manifest.slug} differ on the server`, ["a platform component is never renamed: read the manifest on the server", "nothing was pushed"]);
   }
-  const decision = decidePortal(manifest.slug, { portal: isProtected(manifest), lock: manifest.lock === true }, reading);
+  const decision = decidePortal(manifest.slug, { portal: false, lock: manifest.lock === true }, reading);
   if (decision.kind === "rejects") die(decision.message, decision.details);
-  const doorConfirmed = reading.kind === "present";
-  if (decision.kind === "repository") return { project, switched: false, doorConfirmed };
-
-  const announcement = switchAnnouncement(decision, executor.simulated);
-  step(announcement.title);
-  for (const line of announcement.details) say(`   ${line}`);
-
-  // Both fields at once: the manifest refuses them together, and a switch
-  // between Restricted and the code changed both on the machine.
-  const raw = setLock(setPortal(project.raw, decision.portal), decision.lock);
-  const { manifest: followed, errors } = readManifest(raw);
-  if (followed === undefined || errors.length > 0) {
-    die(`${MANIFEST_NAME} rejected once the general access set from the dashboard is applied`, errors);
+  if (decision.kind === "dashboard") {
+    die(`the manifest on the server gives ${manifest.slug} a door, which a platform component never has`, [
+      "the gatekeeper sets none on the dashboard or the portal: the manifest on the server was edited by hand",
+      "nothing was pushed",
+    ]);
   }
-
-  const path = join(project.folder, MANIFEST_NAME);
-  if (executor.simulated) {
-    say(`   [dry-run] write ${path}`);
-  } else {
-    writeFileSync(path, raw);
-  }
-  return { project: { ...project, manifest: followed, raw }, switched: true, doorConfirmed };
+  return { project, doorConfirmed: reading.kind === "present" };
 }
 
 /**
@@ -2105,67 +1804,6 @@ async function checkStability(standings: Standings, config: Config, executor: Ex
   say(`   ${units.map(unitArgument).join(" ")}: active, never restarted by systemd`);
 }
 
-/**
- * Refuses, before anything is written, a schedule systemd cannot read:
- * validate() only knows that an expression is safe to write, and a timer
- * whose calendar systemd does not understand is laid, loads, and never
- * starts anything, with nothing to say so. Asked of systemd itself, on the
- * machine, the one that will read it: see scheduleCheckCommand in
- * bin/cli/services.ts. A read, hence done in a dry run too.
- */
-async function checkSchedules(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
-  const scheduled = scheduledServices(manifest);
-  const schedules = scheduled.map((service) => service.schedule!);
-  const refused = readScheduleCheck(await executor.read(config, scheduleCheckCommand(schedules)), schedules);
-  if (refused === null) {
-    die("cannot tell whether systemd reads the schedules of this project", [
-      "the server answered nothing readable",
-      "nothing was written: a timer systemd cannot read would never start its service",
-    ]);
-  }
-  const named = scheduled.filter((service) => refused.includes(service.schedule!));
-  if (named.length > 0) {
-    die("systemd does not read the schedule of a scheduled service", [
-      ...named.map((service) => `services.${service.name}.schedule: ${JSON.stringify(service.schedule)}`),
-      "a schedule is a systemd calendar expression: man systemd.time, section CALENDAR EVENTS",
-      'such as hourly, daily, *:0/15 (every quarter of an hour), "Mon..Fri 08:00" or "*-*-* 06:30:00"',
-      "nothing was written",
-    ]);
-  }
-  say(`   systemd reads every schedule: ${scheduled.map((service) => `${service.name} (${service.schedule})`).join(", ")}`);
-}
-
-/**
- * Does the portal answer, with a fingerprint in place? Otherwise nothing leaves.
- *
- * Protecting a site behind a stopped portal would close it with a 502; behind
- * a portal without a fingerprint, it would close it to its owner himself,
- * nobody being able to get in any more. Both are seen here, before the first
- * byte is sent, rather than on the first visit.
- */
-async function requirePortal(config: Config, executor: Executor): Promise<void> {
-  const address = `https://${PORTAL_SLUG}.${config.zone}/sante`;
-  if (executor.simulated) {
-    say(`   [dry-run] check ${address}`);
-    return;
-  }
-  step("portal");
-  let state: { configure?: unknown } = {};
-  try {
-    const response = await fetch(address, { signal: AbortSignal.timeout(15000), ...(acmeStaging(config) ? { tls: { rejectUnauthorized: false } } : {}) });
-    if (response.ok) state = (await response.json()) as { configure?: unknown };
-  } catch {
-    // Treated as an absence, below.
-  }
-  if (state.configure !== true) {
-    die(`the portal is not ready at ${address}`, [
-      "a site behind it would be closed to its owner too",
-      "deploy portal/ first, with its secret: cd portal && sitesolide deploy",
-    ]);
-  }
-  say(`   ${address} ready`);
-}
-
 // --- preparing the service ---------------------------------------------------
 
 /**
@@ -2208,19 +1846,9 @@ async function prepareService(
     config,
     [
       `id -u ${account} >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin ${account}`,
-      ...directoryCommands(slug, true, deploymentAccount(config.server)),
+      ...directoryCommands(slug, deploymentAccount(config.server)),
     ].join(" && "),
   );
-
-  // The store's folders before the units: every unit of an app with a store
-  // loads its files/ folder, and a missing one fails every start with
-  // 243/CREDENTIALS. On every deployment, so that a folder deleted by hand
-  // comes back; before the code and the units, so that a refusal changes
-  // nothing.
-  if (hasStore(manifest)) {
-    const refusal = await prepareStore(slug, config, executor);
-    if (refusal !== null) die(refusal.message, refusal.details);
-  }
 
   step(units.length > 1 ? "systemd units" : "systemd unit");
   if (executor.simulated) {
@@ -2425,164 +2053,50 @@ async function checkPorts(manifest: Manifest, config: Config, executor: Executor
 }
 
 /**
- * Refuses, before anything is pushed, a port of the second block on a machine
- * that has not opened it, and says so on every other deployment when the
- * block is open and a unit could listen in it again: a project deployed by
- * an older CLI, say, whose unit denies none of it. What decides is
- * secondBlockRefusal in bin/cli/services.ts, read on the machine in one
- * round trip at each deployment of an app, never remembered. A read, hence
- * done in a dry run too.
+ * Says, on every deployment of a component, when the second block of the
+ * services' ports is open on the machine and a unit could listen in it again:
+ * a project deployed by an older CLI, say, whose unit denies none of it. Read
+ * on the machine in one round trip, never remembered; a read, hence done in a
+ * dry run too. A component's own port is in the first block (PLATFORM_PORTS
+ * in bin/cli/services.ts): a port of the second block, and the machine's
+ * refusal of one it has not opened, are the installer's to judge, for a
+ * token's deployment.
  */
 async function checkSecondBlock(manifest: Manifest, config: Config, executor: Executor): Promise<void> {
-  const ports = laterBlockPorts(manifest);
-  const own = unitNames(manifest);
   const state = readSecondBlockState(await executor.read(config, secondBlockStateCommand()));
   if (state === null) {
-    if (ports.length > 0) {
-      die("cannot tell whether the server has opened the second block of service ports", [
-        "its loopback rule, its units, its components or its reserved ports did not read",
-        "nothing was pushed: a port there could be reached, or taken, by another project",
-      ]);
-    }
     warn("cannot tell whether every unit on the server still keeps to its own port");
     return;
   }
-  if (ports.length > 0) {
-    const refusal = secondBlockRefusal(ports, state, () => `${script("deploy-loopback.sh")} close`, own, systemUser(manifest.slug));
-    if (refusal !== null) die("the server has not opened the second block of service ports", [...refusal, "nothing was pushed"]);
-    return;
-  }
-  const warning = unguardedWarning(state, own);
+  const warning = unguardedWarning(state, unitNames(manifest));
   if (warning !== null) warn("units on the server may listen where Caddy sends other projects' visitors", warning);
 }
 
 /**
- * Refuses, before anything is pushed, a machine whose loopback rule would cut
- * this project's services off from each other: one laid before the project set
- * existed. A read, hence done in a dry run too; the dry run is where this is
- * worth learning. A machine with no rule at all passes: nothing stands between
- * the services there.
- */
-async function requireProjectSet(config: Config, executor: Executor): Promise<void> {
-  switch (readLoopbackState(await executor.read(config, loopbackStateCommand()))) {
-    case "unreadable":
-      die("cannot tell whether the loopback rule is in place", [
-        "nothing was pushed: this project could fail to reach its own ports",
-      ]);
-    case "table":
-      die("the loopback rule in service predates the project set", [
-        "this project could not reach its own ports, its services each other or its backup command its service; lay the current rule first:",
-        `  ${script("deploy-loopback.sh")} close`,
-        "then run sitesolide deploy again. Nothing was pushed.",
-      ]);
-  }
-}
-
-/**
- * Says, before anything is pushed, when the server's backup component
- * predates the services' backup commands: it would read this project's
- * without a word, and go on copying the live folder as files, the very
- * snapshot the command exists to replace. A warning and not a refusal:
- * deploying changes nothing of what the backups do, and upgrading the
- * component is the owner's `sitesolide upgrade`. A read, hence done in a dry
- * run too.
- */
-async function checkBackupComponent(config: Config, executor: Executor): Promise<void> {
-  switch (readBackupComponent(await executor.read(config, backupComponentCommand()))) {
-    case "current":
-      return;
-    case "outdated":
-      warn("the backup component on the server predates backup commands: until it is upgraded, it copies this project's live folder as files", [
-        "sitesolide upgrade brings it up to date (bin/deploy-backup.sh install from a checkout), see dashboard/src/backup/README.md",
-      ]);
-      return;
-    case "absent":
-      warn("the backup component is not installed on the server: nothing saves this project's data, its backup command included", [
-        "sitesolide setup installs it on the server",
-      ]);
-      return;
-    case "unreadable":
-      warn("cannot tell whether the server's backup component runs backup commands");
-  }
-}
-
-/**
- * Refuses, before anything is pushed, a project that declares `egress` on a
- * machine where the egress proxy does not run. Deployed there, its service
- * would start with its proxy variables pointing at nothing, every outbound
- * call would fail, and nothing would say why. A read, hence done in a dry run
- * too.
- */
-async function requireEgress(config: Config, executor: Executor): Promise<void> {
-  const state = readEgressState(await executor.read(config, egressStateCommand()));
-  // Named in the refusals only: unpacking a kit to print a path nobody reads
-  // would be a write for nothing.
-  const install = (): string => script("deploy-egress.sh");
-  switch (state) {
-    case "active":
-      return;
-    case "unreadable":
-      die("cannot tell whether the egress proxy runs on the server", [
-        "nothing was pushed: this project's outbound calls go through it",
-      ]);
-    case "inactive":
-      die("the egress proxy is installed on the server but not running", [
-        "this project's outbound calls go through it; read its journal, then lay it again:",
-        `  sudo journalctl -u sitesolide-egress -n 50   (on the server)`,
-        `  ${install()}`,
-        "then run sitesolide deploy again. Nothing was pushed.",
-      ]);
-    case "absent":
-      die("this project declares egress, and the egress proxy is not installed on the server", [
-        "install it first, see egress/README.md:",
-        `  ${install()}`,
-        "then run sitesolide deploy again. Nothing was pushed.",
-      ]);
-  }
-}
-
-/**
- * Rebuilds the loopback's project set from the manifests on the machine, so
- * that each project with several services, or with a backup command,
- * reaches its own ports, and only those. See PROJECT_PORTS_SET and
- * reachesOwnPorts in bin/cli/loopback.ts.
+ * Rebuilds the loopback's project set from the manifests on the machine,
+ * after a removal, so that a project that left the machine drops out of it:
+ * its ports go back to being Caddy's alone, before another project takes
+ * them. See PROJECT_PORTS_SET and reachesOwnPorts in bin/cli/loopback.ts. A
+ * token's deployment rebuilds it on the machine (the installer's own run).
  *
- * `services` is the deployment of a project that reaches its own ports: a
- * failure stops it, its services, or its backup command, depending on the
- * set. `follow` is every other deployment and every removal: the set is
- * rewritten only when it differs from what the manifests say, so that a
- * project that dropped its services or left the machine drops out of it, and
- * a failure is reported without stopping anything.
- *
- * The file is checked by `nft -c`, applied, and only then replaces the one in
- * service: a refused file leaves both the set and the file as they were. On a
- * machine without the set, it is written without being applied, for the next
- * bin/deploy-loopback.sh to replay.
+ * The set is rewritten only when it differs from what the manifests say, and
+ * a failure is reported without stopping anything. The file is checked by
+ * `nft -c`, applied, and only then replaces the one in service: a refused file
+ * leaves both the set and the file as they were. On a machine without the
+ * set, a file already there is kept in step without being applied, for the
+ * next bin/deploy-loopback.sh to replay.
  */
-async function rebuildProjectPorts(config: Config, executor: Executor, mode: "services" | "follow"): Promise<void> {
-  const strict = mode === "services";
-  if (executor.simulated) {
-    if (strict) {
-      step("loopback: each project's own ports");
-      say(`   [dry-run] rebuild ${PROJECT_PORTS_FILE} from the manifests on the server`);
-    }
-    return;
-  }
-  const fail = (message: string, details: string[] = []): void => {
-    if (strict) die(message, details);
+async function rebuildProjectPorts(config: Config, executor: Executor): Promise<void> {
+  if (executor.simulated) return;
+  const fail = (message: string): void => {
     say(`   !! ${message}: the loopback's project set was left as it is`);
   };
 
   const state = readLoopbackState(await executor.read(config, loopbackStateCommand()));
   if (state === "unreadable") return fail("cannot tell whether the loopback rule is in place");
-  if (state === "table" && strict) {
-    return fail("the loopback rule in service predates the project set", [
-      `lay the current rule first: ${script("deploy-loopback.sh")} close`,
-    ]);
-  }
 
   const reading = readDepositedManifests(await executor.read(config, readManifestsCommand("*")));
-  if (reading.kind === "unreadable") return fail("cannot read the manifests on the server", [reading.reason]);
+  if (reading.kind === "unreadable") return fail("cannot read the manifests on the server");
   const projects: Manifest[] = [];
   for (const [folder, raw] of reading.manifests) {
     const { manifest } = readManifest(raw);
@@ -2609,14 +2123,14 @@ async function rebuildProjectPorts(config: Config, executor: Executor, mode: "se
   }
   const accounts: ProjectAccount[] = projects.map((manifest) => ({ manifest, uid: uids.get(manifest.slug)! }));
 
-  if (state === "set" && !strict) {
+  if (state === "set") {
     // Nothing to write while the kernel already carries what the manifests say.
     const current = readCurrentPairs(await executor.read(config, currentPairsCommand()));
     if (current === null) return fail("cannot read the loopback's project set");
     const wanted = projectPortPairs(accounts);
     if (current.length === wanted.length && current.every((pair) => wanted.includes(pair))) return;
   }
-  if (state !== "set" && !strict) {
+  if (state !== "set") {
     // Without the set, only a file already there is kept in step: a machine
     // that never had a project reaching its own ports gets nothing written.
     const presence = await remotePresence(config, executor, PROJECT_PORTS_FILE);
@@ -2626,7 +2140,7 @@ async function rebuildProjectPorts(config: Config, executor: Executor, mode: "se
   step("loopback: each project's own ports");
   const result = await executor.execute(config, projectPortsCommand(projectPortsFile(accounts), state === "set"));
   if (result.code !== 0) {
-    return fail(`${PROJECT_PORTS_FILE} refused`, [result.error.trim() || "no message"]);
+    return fail(`${PROJECT_PORTS_FILE} refused`);
   }
   say(`   ${slugs.length === 0 ? "no project" : slugs.join(", ")} reaching ${slugs.length === 1 ? "its" : "their"} own ports`);
   if (state !== "set") say("   written, to be applied by the next bin/deploy-loopback.sh");
@@ -3593,7 +3107,7 @@ async function remove(
 
   // Its manifest gone with its folder, the project drops out of the set: its
   // ports go back to being Caddy's alone, before another project takes them.
-  await rebuildProjectPorts(config, executor, "follow");
+  await rebuildProjectPorts(config, executor);
 
   releaseCaddyLock();
   step("token ownership, on the steward");
@@ -3910,136 +3424,6 @@ function detect(folder: string, write: boolean, chosen: string | undefined): voi
   } else {
     say("   nothing was written; to write it: sitesolide detect --write");
   }
-}
-
-/**
- * The project `deploy` works on: the folder's manifest, or, in a folder that
- * has none, the inferred one, shown and refused unless `--yes` accepts it.
- *
- * An inferred manifest names the project after its folder, and folders called
- * `api` or `site` are not rare: the machine may already serve a project of
- * that name, deployed from somewhere else, which this deployment would
- * replace. It is refused before anything is written. A manifest written by
- * hand is its author's decision, and is not second-guessed here.
- *
- * In a dry run, the accepted manifest stays in memory: a dry run writes nothing.
- */
-async function projectToDeploy(
-  folder: string,
-  config: Config,
-  executor: Executor,
-  accept: boolean,
-  chosen: string | undefined,
-): Promise<Project> {
-  const path = join(folder, MANIFEST_NAME);
-  if (existsSync(path)) {
-    if (chosen !== undefined) warn(`--slug ${chosen} ignored: ${MANIFEST_NAME} names the project`);
-    return readProject(folder, { portLater: true });
-  }
-
-  const { inference, raw } = inferOrDie(folder, chosen, true);
-  const slug = inference.manifest.slug;
-  showInference(inference, raw, `no ${MANIFEST_NAME}: this folder reads as ${KIND_LABEL[inference.kind]}`);
-  note({ inferred: inference.kind });
-
-  const reading = readDepositedManifests(await executor.read(config, readManifestsCommand(slug)));
-  if (reading.kind === "unreadable") {
-    die(`cannot tell whether ${slug} already exists on the server`, [reading.reason, "nothing was written nor pushed"]);
-  }
-  if (reading.manifests.has(slug)) {
-    die(`${slug} already exists on the server, and this folder has no ${MANIFEST_NAME}`, [
-      "deploying the inferred manifest under that name would replace the project the server carries",
-      "pick another name:  sitesolide deploy --yes --slug <name>",
-    ]);
-  }
-  if (!accept) {
-    die(`no ${MANIFEST_NAME} in ${folder}: inferred one shown above, not written`, [
-      "to write it and deploy:            sitesolide deploy --yes",
-      "to write it and review it first:   sitesolide detect --write",
-    ]);
-  }
-  if (executor.simulated) {
-    say(`   [dry-run] write ${path}`);
-  } else {
-    writeFileSync(path, raw);
-    say(`   written: ${path}, commit it`);
-  }
-  note({ manifestWritten: !executor.simulated });
-  return readProject(folder, { raw, portLater: true });
-}
-
-/**
- * Gives a port to an app whose manifest declares none, and writes it into the
- * local sitesolide.json, which then has to be committed: the next deployment,
- * from this workstation or another, keeps it. See bin/cli/ports.ts for the
- * choice. A read, hence done in a dry run too, which only skips the write.
- */
-async function allocatePort(project: Project, config: Config, executor: Executor): Promise<Project> {
-  if (!needsPort(project.manifest)) return project;
-  const slug = project.manifest.slug;
-  const reading = readDepositedManifests(await executor.read(config, readManifestsCommand("*")));
-  if (reading.kind === "unreadable") {
-    die("cannot read the manifests on the server to choose a port", [reading.reason, "nothing was pushed"]);
-  }
-  const choice = choosePort(slug, reading.manifests);
-  if (choice.kind === "full") {
-    die("no free port left on the server", [
-      `every port of ${servicePortsProse()} is declared by a project or reserved`,
-    ]);
-  }
-  step(
-    choice.kind === "kept"
-      ? `port ${choice.port}, the one the server already gives ${slug}`
-      : `port ${choice.port}, the lowest free one on the server`,
-  );
-  const raw = setPort(project.raw, choice.port);
-  const { manifest, errors } = readManifest(raw);
-  if (manifest === undefined || errors.length > 0) die(`${MANIFEST_NAME} rejected`, errors);
-  const path = join(project.folder, MANIFEST_NAME);
-  if (executor.simulated) {
-    say(`   [dry-run] write ${path} with "port": ${choice.port}`);
-  } else {
-    writeFileSync(path, raw);
-    say(`   written into ${path}: commit it, so that the next deploy keeps this port`);
-  }
-  note({ portChosen: choice.kind, manifestWritten: !executor.simulated });
-  return { ...project, manifest, raw };
-}
-
-/**
- * A project renamed on the server since this checkout was written: the
- * machine carries no project under this slug, but one that lists it among its
- * former names. sitesolide.json is rewritten under that slug, to commit, and
- * the deployment starts again for it rather than create the project again
- * under the old name; the workstation's build secrets, kept under the slug,
- * follow. Read only for a project the machine does not carry, every manifest
- * then: a read, hence done in a dry run too, which only skips the writes.
- */
-async function renamedOnServer(project: Project, config: Config, executor: Executor): Promise<Project | null> {
-  const slug = project.manifest.slug;
-  const reading = readDepositedManifests(await executor.read(config, readManifestsCommand("*")));
-  if (reading.kind === "unreadable") die("cannot read the manifests on the server", [reading.reason, "nothing was pushed"]);
-  const followed = followMachine(project.raw, slug, reading.manifests);
-  if (followed.kind !== "renamed") return null;
-  step(`${slug} was renamed ${followed.to} on the server: this deployment goes to ${followed.to}`);
-  const path = join(project.folder, MANIFEST_NAME);
-  const from = workstationSecretsPath(config.vault, slug);
-  const to = workstationSecretsPath(config.vault, followed.to);
-  if (executor.simulated) {
-    say(`   [dry-run] write ${path} with "slug": "${followed.to}"`);
-    if (existsSync(from) && !existsSync(to)) say(`   [dry-run] rename ${from} to ${to}`);
-  } else {
-    writeFileSync(path, followed.text);
-    say(`   written into ${path}: commit it`);
-    if (existsSync(from) && !existsSync(to)) {
-      renameSync(from, to);
-      say(`   the build's secrets follow: ${to}`);
-    }
-  }
-  note({ manifestWritten: !executor.simulated, renamedTo: followed.to });
-  const { manifest, errors } = readManifest(followed.text);
-  if (manifest === undefined || errors.length > 0) die(`${MANIFEST_NAME} rejected`, errors);
-  return { ...project, manifest, raw: followed.text };
 }
 
 /**
@@ -4471,13 +3855,9 @@ if (import.meta.main) {
       if (compareInDryRun && !dryRun) {
         die("--compare needs --dry-run", ["it measures what a deployment would change on the server, and changes nothing there"]);
       }
-      await deploy(
-        await projectToDeploy(folder, config, executor, arguments_.includes("--yes"), optionValue(arguments_, "--slug")),
-        config,
-        executor,
-        replace,
-        arguments_.includes("--adopt"),
-      );
+      // A platform component's folder alone gets here, its manifest read
+      // already: see deploysOverSsh.
+      await deploy(readProject(folder), config, executor, replace);
       break;
     case "status":
       await showStatus(config, executor);

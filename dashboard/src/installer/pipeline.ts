@@ -414,8 +414,8 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     }
     // validate() only knows a schedule is safe to write: whether it is a
     // time is systemd's to say, and a timer it cannot read is laid, loaded,
-    // and never starts anything. Asked before anything is written, as
-    // `deploy` asks, see scheduleCheckCommand in services.ts.
+    // and never starts anything. Asked before anything is written, see
+    // refusedSchedules in real.ts.
     const scheduled = scheduledServices(manifest);
     if (scheduled.length > 0) {
       const refused = await host.refusedSchedules(scheduled.map((service) => service.schedule!));

@@ -8,7 +8,7 @@
  * a marker, for the reason given in unit.ts: an empty output is a failed read,
  * never an answer.
  */
-import { domainHosts, FIRST_BLOCK, inLaterBlock, isValidSchedule, isValidSlug, PORTAL_SLUG, readManifest, servicesOf, type Manifest } from "./manifest";
+import { domainHosts, FIRST_BLOCK, inLaterBlock, isValidSlug, PORTAL_SLUG, readManifest, servicesOf, type Manifest } from "./manifest";
 import { PORTAL_PORT } from "./portal";
 import { autobindReachesBlocks, LOOPBACK_TABLE, PROJECT_PORTS_FILE, PROJECT_PORTS_SET, reservesEveryBlock } from "./loopback";
 import { CREDENTIALS_EXIT_STATUS, credentialsFailure } from "./store";
@@ -596,38 +596,6 @@ export function currentPairsCommand(): string {
 export function readCurrentPairs(output: string): string[] | null {
   if (!output.split("\n").some((line) => line.trim() === MARKER_DONE)) return null;
   return [...output.matchAll(/(\d+) \. (\d+)/g)].map((match) => `${match[1]} . ${match[2]}`);
-}
-
-/**
- * Asks systemd, on the machine, whether it reads each schedule as a time:
- * validate() only knows the expression is safe to write, systemd alone knows
- * the calendar syntax, and a timer it cannot read is laid, loaded, and never
- * starts anything. One `OK` or `BAD` line per schedule, in order, then the
- * marker. A read, run before anything is written, and in a dry run too.
- *
- * Each expression goes between double quotes: isValidSchedule leaves nothing
- * in it a shell reads there, no `$`, quote, backslash or backtick.
- */
-export function scheduleCheckCommand(schedules: string[]): string {
-  for (const schedule of schedules) {
-    if (!isValidSchedule(schedule)) throw new Error(`invalid schedule: ${schedule}`);
-  }
-  const checks = schedules.map(
-    (schedule) => `if systemd-analyze calendar "${schedule}" >/dev/null 2>&1; then echo OK; else echo BAD; fi;`,
-  );
-  return `sh -c '${checks.join(" ")} echo ${MARKER_DONE}'`;
-}
-
-/** The schedules systemd refused, in the manifest's order, or null when the answer does not read. */
-export function readScheduleCheck(output: string, schedules: string[]): string[] | null {
-  const lines = output.split("\n").map((line) => line.trim()).filter((line) => line !== "");
-  if (lines.at(-1) !== MARKER_DONE || lines.length !== schedules.length + 1) return null;
-  const refused: string[] = [];
-  for (const [rank, line] of lines.slice(0, -1).entries()) {
-    if (line === "BAD") refused.push(schedules[rank]!);
-    else if (line !== "OK") return null;
-  }
-  return refused;
 }
 
 /**

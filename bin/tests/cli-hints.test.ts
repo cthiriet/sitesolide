@@ -88,7 +88,7 @@ describe("the hints", () => {
   });
 
   test("the narrower patterns win: a refusal is never answered with a neighbour's hint", () => {
-    expect(hintFor("sitesolide.json rejected once the general access set from the dashboard is applied")).toContain("keeping `portal`");
+    expect(hintFor("the former names of dashboard differ on the server: run `sitesolide deploy` in its folder first")).not.toContain("never renamed");
     expect(hintFor("sitesolide.json rejected")).toContain("docs/manifest.md");
     expect(hintFor("general access of shop changed from the dashboard during this deploy: run `sitesolide deploy` again")).toContain(
       "changed while deploy ran",

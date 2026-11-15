@@ -1,0 +1,12 @@
+{
+  "slug": "dashboard",
+  "description": "A platform component shaped as the dashboard, for the tests",
+  "port": 3022,
+  "publicDir": "public",
+  "build": "bun run build.ts",
+  "install": "bun install --production",
+  "start": "/usr/local/bin/bun run server.ts",
+  "routes": ["/api/*"],
+  "exclude": ["node_modules", "data", "dist"],
+  "memory": "128M"
+}

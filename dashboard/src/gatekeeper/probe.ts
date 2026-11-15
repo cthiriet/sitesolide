@@ -101,7 +101,7 @@ export function judgeOpened(host: string, response: ProbeResponse): string | nul
  * Is the portal ready to guard a door? `/sante` returns `configure: true` when
  * a hash is in place. A site put behind a stopped portal would be closed with a
  * 502, behind a portal with no hash it would be closed to its owner himself:
- * `requirePortal` of the CLI refuses both, here too.
+ * the installer refuses both, here too.
  */
 export function isPortalReady(response: ProbeResponse): boolean {
   if (!("code" in response) || response.code !== 200) return false;

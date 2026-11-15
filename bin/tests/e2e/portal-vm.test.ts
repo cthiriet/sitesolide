@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateFragment } from "../../cli/fragment";
-import { setPortal, type Manifest } from "../../cli/manifest";
+import type { Manifest } from "../../cli/manifest";
 import { buildFragment } from "../../../api/src/locks";
 import { REPO, run, TEST_EMAIL, TEST_ZONE } from "./run";
 import { createFakeVm, type FakeVm } from "./fake-vm";
@@ -68,89 +68,48 @@ function project(manifest: Manifest): string {
   return folder;
 }
 
-describe("deploy reads the door on the VM", () => {
-  test("a site the machine does not know keeps the value from its repository", async () => {
+/**
+ * The one deployment over SSH, a platform component's, whose manifest never
+ * carries a door: the machine's is read all the same, before anything is
+ * built or sent, and one that the machine would contradict stops everything.
+ * The doors a project follows are the installer's, see
+ * dashboard/tests/installer-pipeline.test.ts.
+ */
+describe("deploy of a platform component reads its door on the VM", () => {
+  const COMPONENT: Manifest = { slug: "dashboard", port: 3022, publicDir: "public", start: "/usr/local/bin/bun run server.ts" };
+
+  test("a component the machine does not carry yet is laid open, without a portal", async () => {
     vm = createFakeVm();
-    const folder = project(PROTECTED);
-    const r = await run(folder, ["deploy", "--dry-run"], { vm });
+    const r = await run(project(COMPONENT), ["deploy", "--dry-run"], { vm });
     expect(r.code).toBe(0);
     expect(r.all).not.toContain("from the dashboard");
-    expect(r.output).toContain("check https://portal.");
-    expect(r.output).toContain("forward_auth @portal_guard");
-    // The site's door, what systemd knows of its unit, then every manifest
-    // for the ports they declare, the machine's guard of the services' ports
-    // (secondBlockStateCommand), and nothing else was asked of the machine:
-    // the other sites' blocks are not this deployment's business, and in a
-    // dry run there is no lock. The claim on its name is a read too, which
-    // the machine does not carry yet; its store is not read, the project
-    // declaring no runtime secret. The machine not carrying it, every
-    // manifest is read at once, for a project renamed since that lists it
-    // among its former names.
-    expect(vm.logs()).toEqual(["READ sample-door", "READ *", "UNITS sample-door", "READ *", "SECOND-BLOCK", "CLAIM GET sample-door"]);
-  });
-
-  test("the same value on both sides changes nothing", async () => {
-    vm = createFakeVm();
-    vm.writeManifest("sample-door", text(PROTECTED));
-    const folder = project(PROTECTED);
-    const r = await run(folder, ["deploy", "--dry-run"], { vm });
-    expect(r.code).toBe(0);
-    expect(r.all).not.toContain("from the dashboard");
-    expect(r.output).toContain("forward_auth @portal_guard");
-  });
-
-  test("closed from the dashboard: the door applies to everything deploy generates", async () => {
-    vm = createFakeVm();
-    vm.writeManifest("sample-door", text(PROTECTED));
-    const folder = project(APP);
-    const before = readFileSync(join(folder, "sitesolide.json"), "utf8");
-
-    const r = await run(folder, ["deploy", "--dry-run"], { vm });
-    expect(r.code).toBe(0);
-    expect(r.output).toContain("general access was set to Restricted from the dashboard");
-    expect(r.output).toContain(`[dry-run] write ${join(folder, "sitesolide.json")}`);
-
-    // The block shown carries the door, the portal is checked before anything
-    // is sent, and the door is laid before the files, as for any protected
-    // site.
-    expect(r.output).toContain("forward_auth @portal_guard");
-    const portal = r.output.indexOf("check https://portal.");
-    const door = r.output.indexOf("bin/deploy-caddy.sh sample-door.caddy");
-    const files = r.output.indexOf("/srv/sites/sample-door/public/");
-    expect(portal).toBeGreaterThan(-1);
-    expect(door).toBeGreaterThan(portal);
-    expect(files).toBeGreaterThan(door);
-
-    // In a dry run, nothing is written on the workstation.
-    expect(readFileSync(join(folder, "sitesolide.json"), "utf8")).toBe(before);
-  });
-
-  test("reopened from the dashboard: the site is no longer treated as a protected site", async () => {
-    vm = createFakeVm();
-    vm.writeManifest("sample-door", text(APP));
-    const folder = project(PROTECTED);
-
-    const r = await run(folder, ["deploy", "--dry-run"], { vm });
-    expect(r.code).toBe(0);
-    expect(r.output).toContain("general access was set to Public from the dashboard");
     expect(r.output).not.toContain("forward_auth @portal_guard");
     expect(r.output).not.toContain("check https://portal.");
-    // The block leaves after the restart, as for any open site.
-    expect(r.output.indexOf("bin/deploy-caddy.sh sample-door.caddy")).toBeGreaterThan(
-      r.output.indexOf("systemctl restart sample-door"),
-    );
+    // Its door, what systemd knows of its unit, every manifest for the ports
+    // they declare, the machine's guard of the services' ports
+    // (secondBlockStateCommand), and nothing else: the other sites' blocks
+    // are not this deployment's business, and in a dry run there is no lock.
+    expect(vm.logs()).toEqual(["READ dashboard", "UNITS dashboard", "READ *", "SECOND-BLOCK"]);
+  });
+
+  test("a door on the machine is refused, a platform component never having one", async () => {
+    vm = createFakeVm();
+    vm.writeManifest("dashboard", text({ ...COMPONENT, portal: true }));
+    const r = await run(project(COMPONENT), ["deploy", "--dry-run"], { vm });
+    expect(r.code).toBe(1);
+    expect(r.error).toContain("the manifest on the server gives dashboard a door, which a platform component never has");
+    expect(r.all).not.toContain("[dry-run]");
+    expect(vm.logs()).toEqual(["READ dashboard"]);
   });
 
   test("an unreadable door on the VM stops everything, before the build and before anything is sent", async () => {
     vm = createFakeVm();
-    vm.writeManifest("sample-door", JSON.stringify({ ...APP, portal: "yes" }));
-    const folder = project(APP);
-
-    const r = await run(folder, ["deploy", "--dry-run"], { vm });
+    vm.writeManifest("dashboard", JSON.stringify({ ...COMPONENT, portal: "yes" }));
+    const r = await run(project(COMPONENT), ["deploy", "--dry-run"], { vm });
     expect(r.code).toBe(1);
-    expect(r.error).toContain("cannot tell whether the general access of sample-door was changed from the dashboard");
+    expect(r.error).toContain("cannot tell whether the general access of dashboard was changed from the dashboard");
     expect(r.all).not.toContain("[dry-run]");
-    expect(vm.logs()).toEqual(["READ sample-door"]);
+    expect(vm.logs()).toEqual(["READ dashboard"]);
   });
 
   test("an unreadable answer from the machine stops everything too", async () => {
@@ -158,116 +117,30 @@ describe("deploy reads the door on the VM", () => {
     // it as an absence would make it take the repository's value.
     vm = createFakeVm();
     vm.forceAnswer("");
-    const folder = project(APP);
-
-    const r = await run(folder, ["deploy", "--dry-run"], { vm });
+    const r = await run(project(COMPONENT), ["deploy", "--dry-run"], { vm });
     expect(r.code).toBe(1);
     expect(r.error).toContain("the server did not finish its answer");
     expect(r.all).not.toContain("[dry-run]");
   });
 
-  test("for real, the local manifest catches up with the VM before the first write", async () => {
-    // The direction that does not ask the portal whether it answers: that one
-    // would question the real portal. The first write is refused by the
-    // simulated VM, and that is what stops the deployment.
+  test("for real, only readings go before the first write, and the lock is not taken yet", async () => {
+    // The first write is refused by the simulated VM, and that is what stops
+    // the deployment.
     vm = createFakeVm();
-    vm.writeManifest("sample-door", text(APP));
-    const folder = project(PROTECTED);
-
+    vm.writeManifest("dashboard", text(COMPONENT));
+    const folder = project(COMPONENT);
+    const before = readFileSync(join(folder, "sitesolide.json"), "utf8");
     const r = await run(folder, ["deploy"], { vm });
-    expect(r.output).toContain(
-      "general access was set to Public from the dashboard; sitesolide.json updated, commit it",
-    );
-    expect(readFileSync(join(folder, "sitesolide.json"), "utf8")).toBe(
-      setPortal(text(PROTECTED), false),
-    );
-
-    // Nothing other than the readings went through, the site's door, its
-    // block in service, what systemd knows of its unit, the manifests whose
-    // ports it checks, the guard of the services' ports and whether a token
-    // holds its name: the preparation of
-    // the service is the first write, and the simulated VM refused it. The lock is only taken before the first
-    // deposit of the manifest or of the block, much further on.
     expect(r.code).toBe(1);
+    // Its door, its block in service, what systemd knows of its unit, the
+    // manifests whose ports it checks and the guard of the services' ports:
+    // the preparation of the service is the first write. The lock is only
+    // taken before the first deposit of the manifest, much further on.
     const logs = vm.logs();
-    expect(logs.slice(0, 6)).toEqual(["READ sample-door", "BLOCK sample-door", "UNITS sample-door", "READ *", "SECOND-BLOCK", "CLAIM GET sample-door"]);
-    expect(logs.slice(6).every((line) => line.startsWith("REFUSED "))).toBe(true);
-    expect(logs).toHaveLength(7);
-  });
-});
-
-/**
- * The block in service before the dashboard changed the door. It differs from
- * the generated block by the door alone, and that is the expected discrepancy:
- * refusing it without --force would make every gesture from the dashboard a
- * manual switch. Anything else it differs by is a decision made by hand on the
- * machine, and stops the deployment before anything leaves.
- *
- * The comparison is made against the machine, so these runs are real ones: in
- * a dry run nothing is asked of it. The simulated VM refuses the first write,
- * which is where they stop, and the zone resolves nowhere, so no real portal is
- * ever asked anything.
- */
-describe("the block in service follows the dashboard's door", () => {
-  test("a block that differs only by the door goes through without --force", async () => {
-    vm = createFakeVm();
-    vm.writeManifest("sample-door", text(PROTECTED));
-    vm.writeBlock("sample-door", generateFragment(APP)!);
-    const r = await run(project(APP), ["deploy"], { vm });
-    expect(r.output).toContain("/etc/caddy/sites/sample-door.caddy will follow the portal set from the dashboard");
-    expect(r.all).not.toContain("no longer matches");
-  });
-
-  test("after an interrupted deployment, the block left behind catches up with the VM without --force", async () => {
-    // The local manifest has already been rewritten by the previous pass,
-    // which stopped before depositing the block: no switch left to announce,
-    // but the block in service still does not say what the machine carries.
-    vm = createFakeVm();
-    vm.writeManifest("sample-door", text(APP));
-    vm.writeBlock("sample-door", generateFragment(PROTECTED)!);
-    const r = await run(project(APP), ["deploy"], { vm });
-    expect(r.all).not.toContain("turned");
-    expect(r.output).toContain("will follow the portal set from the dashboard");
-  });
-
-  test("a protected block deployed before the identity headers is upgraded without --force", async () => {
-    vm = createFakeVm();
-    vm.writeManifest("sample-door", text(PROTECTED));
-    vm.writeBlock("sample-door", generateFragment(PROTECTED, "cookie")!);
-    const r = await run(project(PROTECTED), ["deploy"], { vm });
-    expect(r.output).toContain("/etc/caddy/sites/sample-door.caddy was written by an earlier release, the current one replaces it");
-    expect(r.all).not.toContain("no longer matches");
-  });
-
-  test("a door set by a dashboard not yet upgraded is taken, and its block upgraded", async () => {
-    // The older gatekeeper wrote the earlier stanza; the repository has not
-    // caught up with the door yet.
-    vm = createFakeVm();
-    vm.writeManifest("sample-door", text(PROTECTED));
-    vm.writeBlock("sample-door", generateFragment(PROTECTED, "cookie")!);
-    const r = await run(project(APP), ["deploy"], { vm });
-    expect(r.output).toContain("general access was set to Restricted from the dashboard");
-    expect(r.output).toContain("was written by an earlier release, the current one replaces it");
-    expect(r.all).not.toContain("no longer matches");
-  });
-
-  test("without a manifest on the VM, the local door does not silently win over the block in service", async () => {
-    // Nothing then confirms which door holds: the block is refused.
-    vm = createFakeVm();
-    vm.writeBlock("sample-door", generateFragment(APP)!);
-    const r = await run(project(PROTECTED), ["deploy"], { vm });
-    expect(r.code).toBe(1);
-    expect(r.error).toContain("no longer matches the manifest");
-  });
-
-  test("a block that also differs by something else stays refused, before anything is written", async () => {
-    vm = createFakeVm();
-    vm.writeManifest("sample-door", text(PROTECTED));
-    vm.writeBlock("sample-door", generateFragment({ ...APP, port: 3036 })!);
-    const r = await run(project(APP), ["deploy"], { vm });
-    expect(r.code).toBe(1);
-    expect(r.error).toContain("no longer matches the manifest");
-    expect(vm.logs().some((line) => line.startsWith("REFUSED") || line.startsWith("ACCEPTED"))).toBe(false);
+    expect(logs.slice(0, 5)).toEqual(["READ dashboard", "BLOCK dashboard", "UNITS dashboard", "READ *", "SECOND-BLOCK"]);
+    expect(logs.slice(5).every((line) => line.startsWith("REFUSED "))).toBe(true);
+    expect(logs).toHaveLength(6);
+    expect(readFileSync(join(folder, "sitesolide.json"), "utf8")).toBe(before);
   });
 });
 

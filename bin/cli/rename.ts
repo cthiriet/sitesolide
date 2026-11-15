@@ -15,7 +15,7 @@
  * Pure, and borrowed by the dashboard: the steward, the rename run, the
  * installer and the CLI judge a name with this one copy.
  */
-import { readManifest, setFormerSlugs, setSlug, slugRefusal } from "./manifest";
+import { readManifest, slugRefusal } from "./manifest";
 
 /**
  * The platform's own projects, which the platform's scripts find by name:
@@ -71,29 +71,3 @@ export function renameRefusal(from: string, to: string, deposited: Deposited, zo
   return null;
 }
 
-export type Followed = { kind: "same" } | { kind: "renamed"; to: string; text: string } | { kind: "former"; text: string };
-
-/**
- * What a checkout's sitesolide.json becomes against the machine before a
- * deployment: `renamed` when the machine carries the project under another
- * slug that lists this one among its former names, the text then under that
- * slug; `former` when the project is there under this slug but its former
- * names differ, the machine's written in; `same` otherwise, a new project
- * included.
- */
-export function followMachine(raw: string, slug: string, deposited: Deposited): Followed {
-  const own = deposited.get(slug);
-  if (own === undefined) {
-    const to = renamedTo(deposited, slug);
-    if (to === null) return { kind: "same" };
-    const machine = readManifest(deposited.get(to)!).manifest!;
-    return { kind: "renamed", to, text: setFormerSlugs(setSlug(raw, to), machine.formerSlugs) };
-  }
-  const machine = readManifest(own).manifest;
-  const local = readManifest(raw).manifest;
-  if (machine === undefined || local === undefined) return { kind: "same" };
-  const wanted = machine.formerSlugs ?? [];
-  const have = local.formerSlugs ?? [];
-  if (wanted.length === have.length && wanted.every((name, i) => have[i] === name)) return { kind: "same" };
-  return { kind: "former", text: setFormerSlugs(raw, machine.formerSlugs) };
-}

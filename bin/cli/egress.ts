@@ -243,32 +243,6 @@ export function egressUnitLines(manifest: Manifest): string[] {
   return lines;
 }
 
-// --- The deployment's check ------------------------------------------------
-
-/** The last line of the read, so that an empty output is never taken for an answer. */
-export const EGRESS_MARKER = "DONE";
-
-/**
- * Where the egress proxy stands on the machine. `systemctl is-active` needs no
- * privilege, and the unit file is readable by everyone.
- */
-export function egressStateCommand(): string {
-  return (
-    `sh -c 'if systemctl is-active --quiet ${EGRESS_UNIT}.service; then echo active; ` +
-    `elif [ -f /etc/systemd/system/${EGRESS_UNIT}.service ]; then echo inactive; else echo absent; fi; ` +
-    `echo ${EGRESS_MARKER}'`
-  );
-}
-
-export type EgressState = "active" | "inactive" | "absent" | "unreadable";
-
-export function readEgressState(output: string): EgressState {
-  const lines = output.split("\n").map((line) => line.trim()).filter((line) => line !== "");
-  if (lines.length !== 2 || lines[1] !== EGRESS_MARKER) return "unreadable";
-  const state = lines[0];
-  return state === "active" || state === "inactive" || state === "absent" ? state : "unreadable";
-}
-
 // --- The addresses no project reaches -----------------------------------------
 
 /**

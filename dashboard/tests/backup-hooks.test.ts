@@ -2,7 +2,7 @@ import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, closeSync, existsSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { readSnapshotName, SERVICE_COMMANDS_FEATURE, snapshotName } from "../borrowed/backups";
+import { readSnapshotName, snapshotName } from "../borrowed/backups";
 import type { Manifest } from "../borrowed/manifest";
 import { BIND_LINES_FEATURE, generateUnits, unitFileName, withoutStoreLines } from "../borrowed/unit";
 import { configFrom } from "../src/backup/config";
@@ -340,13 +340,7 @@ describe.skipIf(NO_RESTIC)("the verdict is the hook mode's exit code, never what
   });
 });
 
-describe("what sitesolide deploy looks for on the server", () => {
-  test("the component's build carries the feature, as bin/deploy-backup.sh builds it", () => {
-    const built = Bun.spawnSync([process.execPath, "build", "backup.ts", "--target=bun"], { cwd: join(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe" });
-    expect(built.exitCode).toBe(0);
-    expect(built.stdout.toString()).toContain(SERVICE_COMMANDS_FEATURE);
-  });
-
+describe("what a machine is searched for", () => {
   test("the component's build and the installer's carry this release's bind lines, which a machine is searched for before it opens the second block", () => {
     for (const entry of ["backup.ts", "installer.ts"]) {
       const built = Bun.spawnSync([process.execPath, "build", entry, "--target=bun"], { cwd: join(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe" });

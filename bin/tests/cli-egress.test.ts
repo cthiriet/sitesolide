@@ -4,7 +4,6 @@ import {
   EGRESS_STATUS_PORT,
   egressErrors,
   egressPatterns,
-  egressStateCommand,
   egressUnitLines,
   formatPattern,
   INSTALL_REGISTRIES,
@@ -16,7 +15,6 @@ import {
   matchesEgress,
   normalizeHost,
   parseEgressEntry,
-  readEgressState,
   type HostPattern,
 } from "../cli/egress";
 import { CADDY_ADMIN_PORT } from "../cli/loopback";
@@ -227,22 +225,6 @@ describe("the ports", () => {
       expect(port).not.toBe(CADDY_ADMIN_PORT);
     }
     expect(EGRESS_PROXY_PORT).not.toBe(EGRESS_STATUS_PORT);
-  });
-});
-
-describe("the deployment's read", () => {
-  test("three states, and anything else is unreadable", () => {
-    expect(readEgressState("active\nDONE\n")).toBe("active");
-    expect(readEgressState("inactive\nDONE\n")).toBe("inactive");
-    expect(readEgressState("absent\nDONE\n")).toBe("absent");
-    expect(readEgressState("")).toBe("unreadable");
-    expect(readEgressState("active\n")).toBe("unreadable");
-    expect(readEgressState("sudo: a password is required\nDONE\n")).toBe("unreadable");
-  });
-
-  test("asks systemd, with no privilege", () => {
-    expect(egressStateCommand()).not.toContain("sudo");
-    expect(egressStateCommand()).toContain("systemctl is-active --quiet sitesolide-egress.service");
   });
 });
 

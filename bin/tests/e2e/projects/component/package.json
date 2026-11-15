@@ -1,0 +1,5 @@
+{
+  "name": "sample-component",
+  "private": true,
+  "type": "module"
+}

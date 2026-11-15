@@ -385,8 +385,8 @@ export function createHost(config: HostConfig): Host {
     async refusedSchedules(schedules) {
       const refused: string[] = [];
       for (const schedule of schedules) {
-        // validate() has judged it already; the second barrier, as
-        // scheduleCheckCommand has: nothing it refuses reaches a command.
+        // validate() has judged it already; the second barrier: nothing it
+        // refuses reaches a command.
         if (!isValidSchedule(schedule)) throw new Error(`invalid schedule: ${schedule}`);
         // One argument, never a shell: the expression reaches systemd as written.
         // It exits 1 on an expression it cannot parse; any other failure, a

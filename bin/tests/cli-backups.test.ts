@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  BACKUP_COMPONENT_MARKER,
-  SERVICE_COMMANDS_FEATURE,
-  backupComponentCommand,
-  readBackupComponent,
   MARKER_NOT_INSTALLED,
   compactTime,
   humanSize,
@@ -242,16 +238,6 @@ describe("a service's backup command", () => {
     expect(reachesOwnPorts({ ...APP, port: 3050 })).toBe(false);
     expect(reachesOwnPorts(SHOP())).toBe(true);
     expect(projectPortPairs([{ manifest: single, uid: 1700 }, { manifest: { ...APP, slug: "other", port: 3051 }, uid: 1701 }])).toEqual(["3050 . 1700"]);
-  });
-});
-
-describe("whether the server's backup component runs backup commands", () => {
-  test("a search of its build for the feature, nothing run, the end of the answer marked", () => {
-    expect(backupComponentCommand()).toBe(
-      `sh -c 'if [ ! -f /usr/local/lib/sitesolide/backup.js ]; then echo absent; elif grep -qF ${SERVICE_COMMANDS_FEATURE} /usr/local/lib/sitesolide/backup.js; then echo current; else echo outdated; fi; echo DONE'`,
-    );
-    for (const state of ["current", "outdated", "absent"] as const) expect(readBackupComponent(`${state}\n${BACKUP_COMPONENT_MARKER}\n`)).toBe(state);
-    for (const output of ["", "current\n", "sudo: refused\nDONE\n", "current\nDONE\nextra\n"]) expect(readBackupComponent(output)).toBe("unreadable");
   });
 });
 

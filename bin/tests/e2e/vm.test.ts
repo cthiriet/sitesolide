@@ -1,7 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, rmSync } from "node:fs";
-import { resolve } from "node:path";
-import { REPO, run } from "./run";
+import { run } from "./run";
 
 /**
  * Tests against the real machine, the one that serves the clients.
@@ -13,14 +11,19 @@ import { REPO, run } from "./run";
  *   E2E_VM=1 bun test ./e2e/vm.test.ts              the static one, riskless
  *   E2E_VM=1 E2E_VM_APP=1 bun test ./e2e/vm.test.ts
  *
+ * `deploy` goes through the dashboard's API, as on any workstation: it needs
+ * the token `sitesolide login` keeps, and the machine's installer does the
+ * work, whose log the CLI prints. `status` and the confinement check read
+ * over the owner's SSH access.
+ *
  * The first level touches neither systemd nor Caddy: it creates a folder under
  * /srv/sites and deposits files there, which the *.test-zone.invalid block
  * already serves by naming convention. No reload, no service, no risk for the
  * sites in place.
  *
- * The second one lays a systemd unit and a Caddy fragment, so it touches the
- * shared configuration: it goes through bin/deploy-caddy.sh, which backs up,
- * validates and restores at the slightest misstep, but it is still to be run
+ * The second one lays a systemd unit and a Caddy block, so it touches the
+ * shared configuration: the installer validates the block and puts the
+ * previous one back at the slightest misstep, but it is still to be run
  * knowingly.
  */
 
@@ -124,34 +127,23 @@ describe.skipIf(!VM)("built documentation", () => {
 
 describe.skipIf(!VM || !APP)("real deployment of an application project", () => {
   test(
-    "a first deploy lays the user and the unit before the Caddy fragment",
+    "a deploy lays the unit and restarts the service before the Caddy block",
     async () => {
-      // The trace is erased first: what is measured is what this deployment
-      // writes, not what a previous one had left. It used to be the test of
-      // `sitesolide init`, removed on 28 August 2026: the command no longer
-      // exists, the order it protected is still there, and it now lives inside
-      // `deploy`.
-      const trace = resolve(REPO, "infra", "projects", "sample-bun");
-      rmSync(trace, { recursive: true, force: true });
-
       const r = await run("projects/bun-mixed", ["deploy"]);
       expect(r.code).toBe(0);
       expect(r.output).toContain("https://sample-bun.test-zone.invalid/ 200");
 
-      // The fragment comes after the service, never before. Laid too early, it
-      // would be picked up by the first bin/deploy-caddy.sh to come along,
-      // including the one of ANOTHER project, and would deposit a block
-      // proxying towards a port where nothing listens. Measured on 19 August
-      // 2026: sample-secret, refused in the middle of its deployment for want
-      // of a secret, still had its block in service, answering 502.
-      const unit = r.output.indexOf("systemd unit");
-      const service = r.output.indexOf("service restart");
-      const fragment = r.output.indexOf("Caddy fragment");
+      // The block comes after the service, never before. Laid too early, it
+      // would deposit a block proxying towards a port where nothing listens.
+      // Measured on 19 August 2026: sample-secret, refused in the middle of
+      // its deployment for want of a secret, still had its block in service,
+      // answering 502.
+      const unit = r.output.indexOf("sample-bun.service");
+      const service = r.output.indexOf("-> service restart");
+      const block = r.output.indexOf("-> Caddy block, through the validated path");
       expect(unit).toBeGreaterThan(-1);
       expect(service).toBeGreaterThan(unit);
-      expect(fragment).toBeGreaterThan(service);
-
-      expect(readdirSync(trace).sort()).toEqual(["sample-bun.caddy", "sample-bun.service"]);
+      expect(block).toBeGreaterThan(service);
     },
     180000,
   );
@@ -181,9 +173,8 @@ describe.skipIf(!VM || !APP)("real deployment of an application project", () => 
       // anything down.
       const r = await run("projects/bun-mixed", ["deploy"]);
       expect(r.code).toBe(0);
-      expect(r.output).toContain("unchanged  /etc/systemd/system/sample-bun.service");
-      expect(r.output).not.toContain("install the unit");
-      expect(r.all).not.toContain("daemon-reload");
+      expect(r.output).toContain("unchanged  sample-bun.service");
+      expect(r.output).not.toContain("installed  sample-bun.service");
       expect(r.output).toContain("https://sample-bun.test-zone.invalid/ 200");
     },
     180000,
@@ -208,30 +199,21 @@ describe.skipIf(!VM || !APP)("real deployment of an application project", () => 
  * The first pass in a single command, on a project the machine has never
  * carried: no user, no unit, no folder.
  *
- * It is the reason for the preparation made by `deploy`. It is measured here
- * and nowhere else: in a dry run, no reading is done on the VM, so nothing
- * says whether the unit was really missing.
+ * It is the reason for the preparation the installer makes. It is measured
+ * here against a real systemd; the same steps are tried in front of a fake
+ * host in dashboard/tests/installer-pipeline.test.ts.
  *
  * The clean-up is the one from this folder's README, to be run afterwards.
  */
 describe.skipIf(!VM || !APP)("first pass, with nothing prepared", () => {
   test(
-    "deploy lays the user, the unit, the code and the fragment",
+    "deploy lays the user, the unit, the code and the block",
     async () => {
-      const trace = resolve(REPO, "infra", "projects", "sample-api");
-      rmSync(trace, { recursive: true, force: true });
-
       const r = await run("projects/fastapi-app", ["deploy"]);
       expect(r.code).toBe(0);
       expect(r.output).toContain("system user and directories");
-      expect(r.output).toContain("install the unit");
+      expect(r.output).toContain("installed  sample-api.service");
       expect(r.output).toContain("https://sample-api.test-zone.invalid/ 200");
-
-      // The trace of what the machine executes stays in the repository, even
-      // for a project whose code lives elsewhere. The fragment is only written
-      // there after the service has started, by deploy: both files are
-      // therefore present.
-      expect(readdirSync(trace).sort()).toEqual(["sample-api.caddy", "sample-api.service"]);
     },
     240000,
   );
@@ -241,8 +223,8 @@ describe.skipIf(!VM || !APP)("first pass, with nothing prepared", () => {
     async () => {
       const r = await run("projects/fastapi-app", ["deploy"]);
       expect(r.code).toBe(0);
-      expect(r.output).toContain("unchanged  /etc/systemd/system/sample-api.service");
-      expect(r.output).not.toContain("install the unit");
+      expect(r.output).toContain("unchanged  sample-api.service");
+      expect(r.output).not.toContain("installed  sample-api.service");
     },
     240000,
   );
@@ -251,8 +233,8 @@ describe.skipIf(!VM || !APP)("first pass, with nothing prepared", () => {
 /**
  * A secret in place, against the machine. The `sample-secret` project names
  * API_KEY, which its service reads from its store; it is the only place where
- * the store's listing is read from a real steward, which the dry run mode
- * never does.
+ * the store's listing is read from a real dashboard, which the tests in front
+ * of a fake one never do.
  *
  * The VM is the authority: a value set there is left as it is, and one that
  * is missing is warned of, never a stop. The value is set on the machine

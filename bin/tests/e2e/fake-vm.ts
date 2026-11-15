@@ -75,8 +75,6 @@ export type FakeVm = {
   owners(): Record<string, string>;
   /** Lays a static account the machine already carries, with a system uid unless one is given. */
   addAccount(name: string, uid?: number): void;
-  /** The calendar expressions systemd refuses to read, as `systemd-analyze calendar` would on the machine. */
-  refuseSchedules(schedules: string[]): void;
   /** How the services stand at each reading after the restart, in order; see Standing. */
   setStandings(readings: Record<string, Standing>[]): void;
   /** What the reading of the zone's TLS policy answers, one of TLS_ZONE_STATES in bin/cli/tls.ts. */
@@ -206,9 +204,6 @@ export function createFakeVm(): FakeVm {
     },
     addAccount(name, uid) {
       addAccount(root, name, uid);
-    },
-    refuseSchedules(schedules) {
-      writeFileSync(join(root, SWITCHES.refusedSchedules), schedules.map((schedule) => `${schedule}\n`).join(""));
     },
     setStandings(readings) {
       writeFileSync(join(root, SWITCHES.standings), JSON.stringify(readings));

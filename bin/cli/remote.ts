@@ -1572,21 +1572,11 @@ export function unknownOptions(command: string, arguments_: string[]): Failure |
 export const PLATFORM_COMPONENTS: readonly string[] = ["dashboard", "portal"];
 
 /**
- * Set on `globalThis` by bin/tests/e2e/ssh-engine.ts, a preload of the
- * repository's tests alone, which the kit and the binary never carry: the
- * end-to-end tests drive the SSH engine with sample projects against a
- * simulated machine, the engine setup and upgrade still run for the
- * components. Nothing a workstation runs sets it.
- */
-export const SSH_ENGINE_FOR_TESTS = Symbol.for("sitesolide.tests.ssh-engine");
-
-/**
  * Whether `sitesolide deploy` in this folder runs over SSH: a platform
  * component's folder alone, its slug read from its manifest. Every other
  * folder, one without a manifest included, deploys through the API.
  */
 export function deploysOverSsh(folder: string): boolean {
-  if ((globalThis as Record<symbol, unknown>)[SSH_ENGINE_FOR_TESTS] === true) return true;
   try {
     const parsed = JSON.parse(readFileSync(join(folder, "sitesolide.json"), "utf8")) as { slug?: unknown } | null;
     return typeof parsed?.slug === "string" && PLATFORM_COMPONENTS.includes(parsed.slug);

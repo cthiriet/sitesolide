@@ -86,10 +86,8 @@ import {
   type Who,
 } from "../../cli/caddy-lock";
 import { MARKER_ABSENT, MARKER_PRESENT, unitFileName } from "../../cli/unit";
-import { GENERATOR_MARK, listUnitsCommand, loopbackStateCommand, MARKER_DONE, scheduleCheckCommand, secondBlockStateCommand, stabilityCommand, unitOriginsCommand } from "../../cli/services";
+import { GENERATOR_MARK, listUnitsCommand, loopbackStateCommand, MARKER_DONE, secondBlockStateCommand, stabilityCommand, unitOriginsCommand } from "../../cli/services";
 import { loopbackRule } from "../../cli/loopback";
-import { egressStateCommand, EGRESS_MARKER } from "../../cli/egress";
-import { backupComponentCommand, BACKUP_COMPONENT_MARKER } from "../../cli/backups";
 import { ownerGeneralCommand, ownerReadCommand, ownerWriteCommand, type EntryView } from "../../cli/access";
 import { ownershipReleaseCommand } from "../../cli/removal";
 import { STORE_READY, STORE_REFUSED, storePaths, storePrepareCommand } from "../../cli/store";
@@ -110,8 +108,6 @@ export const SWITCHES = {
   loopbackState: "loopback-state",
   /** The whole answer to secondBlockStateCommand, in place of the one read from the VM's units. */
   secondBlock: "second-block",
-  egressState: "egress-state",
-  backupComponent: "backup-component",
   firstInstall: "first-install",
   systemUnits: "system-units.json",
   access: "access.json",
@@ -120,7 +116,6 @@ export const SWITCHES = {
   /** What the steward answers a change of general access, in place of the gatekeeper's work: `{ status, body }`. */
   general: "general.json",
   accounts: "accounts",
-  refusedSchedules: "refused-schedules",
   standings: "standings.json",
   keepUnits: "keep-units",
   tlsZoneState: "tls-zone-state",
@@ -149,27 +144,14 @@ export type StoreState = {
 export const DEFAULT_STORE: StoreState = { state: "current", variables: {}, files: {} };
 
 /**
- * The names tokens hold, or claim, while the machine does not carry their
- * project, as the steward's owner socket answers for them: this release's
- * routes, a steward from before claims (`old`, a 404 `no such route`), no
- * owner socket at all (`down`, curl's 7), or one whose claims.json does not
- * read (`unreadable`, its 500). Absent, the steward is the store's, holding
- * no claim.
+ * The names tokens hold while the machine does not carry their project, as
+ * the steward keeps them: a store a token's write made ahead is moved aside
+ * by the owner's first write to it, `sitesolide secrets set` over SSH.
  */
-/** What the steward says of claims that do not read, as dashboard/src/control/steward.ts words it. */
-export const CLAIMS_UNREADABLE = "the tokens' claims on names cannot be read on the machine: the owner must check /var/lib/sitesolide-steward/claims.json";
-
 export type ClaimsState = {
-  state: "current" | "old" | "down" | "unreadable";
-  /**
-   * Per name: the token that holds it, null for none; whether its write
-   * made the store; whether a deployment of it, that token's or any, is
-   * under way. `claimed` false: a deployment under way, nobody holding it.
-   * `older`: answered as the steward of 0.8's first claims did, without
-   * `onMachine` nor `dropped`.
-   */
-  claims: Record<string, { token: { id: string; label: string; email: string } | null; store: boolean; deploying: boolean; claimed?: boolean }>;
-  older?: boolean;
+  state: "current";
+  /** Per name: the token that holds it, null for none; whether its write made the store. */
+  claims: Record<string, { token: { id: string; label: string; email: string } | null; store: boolean }>;
 };
 
 /**
@@ -266,8 +248,6 @@ const READ_BLOCK = new RegExp(
 const READ_FILE = new RegExp(
   `^if sudo test -f (/srv/sites/[a-z0-9-]+/sitesolide\\.json|/etc/systemd/system/[a-z0-9.-]+\\.(?:service|timer)|/etc/caddy/Caddyfile|/etc/caddy/locks/verrous\\.caddy|/etc/cloudflared/config\\.yml|/etc/caddy/global\\.d/tunnel\\.caddy); then echo ${MARKER_PRESENT}; sudo cat \\1; else echo ${MARKER_ABSENT}; fi$`,
 );
-/** The schedules a deployment asks systemd to read, each between double quotes, see scheduleCheckCommand. */
-const SCHEDULE = /systemd-analyze calendar "([^"]*)"/g;
 /** How the services stand after the restart, the units last, see stabilityCommand. */
 const STABILITY = new RegExp(`^systemctl show -p Id -p ActiveState -p SubState -p NRestarts -p ExecMainStatus ([a-z0-9. -]+) && echo ${MARKER_DONE}$`);
 /** What tells bin/deploy-caddy.sh's two readings of the bare domain, the state before anything leaves and the probe's. */
@@ -447,26 +427,6 @@ if (import.meta.main) {
     );
     process.exit(0);
   }
-  // Where the egress proxy stands, read before a project that declares
-  // `egress` pushes anything. Running, unless the test lays
-  // the state it wants.
-  if (command === egressStateCommand()) {
-    record("EGRESS");
-    const laid = join(vm, SWITCHES.egressState);
-    const state = existsSync(laid) ? readFileSync(laid, "utf8").trim() : "active";
-    process.stdout.write(`${state}\n${EGRESS_MARKER}\n`);
-    process.exit(0);
-  }
-  // Whether the backup component runs backup commands, read before a project
-  // that declares one pushes anything. Current, unless the test lays the
-  // state it wants.
-  if (command === backupComponentCommand()) {
-    record("BACKUP-COMPONENT");
-    const laid = join(vm, SWITCHES.backupComponent);
-    const state = existsSync(laid) ? readFileSync(laid, "utf8").trim() : "current";
-    process.stdout.write(`${state}\n${BACKUP_COMPONENT_MARKER}\n`);
-    process.exit(0);
-  }
   // What systemd knows of the units a deployment is about to lay, read before
   // anything is written. A unit the simulated VM carries under
   // /etc/systemd/system is read from there; any other is unknown to systemd,
@@ -511,25 +471,6 @@ if (import.meta.main) {
     const script = command.replace(/^sudo sh -c '/, "").replace(/'$/, "").replaceAll("/etc/systemd/system", join(vm, "etc", "systemd", "system"));
     const listing = Bun.spawnSync(["sh", "-c", script], { stdout: "inherit", stderr: "inherit" });
     process.exit(listing.exitCode ?? 1);
-  }
-  // Whether systemd reads each schedule a deployment declares, asked before
-  // anything is written. A reading, hence always answered: every one read,
-  // unless the test lays those systemd refuses.
-  if (command.startsWith("sh -c 'if systemd-analyze calendar ")) {
-    const schedules = [...command.matchAll(SCHEDULE)].map((match) => match[1]!);
-    let recognised = false;
-    try {
-      recognised = command === scheduleCheckCommand(schedules);
-    } catch {
-      recognised = false;
-    }
-    if (!recognised) refuse("unexpected reading of the schedules");
-    record(`SCHEDULES ${schedules.join(" | ")}`);
-    const laid = join(vm, SWITCHES.refusedSchedules);
-    const refusedSchedules = existsSync(laid) ? readFileSync(laid, "utf8").split("\n").filter((line) => line !== "") : [];
-    for (const schedule of schedules) process.stdout.write(`${refusedSchedules.includes(schedule) ? "BAD" : "OK"}\n`);
-    process.stdout.write(`${MARKER_DONE}\n`);
-    process.exit(0);
   }
   // How the services stand, read right after their restart and again a few
   // seconds later. A reading, hence always answered: from what the test lays
@@ -755,50 +696,7 @@ if (import.meta.main) {
     answerOwner(current.state);
     answer(200, { store: storeView(current, storeSlug) });
   }
-  // The names tokens hold, on the steward's owner socket: the read is a
-  // reading; taking a name back is a write, refused unless the test accepts
-  // writes, and busy while the token's deployment runs.
   const claimsFile = join(vm, SWITCHES.claims);
-  const claims = (): ClaimsState => (existsSync(claimsFile) ? (JSON.parse(readFileSync(claimsFile, "utf8")) as ClaimsState) : { state: stores().state, claims: {} });
-  const claimOf = /^sudo curl .*http:\/\/steward\/tokens\/claim\?slug=([a-z0-9-]+)'$/.exec(command)?.[1];
-  if (claimOf !== undefined && command === ownerReadCommand(`/tokens/claim?slug=${claimOf}`)) {
-    record(`CLAIM GET ${claimOf}`);
-    const current = claims();
-    if (current.state === "unreadable") refusal(500, "failure", CLAIMS_UNREADABLE);
-    else answerOwner(current.state);
-    const held = current.claims[claimOf];
-    const onMachine = existsSync(join(vm, "srv", "sites", claimOf, "sitesolide.json"));
-    const view = { slug: claimOf, claimed: held === undefined ? false : (held.claimed ?? true), onMachine, token: held?.token ?? null, store: held?.store ?? false, deploying: held?.deploying ?? false };
-    if (current.older === true) {
-      const { onMachine: _, ...before } = view;
-      answer(200, before);
-    }
-    answer(200, view);
-  }
-  if (command === ownerWriteCommand("DELETE", "/tokens/claim")) {
-    if (!existsSync(join(vm, SWITCHES.accept))) refuse("command refused by the simulated server");
-    const { slug } = JSON.parse(await Bun.stdin.text()) as { slug: string };
-    record(`CLAIM DELETE ${slug}`);
-    const current = claims();
-    if (current.state === "unreadable") refusal(500, "failure", CLAIMS_UNREADABLE);
-    else answerOwner(current.state);
-    const held = current.claims[slug];
-    if (held?.deploying === true) refusal(409, "busy", `a deployment of ${slug} is under way: wait for it to end, then take the name back`);
-    // As the steward: the store moved aside whenever a token held the name, on the machine or not.
-    const dropped = { variables: [] as string[], files: [] as string[] };
-    if (held?.token != null) {
-      const store = stores();
-      dropped.variables = store.variables[slug] ?? [];
-      dropped.files = store.files[slug] ?? [];
-      if (Object.hasOwn(store.variables, slug)) store.variables[slug] = [];
-      if (Object.hasOwn(store.files, slug)) store.files[slug] = [];
-      writeFileSync(storeFile, JSON.stringify(store));
-    }
-    delete current.claims[slug];
-    writeFileSync(claimsFile, JSON.stringify(current));
-    if (current.older === true) answer(200, { slug, released: held?.token?.id ?? null });
-    answer(200, { slug, released: held?.token?.id ?? null, dropped });
-  }
 
   const storeWrites = [
     ["PUT", "/store/variable"],

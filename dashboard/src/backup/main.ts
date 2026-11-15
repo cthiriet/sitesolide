@@ -22,7 +22,7 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isBackupFolder, SERVICE_COMMANDS_FEATURE, type Listing, type ListedSnapshot } from "../../borrowed/backups";
+import { isBackupFolder, type Listing, type ListedSnapshot } from "../../borrowed/backups";
 import { BIND_LINES_FEATURE } from "../../borrowed/unit";
 import { copyMain, discardMain, downloadMain, extractMain, hookMain, measureMain } from "./child";
 import { configFrom, pathsFrom, STATE_FOLDER, type Environment } from "./config";
@@ -98,10 +98,8 @@ export async function main(argv: string[], env: Environment): Promise<number> {
     case "discard":
       return discardMain(args, env);
     case "features":
-      // What `sitesolide deploy` looks for in this build (bin/cli/backups.ts),
-      // and what a machine is searched for before it opens the second block
-      // of the services' ports (secondBlockStateCommand in bin/cli/services.ts).
-      console.log(SERVICE_COMMANDS_FEATURE);
+      // What a machine is searched for before it opens the second block of
+      // the services' ports (secondBlockStateCommand in bin/cli/services.ts).
       console.log(BIND_LINES_FEATURE);
       return 0;
     case "list": {
