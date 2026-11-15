@@ -109,11 +109,12 @@ missing. The output is a checklist: `[done]` already there, `[ok]` done now,
 | dns | `x<random>.<zone>` and `<zone>` resolve to the machine | Cloudflare, through its API: `<zone>` and `*.<zone>`, an A each, an AAAA each when the machine has an IPv6; skipped under `--dns manual` and `--skip-dns`, which list them for you to create |
 | packages | sudo ufw fail2ban unattended-upgrades rsync git curl unzip installed, `nft` present | apt; fail2ban installed without being started |
 | account | the deploy account exists, `sudo -n` works for it, it holds the operator's keys | `useradd`, `/etc/sudoers.d/90-sitesolide-<user>`, its `authorized_keys` |
-| firewall | ufw active, incoming denied, the ssh port, 80 and 443 allowed | ufw |
+| firewall | ufw active, incoming denied, 80 and 443 allowed, the ssh port allowed as `--ssh-from` and `--ssh-interface` say, else to all | ufw; a restriction only once this connection proves it arrives by it, see [ssh.md](ssh.md) |
 | updates | `apt-config` shows the two `APT::Periodic` settings at 1 | `/etc/apt/apt.conf.d/20auto-upgrades` |
 | directories | `/srv/sites`, `/srv/api`, `/srv/data` exist | `mkdir` |
-| ssh | `sshd -T` says no root login, no password, no keyboard-interactive | `/etc/ssh/sshd_config.d/00-sitesolide.conf`, `systemctl reload ssh` |
+| ssh | `sshd -T` says no root login, no password, no keyboard-interactive, the deploy account alone, no forwarding, modern algorithms | `/etc/ssh/sshd_config.d/00-sitesolide.conf`, `systemctl reload ssh`, see [ssh.md](ssh.md#the-sshd-settings) |
 | fail2ban | enabled and active | `systemctl enable fail2ban`, a restart, your address spared for the run |
+| tailscale | with `--tailscale` only: joined, tagged, Tailscale SSH off | Tailscale's apt repository, its key checked, `tailscale up` with the auth key, see [ssh.md](ssh.md#a-tailnet) |
 | caddy | the package installed and Cloudflare's module listed, `dns.providers.cloudflare`, the package held; none of the two under `--dns manual` | Caddy's apt repository, then Caddy built on the machine with the module by `infra/caddy/build.sh`, from pinned versions; `apt-mark hold caddy`, so that no apt upgrade puts back a binary without the module ([upgrading Caddy](upgrading.md#upgrading-caddy)) |
 | bun | `/usr/local/bin/bun` exists and says the pinned version | Bun's release zip at the version `bin/cli/pins.ts` pins, checked against its pinned SHA-256 before it is opened ([upgrading Bun](upgrading.md#upgrading-bun)) |
 | dns-credentials | `/etc/caddy/cloudflare.env` root:caddy 0640, holding the token given, and a running Caddy started after it was written | that file, once the token is proven against the zone, any other DNS credential it held kept; a restart of Caddy when the token changes on a running machine, since Caddy reads it at its start, unless the next step restarts it |
@@ -166,6 +167,12 @@ every check and every run goes through the root session, a `--dry-run` on a
 fresh machine included. From the ssh step on, every step runs as the deploy
 account, and so does a later run: `setup.json` records that root is closed,
 and `sitesolide setup root@...` again goes straight to `deploy`.
+
+Who reaches port 22 at all is `--ssh-from`, `--ssh-interface` and
+`--ssh-public`, recorded in the configuration and never widened by a run
+without them; `--tailscale` joins a tailnet so that port 22 can close to the
+internet; `--host-key SHA256:...` checks the host key before the first
+login. All of it is in [ssh.md](ssh.md).
 
 ## fail2ban, and not banning yourself
 

@@ -114,7 +114,7 @@ and how `destroy` tells them from what it must never touch.
 | What | Why |
 |---|---|
 | Your workstation's public key, `--ssh-key` or the first of `~/.ssh/id_ed25519.pub`, `id_ecdsa.pub`, `id_rsa.pub`, else the key the SSH agent holds | the only way in: no password is ever set |
-| A firewall named after the machine | inbound TCP 22, 80 and 443, and ICMP, from everywhere; everything else inbound is dropped before it reaches the machine |
+| A firewall named after the machine | inbound TCP 22, 80 and 443, and ICMP, from everywhere, TCP 22 from the networks of `--ssh-from` alone where it is given; everything else inbound is dropped before it reaches the machine |
 | The machine | Debian 13, a public IPv4 that stays the same across a stop and a start, since the DNS records point at it, and IPv6 where the provider routes it |
 
 Before anything is created, `create` reads what could refuse it: a machine
@@ -159,6 +159,28 @@ destroy stopped half way, is listed with the status `incomplete` where it left
 billed resources behind, a reserved address above all: `create` with the same
 name reuses them, `destroy` removes them, and a refusal of `create` names
 them.
+
+## Who reaches port 22
+
+```bash
+sitesolide machine firewall web --provider hetzner --ssh-from 203.0.113.0/24
+sitesolide machine firewall web --provider hetzner --ssh-closed
+sitesolide machine firewall web --provider hetzner --ssh-public
+```
+
+The rule for TCP 22 on the firewall `create` made, and only on that one: these
+networks alone, nobody (the owner comes in over a tailnet), or everyone again.
+Narrowing is refused unless the server of the configuration answers over SSH,
+is this machine, and reaches it by a path that stays open; reopening needs no
+proof, since it is the way back in. `create --ssh-from` takes the same
+networks at Hetzner, Google Cloud and Scaleway; the other providers refuse it
+before ordering anything. `machine firewall` speaks to Hetzner alone for now.
+The rest, ufw on the machine and the tailnet, is in [ssh.md](ssh.md).
+
+The first login of `create` records the machine's host key in
+`~/.ssh/known_hosts`: `create` prints its fingerprints, to compare with what
+`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` prints in the provider's
+console.
 
 ## Destroying
 

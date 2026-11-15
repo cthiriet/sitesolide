@@ -78,8 +78,29 @@ proving them:
   narrows the kernel it reaches without closing it: files, sockets, processes
   and memory remain. A kernel exploit through what is left, or an escape from
   systemd's confinement, gets root on the machine and every project on it.
-- **The owner's SSH account has passwordless sudo.** Whoever holds its key
-  holds the machine; that is what "only the owner holds SSH" means.
+- **The owner's SSH account has passwordless sudo, for every command.**
+  Whoever holds its key holds the machine; that is what "only the owner
+  holds SSH" means. It is not narrowed to a list of commands because the CLI
+  works by sending a script on standard input to `sudo -n sh -s`, for setup's
+  and upgrade's checks and runs alike: a rule allowing `sh` is a rule
+  allowing everything, and a fixed list of wrapper scripts would have to be
+  upgraded before every upgrade that changes them, by the very sudo it
+  restricts. A password for sudo would be typed over SSH on every run, or
+  stored on the workstation beside the key, and would stop nobody who holds
+  the key and waits for the next run. What protects the machine is therefore
+  the key and the path to port 22: keys only, the deploy account alone in
+  `AllowUsers`, a security key where the owner uses one, and port 22 closed
+  to the internet behind a tailnet where the owner chooses to, see
+  [docs/ssh.md](docs/ssh.md). The residual risk: a stolen workstation key,
+  unlocked agent included, is root on the machine for as long as port 22
+  reaches it.
+- **Port 22 is open to the internet by default**, keys only, behind
+  fail2ban. `--ssh-from`, `--ssh-interface tailscale0` and `sitesolide machine
+  firewall --ssh-closed` narrow it; nothing narrows it without being asked.
+- **A tailnet is trusted to deliver packets, not to authenticate.** With
+  `--tailscale`, OpenSSH still checks the key, and Tailscale SSH stays off;
+  whoever controls the Tailscale account can add a device to the tailnet,
+  which Tailnet Lock prevents, and still needs the key to log in.
 - **A preview code is 50 bits, and nothing limits the attempts.** Ten
   characters, out of reach of a script that guesses without being counted;
   a site locked before that release keeps its six-character code, about 30
@@ -119,7 +140,9 @@ proving them:
   no code of the repository nor of npm, never overwriting a release's files;
   each file carries a provenance attestation, signed through Sigstore, which
   `install.sh` checks with `gh attestation verify` when gh is signed in, and
-  otherwise checks against the release's own checksums alone.
+  otherwise checks against the release's own checksums alone. With
+  `--tailscale`, setup adds Tailscale's apt repository, its key refused
+  unless it is the one Tailscale publishes by fingerprint.
 
 A vulnerability in Bun, Caddy, systemd, restic or Debian belongs to their
 maintainers. How sitesolide configures them belongs here.

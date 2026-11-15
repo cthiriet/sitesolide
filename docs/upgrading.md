@@ -197,6 +197,169 @@ first, with that release's binary and [its
 notes](https://github.com/cthiriet/sitesolide/blob/v0.16.0/docs/upgrading.md),
 which go back to 0.1; this release converts nothing an earlier one left.
 
+## SSH closes to the internet
+
+**What the release brings.** Port 22 can be restricted to networks
+(`--ssh-from`) or to an interface (`--ssh-interface tailscale0`) in ufw, and
+at Hetzner's firewall with `sitesolide machine firewall`; `setup --tailscale`
+joins the machine to a tailnet; the sshd drop-in lets in the deploy account
+alone, turns forwarding off and keeps modern algorithms; `setup --host-key`
+pins the host key. See [ssh.md](ssh.md). Nothing closes port 22 unless the
+owner asks, and nothing that was restricted is opened again.
+
+**What `sitesolide upgrade` brings**: the component `ssh`, the new drop-in,
+with the configuration's account as the one `AllowUsers` lets in, behind the
+same safety net as setup's (a second login proves it, else it is withdrawn
+two minutes later); and the component `ssh-firewall`, which applies the
+access recorded in the configuration, and with none recorded finds port 22
+open and leaves it so. Before it, check that nobody else logs in over SSH, an
+agent's account or a backup's for instance: `AllowUsers` refuses them.
+
+```bash
+ssh deploy@<machine> "sudo journalctl -u ssh --since -30d | grep -o 'Accepted [a-z-]* for [^ ]*' | sort | uniq -c"
+```
+
+Every line should name the deploy account. The same login must not offer more
+than five keys: `MaxAuthTries 5`, see [ssh.md](ssh.md#the-sshd-settings).
+
+**Closing port 22 to the internet, on a machine in service, is three phases**,
+each one reversible, each one checked before the next. Keep a second terminal
+logged in over the public address until phase 2 is checked: an open session
+survives every change below.
+
+### Phase 0: the way back in, tried first
+
+Nothing changes on the machine but a password for the console.
+
+1. Set root's password for the provider's console, and keep it in your
+   password manager: `ssh deploy@<machine> sudo passwd root`. sshd refuses
+   root and passwords whatever it is.
+2. Open the machine's console in Hetzner's console (*Servers*, the machine,
+   *Console*), log in as root, run `ufw status`, log out. That is the way in
+   when ufw or sshd shuts you out.
+3. Note which firewall Hetzner applies to the machine (*Firewalls*). One made
+   by `sitesolide machine create` is the one `sitesolide machine firewall`
+   changes; check it reads it:
+
+   ```bash
+   sitesolide machine list --provider hetzner
+   ```
+
+   A firewall made another way, or none, is changed in the console, and
+   `machine firewall` refuses it. Check that `hcloud firewall describe
+   <firewall>` answers, or that you can edit its rules in the console: that is
+   the way in when port 22 is closed there.
+
+**Rollback:** nothing to roll back; `sudo passwd -l root` locks the password
+again if you prefer to rely on the rescue system.
+
+### Phase 1: the tailnet beside the public address
+
+Port 22 stays open to all; the tailnet becomes a second way in.
+
+1. Prepare the tailnet: the tag, the grant from your devices to `tag:server`
+   on `tcp:22` with nothing back, Tailnet Lock, and a one-use, pre-approved
+   auth key tagged `tag:server`, see [ssh.md](ssh.md#before-setup-the-tailnets-settings).
+2. Upgrade first, so the drop-in and the firewall components are this
+   release's: `sitesolide upgrade --dry-run`, then `sitesolide upgrade`.
+3. Join, over the public address, the server as the configuration names it:
+
+   ```bash
+   sitesolide setup --dry-run deploy@<public address> --zone <your zone> --email <you> --tailscale
+   op read "op://<vault>/<item>/credential" | sitesolide setup deploy@<public address> --zone <your zone> --email <you> --tailscale --tailscale-key-stdin
+   ```
+
+   Every other step reads `[done]`: setup changes nothing else on a machine
+   it installed. On a machine it did not install, no `setup.json` beside the
+   configuration, setup only reads, and the dry run says so; install
+   Tailscale by hand then, as the step would:
+
+   ```bash
+   ssh deploy@<public address>
+   curl -fsSL https://pkgs.tailscale.com/stable/debian/trixie.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+   gpg --show-keys --with-colons /usr/share/keyrings/tailscale-archive-keyring.gpg | grep '^fpr'
+   ```
+
+   The fingerprint must read `2596A99EAAB33821893C0A79458CA832957F5868`.
+   Then, still on the machine:
+
+   ```bash
+   echo "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/debian trixie main" | sudo tee /etc/apt/sources.list.d/tailscale.list
+   sudo apt-get update && sudo apt-get install -y tailscale
+   read -rs key && printf '%s' "$key" | sudo install -m 600 /dev/stdin /run/tailscale.key && unset key
+   sudo tailscale up --auth-key=file:/run/tailscale.key --advertise-tags=tag:server --ssh=false --accept-dns=false --accept-routes=false
+   sudo rm /run/tailscale.key
+   ```
+4. If Tailnet Lock is on, sign the node from a signing device:
+   `tailscale lock status` lists it, `tailscale lock sign <node key>`.
+5. Check, from the workstation, in the tailnet:
+
+   ```bash
+   ssh deploy@<tailnet name> 'tailscale status --self; ip -o addr show tailscale0'
+   ssh-keygen -lF <tailnet name>
+   ssh-keygen -lF <public address>
+   ```
+
+   The two fingerprints must be the same key's.
+
+**Rollback:** `ssh deploy@<public address> 'sudo tailscale logout; sudo apt-get
+purge -y tailscale'`, remove the machine from the tailnet's admin console,
+and drop `"tailscale"` from `~/.config/sitesolide/config.json`.
+
+### Phase 2: port 22 closed to the internet
+
+1. Point the configuration at the tailnet name, and check it:
+
+   ```bash
+   sitesolide init --server deploy@<tailnet name> --zone <your zone> --email <you>
+   ssh deploy@<tailnet name> true
+   ```
+
+2. Close it in ufw, over the tailnet. Upgrade refuses unless its own
+   connection arrives on `tailscale0`, and records the access in the
+   configuration once ufw holds it:
+
+   ```bash
+   sitesolide upgrade --dry-run --ssh-interface tailscale0
+   sitesolide upgrade --ssh-interface tailscale0
+   ```
+
+   Upgrade rather than setup: setup's record of the install names the public
+   address, and a tailnet name resolves elsewhere, so setup given the tailnet
+   name only reads.
+
+3. Close it at Hetzner's firewall: `sitesolide machine firewall <name>
+   --provider hetzner --ssh-closed`, which checks the configured server
+   reaches the machine without port 22 first, or the console, the rule for
+   TCP 22 deleted.
+4. Check, from a network outside the tailnet, a phone's connection for
+   instance: `nc -vz -w 5 <public address> 22` times out, and
+   `curl -sI https://<your zone>` still answers. From the tailnet, `ssh
+   deploy@<tailnet name> true` works, and `sitesolide upgrade --dry-run` reads
+   every component `up to date`.
+
+**Rollback**, with SSH still working over the tailnet:
+
+```bash
+sitesolide machine firewall <name> --provider hetzner --ssh-public
+sitesolide upgrade --ssh-public
+sitesolide init --server deploy@<public address> --zone <your zone> --email <you>
+```
+
+**Rollback without SSH**, the tailnet down: the Hetzner rule for TCP 22 put
+back from the console or `hcloud firewall add-rule <firewall> --direction in
+--protocol tcp --port 22 --source-ips 0.0.0.0/0 --source-ips ::/0`, then, in
+the machine's console as root, `ufw allow 22/tcp`. Once in over the public
+address, `sitesolide init --server deploy@<public address> ...` then
+`sitesolide upgrade --ssh-public` make the configuration agree. See [ssh.md](ssh.md#the-way-back-in).
+
+**Going back to the previous release.** Its `upgrade` leaves ufw alone, but
+its `setup` reads neither `sshFrom` nor `sshInterface`: it looks for a rule
+starting `22/tcp ALLOW`, which a rule `on tailscale0` is not, and adds
+`ufw allow 22/tcp`, open to all. Do not run the earlier release's `setup` on a
+machine closed this way; the provider's firewall stays closed whatever it
+does.
+
 ## The collector runs root's own build
 
 **What the release brings.** The collector, the root timer that snapshots the
