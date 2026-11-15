@@ -97,8 +97,8 @@ describe("the portal login page", () => {
   });
 
   test("with a passkey, a password's message sits under its field, any other leads the card", () => {
-    const refused = signInPage("/", "Password refused. The owner signs in with a passkey.", true, true);
-    expect(refused).toInclude('<p class="alert" role="alert">Password refused. The owner signs in with a passkey.</p>');
+    const refused = signInPage("/", "Password refused.", true, true);
+    expect(refused).toInclude('<p class="alert" role="alert">Password refused.</p>');
     expect(refused.indexOf('role="alert"')).toBeGreaterThan(refused.indexOf('name="motdepasse"'));
     // The guest retypes: the field takes the focus back.
     expect(refused).toInclude("required autofocus>");

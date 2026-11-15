@@ -179,8 +179,9 @@ a hosted site taken over could serve a copy of the sign-in page and collect
 it, and it opens every protected site as `admin`; a passkey answers the
 portal's own origin alone. The form still takes it, for password access,
 which works as before: the owner's password is not even verified, and a
-refusal counts as a failure, as any wrong password does, its message saying
-that the owner signs in with a passkey. "A passkey signs in here" is what
+refusal counts as a failure, as any wrong password does, and says
+"Password refused." to everyone, the passkey's button already first on the
+page: a guest is told nothing of how the owner signs in. "A passkey signs in here" is what
 the sign-in page offers: a projection naming at least one key for the
 portal's relying party. When it names none, none for this zone, or cannot be
 read, the password works as before, so that a steward or a projection gone

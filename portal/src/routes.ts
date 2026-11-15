@@ -276,7 +276,9 @@ export function createRoutes(options: Options, clock: () => number = Date.now): 
         // A single message for every cause: wrong password, revoked access,
         // absent or malformed hash. What the portal knows about its own
         // configuration is not learned here.
-        return passwordDoor(returnTo, 401, passkeyOnly ? "Password refused. The owner signs in with a passkey." : "Password refused.");
+        // The same words with a passkey held: the page offers it first, and
+        // saying who signs in how would tell a guest about the owner.
+        return passwordDoor(returnTo, 401, "Password refused.");
       }
 
       attempts.delete(counter);

@@ -287,7 +287,7 @@ describe("a password access", () => {
     expect(refused.headers.get("set-cookie")).toBeNull();
     const refusal = await refused.text();
     // Under the password's field, which the passkey's button now leads.
-    expect(refusal).toInclude('<p class="alert" role="alert">Password refused. The owner signs in with a passkey.</p>');
+    expect(refusal).toInclude('<p class="alert" role="alert">Password refused.</p>');
     expect(refusal.indexOf('href="/_portal/passkey')).toBeLessThan(refusal.indexOf('name="motdepasse"'));
     // Not even verified: no argon2id for a password that cannot open.
     expect(checked).toBe(0);
