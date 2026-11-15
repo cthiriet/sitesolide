@@ -270,7 +270,8 @@ import { DNS_CHOICES, dnsEntry, shownDns } from "./cli/dns/registry";
 import { deploysOverSsh, eventOutput, humanOutput, login, promptWithoutEcho, remoteMode, REMOTE_USAGE, runRemote, type BuildContext } from "./cli/remote";
 import { ownerLogin } from "./cli/owner-token";
 import { buildEnv, KitUnavailable, kitEnv, kitRoot, projectEnv, VERSION, workingFolder } from "./cli/kit";
-import { ownerGeneralCommand, ownerWriteCommand, SHARE_USAGE, share, sshAccess, sshClaim, sshGeneral, sshLifecycle, sshRename, sshTakeBack } from "./cli/access";
+import { ownerGeneralCommand, ownerWriteCommand, readShareArguments, SHARE_USAGE, share, sshAccess, sshClaim, sshGeneral, sshLifecycle, sshRename, sshTakeBack } from "./cli/access";
+import { commandRefusal } from "./cli/commands";
 import { PASSKEY_USAGE, passkeys, sshPasskeys } from "./cli/passkeys";
 import {
   foreignUnit,
@@ -4335,6 +4336,25 @@ if (import.meta.main) {
     }
     console.log(text);
     process.exit(0);
+  }
+
+  // A command this release does not run, named, and a removed one with what
+  // replaced it, before any configuration is read: see bin/cli/commands.ts.
+  const refusedCommand = commandRefusal(command);
+  if (refusedCommand !== null) {
+    // At a terminal, a command never known is followed by the list.
+    if (!jsonOutput && !refusedCommand.removed) {
+      console.error(`!! ${refusedCommand.message}`);
+      console.error(helpText([]));
+      process.exit(1);
+    }
+    die(refusedCommand.message, refusedCommand.details);
+  }
+  // `share`'s arguments too: a flag a release took away says what replaced
+  // it, rather than "missing settings" on a workstation where init never ran.
+  if (command === "share") {
+    const asked = readShareArguments(arguments_);
+    if ("error" in asked) die(asked.message, asked.details ?? []);
   }
 
   // A component of the unpacked kit, the dashboard that `setup` deploys, is
