@@ -221,6 +221,34 @@ looked into.
 `app/collector.ts` again. `/usr/local/lib/sitesolide/collector.js` stays,
 run by nothing; `sudo rm /usr/local/lib/sitesolide/collector.js` removes it.
 
+## Sign-ins verified as they stand, and protected sites framed by themselves alone
+
+**What the release brings.** The dashboard's password is verified by the
+steward against the hash as its file holds it now: after *Change password*,
+the old one stops signing in at once, and the owner's other sessions close,
+with no *Restart service*. A member's sign-in with a company account is
+bounded per client, sixty a minute, rather than for the whole machine,
+which anyone could fill. The portal answers 403 when a protected site is
+loaded in a frame by a page of another origin, a sibling host of the zone
+above all, and the sign-in page and a preview's door page refuse every
+frame. See [dashboard/README.md](../dashboard/README.md) and
+[portal/README.md](../portal/README.md).
+
+**What `sitesolide upgrade` brings**: the steward, its `/signin` route; the
+dashboard; the portal; the gatekeeper, whose next locks' fragment carries
+the door page's headers. No project is redeployed. The order is the usual
+one, the steward first; a dashboard ahead of its steward finds no `/signin`
+and verifies with the hash it started with, as before.
+
+**What changes for you.** A protected site shown inside a page of another
+site of the zone, on purpose, now shows the portal's refusal instead: no
+setting brings it back, the site has to be opened in its own tab. A public
+site is untouched.
+
+**Going back.** The previous dashboard verifies with its own hash again,
+the previous portal lets frames through; the steward's route is left
+unused.
+
 ## Preview codes of ten characters
 
 **What the release brings.** A site whose general access is *Anyone with
