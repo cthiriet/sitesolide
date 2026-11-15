@@ -2075,14 +2075,26 @@ projects, which caps), never what the installer accepts of an archive or
 writes from it. `--force` replaces a unit or a block with the generated one,
 never with anything the request carries.
 
-**`install` has the network, as before.** A manifest's `install` runs with
-`IPAddressDeny=localhost` alone, so it reaches the internet, and with it the
-cloud's metadata address (169.254.169.254) and the private ranges, whatever
-the token's outbound permission; a unit with `network: outbound` is not
-filtered from them either. Closing link-local and RFC 1918 would need the
-machine's resolver allowed first (`/etc/resolv.conf`), which on GCP and AWS
-is itself at such an address: a follow-up to test on each cloud, not a
-change made blind.
+**`install` follows the token's outbound permission.** With it, the owner's
+token included, a manifest's `install` reaches the outside but never the
+loopback, link-local (the cloud's metadata address, 169.254.169.254), multicast
+nor the private ranges (`PRIVATE_DENY` in bin/cli/egress.ts); systemd-resolved's
+stub, 127.0.0.53, alone of the loopback, is let through. Without it, the
+install reaches the loopback alone, as a `localhost` service, its HTTP clients
+pointed at the egress proxy, and the proxy lets the account reach the package
+registries (`INSTALL_REGISTRIES`) while the installer's marker,
+`/srv/sites/<slug>/.installing`, root's, says an install runs, its deadline
+twenty minutes at most. The project's services share the account and can
+reach the registries for those minutes too; nothing else opens. Units with
+`network: outbound` refuse the same private ranges, keep the loopback, and
+reach a private range again only through `privateNetworks`, which the owner's
+token alone deploys.
+
+The resolver is the condition: a machine whose `/etc/resolv.conf` names an
+address in those ranges, GCP's or an AWS VPC's, resolves nothing for an
+outbound project or an install. The installer says so in the deployment's
+log; [docs/upgrading.md](../docs/upgrading.md) puts systemd-resolved's stub in
+front of it.
 
 ### Deployment of the control API
 

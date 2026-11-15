@@ -174,11 +174,25 @@ A command run on the machine after the code arrives, typically
 elsewhere; anything platform-independent belongs in `build`.
 
 It runs in `app/` as the project's own account, `site-<slug>`, in a transient
-unit with the walls of its service: the network but not the loopback, none
-of the machine's ports to listen on, nothing of `/srv` but `app/`, nothing of
-`/etc/sitesolide`, a throwaway `HOME`, 1G of memory and fifteen minutes at
-most. That holds for a deployment over SSH as for
-one through a token. A package manager runs lifecycle scripts, the
+unit with the walls of its service: none of the machine's ports to listen on,
+nothing of `/srv` but `app/`, nothing of `/etc/sitesolide`, a throwaway
+`HOME`, 1G of memory and fifteen minutes at most. That holds for a deployment
+over SSH as for one through a token.
+
+What it reaches follows the token that deploys it:
+
+- **a token allowed outbound network**, the owner's among them: the outside,
+  but never the loopback, the cloud's metadata service (169.254.169.254 and
+  the rest of link-local), multicast, nor the private ranges (10/8,
+  172.16/12, 192.168/16, 100.64/10, fc00::/7). systemd-resolved's stub,
+  127.0.0.53, is let through for DNS;
+- **any other token**: the package registries alone, through the egress
+  proxy, its HTTP clients pointed at it by `HTTPS_PROXY` and `HTTP_PROXY`:
+  npm's (Bun, npm, pnpm, Yarn), PyPI's, crates.io's, Go's module proxy and
+  RubyGems, over HTTPS. A git dependency, a binary a package downloads from
+  GitHub or another host, fails there: deploy it with a token allowed
+  outbound network, or move the step into `build`. The egress proxy must run
+  on the machine. A package manager runs lifecycle scripts, the
 package's own and those of the dependencies it trusts, and they run there too,
 never with the rights of the account that deploys. A step that writes outside
 `app/`, needs root, or relies on a tool installed into `HOME` fails: it belongs
@@ -639,11 +653,43 @@ lasts. Refused on a static site, where nothing runs.
 
 - `localhost` (default): the service can only reach the loopback. Outbound
   connections and DNS are blocked.
-- `outbound`: the service can reach the network.
+- `outbound`: the service can reach the network, and keeps the loopback. Never
+  the cloud's metadata service (169.254.169.254 and the rest of link-local),
+  multicast, nor the private ranges a provider's network and the hosts around
+  the machine use: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10,
+  fc00::/7. See [`privateNetworks`](#privatenetworks) for a project that must
+  reach one of them.
 
 The blocking also cuts DNS, whose resolvers are external. A service that needs
 to call an API, a mail provider, a payment processor, needs `outbound`, or,
 better, [`egress`](#egress) with the hosts it calls.
+
+With `outbound`, the machine's resolver must be reachable: a public one, or
+systemd-resolved's stub on the loopback, 127.0.0.53. A resolver in a private
+or link-local range, GCP's 169.254.169.254 or an AWS VPC's, answers nothing
+behind these walls; [docs/upgrading.md](upgrading.md) says how to put the stub
+in front of it.
+
+### `privateNetworks`
+
+Private ranges an `outbound` project reaches again: a database on the
+provider's private network, another machine of yours.
+
+```json
+"network": "outbound",
+"privateNetworks": ["10.0.1.0/24"]
+```
+
+- **Ranges, prefix included**, IPv4 or IPv6, the address the network's own:
+  `10.0.1.0/24`, never `10.0.1.5/24`. At most 16.
+- **Inside the private ranges alone**: 10.0.0.0/8, 172.16.0.0/12,
+  192.168.0.0/16, 100.64.0.0/10, fc00::/7. Link-local, where the cloud's
+  metadata service answers, never opens, nor AWS's fd00:ec2::254.
+- **The owner's decision**: only the owner's own token deploys a manifest
+  that carries it; any other token, whatever its permissions, is refused.
+- **The service alone**: the project's `install` never reaches them.
+
+Refused without `"network": "outbound"`, and on a static site.
 
 ### `egress`
 

@@ -280,6 +280,78 @@ it is. Before going back, give every site that holds a ten-character code
 another general access, then lock it again once the previous release is in
 place.
 
+## Installs and outbound projects stay off private networks
+
+**What the release brings.** A manifest's `install` and every unit with
+`"network": "outbound"` no longer reach the cloud's metadata service
+(169.254.169.254, all of link-local), multicast, nor the private ranges
+(10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, fc00::/7, AWS's
+fd00:ec2::254 among them). The install also loses its address families but
+`AF_UNIX`, `AF_INET`, `AF_INET6` and `AF_NETLINK`. A token without the
+outbound permission now installs from the package registries alone, through
+the egress proxy; a token with it, the owner's included, keeps the public
+network. An outbound unit keeps the loopback. A project that must reach a
+private range declares it under `privateNetworks`, which only the owner's
+token deploys. See [manifest.md](manifest.md#network) and
+[egress/README.md](../egress/README.md#installs-without-the-outbound-permission).
+
+**What `sitesolide upgrade` brings**: the installer (the install's network by
+the token's scope, the registries' marker), the egress proxy (it reads the
+marker), and the dashboard, whose own unit is `outbound` and gains the deny
+line. A project's unit changes at its next deployment, without `--force`:
+the unit an earlier release laid is recognised as the generator's own.
+
+**The steps, in this order:**
+
+1. **The resolver.** Read `/etc/resolv.conf` on the machine:
+
+   ```bash
+   ssh <server> cat /etc/resolv.conf
+   ```
+
+   `nameserver 127.0.0.53`, systemd-resolved's stub, or only public
+   addresses (a provider's public resolvers, Hetzner's for instance): nothing
+   to do. A `nameserver` in one of the ranges above, or on the loopback but
+   127.0.0.53, GCP's 169.254.169.254, an AWS VPC's x.x.x.2 or 169.254.169.253:
+   every outbound project and every install would resolve nothing once
+   upgraded. Put systemd-resolved in front of it first, as root, keeping
+   those addresses as its upstream:
+
+   ```bash
+   sudo apt-get install -y systemd-resolved
+   sudo mkdir -p /etc/systemd/resolved.conf.d
+   printf '[Resolve]\nDNS=<the addresses resolv.conf listed>\n' | sudo tee /etc/systemd/resolved.conf.d/upstream.conf
+   sudo systemctl restart systemd-resolved
+   cat /etc/resolv.conf            # nameserver 127.0.0.53
+   resolvectl query example.com    # answers
+   ```
+
+   resolved itself runs outside the projects' walls and keeps reaching the
+   provider's resolver; the projects ask it on 127.0.0.53, which the walls
+   let through.
+2. **Projects that reach a private network.** Any outbound project that
+   talks to an address in those ranges, a database on the provider's private
+   network for instance: add `"privateNetworks": ["<its range>"]` to its
+   manifest. Only your own token deploys it.
+3. Install the new CLI, then `sitesolide upgrade --dry-run`, then
+   `sitesolide upgrade`. The egress proxy, the installer and the dashboard
+   are among the components it lists out of date. A machine without the
+   egress proxy (`setup --minimal` leaves it out) needs it for
+   tokens without the outbound permission: `sitesolide setup <user@host>
+   --zone <zone> --email <you>`, without `--minimal`, installs it.
+4. Redeploy each outbound project, and those with an `install`, the way you
+   deploy them. `systemctl cat <slug>` then shows the `IPAddressDeny=` line.
+5. A token without the outbound permission whose project's `install` fetches
+   a git dependency or a download from another host than a registry fails
+   now, saying so: deploy it with a token allowed outbound network, or move
+   the step into `build`.
+
+**Going back.** The previous release's installer gives every install the
+whole network again, and its proxy ignores the marker. A unit this release
+generated reads, to the previous release, as edited by hand: redeploy with
+`--force`, from the owner's token, to put that release's unit back. A
+manifest carrying `privateNetworks` is refused there as an unknown key.
+
 ## The owner signs in with a passkey
 
 **What the release brings.** The owner signs in to the dashboard with a

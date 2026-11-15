@@ -311,8 +311,17 @@ Caddy on `127.0.0.1`, where it believes no header.
 ## Egress
 
 A service reaches the loopback and nothing else, DNS included, unless its
-manifest says otherwise. `"network": "outbound"` lifts that for everything;
-`egress` lists the hosts it may reach instead, and keeps the rest closed.
+manifest says otherwise. `"network": "outbound"` lifts that for every
+public address, never for the cloud's metadata service, link-local,
+multicast nor the private ranges, which only the owner opens again with
+`privateNetworks`; `egress` lists the hosts it may reach instead, and keeps
+the rest closed.
+
+A manifest's `install` follows the token that deploys it: the same public
+network, the loopback refused too, for a token allowed outbound network; the
+package registries alone, through the egress proxy, for any other. The
+outbound permission is then what it says: without it, nothing the project
+runs leaves the machine but for its packages.
 
 The unit of a project with `egress` still refuses every address but the
 loopback. Its HTTP clients are pointed at the egress proxy, on 127.0.0.1:3128,
