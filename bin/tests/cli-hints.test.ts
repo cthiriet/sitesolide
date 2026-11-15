@@ -147,7 +147,7 @@ describe("the hints", () => {
     expect(REMOTE_HINTS.busy).toContain("never retry in a loop");
   });
 
-  test("every refusal of share and people has its code's hint, whichever way they run, and so has every code the API's access answers", () => {
+  test("every refusal of share has its code's hint, whichever way it runs, and so has every code the API's access answers", () => {
     const source = readFileSync(join(import.meta.dir, "..", "cli", "access.ts"), "utf8");
     const codes = new Set([...source.matchAll(/error: "([a-z-]+)"/g)].map((match) => match[1]!));
     // Enough to be sure the scan reads the file.
@@ -170,7 +170,7 @@ describe("the hints", () => {
     for (const code of ["value-in-arguments", "needs-stdin", "cancelled", "restart-failed", "needs-ssh", "unknown-option", "stdin-is-terminal", "looks-like-value", "unconfirmed"]) expect(codes.has(code)).toBe(true);
     // What the API answers on its secrets and restart routes (docs/access.md), `unmanaged` the one they add,
     // and what the steward refuses a change of the store with, over SSH as through the API.
-    for (const code of ["unauthenticated", "too-many-attempts", "out-of-scope", "invalid", "not-found", "busy", "too-large", "unmanaged", "not-available", "failure", "already-present", "store-unmanaged", "store-refused", "steward-outdated", "ssh-failed"]) codes.add(code);
+    for (const code of ["unauthenticated", "too-many-attempts", "out-of-scope", "invalid", "not-found", "busy", "too-large", "unmanaged", "not-available", "failure", "already-present", "store-refused", "steward-outdated", "ssh-failed"]) codes.add(code);
     expect([...codes].filter((code) => !Object.hasOwn(REMOTE_HINTS, code))).toEqual([]);
   });
 
@@ -203,7 +203,7 @@ describe("the hints", () => {
   });
 
   test("the codes of what is gone have no hint left: members, the portal's own sharing, and a project's flat secret files", () => {
-    for (const code of ["not-a-member", "portal-unreachable", "secret-missing", "secret-taken", "migrate-first", "migrate-conflict", "store-unlisted"]) {
+    for (const code of ["not-a-member", "no-portal", "portal-unreachable", "secret-missing", "secret-taken", "migrate-first", "migrate-conflict", "store-unlisted"]) {
       expect(Object.hasOwn(REMOTE_HINTS, code)).toBe(false);
     }
     for (const hint of Object.values(REMOTE_HINTS)) {

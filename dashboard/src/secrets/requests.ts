@@ -1,6 +1,6 @@
 /**
  * What the steward's routes share, the secrets' (steward.ts), the control
- * API's (src/control/steward.ts), the people's and access's: a request's
+ * API's (src/control/steward.ts) and access's: a request's
  * body read bounded in size and in time, its route found behind a bound on
  * the requests in flight, an error named for the log, and a queue that runs
  * one change at a time. A refusal is the same JSON on every socket,

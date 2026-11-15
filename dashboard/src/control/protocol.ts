@@ -320,7 +320,6 @@ export type ControlErrorCode =
   | "busy"
   | "too-large"
   | "expired"
-  | "no-portal"
   | "unmanaged"
   | "already-present"
   | "not-available"
@@ -340,7 +339,6 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
   busy: 409,
   "too-large": 413,
   expired: 410,
-  "no-portal": 409,
   unmanaged: 409,
   "already-present": 409,
   "not-available": 503,

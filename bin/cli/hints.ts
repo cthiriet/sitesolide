@@ -281,15 +281,12 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
   "store-not-yours":
     "the project's store was not made by this token's own write: a token's creation never takes another's store; do not retry, tell the owner of the machine",
   "taken-meanwhile": "the project was deployed on the machine after this creation was accepted; pick another slug, or ask the owner",
-  "store-unmanaged":
-    "the project's store on the machine is in a state the steward does not rewrite, and nothing was changed: tell the owner of the machine, with the message; never work around it",
   "already-present":
     "the name already has a value: leave it, or, only if the user asks for a new one, they run `sitesolide secrets generate NAME --replace` themselves, which stops the old value working at the next restart",
   locked: "this change needs the dashboard's unlock: make it from the dashboard, or over the owner's SSH",
   "not-ready": "the machine is beginning its access registry: run the same command again in a minute; if it lasts, tell the owner of the machine, who reads the steward's log",
   "too-many-changes": "too many changes of access this hour: wait, then run the same command again; never retry in a loop",
   "log-full": "the access log is full of recent changes, which are kept 180 days: nobody more is let in until older ones age out, while removing and lowering still work; the owner may still change access from their workstation, with sitesolide share",
-  "no-portal": "the project is not restricted: its general access is the dashboard's Access section",
   // --- a deployment that failed on the machine
   "install-failed": "run the install command from the message in the project folder, fix what it reports, then deploy again",
   "edited-by-hand": "do not re-run with --force on your own: tell the owner of the machine, who reads the file and decides; only the owner's own token for every project carries --force",
