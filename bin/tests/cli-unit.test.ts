@@ -30,6 +30,7 @@ import {
   watchedUnits,
   withoutBindLines,
   withoutLaterBlockLines,
+  withoutPrivateDenyLines,
   withoutStoreLines,
   withoutSyscallLines,
   DENIED_BINDS,
@@ -141,6 +142,44 @@ describe("network", () => {
     expect(unit).not.toInclude("IPAddressDeny=any");
     // Everything else holds.
     for (const directive of CONFINEMENT) expect(unit).toInclude(directive);
+  });
+
+  test("outbound never reaches the metadata service, multicast nor a private range, and keeps the loopback", () => {
+    const unit = generateUnit({ ...APP, network: "outbound" });
+    const network = unit.split("\n").filter((line) => line.startsWith("IPAddress"));
+    expect(network).toEqual(["IPAddressDeny=link-local multicast 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 fc00::/7"]);
+    expect(network[0]).not.toInclude("localhost");
+  });
+
+  test("privateNetworks opens its ranges again after the deny line, and nothing else", () => {
+    const unit = generateUnit({ ...APP, network: "outbound", privateNetworks: ["10.0.1.0/24", "fd12:3456::/48"] });
+    const network = unit.split("\n").filter((line) => line.startsWith("IPAddress"));
+    expect(network).toEqual([
+      "IPAddressDeny=link-local multicast 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 fc00::/7",
+      "IPAddressAllow=10.0.1.0/24 fd12:3456::/48",
+    ]);
+  });
+
+  test("an outbound unit of the release before is the generator's own, replaced without --force", () => {
+    const text = generateUnit({ ...APP, network: "outbound" });
+    const before = withoutPrivateDenyLines(text);
+    expect(before).not.toInclude("IPAddressDeny");
+    expect(before).toInclude("# network: outbound. This project reaches an outside API; the network\n# confinement is lifted, everything else holds.\n\n");
+    expect(decideUnit({ installed: before, generated: text, replace: false })).toBe("install");
+    expect(decideUnit({ installed: `${before}LimitNOFILE=4096\n`, generated: text, replace: false })).toBe("diverged");
+    // A localhost unit loses nothing.
+    expect(withoutPrivateDenyLines(generateUnit(APP))).toBe(generateUnit(APP));
+  });
+
+  test("a unit of the release before, for a manifest that adds privateNetworks, is the generator's own", () => {
+    const before = withoutPrivateDenyLines(generateUnit({ ...APP, network: "outbound" }));
+    const text = generateUnit({ ...APP, network: "outbound", privateNetworks: ["10.0.1.0/24"] });
+    expect(withoutPrivateDenyLines(text)).toBe(before);
+    expect(decideUnit({ installed: before, generated: text, replace: false })).toBe("install");
+  });
+
+  test("a privateNetworks entry that is no range never reaches the unit", () => {
+    expect(() => generateUnit({ ...APP, network: "outbound", privateNetworks: ["10.0.0.0/8 any"] })).toThrow();
   });
 });
 
@@ -303,9 +342,9 @@ describe("the project's store, in every service unit", () => {
     expect(scheduled["news.sync"]!).toInclude("\nProtectProc=invisible\n");
   });
 
-  test.each(STORELESS)("%s keeps its flat file and its unit of 0.7, byte for byte but the second block's bind line (I10)", (name) => {
+  test.each(STORELESS)("%s keeps its flat file and its unit of 0.7, byte for byte but the second block's bind line (I10) and the private ranges refused", (name) => {
     const units = unitsOf(name);
-    expect(Object.fromEntries(units.map(({ unit, text }) => [unit, sha256(withoutLaterBlockLines(text))]))).toEqual(FINGERPRINTS_07[name]!);
+    expect(Object.fromEntries(units.map(({ unit, text }) => [unit, sha256(withoutLaterBlockLines(withoutPrivateDenyLines(text)))]))).toEqual(FINGERPRINTS_07[name]!);
     for (const { text } of units) {
       expect(text).not.toMatch(/\/projects\/|^(LoadCredential|ProtectProc|InaccessiblePaths)=/m);
       expect(text).toInclude(`\nEnvironmentFile=-/etc/sitesolide/${name}.env\n`);
@@ -499,13 +538,13 @@ describe("the units 0.7 laid, replaced without --force", () => {
   });
 
   test.each(Object.keys(FINGERPRINTS_07))("%s: without the second block's line and the store's, each unit of 0.7 comes back byte for byte", (name) => {
-    expect(Object.fromEntries(unitsOf(name).map(({ unit, text }) => [unit, sha256(withoutStoreLines(withoutLaterBlockLines(text)))]))).toEqual(FINGERPRINTS_07[name]!);
+    expect(Object.fromEntries(unitsOf(name).map(({ unit, text }) => [unit, sha256(withoutStoreLines(withoutLaterBlockLines(withoutPrivateDenyLines(text))))]))).toEqual(FINGERPRINTS_07[name]!);
   });
 
   test.each(Object.keys(FINGERPRINTS_07))("%s: each unit of 0.7, of 0.6 and from before is the generator's own", (name) => {
     for (const { unit, text } of unitsOf(name)) {
       // Byte for byte the 0.7 text, by the fingerprints above.
-      const of07 = withoutStoreLines(withoutLaterBlockLines(text));
+      const of07 = withoutStoreLines(withoutLaterBlockLines(withoutPrivateDenyLines(text)));
       for (const earlier of [of07, withoutSyscallLines(of07), withoutBindLines(withoutSyscallLines(of07))]) {
         // Never diverged: present when nothing changed for this unit, a timer or an anchor.
         const action = decideUnit({ installed: earlier, generated: text, replace: false });
@@ -552,6 +591,9 @@ describe("the units 0.7 laid, replaced without --force", () => {
     ]);
     expect(generations[1]).toBe(SHOP_07);
     for (const generation of generations) expect(generation).not.toInclude("SocketBindDeny=21000-29999");
+    // An outbound unit's list starts with the one its project carries now.
+    const outbound = generateUnit({ ...APP, network: "outbound" });
+    expect(earlierGenerations(outbound)).toEqual([withoutPrivateDenyLines(outbound), ...earlierGenerations(withoutPrivateDenyLines(outbound))]);
   });
 
   test("withoutStoreLines takes off the store's lines and nothing else, and once", () => {
@@ -814,7 +856,9 @@ describe("install over SSH, in the service's walls", () => {
       '"-p" "TemporaryFileSystem=/srv:ro"',
       '"-p" "BindPaths=/srv/sites/budget/app:/srv/sites/budget/app" "-p" "ReadWritePaths=/srv/sites/budget/app"',
       '"-p" "InaccessiblePaths=-/etc/sitesolide"',
-      '"-p" "IPAddressDeny=localhost"',
+      '"-p" "IPAddressDeny=localhost link-local multicast 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 fc00::/7"',
+      '"-p" "IPAddressAllow=127.0.0.53"',
+      '"-p" "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK"',
       // The loopback refused, but a port of the machine could still be held
       // for the install's fifteen minutes: the portal's, which then could
       // not start again.
@@ -837,11 +881,60 @@ describe("install over SSH, in the service's walls", () => {
       stdin: null,
       binds: [{ source: "/srv/sites/budget/app", target: "/srv/sites/budget/app" }],
       workingDirectory: "/srv/sites/budget/app",
-      network: true,
+      network: "public",
       timeoutS: 900,
       memory: "1G",
     });
     expect(command).toContain(line.map((argument) => `"${argument}"`).join(" "));
+    // Whoever deploys over SSH is the owner: no proxy.
+    expect(command).not.toContain("HTTPS_PROXY");
+  });
+
+  const RUN = {
+    slug: "budget",
+    purpose: "install" as const,
+    command: ["/bin/sh", "-s"],
+    stdin: null,
+    binds: [],
+    workingDirectory: null,
+    timeoutS: 900,
+    memory: "1G",
+  };
+  const properties = (line: string[]) => line.flatMap((argument, i) => (line[i - 1] === "-p" ? [argument] : []));
+  const variables = (line: string[]) => line.flatMap((argument, i) => (line[i - 1] === "-E" ? [argument] : []));
+
+  test("public: the outside, never the loopback, a private range nor the metadata service; the resolved stub let through", () => {
+    const line = systemdRunArguments({ ...RUN, network: "public" });
+    const network = properties(line).filter((property) => /^(IPAddress|PrivateNetwork|RestrictAddressFamilies)/.test(property));
+    expect(network).toEqual([
+      "IPAddressDeny=localhost link-local multicast 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 fc00::/7",
+      "IPAddressAllow=127.0.0.53",
+      "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK",
+    ]);
+    expect(variables(line).some((variable) => /proxy/i.test(variable))).toBe(false);
+  });
+
+  test("proxy: the loopback alone, as a localhost service, its clients pointed at the egress proxy", () => {
+    const line = systemdRunArguments({ ...RUN, network: "proxy" });
+    const network = properties(line).filter((property) => /^(IPAddress|PrivateNetwork|RestrictAddressFamilies)/.test(property));
+    expect(network).toEqual(["IPAddressDeny=any", "IPAddressAllow=localhost", "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK"]);
+    expect(variables(line)).toEqual(
+      expect.arrayContaining([
+        "HTTPS_PROXY=http://127.0.0.1:3128",
+        "https_proxy=http://127.0.0.1:3128",
+        "HTTP_PROXY=http://127.0.0.1:3128",
+        "http_proxy=http://127.0.0.1:3128",
+        "NO_PROXY=localhost,127.0.0.1,::1",
+        "no_proxy=localhost,127.0.0.1,::1",
+      ]),
+    );
+    // Before the command, which systemd-run reads as everything after its options.
+    expect(line.slice(-2)).toEqual(["/bin/sh", "-s"]);
+  });
+
+  test("none: no network at all, the extraction's", () => {
+    const line = systemdRunArguments({ ...RUN, network: "none" });
+    expect(properties(line).filter((property) => /^(IPAddress|PrivateNetwork)/.test(property))).toEqual(["PrivateNetwork=yes", "IPAddressDeny=any"]);
   });
 
   test("the install command is never in it: it travels on standard input, to sh -s", () => {
@@ -1093,7 +1186,7 @@ describe("the units of servers, as they were before workers existed", () => {
   test.each(Object.keys(FINGERPRINTS_06))("projects/%s, without the store's lines and the system-call filter, is what 0.6 generated, to the byte", (fixture) => {
     const { manifest } = readManifest(readFileSync(join(REPO_ROOT, "bin", "tests", "e2e", "projects", fixture, "sitesolide.json"), "utf8"));
     const generated = generateUnits(manifest!, { slug: manifest!.slug, zone: "test-zone.invalid", contact: "sample@test-zone.invalid" });
-    const fingerprints = Object.fromEntries(generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(withoutSyscallLines(withoutStoreLines(withoutLaterBlockLines(text)))).digest("hex")]));
+    const fingerprints = Object.fromEntries(generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(withoutSyscallLines(withoutStoreLines(withoutLaterBlockLines(withoutPrivateDenyLines(text))))).digest("hex")]));
     expect(fingerprints).toEqual(FINGERPRINTS_06[fixture]!);
   });
 });

@@ -230,10 +230,6 @@ export function egressErrors(manifest: Manifest, isApplication: boolean): string
 export function egressUnitLines(manifest: Manifest): string[] {
   const lines: string[] = [];
   if (declaresEgress(manifest)) {
-    const proxy = `http://${EGRESS_ADDRESS}:${EGRESS_PROXY_PORT}`;
-    // localhost and the loopback addresses go direct: the services of one
-    // project call each other there.
-    const direct = `localhost,${EGRESS_ADDRESS},::1`;
     lines.push(
       "",
       "# egress: the service still reaches only the loopback (see IPAddressDeny",
@@ -241,12 +237,7 @@ export function egressUnitLines(manifest: Manifest): string[] {
       "# the hosts its sitesolide.json lists and refuses the rest. curl reads the",
       "# lowercase spelling, Go and Python either, Bun's fetch both; Node's fetch",
       "# reads neither by default. See egress/README.md.",
-      `Environment=HTTPS_PROXY=${proxy}`,
-      `Environment=https_proxy=${proxy}`,
-      `Environment=HTTP_PROXY=${proxy}`,
-      `Environment=http_proxy=${proxy}`,
-      `Environment=NO_PROXY=${direct}`,
-      `Environment=no_proxy=${direct}`,
+      ...proxyVariables().map(([name, value]) => `Environment=${name}=${value}`),
     );
   }
   return lines;
@@ -276,4 +267,257 @@ export function readEgressState(output: string): EgressState {
   if (lines.length !== 2 || lines[1] !== EGRESS_MARKER) return "unreadable";
   const state = lines[0];
   return state === "active" || state === "inactive" || state === "absent" ? state : "unreadable";
+}
+
+// --- The addresses no project reaches -----------------------------------------
+
+/**
+ * What every generated unit with the network refuses, `outbound` included,
+ * and every install: the cloud's metadata service and its link-local
+ * neighbours (169.254.0.0/16 and fe80::/10, systemd's `link-local`),
+ * multicast, 0.0.0.0/8, which Linux delivers to the loopback, and the ranges
+ * a provider's private network and the hosts around the machine live in:
+ * RFC 1918, the carrier-grade NAT range and the IPv6 unique local addresses,
+ * AWS's IPv6 metadata address fd00:ec2::254 among them. The egress proxy's
+ * unit refuses the same ranges, for the same reason.
+ *
+ * The resolver is the catch: a machine whose /etc/resolv.conf names an
+ * address in one of these ranges, GCP's 169.254.169.254 or an AWS VPC's
+ * resolver, resolves nothing for its projects. systemd-resolved's stub,
+ * 127.0.0.53, passes, since resolved is the one that talks to the
+ * provider, and a provider's public resolvers pass. See unreachableResolvers.
+ */
+export const PRIVATE_RANGES: readonly string[] = [
+  "0.0.0.0/8",
+  "10.0.0.0/8",
+  "100.64.0.0/10",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+  "fc00::/7",
+];
+
+/** PRIVATE_RANGES with systemd's own words for link-local and multicast, as a unit writes them. */
+export const PRIVATE_DENY = ["link-local", "multicast", ...PRIVATE_RANGES].join(" ");
+
+/**
+ * The ranges `privateNetworks` may open again, the owner's decision: a
+ * provider's private network, a database on another of its machines. Never
+ * link-local, where the metadata service answers, nor the loopback, nor
+ * multicast.
+ */
+const OPENABLE_RANGES = ["10.0.0.0/8", "100.64.0.0/10", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"];
+
+/** AWS's IPv6 metadata service, inside fc00::/7, which no entry may cover. */
+const IPV6_METADATA = "fd00:ec2::254";
+
+/** What a manifest may list. A private network is a few ranges, not a routing table. */
+export const MAX_PRIVATE_NETWORKS = 16;
+
+/** An address as bits: the family's width and its value. */
+type Bits = { width: 32 | 128; value: bigint };
+
+function ipv4Bits(text: string): Bits | null {
+  const parts = text.split(".");
+  if (parts.length !== 4) return null;
+  let value = 0n;
+  for (const part of parts) {
+    if (!/^(0|[1-9][0-9]{0,2})$/.test(part) || Number(part) > 255) return null;
+    value = (value << 8n) | BigInt(part);
+  }
+  return { width: 32, value };
+}
+
+function ipv6Bits(text: string): Bits | null {
+  if (!/^[0-9a-f:]+$/i.test(text) || text.length > 39) return null;
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  const groups = (half: string) => (half === "" ? [] : half.split(":"));
+  const head = groups(halves[0]!);
+  const tail = halves.length === 2 ? groups(halves[1]!) : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 2 ? missing < 1 : missing !== 0) return null;
+  let value = 0n;
+  for (const group of [...head, ...Array<string>(missing).fill("0"), ...tail]) {
+    if (!/^[0-9a-f]{1,4}$/i.test(group)) return null;
+    value = (value << 16n) | BigInt(`0x${group}`);
+  }
+  return { width: 128, value };
+}
+
+function addressBits(address: string): Bits | null {
+  return address.includes(":") ? ipv6Bits(address) : ipv4Bits(address);
+}
+
+/** A range read: its network's bits and its prefix length. */
+export type Range = { bits: Bits; prefix: number };
+
+/**
+ * `10.1.0.0/16` or `fd12:3456::/48`, read, or null. The prefix is required
+ * and the address must be the network's own, host bits clear: `10.1.2.3/16`
+ * is refused rather than read as something its author may not have meant.
+ */
+export function parseRange(text: unknown): Range | null {
+  if (typeof text !== "string") return null;
+  const match = /^([^/]+)\/(0|[1-9][0-9]{0,2})$/.exec(text);
+  if (match === null) return null;
+  const bits = addressBits(match[1]!);
+  if (bits === null) return null;
+  const prefix = Number(match[2]);
+  if (prefix > bits.width) return null;
+  const host = (1n << BigInt(bits.width - prefix)) - 1n;
+  if ((bits.value & host) !== 0n) return null;
+  return { bits, prefix };
+}
+
+/** Whether `inner` lies wholly inside `outer`. */
+function within(inner: Range, outer: Range): boolean {
+  if (inner.bits.width !== outer.bits.width || inner.prefix < outer.prefix) return false;
+  const shift = BigInt(outer.bits.width - outer.prefix);
+  return inner.bits.value >> shift === outer.bits.value >> shift;
+}
+
+/** Whether an address, IPv4 or IPv6, lies in `range`. */
+function holds(range: Range, address: string): boolean {
+  const bits = addressBits(address);
+  return bits !== null && within({ bits, prefix: bits.width }, range);
+}
+
+/** What PRIVATE_DENY refuses, its two words spelled out, and the loopback. */
+const DENIED_RANGES = [...PRIVATE_RANGES, "127.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4", "::1/128", "fe80::/10", "ff00::/8"].map(
+  (range) => parseRange(range)!,
+);
+
+/** Whether an address lies in what an install with the network refuses: PRIVATE_DENY and the loopback. */
+export function isDeniedAddress(address: string): boolean {
+  return DENIED_RANGES.some((range) => holds(range, address));
+}
+
+/**
+ * The refusals of `privateNetworks`, for validate(): ranges among
+ * PRIVATE_RANGES that a project with `"network": "outbound"` reaches again,
+ * which only the owner of the machine deploys (scopeRefusals in
+ * dashboard/src/control/policy.ts).
+ */
+export function privateNetworksErrors(manifest: Manifest, isApplication: boolean): string[] {
+  const errors: string[] = [];
+  if (manifest.privateNetworks === undefined) return errors;
+  const entries = manifest.privateNetworks as unknown;
+  if (!Array.isArray(entries) || entries.length === 0) {
+    errors.push('privateNetworks: a non-empty list of ranges, such as ["10.0.1.0/24"]');
+    return errors;
+  }
+  if (entries.length > MAX_PRIVATE_NETWORKS) errors.push(`privateNetworks: ${MAX_PRIVATE_NETWORKS} ranges at most`);
+  const openable = OPENABLE_RANGES.map((range) => parseRange(range)!);
+  const metadata = parseRange(`${IPV6_METADATA}/128`)!;
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const range = parseRange(entry);
+    if (range === null) {
+      errors.push(`privateNetworks: "${String(entry)}" must be a range such as 10.0.1.0/24 or fd12:3456::/48, its address the network's own`);
+      continue;
+    }
+    if (!openable.some((outer) => within(range, outer))) {
+      errors.push(`privateNetworks: ${String(entry)} must lie inside ${OPENABLE_RANGES.join(", ")}; link-local, where the cloud's metadata service answers, never opens`);
+    } else if (within(metadata, range)) {
+      errors.push(`privateNetworks: ${String(entry)} covers ${IPV6_METADATA}, the cloud's metadata service`);
+    }
+    if (seen.has(String(entry))) errors.push(`privateNetworks: ${String(entry)} is listed twice`);
+    seen.add(String(entry));
+  }
+  if (manifest.network !== "outbound") errors.push('privateNetworks: needs "network": "outbound", which it narrows');
+  if (!isApplication) errors.push("privateNetworks: without `start`, nothing runs to reach anything");
+  return errors;
+}
+
+/** systemd-resolved's stub resolver, which /etc/resolv.conf names when resolved runs. */
+export const RESOLVED_STUB = "127.0.0.53";
+
+/**
+ * The nameservers of an /etc/resolv.conf that an install or an `outbound`
+ * unit cannot reach, systemd-resolved's stub excepted: the installs allow
+ * it, and the `outbound` units keep the loopback. A machine that lists one
+ * resolves nothing for its projects; docs/upgrading.md says what to do.
+ */
+export function unreachableResolvers(resolvConf: string): string[] {
+  return resolvConf
+    .split("\n")
+    .map((line) => /^\s*nameserver\s+(\S+)/.exec(line)?.[1])
+    .filter((server): server is string => server !== undefined)
+    // An IPv6 zone, fe80::1%eth0, is not part of the address.
+    .map((server) => server.replace(/%.*$/, ""))
+    .filter((server) => server !== RESOLVED_STUB && isDeniedAddress(server));
+}
+
+// --- What an install reaches without the outbound permission --------------------
+
+/**
+ * The package registries a manifest's `install` reaches through the egress
+ * proxy when the token that deploys it may not reach outside hosts: npm's
+ * (Bun, npm, pnpm and Yarn read it), Yarn's mirror of it, PyPI's (pip, uv),
+ * crates.io's, Go's module proxy and RubyGems. Nothing a git dependency or a
+ * downloaded tool needs, github.com first: a token with the outbound
+ * permission installs those. HTTPS alone.
+ */
+export const INSTALL_REGISTRIES: readonly string[] = [
+  "registry.npmjs.org:443",
+  "registry.yarnpkg.com:443",
+  "pypi.org:443",
+  "files.pythonhosted.org:443",
+  "index.crates.io:443",
+  "static.crates.io:443",
+  "proxy.golang.org:443",
+  "sum.golang.org:443",
+  "rubygems.org:443",
+  "index.rubygems.org:443",
+];
+
+/**
+ * The file the installer lays, root's and 0644, in `/srv/sites/<slug>/` for
+ * as long as an install runs through the proxy: while it is there and its
+ * deadline has not passed, the proxy lets the project's account reach
+ * INSTALL_REGISTRIES on top of its `egress`. The project's services share
+ * the account and can reach them too for those minutes; the registries are
+ * what the install fetches from, and nothing else opens.
+ */
+export const INSTALL_MARKER = ".installing";
+
+/** How far past now a marker may run: the install's fifteen minutes, and a margin. */
+export const INSTALL_MARKER_MAX_MS = 20 * 60 * 1000;
+
+/** The marker's text: the moment after which it means nothing, in ms since the epoch. */
+export function installMarkerText(until: number): string {
+  return `${JSON.stringify({ until })}\n`;
+}
+
+/**
+ * Whether a marker's text, read at `now`, still opens the registries. A
+ * deadline past, unreadable or further than INSTALL_MARKER_MAX_MS opens
+ * nothing: a marker an installer crash left behind closes by itself.
+ */
+export function installMarkerOpen(text: string, now: number): boolean {
+  let marker: unknown;
+  try {
+    marker = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  if (typeof marker !== "object" || marker === null) return false;
+  const until = (marker as Record<string, unknown>).until;
+  return typeof until === "number" && Number.isFinite(until) && until > now && until - now <= INSTALL_MARKER_MAX_MS;
+}
+
+/** The variables that point HTTP clients at the proxy, both spellings, and the loopback left direct. */
+export function proxyVariables(): [string, string][] {
+  const proxy = `http://${EGRESS_ADDRESS}:${EGRESS_PROXY_PORT}`;
+  // localhost and the loopback addresses go direct: the services of one
+  // project call each other there.
+  const direct = `localhost,${EGRESS_ADDRESS},::1`;
+  return [
+    ["HTTPS_PROXY", proxy],
+    ["https_proxy", proxy],
+    ["HTTP_PROXY", proxy],
+    ["http_proxy", proxy],
+    ["NO_PROXY", direct],
+    ["no_proxy", direct],
+  ];
 }

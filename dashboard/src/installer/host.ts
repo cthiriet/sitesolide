@@ -15,6 +15,15 @@ import type { ExtractOutcome } from "./extract";
 export type Execution = { code: number; output: string };
 
 /**
+ * What an install reaches, from the token's scope: `public`, the outside
+ * but never a private range nor the metadata service, for a token that may
+ * reach outside hosts, the owner's among them; `proxy`, the package
+ * registries alone, through the egress proxy, for any other. See RunNetwork
+ * in bin/cli/unit.ts.
+ */
+export type InstallNetwork = "proxy" | "public";
+
+/**
  * How a unit stands, and the exit status of its main process, which says
  * what systemd's own words hide: 243 is a unit that could not load its
  * credentials, logged as a "Protocol error" (bin/cli/store.ts,
@@ -99,8 +108,12 @@ export type Host = {
   extract: (slug: string, deployment: string, staging: string) => Promise<ExtractOutcome>;
   /** Does the staged tree hold at least one file? */
   hasFiles: (staging: string, part: Part) => Promise<boolean>;
-  /** The manifest's `install`, run as the project's account in the staged `app/`, seen at its final path. */
-  install: (slug: string, staging: string, command: string) => Promise<Execution>;
+  /**
+   * The manifest's `install`, run as the project's account in the staged
+   * `app/`, seen at its final path, with the network the token's scope gives
+   * it: see InstallNetwork.
+   */
+  install: (slug: string, staging: string, command: string, network: InstallNetwork) => Promise<Execution>;
   /** The staged trees handed to the deployment account, then put in place of the served ones. */
   place: (slug: string, staging: string, parts: Part[]) => Promise<void>;
   /** The staging directory and the trees set aside, removed. */

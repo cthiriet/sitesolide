@@ -182,7 +182,7 @@ describe("deploy --json", () => {
     const logs = machine.logs();
     const ran = logs.find((line) => line.includes("systemd-run"))!;
     expect(ran).toStartWith("ACCEPTED sudo sh -c 'chown -hR site-agent-shop:site-agent-shop /srv/sites/agent-shop/app && \"/usr/bin/systemd-run\"");
-    for (const property of ['"User=site-agent-shop"', '"BindPaths=/srv/sites/agent-shop/app:/srv/sites/agent-shop/app"', '"IPAddressDeny=localhost"', '"InaccessiblePaths=-/etc/sitesolide"', '"/bin/sh" "-s"']) {
+    for (const property of ['"User=site-agent-shop"', '"BindPaths=/srv/sites/agent-shop/app:/srv/sites/agent-shop/app"', '"IPAddressDeny=localhost link-local multicast 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 fc00::/7"', '"InaccessiblePaths=-/etc/sitesolide"', '"/bin/sh" "-s"']) {
       expect(ran).toContain(property);
     }
     // app/ back to the deployment account, whatever the outcome.

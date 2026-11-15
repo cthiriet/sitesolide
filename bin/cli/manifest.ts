@@ -15,7 +15,7 @@
  * that every refusal from `validate()` is checkable without a server.
  */
 import { MACHINE_FOLDER } from "./backups";
-import { egressErrors } from "./egress";
+import { egressErrors, privateNetworksErrors } from "./egress";
 import {
   buildNameRefusal,
   checkKey,
@@ -128,6 +128,12 @@ export type Manifest = {
   /** The hosts reachable through the egress proxy, see bin/cli/egress.ts. */
   egress?: string[];
   /**
+   * Private ranges a project with `"network": "outbound"` reaches again,
+   * which the owner alone deploys: see privateNetworksErrors in
+   * bin/cli/egress.ts.
+   */
+  privateNetworks?: string[];
+  /**
    * `false` keeps the data folder out of the machine's snapshots, see
    * isBackedUp. An object is the single service's own backup command, in the
    * form with one `start`, as `start` and `port` are its own: see ServiceBackup.
@@ -165,6 +171,7 @@ export const KNOWN_KEYS = [
   "portal",
   "portalExempt",
   "egress",
+  "privateNetworks",
   "backup",
 ];
 
@@ -1135,6 +1142,7 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
   }
 
   errors.push(...egressErrors(manifest, isApplication));
+  errors.push(...privateNetworksErrors(manifest, isApplication));
 
   // Joined into the `path` matcher of the site's Caddy block, like a service's.
   if (manifest.routes !== undefined && !Array.isArray(manifest.routes)) {

@@ -57,9 +57,10 @@ import { MAX_STORE_ENV_BYTES, STORE_FOLDER_MODE, STORE_PREVIOUS_ROOT, storePaths
 import { COMPONENTS_FOLDER, GENERATOR_MARK, MARKER_DONE, readAccounts, readCurrentPairs, readListeners, readStability, type ComponentState, type Listener } from "../../borrowed/services";
 import { BIND_LINES_FEATURE, BIND_PROPERTIES, isTimerUnit, readBindStates, systemdRunArguments, systemUser, unitArgument, unitFileName, type BindState, type ProjectRun } from "../../borrowed/unit";
 import { zoneNamesScript } from "../../borrowed/zone-names";
+import { INSTALL_MARKER, INSTALL_MARKER_MAX_MS, installMarkerText, unreachableResolvers } from "../../borrowed/egress";
 import { BUNDLE_NAME, DEPLOYMENT_ID_SHAPE, MAX_BUNDLE_BYTES } from "../control/protocol";
 import type { ExtractOutcome } from "./extract";
-import type { Execution, Host, Standing } from "./host";
+import type { Execution, Host, InstallNetwork, Standing } from "./host";
 
 /**
  * One program run as the project's account, and the `systemd-run` line that
@@ -123,6 +124,8 @@ export type HostConfig = {
   machine: Machine;
   commands: Commands;
   log: (line: string) => void;
+  /** /etc/resolv.conf, read before an install with the outside network to warn of a resolver it cannot reach. */
+  resolvConf?: string;
   /** Told when this deployment made the project's folder, and when it took it away again. */
   laid?: (laid: boolean) => void;
   now?: () => number;
@@ -585,7 +588,7 @@ export function createHost(config: HostConfig): Host {
           stdin: fd,
           binds: [{ source: staging, target: staging }],
           workingDirectory: null,
-          network: false,
+          network: "none",
           timeoutS: 300,
           memory: "256M",
         });
@@ -620,24 +623,55 @@ export function createHost(config: HostConfig): Host {
       return found;
     },
 
-    async install(slug, staging, command) {
+    async install(slug, staging, command, network: InstallNetwork) {
       const app = join(staging, "app");
       mkdirSync(app, { recursive: true, mode: 0o755 });
       const target = join(root(slug), "app");
-      // The command on the shell's standard input, never in its arguments:
-      // systemd expands `$VAR` and `%` specifiers in a unit's command line, and
-      // the manifest's text must reach `sh` exactly as it was written.
-      return config.commands.asProject({
-        slug,
-        purpose: "install",
-        command: ["/bin/sh", "-s"],
-        stdin: encoder.encode(`${command}\n`),
-        binds: [{ source: app, target }],
-        workingDirectory: target,
-        network: true,
-        timeoutS: 900,
-        memory: "1G",
-      });
+      const timeoutS = 900;
+      if (network === "public") {
+        // A resolver the deny lines cut off fails every name, with a message
+        // that sends one hunting a DNS outage: said before, not after.
+        const resolvers = readText(config.resolvConf ?? "/etc/resolv.conf");
+        const unreachable = resolvers === null ? [] : unreachableResolvers(resolvers);
+        if (unreachable.length > 0) {
+          config.log(`   warning: /etc/resolv.conf names ${unreachable.join(", ")}, which an install cannot reach: see docs/upgrading.md`);
+        }
+      }
+      // Through the proxy, the registries open for the account while the
+      // marker is there: root's, 0644, in the project's folder, which neither
+      // the install nor the service can write. Its deadline closes it should
+      // this process die before taking it away.
+      const marker = join(root(slug), INSTALL_MARKER);
+      if (network === "proxy") {
+        // Created afresh, never through a link: a name left there is removed
+        // first, and O_EXCL refuses whatever takes its place meanwhile.
+        rmSync(marker, { force: true });
+        const fd = openSync(marker, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);
+        try {
+          fchmodSync(fd, 0o644);
+          writeFileSync(fd, installMarkerText(now() + Math.min((timeoutS + 60) * 1000, INSTALL_MARKER_MAX_MS)));
+        } finally {
+          closeSync(fd);
+        }
+      }
+      try {
+        // The command on the shell's standard input, never in its arguments:
+        // systemd expands `$VAR` and `%` specifiers in a unit's command line, and
+        // the manifest's text must reach `sh` exactly as it was written.
+        return await config.commands.asProject({
+          slug,
+          purpose: "install",
+          command: ["/bin/sh", "-s"],
+          stdin: encoder.encode(`${command}\n`),
+          binds: [{ source: app, target }],
+          workingDirectory: target,
+          network,
+          timeoutS,
+          memory: "1G",
+        });
+      } finally {
+        if (network === "proxy") rmSync(marker, { force: true });
+      }
     },
 
     async place(slug, staging, parts) {

@@ -7,6 +7,12 @@ import {
   egressStateCommand,
   egressUnitLines,
   formatPattern,
+  INSTALL_REGISTRIES,
+  installMarkerOpen,
+  installMarkerText,
+  isDeniedAddress,
+  parseRange,
+  unreachableResolvers,
   matchesEgress,
   normalizeHost,
   parseEgressEntry,
@@ -237,5 +243,81 @@ describe("the deployment's read", () => {
   test("asks systemd, with no privilege", () => {
     expect(egressStateCommand()).not.toContain("sudo");
     expect(egressStateCommand()).toContain("systemctl is-active --quiet sitesolide-egress.service");
+  });
+});
+
+describe("the private ranges", () => {
+  test("a range reads with its prefix, its address the network's own", () => {
+    expect(parseRange("10.0.1.0/24")).not.toBeNull();
+    expect(parseRange("fd12:3456::/48")).not.toBeNull();
+    expect(parseRange("::/0")).not.toBeNull();
+    for (const text of ["10.0.1.0", "10.0.1.1/24", "10.0.1.0/33", "fd12::/129", "010.0.0.0/8", "10.0.0.256/32", "10.0.0.0/08", "1:2:3:4:5:6:7:8:9/128", "fd12:::/48", "10.0.0.0/8 any", "", 10]) {
+      expect({ text, read: parseRange(text) }).toEqual({ text, read: null });
+    }
+  });
+
+  test("the metadata service, the loopback, private and link-local addresses are denied; a public resolver is not", () => {
+    for (const address of ["169.254.169.254", "169.254.169.253", "10.0.0.2", "172.31.0.2", "192.168.1.1", "100.100.100.100", "127.0.0.1", "0.0.0.0", "fd00:ec2::254", "fe80::1", "::1", "224.0.0.251"]) {
+      expect({ address, denied: isDeniedAddress(address) }).toEqual({ address, denied: true });
+    }
+    for (const address of ["185.12.64.1", "8.8.8.8", "168.63.129.16", "2a01:4ff:ff00::add:1", "2001:4860:4860::8888"]) {
+      expect({ address, denied: isDeniedAddress(address) }).toEqual({ address, denied: false });
+    }
+  });
+
+  test("the resolvers an install cannot reach, systemd-resolved's stub excepted", () => {
+    expect(unreachableResolvers("nameserver 127.0.0.53\noptions edns0 trust-ad\nsearch .\n")).toEqual([]);
+    expect(unreachableResolvers("# a provider's public resolvers\nnameserver 185.12.64.1\nnameserver 2a01:4ff:ff00::add:2\n")).toEqual([]);
+    expect(unreachableResolvers("nameserver 169.254.169.254\n")).toEqual(["169.254.169.254"]);
+    expect(unreachableResolvers("search ec2.internal\nnameserver 10.0.0.2\nnameserver 8.8.8.8\n")).toEqual(["10.0.0.2"]);
+    expect(unreachableResolvers("  nameserver\tfe80::1%eth0\n")).toEqual(["fe80::1"]);
+    expect(unreachableResolvers("nameserver 127.0.0.1\n")).toEqual(["127.0.0.1"]);
+    expect(unreachableResolvers("")).toEqual([]);
+  });
+
+  test("an outbound app may open a private range again", () => {
+    expect(validate({ ...APP, network: "outbound", privateNetworks: ["10.0.1.0/24", "192.168.0.0/16", "fd12:3456::/48"] })).toEqual([]);
+  });
+
+  test("never link-local, the loopback, a public range, nor AWS's IPv6 metadata address", () => {
+    for (const range of ["169.254.0.0/16", "169.254.169.254/32", "127.0.0.0/8", "0.0.0.0/0", "8.8.8.0/24", "fe80::/10", "fc00::/7", "fd00:ec2::/32", "::/0", "10.0.0.0/7"]) {
+      const errors = validate({ ...APP, network: "outbound", privateNetworks: [range] });
+      expect({ range, refused: errors.some((error) => error.startsWith("privateNetworks:")) }).toEqual({ range, refused: true });
+    }
+  });
+
+  test("needs network outbound, an app, a list, and each range once", () => {
+    expect(validate({ ...APP, privateNetworks: ["10.0.1.0/24"] })).toContainEqual(expect.stringContaining('privateNetworks: needs "network": "outbound"'));
+    expect(validate({ slug: "notes", publicDir: "dist", network: "outbound", privateNetworks: ["10.0.1.0/24"] })).toContainEqual(
+      expect.stringContaining("privateNetworks: without `start`"),
+    );
+    expect(validate({ ...APP, network: "outbound", privateNetworks: [] })).toContainEqual(expect.stringContaining("privateNetworks: a non-empty list"));
+    expect(validate({ ...APP, network: "outbound", privateNetworks: "10.0.1.0/24" as unknown as string[] })).toContainEqual(
+      expect.stringContaining("privateNetworks: a non-empty list"),
+    );
+    expect(validate({ ...APP, network: "outbound", privateNetworks: ["10.0.1.0/24", "10.0.1.0/24"] })).toContainEqual(expect.stringContaining("listed twice"));
+    expect(validate({ ...APP, network: "outbound", privateNetworks: ["10.0.1.1/24"] })).toContainEqual(expect.stringContaining("the network's own"));
+  });
+});
+
+describe("an install without the outbound permission", () => {
+  test("the registries are HTTPS host names the proxy reads", () => {
+    for (const entry of INSTALL_REGISTRIES) {
+      const pattern = parseEgressEntry(entry);
+      expect({ entry, port: pattern?.port, wildcard: pattern?.wildcard }).toEqual({ entry, port: 443, wildcard: false });
+    }
+    expect(INSTALL_REGISTRIES).toContain("registry.npmjs.org:443");
+    expect(INSTALL_REGISTRIES).toContain("files.pythonhosted.org:443");
+    expect(INSTALL_REGISTRIES.some((entry) => entry.includes("github"))).toBe(false);
+  });
+
+  test("the marker opens them until its deadline, never further than twenty minutes ahead", () => {
+    const now = 1_800_000_000_000;
+    expect(installMarkerOpen(installMarkerText(now + 15 * 60_000), now)).toBe(true);
+    expect(installMarkerOpen(installMarkerText(now - 1), now)).toBe(false);
+    expect(installMarkerOpen(installMarkerText(now + 60 * 60_000), now)).toBe(false);
+    for (const text of ["", "{}", "null", '{"until":"soon"}', "[1]", "not json"]) {
+      expect({ text, open: installMarkerOpen(text, now) }).toEqual({ text, open: false });
+    }
   });
 });

@@ -147,6 +147,32 @@ describe("a new project, private by default", () => {
     expect(bench.events).toContain("log    ok");
     expect(order(bench, "as shop install", "log -> app and public, put in place")).toBe(true);
   });
+
+  test("a token without outbound installs through the proxy, its registries' marker laid for that time alone", async () => {
+    const bench = createBench();
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, install: "echo ok" }));
+    expect(outcome.ok).toBe(true);
+    expect(bench.events).toContain("network proxy, marker laid");
+    expect(existsSync(join(bench.sites, "shop", ".installing"))).toBe(false);
+  });
+
+  test("a token with outbound installs with the outside network, no marker", async () => {
+    const bench = createBench();
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, install: "echo ok" }, { ...PRIVATE, outbound: true }));
+    expect(outcome.ok).toBe(true);
+    expect(bench.events).toContain("network public");
+  });
+
+  test("an install that fails through the proxy says what it could reach", async () => {
+    const bench = createBench();
+    stageBundle(bench, APP_FILES);
+    const outcome = await run(bench, request({ ...APP, install: "exit 7" }));
+    expect(outcome).toMatchObject({ ok: false, code: "install-failed" });
+    expect(outcome.ok === false && outcome.message).toContain("the package registries alone, through the egress proxy");
+    expect(existsSync(join(bench.sites, "shop", ".installing"))).toBe(false);
+  });
 });
 
 describe("refusals, before anything served changes", () => {

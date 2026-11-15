@@ -190,6 +190,12 @@ export function scopeRefusals(manifest: Manifest, scope: Scope, slug: string): s
   if (manifest.egress !== undefined && !scope.outbound) {
     refusals.push("egress: your token may not reach outside hosts; remove egress, or ask the owner of the machine to allow outbound network");
   }
+  // A private range reached again is a provider's network, the machines
+  // around this one: the owner's decision alone, never a token's, whatever
+  // its other permissions. A member's scope is never `all`.
+  if (manifest.privateNetworks !== undefined && scope.all !== true) {
+    refusals.push("privateNetworks: only the owner of the machine deploys a project that reaches a private network; remove it, or ask the owner to deploy it");
+  }
   if (manifest.domain !== undefined && !scope.domain) {
     refusals.push("domain: your token may not declare a domain; remove it, or ask the owner of the machine to allow it");
   }

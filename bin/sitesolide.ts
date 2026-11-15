@@ -1826,7 +1826,7 @@ async function installAsProject(manifest: Manifest, config: Config, executor: Ex
   stopIfInterrupted();
   if (code !== 0) {
     die(`install failed (${code}): ${install}`, [
-      `it ran as ${account}, with the network but not the loopback, a throwaway HOME and only app/ writable`,
+      `it ran as ${account}, with the network but neither the loopback nor the private ranges and the cloud's metadata service, a throwaway HOME and only app/ writable`,
       "a step that writes outside app/ or needs root fails there: move it into build, which runs on this workstation",
       "the code is in place, the service was not restarted",
     ]);

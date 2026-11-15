@@ -142,6 +142,14 @@ describe("scopeRefusals", () => {
     expect(scopeRefusals(egress, { ...NONE, outbound: true }, "shop")).toEqual([]);
   });
 
+  test("privateNetworks is the owner's alone, whatever else a token may", () => {
+    const reaching = app({ network: "outbound", privateNetworks: ["10.0.1.0/24"] });
+    const everything = { slugs: [], create: true, outbound: true, domain: true, public: true, secrets: true };
+    expect(scopeRefusals(reaching, everything, "shop")).toEqual([expect.stringContaining("privateNetworks: only the owner")]);
+    expect(scopeRefusals(reaching, { ...everything, all: true }, "shop")).toEqual([]);
+    expect(scopeRefusals(app({ network: "outbound" }), everything, "shop")).toEqual([]);
+  });
+
   test("a manifest's secrets are its store's names: the scope has nothing to judge in them", () => {
     for (const secrets of [["API_KEY", "SESSION_KEY"], { runtime: ["API_KEY"], files: ["tls.key"], build: ["NPM_TOKEN"] }]) {
       expect(scopeRefusals(app({ secrets }), NONE, "shop")).toEqual([]);

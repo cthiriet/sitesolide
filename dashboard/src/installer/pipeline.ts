@@ -496,11 +496,23 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     }
 
     if (application && manifest.install !== undefined) {
-      host.log(`-> dependencies (${manifest.install}), as the project's own account`);
-      const installed = await host.install(slug, staging, manifest.install);
+      // A token that may not reach outside hosts installs from the package
+      // registries alone, through the egress proxy: its `install`, shell the
+      // manifest wrote, would otherwise be the way out its scope refuses.
+      const network = request.scope.outbound ? "public" : "proxy";
+      host.log(
+        `-> dependencies (${manifest.install}), as the project's own account, ${network === "public" ? "with the outside network" : "the package registries alone, through the egress proxy"}`,
+      );
+      const installed = await host.install(slug, staging, manifest.install, network);
       const lines = installed.output.split("\n").filter((line) => line.trim() !== "");
       for (const line of lines.slice(-(options.installTail ?? 40))) host.log(`   ${line}`);
-      if (installed.code !== 0) throw new Stop("install-failed", `${manifest.install} failed (exit ${installed.code}): nothing served was changed`);
+      if (installed.code !== 0) {
+        const reach =
+          network === "proxy"
+            ? "; it reached the package registries alone, through the egress proxy: a git dependency or a download from elsewhere needs a token allowed outbound network, and the proxy must run (bin/deploy-egress.sh)"
+            : "";
+        throw new Stop("install-failed", `${manifest.install} failed (exit ${installed.code}): nothing served was changed${reach}`);
+      }
     }
 
     // --- 5. the units -----------------------------------------------------------

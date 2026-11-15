@@ -9,7 +9,7 @@
  * Pure: returns text, touches nothing.
  */
 import { sameDirectives, usefulDirectives } from "./comparison";
-import { EGRESS_PROXY_PORT, EGRESS_STATUS_PORT, egressUnitLines } from "./egress";
+import { EGRESS_PROXY_PORT, EGRESS_STATUS_PORT, egressUnitLines, parseRange, PRIVATE_DENY, proxyVariables, RESOLVED_STUB } from "./egress";
 import { CADDY_ADMIN_PORT } from "./loopback";
 import {
   commandErrors,
@@ -569,11 +569,7 @@ function renderUnit(
   );
 
   if (isOutbound) {
-    lines.push(
-      "# network: outbound. This project reaches an outside API; the network",
-      "# confinement is lifted, everything else holds.",
-      "",
-    );
+    lines.push(...outboundLines(manifest), "");
   } else {
     lines.push(
       "# The only client of this service is Caddy, on the loopback.",
@@ -891,14 +887,82 @@ export function withoutStoreLines(text: string): string {
  * and the installer alike.
  *
  * Every text but the first is taken without the second block's line: no
- * release before it wrote that line.
+ * release before it wrote that line. And all of them without the private
+ * ranges an `outbound` unit now refuses: for such a unit, the list starts
+ * with the one every such project carries until its next deployment; for
+ * any other, which those lines never touched, it is the list it was.
  */
 export function earlierGenerations(text: string): string[] {
-  const beforeBlock = withoutLaterBlockLines(text);
+  const beforeDeny = withoutPrivateDenyLines(text);
+  const beforeBlock = withoutLaterBlockLines(beforeDeny);
   const beforeStore = withoutStoreLines(beforeBlock);
   const beforeStoreAndFilter = withoutSyscallLines(beforeStore);
   const beforeFilter = withoutSyscallLines(beforeBlock);
-  return [beforeBlock, beforeStore, beforeStoreAndFilter, withoutBindLines(beforeStoreAndFilter), beforeFilter, withoutBindLines(beforeFilter)];
+  return [...(beforeDeny === text ? [] : [beforeDeny]), beforeBlock, beforeStore, beforeStoreAndFilter, withoutBindLines(beforeStoreAndFilter), beforeFilter, withoutBindLines(beforeFilter)];
+}
+
+/** The deny line of an `outbound` unit, see outboundLines. */
+export const OUTBOUND_DENY_LINE = `IPAddressDeny=${PRIVATE_DENY}`;
+
+/** What an `outbound` unit says above its network lines, see outboundLines. */
+const OUTBOUND_COMMENT = [
+  "# network: outbound. This project reaches outside hosts, and keeps the",
+  "# loopback. Never the cloud's metadata service (169.254.169.254, link-local),",
+  "# multicast, nor the private ranges around the machine: with these lines,",
+  "# the resolver of /etc/resolv.conf must be public, or systemd-resolved's",
+  "# stub on the loopback.",
+];
+
+/** What it said before, with nothing after it: see withoutPrivateDenyLines. */
+const OUTBOUND_COMMENT_BEFORE = [
+  "# network: outbound. This project reaches an outside API; the network",
+  "# confinement is lifted, everything else holds.",
+];
+
+/**
+ * The network lines of a unit with `"network": "outbound"`: everything but
+ * what PRIVATE_DENY names, the cloud's metadata service first, and the
+ * loopback kept, where its own services, the egress proxy and Caddy answer
+ * (the loopback rule judges which ports). The machine's own public address
+ * comes back through the loopback too, so the rule covers it. The ranges of
+ * `privateNetworks`, the owner's decision, open again after it: systemd lets
+ * through what an allow line names, whatever a deny line says.
+ */
+function outboundLines(manifest: Manifest): string[] {
+  const opened = manifest.privateNetworks ?? [];
+  for (const range of opened) {
+    if (parseRange(range) === null) throw new Error(`invalid privateNetworks entry: ${range}`);
+  }
+  return [
+    ...OUTBOUND_COMMENT,
+    OUTBOUND_DENY_LINE,
+    ...(opened.length === 0
+      ? []
+      : ["# privateNetworks: the ranges the owner of the machine opened again.", `IPAddressAllow=${opened.join(" ")}`]),
+  ];
+}
+
+/**
+ * A generated unit as the generator wrote it before outboundLines refused the
+ * private ranges: the units of every `outbound` project in service until this
+ * release, byte for byte, the comment above included.
+ */
+export function withoutPrivateDenyLines(text: string): string {
+  const lines = text.split("\n");
+  const kept: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const block =
+      OUTBOUND_COMMENT.every((comment, offset) => lines[i + offset] === comment) && lines[i + OUTBOUND_COMMENT.length] === OUTBOUND_DENY_LINE;
+    if (!block) {
+      kept.push(lines[i]!);
+      continue;
+    }
+    kept.push(...OUTBOUND_COMMENT_BEFORE);
+    i += OUTBOUND_COMMENT.length;
+    if (lines[i + 1]?.startsWith("# privateNetworks:")) i++;
+    if (lines[i + 1]?.startsWith("IPAddressAllow=")) i++;
+  }
+  return kept.join("\n");
 }
 
 /**
@@ -950,11 +1014,42 @@ export type ProjectRun = {
   /** The only directories of /srv it sees: `source` mounted at `target`, writable. */
   binds: { source: string; target: string }[];
   workingDirectory: string | null;
-  /** Outbound network, never the loopback. Off for the extraction. */
-  network: boolean;
+  /** What it reaches: see networkProperties. */
+  network: RunNetwork;
   timeoutS: number;
   memory: string;
 };
+
+/**
+ * The network of a project's program:
+ *
+ * - `none`, the extraction's: no network at all, not even the loopback;
+ * - `proxy`, an install deployed by a token without the outbound
+ *   permission: the loopback alone, as a `localhost` service, its HTTP
+ *   clients pointed at the egress proxy, which lets it reach
+ *   INSTALL_REGISTRIES (bin/cli/egress.ts) while the installer's marker
+ *   says an install runs;
+ * - `public`, an install the owner or a token with outbound deploys: the
+ *   outside, never the loopback, where every other project listens, nor what
+ *   PRIVATE_DENY names, the cloud's metadata service first. systemd-resolved's
+ *   stub, 127.0.0.53, is let through, the one address of the loopback a
+ *   resolver answers on.
+ */
+export type RunNetwork = "none" | "proxy" | "public";
+
+function networkProperties(network: RunNetwork): string[] {
+  // Every family a package manager uses, and netlink, which reading the
+  // interfaces needs; never a raw or packet socket.
+  const families = "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK";
+  switch (network) {
+    case "none":
+      return ["PrivateNetwork=yes", "IPAddressDeny=any"];
+    case "proxy":
+      return ["IPAddressDeny=any", "IPAddressAllow=localhost", families];
+    case "public":
+      return [`IPAddressDeny=localhost ${PRIVATE_DENY}`, `IPAddressAllow=${RESOLVED_STUB}`, families];
+  }
+}
 
 /**
  * The `systemd-run` line for a project's program: the generated unit's
@@ -988,11 +1083,10 @@ export function systemdRunArguments(run: ProjectRun, systemdRun = "/usr/bin/syst
     `MemoryMax=${run.memory}`,
     `RuntimeMaxSec=${run.timeoutS}`,
     "TasksMax=256",
-    // The extraction needs no network at all; an install fetches packages, but
-    // never reaches the loopback, where every other project listens. Nor does
-    // it hold one of the machine's ports for its fifteen minutes: the
-    // portal's, held, could not start again (bindLines).
-    ...(run.network ? ["IPAddressDeny=localhost"] : ["PrivateNetwork=yes", "IPAddressDeny=any"]),
+    // See RunNetwork. Whichever it is, it never holds one of the machine's
+    // ports for its fifteen minutes: the portal's, held, could not start
+    // again (bindLines).
+    ...networkProperties(run.network),
     ...deniedBindLines(),
     ...(run.workingDirectory === null ? [] : [`WorkingDirectory=${run.workingDirectory}`]),
   ];
@@ -1014,6 +1108,7 @@ export function systemdRunArguments(run: ProjectRun, systemdRun = "/usr/bin/syst
     "PATH=/usr/local/bin:/usr/bin:/bin",
     "-E",
     "CI=1",
+    ...(run.network === "proxy" ? proxyVariables().flatMap(([name, value]) => ["-E", `${name}=${value}`]) : []),
     ...run.command,
   ];
 }
@@ -1021,7 +1116,9 @@ export function systemdRunArguments(run: ProjectRun, systemdRun = "/usr/bin/syst
 /**
  * The remote command `deploy` runs a manifest's `install` with over SSH: as
  * the project's own account, in the walls the installer gives it for a token,
- * the network but never the loopback, /srv hidden but `app/`, nothing of
+ * the outside network but never the loopback nor a private range or the
+ * cloud's metadata service (RunNetwork `public`: whoever deploys over SSH is
+ * the owner), /srv hidden but `app/`, nothing of
  * /etc/sitesolide, a throwaway HOME, fifteen minutes and 1G at most. The
  * install command itself travels on standard input, to `sh -s`: systemd
  * expands `$VAR` and `%` in a unit's command line, and the manifest's text
@@ -1051,7 +1148,7 @@ export function sandboxedInstallCommand(slug: string, owner: string): string {
     stdin: null,
     binds: [{ source: app, target: app }],
     workingDirectory: app,
-    network: true,
+    network: "public",
     timeoutS: 900,
     memory: "1G",
   });

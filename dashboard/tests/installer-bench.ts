@@ -238,6 +238,7 @@ export function commandsOf(bench: Bench): Commands {
     // program itself is the real one, run directly.
     async asProject(run: ProjectRun) {
       bench.events.push(`as ${run.slug} ${run.purpose}`);
+      if (run.purpose === "install") bench.events.push(`network ${run.network}${existsSync(join(bench.sites, run.slug, ".installing")) ? ", marker laid" : ""}`);
       if (run.purpose === "extract") return spawn(run.command, 60_000, { stdin: run.stdin });
       return spawn(run.command, 60_000, { cwd: run.binds[0]!.source, stdin: run.stdin });
     },

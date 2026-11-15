@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bundle } from "../borrowed/bundle";
@@ -97,7 +97,7 @@ describe("the confinement asked of systemd-run", () => {
     stdin: 3,
     binds: [{ source: "/srv/sites/shop/.incoming", target: "/srv/sites/shop/.incoming" }],
     workingDirectory: null,
-    network: false,
+    network: "none" as const,
     timeoutS: 300,
     memory: "256M",
   };
@@ -123,11 +123,74 @@ describe("the confinement asked of systemd-run", () => {
   });
 
   test("install: the network, never the loopback, the staged app/ at its final path, writable", () => {
-    const line = systemdRunArguments({ ...run, purpose: "install", network: true, binds: [{ source: "/srv/sites/shop/.incoming/app", target: "/srv/sites/shop/app" }], workingDirectory: "/srv/sites/shop/app", command: ["/bin/sh", "-s"] }).join(" ");
-    expect(line).toContain("-p IPAddressDeny=localhost");
+    const line = systemdRunArguments({ ...run, purpose: "install", network: "public", binds: [{ source: "/srv/sites/shop/.incoming/app", target: "/srv/sites/shop/app" }], workingDirectory: "/srv/sites/shop/app", command: ["/bin/sh", "-s"] }).join(" ");
+    expect(line).toContain("-p IPAddressDeny=localhost link-local multicast 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 172.16.0.0/12 192.168.0.0/16 fc00::/7");
+    expect(line).toContain("-p IPAddressAllow=127.0.0.53");
     expect(line).not.toContain("PrivateNetwork");
     expect(line).toContain("-p BindPaths=/srv/sites/shop/.incoming/app:/srv/sites/shop/app -p ReadWritePaths=/srv/sites/shop/app");
     expect(line).toContain("-p WorkingDirectory=/srv/sites/shop/app");
+  });
+
+  /** A real host whose systemd-run is `asProject`, over a throwaway tree. */
+  function installHost(root: string, asProject: (run: ProjectRun) => Promise<{ code: number; output: string }>, extra: { resolvConf?: string; log?: (line: string) => void; now?: () => number } = {}) {
+    return createHost({
+      sitesDir: root,
+      unitsFolder: root,
+      secretsFolder: root,
+      spoolFolder: root,
+      accountsFile: join(root, "passwd"),
+      projectPortsFile: join(root, "nft"),
+      tlsZoneFile: join(root, "tls-zone.caddy"),
+      zoneNamesFile: join(root, "zone-names"),
+      deployAccount: null,
+      dashboardAccount: null,
+      extractor: [],
+      machine: {} as never,
+      commands: { asProject } as never,
+      log: extra.log ?? (() => {}),
+      resolvConf: extra.resolvConf ?? join(root, "resolv.conf"),
+      ...(extra.now === undefined ? {} : { now: extra.now }),
+    });
+  }
+
+  test("through the proxy, the registries' marker is there for the install alone, root's deadline in it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "installer-install-"));
+    toClean.push(root);
+    mkdirSync(join(root, "shop", ".incoming"), { recursive: true });
+    const marker = join(root, "shop", ".installing");
+    const seen: { network: string; marker: string | null }[] = [];
+    const host = installHost(
+      root,
+      async (requested) => {
+        seen.push({ network: requested.network, marker: existsSync(marker) ? readFileSync(marker, "utf8") : null });
+        return { code: 3, output: "failed" };
+      },
+      { now: () => 1_800_000_000_000 },
+    );
+    expect((await host.install("shop", join(root, "shop", ".incoming"), "bun install", "proxy")).code).toBe(3);
+    expect(seen).toEqual([{ network: "proxy", marker: `${JSON.stringify({ until: 1_800_000_000_000 + 960_000 })}\n` }]);
+    expect(statSync(join(root, "shop")).isDirectory()).toBe(true);
+    // Taken away whatever the install's outcome.
+    expect(existsSync(marker)).toBe(false);
+
+    seen.length = 0;
+    await host.install("shop", join(root, "shop", ".incoming"), "bun install", "public");
+    expect(seen).toEqual([{ network: "public", marker: null }]);
+  });
+
+  test("with the outside network, a resolver the deny lines cut off is said before the install", async () => {
+    const root = mkdtempSync(join(tmpdir(), "installer-install-"));
+    toClean.push(root);
+    mkdirSync(join(root, "shop", ".incoming"), { recursive: true });
+    writeFileSync(join(root, "resolv.conf"), "nameserver 169.254.169.254\n");
+    const logged: string[] = [];
+    const host = installHost(root, async () => ({ code: 0, output: "" }), { log: (line) => logged.push(line) });
+    await host.install("shop", join(root, "shop", ".incoming"), "bun install", "public");
+    expect(logged.join("\n")).toContain("169.254.169.254, which an install cannot reach");
+    logged.length = 0;
+    writeFileSync(join(root, "resolv.conf"), "nameserver 127.0.0.53\n");
+    await host.install("shop", join(root, "shop", ".incoming"), "bun install", "public");
+    expect(logged).toEqual([]);
   });
 
   test("nothing expanded in the command line, and the manifest's command never in it", async () => {
@@ -157,7 +220,7 @@ describe("the confinement asked of systemd-run", () => {
       log: () => {},
     });
     mkdirSync(join(root, "shop", ".incoming"), { recursive: true });
-    await host.install("shop", join(root, "shop", ".incoming"), "echo $HOME %n && bun install");
+    await host.install("shop", join(root, "shop", ".incoming"), "echo $HOME %n && bun install", "public");
     expect(seen[0]!.command).toEqual(["/bin/sh", "-s"]);
     expect(new TextDecoder().decode(seen[0]!.stdin as Uint8Array)).toBe("echo $HOME %n && bun install\n");
   });
