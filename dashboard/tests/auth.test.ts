@@ -7,6 +7,9 @@ import {
   remainingWait,
   isPasswordValid,
   isAcceptableSubmission,
+  clientKey,
+  createClientLimiter,
+  FORGET_AFTER_MS,
 } from "../src/auth";
 
 describe("rate limiting", () => {
@@ -60,5 +63,40 @@ describe("verification", () => {
     expect(await isPasswordValid("the right one", hash)).toBe(true);
     expect(await isPasswordValid("the right one ", hash)).toBe(false);
     expect(await isPasswordValid("", hash)).toBe(false);
+  });
+});
+
+describe("clientKey", () => {
+  test("takes the last address, the one Caddy saw, and an IPv6 address by its /64", () => {
+    expect(clientKey("203.0.113.9")).toBe("203.0.113.9");
+    expect(clientKey("198.51.100.1, 203.0.113.9")).toBe("203.0.113.9");
+    expect(clientKey("2001:db8:1:2:3:4:5:6")).toBe("2001:db8:1:2::/64");
+    expect(clientKey("2001:db8:1:2::9")).toBe(clientKey("2001:db8:1:2:ffff::1"));
+    expect(clientKey("2001:db8::1")).toBe("2001:db8:0:0::/64");
+    expect(clientKey("[2001:0db8:0001:0002::1]")).toBe("2001:db8:1:2::/64");
+    expect(clientKey(null)).toBe("unknown");
+    expect(clientKey("")).toBe("unknown");
+    expect(clientKey("not an address")).toBe("unknown");
+  });
+});
+
+describe("createClientLimiter", () => {
+  test("one client's failures make that client wait, and nobody else", () => {
+    const limiter = createClientLimiter();
+    for (let i = 0; i < TOLERATED_FAILURES; i += 1) limiter.failed("a", 0);
+    expect(limiter.wait("a", 0)).toBe(0);
+    limiter.failed("a", 0);
+    expect(limiter.wait("a", 0)).toBe(INITIAL_BACKOFF_MS);
+    expect(limiter.wait("b", 0)).toBe(0);
+    limiter.succeeded("a");
+    expect(limiter.wait("a", 0)).toBe(0);
+  });
+
+  test("failures nobody added to for a day are forgotten", () => {
+    const limiter = createClientLimiter();
+    for (let i = 0; i < 20; i += 1) limiter.failed("a", 0);
+    expect(limiter.wait("a", 1000)).toBe(MAXIMUM_BACKOFF_MS - 1000);
+    limiter.failed("a", FORGET_AFTER_MS);
+    expect(limiter.wait("a", FORGET_AFTER_MS)).toBe(0);
   });
 });
