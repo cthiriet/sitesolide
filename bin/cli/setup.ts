@@ -798,7 +798,12 @@ export const COMPONENT_CONDITIONS = {
   ],
   dashboard: [active("dashboard-active", "dashboard")],
   steward: [active("steward-active", "sitesolide-steward"), present("steward-code", `${LIB}/steward.js`)],
-  collector: [enabled("collector-enabled", "sitesolide-collector.timer"), active("collector-active", "sitesolide-collector.timer")],
+  collector: [
+    enabled("collector-enabled", "sitesolide-collector.timer"),
+    active("collector-active", "sitesolide-collector.timer"),
+    // Built and installed root's since it stopped running from the dashboard's tree.
+    present("collector-code", `${LIB}/collector.js`),
+  ],
   portal: [active("portal-active", "portal")],
   monitor: [enabled("monitor-enabled", "sitesolide-monitor.timer"), active("monitor-active", "sitesolide-monitor.timer")],
   // restic, which stores the snapshots, the server's repository and its key, which install lays.

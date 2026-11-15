@@ -87,6 +87,7 @@ const FINGERPRINTED: Record<string, string[]> = {
   ],
   "deploy-installer.sh": ["/usr/local/lib/sitesolide/installer.js", "/etc/systemd/system/sitesolide-installer@.service", "/etc/systemd/system/sitesolide-rename@.service", "/etc/systemd/system/sitesolide-lifecycle@.service", "/etc/sitesolide-installer.env"],
   "deploy-monitor.sh": ["/usr/local/lib/sitesolide/monitor.js", "/etc/systemd/system/sitesolide-monitor.service", "/etc/systemd/system/sitesolide-monitor.timer"],
+  "deploy-collector.sh": ["/usr/local/lib/sitesolide/collector.js", "/etc/systemd/system/sitesolide-collector.service", "/etc/systemd/system/sitesolide-collector.timer"],
 };
 
 /** What a run sets on the model machine beyond setup's labels: the fingerprints its check compares. */
@@ -97,7 +98,7 @@ const RUN_LABELS: Record<string, string[]> = {
   "deploy-gatekeeper.sh": FINGERPRINTED["deploy-gatekeeper.sh"]!.map((path) => labelFor(path)),
   "deploy-installer.sh": FINGERPRINTED["deploy-installer.sh"]!.map((path) => labelFor(path)),
   "deploy-monitor.sh": FINGERPRINTED["deploy-monitor.sh"]!.map((path) => labelFor(path)),
-  "deploy-collector.sh": ["sitesolide-collector.service", "sitesolide-collector.timer"],
+  "deploy-collector.sh": FINGERPRINTED["deploy-collector.sh"]!.map((path) => labelFor(path)),
   "deploy-caddy.sh": ["caddyfile-current"],
   "deploy-api.sh": ["sitesolide-api.service", "api-release"],
   "deploy dashboard": ["dashboard-code"],

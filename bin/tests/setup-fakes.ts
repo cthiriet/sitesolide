@@ -163,7 +163,7 @@ const EFFECTS: Record<string, string[]> = {
   "dashboard-password.sh": ["dashboard-password"],
   "deploy dashboard": ["dashboard-active"],
   "deploy-steward.sh": ["steward-active", "steward-code"],
-  "deploy-collector.sh": ["collector-enabled", "collector-active"],
+  "deploy-collector.sh": ["collector-enabled", "collector-active", "collector-code"],
   "deploy portal": ["portal-active"],
   "deploy-loopback.sh close": ["loopback-table", "loopback-unit", "loopback-tunnel"],
   "deploy-monitor.sh": ["monitor-enabled", "monitor-active"],

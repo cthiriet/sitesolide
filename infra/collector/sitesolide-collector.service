@@ -6,19 +6,24 @@
 # account, which no mount gets around. The web service therefore has none of
 # these rights: it reads only the file placed here, in its own data directory.
 #
-# Placed by bin/deploy-collector.sh. The snapshot script, for its part, travels
-# with the code of the dashboard and updates itself by an ordinary
-# `sitesolide deploy`.
+# Placed by bin/deploy-collector.sh, never by `sitesolide deploy`, like the
+# steward and the monitor: dashboard/collector.ts is built into one file and
+# installed root:root under /usr/local/lib/sitesolide/, its fingerprint
+# verified. It used to run from /srv/sites/dashboard/app/, a tree every
+# deployment of the dashboard rewrites, its `install` phase included as
+# site-dashboard: whatever could write there ran as root within the minute.
 
 [Unit]
 Description=Machine state snapshot for the dashboard
-# Nothing to record as long as the dashboard has not been deployed once.
-ConditionPathExists=/srv/sites/dashboard/app/collector.ts
+RequiresMountsFor=/srv/sites
+# Nothing to record until the code is installed; a missing file must not pass
+# for a failed snapshot.
+ConditionPathExists=/usr/local/lib/sitesolide/collector.js
 
 [Service]
 Type=oneshot
 User=root
-ExecStart=/usr/local/bin/bun run /srv/sites/dashboard/app/collector.ts
+ExecStart=/usr/local/bin/bun /usr/local/lib/sitesolide/collector.js
 
 # The zone, which the collector needs to name each site's address. It has no
 # default: a ready-made value here would name the machine of whoever wrote the
@@ -35,35 +40,77 @@ IOSchedulingClass=idle
 # measures of the projects' sizes, the one reading a project can make long,
 # stop at 5 seconds each and 20 together (collector.ts, MEASURE_TIMEOUT_MS
 # and MEASURE_BUDGET_MS), so that the snapshot is written well before this.
+# RuntimeMaxSec would add nothing: it does not apply to a oneshot.
 TimeoutStartSec=45
 
-# Confinement of what runs as root. It reads /srv and /etc/caddy, and writes
-# only into the dashboard's data directory.
+UMask=0077
+
+# Four capabilities, each for one reading or the one write, and nothing else:
+#
+# CAP_DAC_READ_SEARCH: the projects' folders, 0750 to their own accounts, which
+#   `du` walks; /etc/caddy/locks-codes.json, the deployment account's in 0600;
+#   the monitor's status in /var/lib/sitesolide-monitor, 0700 to its account.
+#   Reading only, never writing.
+# CAP_DAC_OVERRIDE: the snapshot is written into /srv/sites/dashboard/data,
+#   site-dashboard's in 0750, where root is only another account. Writing is
+#   held to that one directory by ReadWritePaths below, everything else being
+#   read-only under ProtectSystem=strict.
+# CAP_CHOWN: the snapshot is handed to site-dashboard on its descriptor, see
+#   writeOwned in collector.ts. The mode is set while root still owns it: no
+#   CAP_FOWNER.
+# CAP_SYS_PTRACE: `ss -tnp` names the process behind each loopback connection
+#   by reading /proc/<pid>/fd of every process, which the kernel opens to
+#   another account's processes only with it; without it the dashboard's
+#   Services section sees no link. Nothing here calls ptrace(2), and
+#   SystemCallFilter=@system-service below refuses it.
+#
+# systemctl asks for none: PID 1 judges the caller by its uid on its socket.
 NoNewPrivileges=true
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN CAP_SYS_PTRACE
+AmbientCapabilities=
+
+# The whole system read-only but the dashboard's data directory. systemctl
+# still reaches PID 1 through /run/systemd/private under strict: a socket on a
+# read-only mount stays connectable, measured on the bench.
+ProtectSystem=strict
+ReadWritePaths=/srv/sites/dashboard/data
+# What it never reads, and the capabilities above would open: the projects'
+# stores, the steward's state and sockets, the backups, the DNS provider's
+# token. The dashes keep a path that is missing from failing the unit. The
+# zone's file above still arrives: PID 1 reads EnvironmentFile= before any
+# mount is laid.
+InaccessiblePaths=-/etc/sitesolide -/etc/sitesolide-portal -/etc/caddy/cloudflare.env -/var/lib/sitesolide-steward -/run/sitesolide-steward -/run/sitesolide-steward-owner -/var/backups
+ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
-ProtectHome=true
-ReadWritePaths=/srv/sites/dashboard/data
+PrivateIPC=true
 
-# ProtectSystem=full and not strict, on purpose. Strict would mount /run
-# read-only, and this script talks to systemd through a socket that lives there;
-# the doubt can only be lifted on the machine that serves the clients, and
-# nothing is tried out on it. What would be gained is thin: /var and /run have
-# nothing this snapshot wants.
-# Lifted since, outside production: systemctl passes under strict, measured on
-# the bench.
-ProtectSystem=full
-
-# Everything it reads is on this machine.
+# Everything it reads is on this machine. AF_UNIX for systemctl over its
+# socket, AF_NETLINK for `ss`, which asks the kernel's socket tables through
+# it. NOT PrivateNetwork: in a namespace of its own, `ss` would list none of
+# the machine's sockets.
 IPAddressDeny=any
 IPAddressAllow=localhost
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
 
 ProtectKernelTunables=true
 ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+# NOT ProtectProc=invisible nor ProcSubset=pid: `ss -p` and the links read
+# every process's /proc/<pid>/fd and /proc/<pid>/cgroup, the machine's reading
+# /proc/loadavg.
 RestrictNamespaces=true
 RestrictSUIDSGID=true
 RestrictRealtime=true
 LockPersonality=true
+SystemCallArchitectures=native
+# @system-service and nothing stricter, the steward's measurement: a narrower
+# set kills Bun at start. MemoryDenyWriteExecute stays out for the JIT.
+SystemCallFilter=@system-service
+
 # A `du` over millions of hard links remembers every one of them, and is the
 # process the kernel kills first if this ceiling is reached. With
 # OOMPolicy=continue the pass goes on without it, that project's size unknown,

@@ -11,7 +11,7 @@
  *   steward        the steward                bin/deploy-steward.sh
  *   api            the shared service         bin/deploy-api.sh, before anything deposits the Caddyfile
  *   dashboard      the dashboard              sitesolide deploy in dashboard/
- *   collector      the collector's units      bin/deploy-collector.sh, after the dashboard
+ *   collector      the collector              bin/deploy-collector.sh, after the dashboard
  *   gatekeeper     the gatekeeper             bin/deploy-gatekeeper.sh, after the dashboard
  *   installer      the installer              bin/deploy-installer.sh, after the steward
  *   caddy-config   the Caddyfile              bin/deploy-caddy.sh
@@ -33,7 +33,7 @@
  * is what setup checks for that component (COMPONENT_CONDITIONS), plus the
  * fingerprint of what would be installed against what is:
  *
- *   - a component its script builds, the steward or the monitor: the script's
+ *   - a component its script builds, the steward, the collector or the monitor: the script's
  *     own `--fingerprint`, which builds as it would to install and prints the
  *     SHA-256 of every file it lays, compared on the machine with sha256sum,
  *     the measure the script itself verifies after installing;
@@ -444,12 +444,7 @@ export function upgradeComponents(): Component[] {
       title: "collector",
       installed: present("installed", `${UNITS}/sitesolide-collector.timer`),
       plan: "bin/deploy-collector.sh",
-      check: (context) =>
-        machineState(context, "collector", [
-          ...C.collector,
-          kitFile(context, "infra/collector/sitesolide-collector.service", `${UNITS}/sitesolide-collector.service`),
-          kitFile(context, "infra/collector/sitesolide-collector.timer", `${UNITS}/sitesolide-collector.timer`),
-        ]),
+      check: async (context) => machineState(context, "collector", [...C.collector, ...(await scriptFingerprints(context, "deploy-collector.sh"))]),
       run: (context) => script(context, "deploy-collector.sh"),
       inspect: (context) => journal(context, "sitesolide-collector"),
     },
