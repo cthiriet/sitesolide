@@ -103,18 +103,18 @@ describe("leftoversReason", () => {
     expect(leftoversReason("shop", { snapshots: 0, store: false })).toBeNull();
     expect(leftoversReason("shop", { snapshots: 3, store: false })).toBe(
       "the machine still keeps 3 backup snapshots of a project once named shop, which a project created under that name would be handed: no token creates it. " +
-        "Pick another slug, or ask the owner of the machine, who may deploy shop themselves over SSH, or forget the snapshots first",
+        "Pick another slug, or ask the owner of the machine, whose own token for every project may deploy shop, or forget the snapshots first",
     );
   });
 
   test("a store of secrets left under the name: its values would reach whatever code a token deploys there", () => {
     expect(leftoversReason("shop", { snapshots: 0, store: true })).toBe(
       "the machine still keeps a secrets store of a project once named shop, which a project created under that name would be handed: no token creates it. " +
-        "Pick another slug, or ask the owner of the machine, who may deploy shop themselves over SSH, or remove the store with sitesolide remove --confirm shop first",
+        "Pick another slug, or ask the owner of the machine, whose own token for every project may deploy shop, or remove the store with sitesolide remove --confirm shop first",
     );
     expect(leftoversReason("shop", { snapshots: 1, store: true })).toBe(
       "the machine still keeps 1 backup snapshot and a secrets store of a project once named shop, which a project created under that name would be handed: no token creates it. " +
-        "Pick another slug, or ask the owner of the machine, who may deploy shop themselves over SSH, or remove the store with sitesolide remove --confirm shop and forget the snapshot first",
+        "Pick another slug, or ask the owner of the machine, whose own token for every project may deploy shop, or remove the store with sitesolide remove --confirm shop and forget the snapshot first",
     );
   });
 });

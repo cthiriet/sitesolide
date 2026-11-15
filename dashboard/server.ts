@@ -371,6 +371,8 @@ const server = Bun.serve({
     // Bun's ten seconds of silence would cut a slow upload in the middle.
     "/api/v1/whoami": { GET: api.whoami },
     "/api/v1/deployments": { POST: api.createDeployment },
+    // A dry run: judged and planned on the machine, nothing written.
+    "/api/v1/deployments/plan": { POST: api.planDeployment },
     "/api/v1/deployments/:id": { GET: (req) => api.readDeployment(req, req.params.id) },
     "/api/v1/deployments/:id/bundle": {
       PUT: (req, server) => {
@@ -386,6 +388,8 @@ const server = Bun.serve({
       PUT: (req) => api.putProjectAccess(req, req.params.slug),
       DELETE: (req) => api.removeProjectAccess(req, req.params.slug),
     },
+    // The owner's token for every project takes a name back: deploy --adopt.
+    "/api/v1/projects/:slug/claim": { DELETE: (req) => api.takeBackClaim(req, req.params.slug) },
     // A token's restart, observed for eight seconds: the long delay, as for
     // the Secrets page.
     ...restartRoutes(api),

@@ -45,7 +45,7 @@ import { DEFAULT_TIMEOUTS } from "../secrets/client";
 import type { Verdict } from "../secrets/protocol";
 import { reach, type ControlSteward, type Reached } from "./client";
 import { clientAddress, type Limiter } from "./limiter";
-import { allocatePorts, decideManifest } from "./policy";
+import { allocatePorts, decideManifest, everyProject } from "./policy";
 import {
   CONTROL_STATUSES,
   MAX_BUNDLE_BYTES,
@@ -58,6 +58,7 @@ import {
   type ControlErrorCode,
   type ControlFailure,
   type DeploymentView,
+  type PlanResponse,
   type Identity,
   type InstallerResult,
   type ProjectAccess,
@@ -97,6 +98,8 @@ type Handler = (req: Request) => Promise<Response>;
 export type ApiRoutes = {
   whoami: Handler;
   createDeployment: Handler;
+  planDeployment: Handler;
+  takeBackClaim: (req: Request, slug: string) => Promise<Response>;
   uploadBundle: (req: Request, id: string) => Promise<Response>;
   readDeployment: (req: Request, id: string) => Promise<Response>;
   projects: Handler;
@@ -150,6 +153,17 @@ function relayed(reached: Reached): Response {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The steward's plan of a deployment, read field by field: what the CLI shows of it, and nothing else. */
+function planOf(body: Record<string, unknown>): PlanResponse | null {
+  const { slug, creating, existing, portal, allocated, manifest, placeholders } = body;
+  if (typeof slug !== "string" || typeof creating !== "boolean" || typeof existing !== "boolean" || typeof portal !== "boolean" || typeof manifest !== "string") return null;
+  if (!Array.isArray(allocated) || !isObject(placeholders) || typeof placeholders.zone !== "string" || typeof placeholders.contact !== "string") return null;
+  const ports = allocated.filter(
+    (entry): entry is { service: string | null; port: number } => isObject(entry) && (entry.service === null || typeof entry.service === "string") && typeof entry.port === "number",
+  );
+  return { slug, creating, existing, portal, allocated: ports.map(({ service, port }) => ({ service, port })), manifest, placeholders: { zone: placeholders.zone, contact: placeholders.contact } };
 }
 
 const secretsUnavailable = () => failure("not-available", "this machine's steward does not carry secrets by token yet: the owner must run sitesolide upgrade");
@@ -507,14 +521,14 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
     return row;
   }
 
-  return {
-    async whoami(req) {
-      const auth = await authenticated(req);
-      if (auth instanceof Response) return auth;
-      return json({ identity: auth.identity });
-    },
-
-    async createDeployment(req) {
+  /**
+   * A deployment's manifest as `POST /api/v1/deployments` and its plan
+   * receive it, judged as far as the dashboard can: its shape, the CLI's
+   * validation on a copy whose missing ports are filled in, the scope and
+   * the door against the machine's snapshot. `force` only for the owner's
+   * token for every project, which the steward judges again.
+   */
+  async function judgedManifest(req: Request): Promise<{ identity: Identity; bearer: string; text: string; slug: string; force: boolean } | Response> {
       const auth = await authenticated(req);
       if (auth instanceof Response) return auth;
       const { identity, bearer } = auth;
@@ -522,7 +536,12 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
       const body = await readJson(req, MAX_MANIFEST_BYTES + 1024);
       if (body === "too-large") return failure("too-large", "the manifest is over 64 KiB");
       if (body === null) return failure("invalid", 'send a JSON object: { "manifest": <the content of sitesolide.json> }');
-      if (Object.keys(body).some((key) => key !== "manifest")) return failure("invalid", 'unexpected field: send { "manifest": ... } and nothing else');
+      if (Object.keys(body).some((key) => key !== "manifest" && key !== "force")) return failure("invalid", 'unexpected field: send { "manifest": ..., "force": false } and nothing else');
+      if (body.force !== undefined && typeof body.force !== "boolean") return failure("invalid", "force must be true or false");
+      const force = body.force === true;
+      if (force && !everyProject(identity)) {
+        return failure("out-of-scope", "--force replaces a file edited by hand on the machine: the owner's own token for every project alone may ask it, never a token of chosen projects");
+      }
       const given = body.manifest;
       const text = typeof given === "string" ? given : isObject(given) ? `${JSON.stringify(given, null, 2)}\n` : null;
       if (text === null) return failure("invalid", "manifest: the content of sitesolide.json, as an object or as its text");
@@ -554,6 +573,21 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
           details: decision.details,
         });
       }
+      return { identity, bearer, text, slug, force };
+  }
+
+  return {
+    async whoami(req) {
+      const auth = await authenticated(req);
+      if (auth instanceof Response) return auth;
+      return json({ identity: auth.identity });
+    },
+
+    async createDeployment(req) {
+      const judged = await judgedManifest(req);
+      if (judged instanceof Response) return judged;
+      const { identity, bearer, text, slug, force } = judged;
+
 
       const preflight = await reach(() => steward.preflight(bearer, slug), [bearer]);
       if (preflight.kind !== "received" || preflight.status !== 200) return relayed(preflight);
@@ -585,9 +619,35 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
       if (store.countRunning() >= MAX_RUNNING) return failure("busy", "the machine is already running several deployments: try again in a minute");
 
       const id = newDeploymentId(random);
-      store.createDeployment({ id, tokenId: identity.id, email: identity.email, member: identity.member ?? null, slug, creating, manifest: text, createdAt: now });
+      store.createDeployment({ id, tokenId: identity.id, email: identity.email, member: identity.member ?? null, slug, creating, manifest: text, createdAt: now, force });
       const row = store.deployment(id)!;
       return json({ deployment: view(row, null, 0) }, 201, { Location: `/api/v1/deployments/${id}` });
+    },
+
+    async planDeployment(req) {
+      const judged = await judgedManifest(req);
+      if (judged instanceof Response) return judged;
+      const { bearer, text, slug, force } = judged;
+      const reached = await reach(() => steward.plan({ bearer, slug, manifest: text, ...(force ? { force: true } : {}) }), [bearer]);
+      if (reached.kind === "unavailable") return failure("not-available", "this machine's steward does not plan a deployment yet, sitesolide deploy --dry-run: the owner must run sitesolide upgrade");
+      if (reached.kind !== "received" || reached.status !== 200) return relayed(reached);
+      const plan = planOf(reached.body);
+      if (plan === null) return unreadable();
+      return json({ plan });
+    },
+
+    async takeBackClaim(req, slug) {
+      const auth = await authenticated(req);
+      if (auth instanceof Response) return auth;
+      if (!everyProject(auth.identity)) {
+        return failure("out-of-scope", "taking a name back from the token that holds it is the owner's: their own token for every project alone may");
+      }
+      const reached = await reach(() => steward.takeBack(auth.bearer, slug), [auth.bearer]);
+      if (reached.kind === "unavailable") return failure("not-available", "this machine's steward does not take a name back for a token yet, sitesolide deploy --adopt: the owner must run sitesolide upgrade");
+      if (reached.kind !== "received" || reached.status !== 200) return relayed(reached);
+      const { released, dropped } = reached.body;
+      if ((released !== null && typeof released !== "string") || !isObject(dropped) || !Array.isArray(dropped.variables) || !Array.isArray(dropped.files)) return unreadable();
+      return json({ claim: { slug, released, dropped: { variables: dropped.variables.map(String), files: dropped.files.map(String) } } });
     },
 
     async uploadBundle(req, id) {
@@ -628,7 +688,8 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
         return failure("busy", "the machine is already running several deployments: send the archive again in a minute, this deployment waits for it until its 15 minutes are up");
       }
 
-      const reached = await reach(() => steward.deploy({ bearer, deployment: row.id, slug: row.slug, manifest: row.manifest }), [bearer]);
+      // `force` only when asked: a steward from before refuses a field it does not know.
+      const reached = await reach(() => steward.deploy({ bearer, deployment: row.id, slug: row.slug, manifest: row.manifest, ...(row.force ? { force: true } : {}) }), [bearer]);
       if (reached.kind !== "received" || reached.status !== 202) {
         const response = relayed(reached);
         const answer = (await response.clone().json()) as ControlFailure;

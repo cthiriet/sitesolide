@@ -73,6 +73,8 @@ export function readRequest(text: string | null, slug: string, now: number): Req
   if (typeof manifest !== "string") return { ok: false, reason: "the steward's request carries no manifest" };
   return {
     ok: true,
-    request: { deployment, slug, requestedAt, token: { id: token.id, email: token.email, member }, scope, creating, manifest },
+    // `force` from a steward that knows it, true alone: absent or anything
+    // else, the hand-edited file stops the deployment, as it always did.
+    request: { deployment, slug, requestedAt, token: { id: token.id, email: token.email, member }, scope, creating, manifest, ...(object.force === true ? { force: true } : {}) },
   };
 }

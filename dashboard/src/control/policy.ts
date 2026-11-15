@@ -26,8 +26,8 @@
  * or left by a removal stopped half way, would hand its values to whatever
  * code a token deploys under that name. So no token
  * creates a name under which the machine still keeps any of them
- * (`leftoversReason`), but a store its own write made there; the owner,
- * deploying over SSH, still may.
+ * (`leftoversReason`), but a store its own write made there; the owner's
+ * own token for every project still may.
  *
  * Pure.
  */
@@ -88,7 +88,16 @@ export function decideSlug(identity: Identity, slug: unknown, machine: { exists:
 
   const granted = identity.scope.slugs.includes(slug);
   const own = machine.owner === identity.id;
+  const every = everyProject(identity);
   if (machine.owner !== null && !own && !granted) {
+    // The owner's token reaches every project but one another token holds:
+    // taking it back is a gesture of its own, as it was over SSH.
+    if (every) {
+      return refused(
+        "out-of-scope",
+        `${slug} is held by another token${machine.exists ? "" : ", and the machine does not carry it yet"}: sitesolide deploy --adopt takes the name back, its store's values moved aside, then deploys`,
+      );
+    }
     return refused("out-of-scope", `${slug} belongs to another token: pick another slug, or ask the owner of the machine to grant it to yours`);
   }
   if (machine.exists) {
@@ -98,8 +107,17 @@ export function decideSlug(identity: Identity, slug: unknown, machine: { exists:
       `${slug} already exists on the machine and your token may not deploy it: ask the owner of the machine to grant it, or pick another slug`,
     );
   }
-  if (own || granted || identity.scope.create) return { kind: "allowed", creating: true };
+  if (own || granted || identity.scope.create || every) return { kind: "allowed", creating: true };
   return refused("out-of-scope", `your token may not create projects: ask the owner of the machine to grant ${slug}, or to allow creating projects`);
+}
+
+/**
+ * Every project, as the owner: an owner's own token minted with `all`. A
+ * person's token never is, whatever its scope says (src/people/tokens.ts
+ * refuses it at the mint, and narrowIdentity drops it).
+ */
+export function everyProject(identity: Pick<Identity, "scope" | "member">): boolean {
+  return identity.scope.all === true && (identity.member === null || identity.member === undefined);
 }
 
 /**
@@ -130,8 +148,9 @@ const listed = (items: string[]) => (items.length <= 1 ? items.join("") : `${ite
  * creation, and is not asked.
  *
  * The answer counts what was left, never names a value nor a snapshot, and
- * says what the owner may do: deploy it over SSH, which stays the way to
- * bring a removed project back, or clear what was left first.
+ * says what the owner may do: deploy it with their own token for every
+ * project (`all`), which stays the way to bring a removed project back, or
+ * clear what was left first.
  */
 export function leftoversReason(slug: string, left: Leftovers): string | null {
   const kept: string[] = [];
@@ -145,7 +164,7 @@ export function leftoversReason(slug: string, left: Leftovers): string | null {
   if (kept.length === 0) return null;
   return (
     `the machine still keeps ${listed(kept)} of a project once named ${slug}, which a project created under that name would be handed: no token creates it. ` +
-    `Pick another slug, or ask the owner of the machine, who may deploy ${slug} themselves over SSH, or ${listed(clear)} first`
+    `Pick another slug, or ask the owner of the machine, whose own token for every project may deploy ${slug}, or ${listed(clear)} first`
   );
 }
 
@@ -177,6 +196,10 @@ export function scopeRefusals(manifest: Manifest, scope: Scope, slug: string): s
   if (manifest.portalExempt !== undefined && manifest.portalExempt.length > 0 && !scope.public) {
     refusals.push("portalExempt: exempted paths are public, and your token may only deploy private sites; remove them, or ask the owner of the machine to allow public sites");
   }
+  // The owner's token deploys what the owner's folder holds, as SSH did: a
+  // `lock` key `sitesolide lock` wrote there, which the machine's value
+  // overrides anyway, and no token's bounds.
+  if (scope.all === true) return refusals;
   if (manifest.lock !== undefined) {
     refusals.push("lock: a preview code is chosen in the site's Access section, by its Admin or the owner, never by a deployment; remove the key");
   }

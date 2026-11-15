@@ -115,10 +115,17 @@ export function bearerOf(header: string | null): string | null {
  * `secrets` alone may be missing, and reads false, for one release: it is
  * what every page and CLI from before the flag sends, and false grants less
  * than the owner saw, never more. Sent, it must be a boolean.
+ *
+ * `all` may be missing too, and reads false. True, it carries every other
+ * permission with it, whatever the other flags say: every project, as the
+ * owner, is a token that also creates, opens a site to the public, reaches
+ * outside hosts, declares a domain and manages secrets, and saying so here
+ * keeps every other check of a scope as it is. Whether its holder may have
+ * it, the owner alone, is the steward's to judge (`mintRefusals`).
  */
 export function readScope(value: unknown, zone: string): Scope | Refusal {
   if (!isObject(value)) return { refusal: "scope must be an object" };
-  const allowed = ["slugs", "create", "outbound", "domain", "public", "secrets"];
+  const allowed = ["slugs", "create", "outbound", "domain", "public", "secrets", "all"];
   if (Object.keys(value).some((key) => !allowed.includes(key))) return { refusal: "unexpected field in the scope" };
   const { slugs, create, outbound, domain, secrets } = value;
   const isPublic = value.public;
@@ -135,6 +142,8 @@ export function readScope(value: unknown, zone: string): Scope | Refusal {
     if (typeof flag !== "boolean") return { refusal: `scope.${name} must be true or false` };
   }
   if (secrets !== undefined && typeof secrets !== "boolean") return { refusal: "scope.secrets must be true or false" };
+  if (value.all !== undefined && typeof value.all !== "boolean") return { refusal: "scope.all must be true or false" };
+  if (value.all === true) return { slugs: seen.sort(), create: true, outbound: true, domain: true, public: true, secrets: true, all: true };
   return {
     slugs: seen.sort(),
     create: create as boolean,
@@ -198,7 +207,8 @@ function isScope(value: unknown): value is Scope {
     typeof value.outbound === "boolean" &&
     typeof value.domain === "boolean" &&
     typeof value.public === "boolean" &&
-    (value.secrets === undefined || typeof value.secrets === "boolean")
+    (value.secrets === undefined || typeof value.secrets === "boolean") &&
+    (value.all === undefined || typeof value.all === "boolean")
   );
 }
 

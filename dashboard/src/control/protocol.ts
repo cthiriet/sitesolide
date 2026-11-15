@@ -65,6 +65,22 @@ export type Scope = {
    * install request, may lack it. Read it as `secrets === true`.
    */
   secrets?: boolean;
+  /**
+   * Every project, as the owner: the owner's own tokens alone, never a
+   * person's. It reaches every project the machine carries but the
+   * platform's own and those another token holds, creates any name the
+   * machine still keeps a removed project's snapshots or store under, takes a
+   * name back from the token that holds it (`sitesolide deploy --adopt`),
+   * replaces a unit or a block edited by hand (`--force`), keeps a manifest's
+   * `lock` key, and is bounded by none of a token's caps on memory and
+   * services. Minted, it carries every other permission too (tokens.ts,
+   * `readScope`): it is what the owner deploys with, now that no deployment
+   * goes over SSH.
+   *
+   * Optional, read as `all === true`, as `secrets` is: a registry, a page or
+   * a request from before it lacks it, which grants less, never more.
+   */
+  all?: boolean;
 };
 
 /**
@@ -201,6 +217,12 @@ export type InstallRequest = {
   creating: boolean;
   /** The manifest's text as the client sent it. The installer re-validates it. */
   manifest: string;
+  /**
+   * Replace a unit or a block edited by hand on the machine, as
+   * `sitesolide deploy --force` did over SSH: asked by an owner's token with
+   * `all` alone, and applied by the installer only then. Absent: false.
+   */
+  force?: boolean;
 };
 
 /** The installer's unit template, one instance per project. */
@@ -361,6 +383,7 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 //   POST   /tokens/revoke   { id }                 -> { token: TokenView }
 //   POST   /control/authenticate  { bearer }       -> { identity: Identity }
 //   POST   /control/preflight     { bearer, slug } -> PreflightResponse
+//   POST   /control/plan          PlanRequest      -> PlanResponse   judged, nothing written: deploy --dry-run
 //   POST   /control/deploy        DeployRequest    -> { deployment, slug, creating }   202
 //   GET    /control/deployment?id=<id>             -> { result: InstallerResult }
 //   POST   /control/logs          LogsRequest      -> LogsResponse
@@ -373,6 +396,7 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 //   POST   /control/store/generate { bearer, slug, name, format?, bytes?, replace? } -> StoreChangeResponse
 //   PUT    /control/store/file    { bearer, slug, name, content } -> StoreChangeResponse        content in base64
 //   DELETE /control/store/file    { bearer, slug, name }      -> StoreChangeResponse
+//   DELETE /control/claim         { bearer, slug }            -> ClaimReleased                  an owner's token with `all`: deploy --adopt
 //
 // The restart and store ones judge a person's token by role first
 // (`secrets.list`, `secrets.write`, `restart`), then the project among those
@@ -403,7 +427,8 @@ export const CONTROL_STATUSES: Record<ControlErrorCode, number> = {
 //
 //   DELETE /tokens/project        { slug }    a project removed: its token ownership and its people with access forgotten
 //   GET    /tokens/claim?slug=<slug>          -> ClaimView: does a token hold or claim a name, and is a deployment of it under way
-//   DELETE /tokens/claim          { slug }    -> ClaimReleased: the owner takes such a name back, its store moved aside (`sitesolide deploy --adopt`)
+//   DELETE /tokens/claim          { slug }    -> ClaimReleased: the owner takes such a name back, its store moved aside
+//   POST   /tokens/owner          OwnerTokenRequest -> CreatedTokenResponse: the owner's own token, every permission, `sitesolide setup`'s last step
 //
 // Any error returns `ControlFailure`. An older steward answers 404 `no such route` to all of
 // them: the dashboard turns that into `not-available`.
@@ -455,7 +480,7 @@ export type CreateTokenRequest = {
   scope: Scope;
 };
 export type CreatedTokenResponse = { token: TokenView; secret: string };
-export type DeployRequest = { bearer: string; deployment: string; slug: string; manifest: string };
+export type DeployRequest = { bearer: string; deployment: string; slug: string; manifest: string; force?: boolean };
 export type DeployResponse = { deployment: string; slug: string; creating: boolean };
 /**
  * Whether a deployment would create its project, and what `{zone}` and
@@ -464,6 +489,40 @@ export type DeployResponse = { deployment: string; slug: string; creating: boole
  * answers `creating` alone.
  */
 export type PreflightResponse = { creating: boolean; placeholders: { zone: string; contact: string } };
+
+/**
+ * A deployment judged without deploying, `sitesolide deploy --dry-run`: the
+ * slug, the scope and the leftovers as the deployment itself would be judged,
+ * then the manifest the installer would deposit, its missing ports chosen and
+ * the machine's general access, preview lock, former names, switch of a
+ * domain and turning off applied (src/installer/pipeline.ts, `finalManifest`).
+ * Nothing is written and nothing is started. The ports are those free now:
+ * the deployment chooses again when it runs.
+ *
+ *   `manifest`   the text the machine would deposit, which the client
+ *                generates the unit and the block from, as over SSH
+ *   `portal`     the site restricted on the machine, or to be
+ *   `existing`   the machine carries the project
+ */
+export type PlanRequest = { bearer: string; slug: string; manifest: string; force?: boolean };
+export type PlanResponse = {
+  slug: string;
+  creating: boolean;
+  existing: boolean;
+  portal: boolean;
+  allocated: { service: string | null; port: number }[];
+  manifest: string;
+  placeholders: { zone: string; contact: string };
+};
+
+/**
+ * The owner's own token, minted on the owner's socket at the end of
+ * `sitesolide setup`, which root alone opens: every permission and every
+ * project (`all`), for the workstation that ran setup to deploy with. The
+ * secret goes back over that SSH session alone, straight into the
+ * workstation's vault, and is never printed.
+ */
+export type OwnerTokenRequest = { label: string; expiresAt: number | null };
 export type LogsRequest = { bearer: string; slug: string; lines: number; cursor: string | null };
 export type LogsResponse = { lines: string[]; cursor: string | null };
 
@@ -514,7 +573,8 @@ export type TeamPageResponse = {
 // --- The dashboard's public API, under /api/v1, with `Authorization: Bearer` ---
 //
 //   GET    /api/v1/whoami                          -> { identity }
-//   POST   /api/v1/deployments   { manifest }      -> 201 { deployment: DeploymentView }
+//   POST   /api/v1/deployments/plan  { manifest, force? }  -> { plan: PlanResponse }   nothing written: deploy --dry-run
+//   POST   /api/v1/deployments   { manifest, force? }  -> 201 { deployment: DeploymentView }   `force`: an owner's token with `all`
 //   PUT    /api/v1/deployments/:id/bundle   tar.gz -> 202 { deployment: DeploymentView }
 //   GET    /api/v1/deployments/:id[?after=<n>]     -> { deployment: DeploymentView }
 //   GET    /api/v1/projects                        -> { projects: ProjectStatus[] }
@@ -529,6 +589,7 @@ export type TeamPageResponse = {
 //   POST   /api/v1/projects/:slug/store/generate  StoreApiGenerateBody -> StoreApiChangeResponse
 //   PUT    /api/v1/projects/:slug/store/files/:name  StoreApiFileBody  -> StoreApiChangeResponse
 //   DELETE /api/v1/projects/:slug/store/files/:name  { restart? }      -> StoreApiChangeResponse
+//   DELETE /api/v1/projects/:slug/claim             -> { claim: ClaimReleased }   an owner's token with `all`: deploy --adopt
 
 export type DeploymentView = {
   id: string;

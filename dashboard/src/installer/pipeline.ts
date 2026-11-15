@@ -78,7 +78,9 @@
  * the same from the workstation. The machine can tell the two apart: a file
  * that is exactly what the previous deposited manifest generates was not
  * edited by hand, and is replaced; anything else stops the deployment, and the
- * owner settles it with `sitesolide deploy --force`. A token has no `--force`.
+ * owner settles it with `sitesolide deploy --force`, which the owner's own
+ * token for every project alone may ask (`InstallRequest.force`); any other
+ * token has no `--force`.
  */
 import { generateFragment, decideBlock } from "../../borrowed/fragment";
 import { PROJECT_PORTS_FILE, projectPortPairs, projectPortsFile, reachesOwnPorts, type ProjectAccount } from "../../borrowed/loopback";
@@ -108,7 +110,7 @@ import { compareDirectives, summariseDivergence } from "../../borrowed/compariso
 import { FIRST_CERTIFICATE_MS, readZoneNamesAnswer, ZONE_NAMES_PATH } from "../../borrowed/zone-names";
 import { isPortalReady, portalHost, fromPortal, answers, describe, type ProbeResponse } from "../gatekeeper/probe";
 import { TIMEOUTS } from "../gatekeeper/transaction";
-import { allocatePorts, decideDoor, scopeRefusals, takenPorts } from "../control/policy";
+import { allocatePorts, decideDoor, everyProject, scopeRefusals, takenPorts } from "../control/policy";
 import { madeStore, readClaims } from "../control/claims";
 import type { InstallRequest } from "../control/protocol";
 import { installBlock } from "./caddy";
@@ -301,7 +303,9 @@ export function finalManifest(
     const before = previous?.domain;
     const covered = before !== undefined && typeof before.name === "string" ? new Set(attempt(() => domainHosts(before), [])) : new Set<string>();
     const uncovered = domainHosts(asked.manifest.domain).filter((host) => !covered.has(host));
-    if (before?.active === true && uncovered.length > 0) {
+    // The owner's token for every project adds names as the owner's SSH
+    // deployment did: they ride the domain's switch, which stays the machine's.
+    if (before?.active === true && uncovered.length > 0 && !everyProject({ scope: request.scope, member: request.token.member })) {
       throw new Stop(
         "out-of-scope",
         `${before.name} is switched on, and ${uncovered.join(", ")} would be new names of this domain: a token's deployment would switch the whole domain off, and it would stop answering at the next regeneration of the domain table. Deploy without them, or ask the owner of the machine, who adds names to a domain switched on over SSH`,
@@ -327,7 +331,8 @@ export function finalManifest(
  * the same order and number, see generatedAs in bin/cli/unit.ts, the rule
  * `deploy` applies.
  */
-export function replaceable(inService: string | null, generated: string, previous: string | null): boolean {
+export function replaceable(inService: string | null, generated: string, previous: string | null, force = false): boolean {
+  if (force) return true;
   if (inService === null || inService.trim() === "") return true;
   if (generatedAs(inService, generated)) return true;
   return previous !== null && generatedAs(inService, previous);
@@ -337,13 +342,16 @@ function handEdited(path: string, inService: string, generated: string): Stop {
   const divergence = summariseDivergence(compareDirectives(inService, generated));
   return new Stop(
     "edited-by-hand",
-    `${path} on the machine was edited by hand (${divergence.join(" ")}): nothing was changed; the owner must read it, then deploy once with sitesolide deploy --force`,
+    `${path} on the machine was edited by hand (${divergence.join(" ")}): nothing was changed; the owner must read it, then deploy once with sitesolide deploy --force, with their own token for every project`,
   );
 }
 
 export async function runPipeline(host: Host, request: InstallRequest, options: PipelineOptions): Promise<Outcome> {
   const { slug } = request;
   const { zone } = options;
+  // `sitesolide deploy --force`, asked by the owner's token for every project
+  // alone: a file edited by hand on the machine is replaced, as over SSH.
+  const forced = request.force === true && everyProject({ scope: request.scope, member: request.token.member });
   let allocated: { service: string | null; port: number }[] = [];
   let release: (() => void) | null = null;
   const created: Created = { account: false, tree: false, units: [], store: false };
@@ -388,7 +396,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
     if (block !== null) {
       const inService = await host.machine.readBlock(slug);
       const before = previous === null ? null : attempt(() => generateFragment(previous), null);
-      const replace = replaceable(inService, block, before);
+      const replace = replaceable(inService, block, before, forced);
       if (decideBlock({ manifest, inService, replace, doorConfirmed: final.doorConfirmed }) === "diverged") {
         throw handEdited(`/etc/caddy/sites/${slug}.caddy`, inService ?? "", block);
       }
@@ -510,7 +518,7 @@ export async function runPipeline(host: Host, request: InstallRequest, options: 
         // generator's own too.
         const earlier = before === null ? [] : earlierGenerations(before);
         const replace =
-          replaceable(installed, generated, before) ||
+          replaceable(installed, generated, before, forced) ||
           earlierGenerations(generated).some((text, generation) => replaceable(installed, text, earlier[generation] ?? null));
         decisions.push({ unit, generated, installed, absent: onDisk === null, action: decideUnit({ installed, generated, replace }) });
       }

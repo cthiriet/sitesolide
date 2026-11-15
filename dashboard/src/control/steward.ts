@@ -113,7 +113,7 @@ import {
   type DeploymentOutcome,
 } from "./claims";
 import { MAX_CONTROL_FILE_BYTES, type ControlSystem } from "./system";
-import { decideManifest, decideSlug, leftoversReason, reservedReason, type Leftovers, type SlugDecision } from "./policy";
+import { decideManifest, decideSlug, everyProject, leftoversReason, reservedReason, type Leftovers, type SlugDecision } from "./policy";
 import {
   CONTROL_STATUSES,
   DEPLOYMENT_ID_SHAPE,
@@ -134,12 +134,14 @@ import {
   type InstallRequest,
   type InstallerResult,
   type LogsResponse,
+  type PlanResponse,
   type PreflightResponse,
   type TeamResponse,
   type TokenView,
   OWNER_HOLDER,
 } from "./protocol";
 import { cleanLine, interrupted, judgeResult } from "./results";
+import { finalManifest, Stop } from "../installer/pipeline";
 import { judgeLifecycleResult, judgeRenameResult, renameInClaims, renameInTeam } from "./rename";
 import { isLifecycle, lifecycleRefusal } from "../../borrowed/lifecycle";
 import { renameRefusal, renamedTo } from "../../borrowed/rename";
@@ -428,6 +430,33 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   /**
+   * The owner's token for every project, its projects read from the machine
+   * at each request: every one the machine carries, but the platform's own
+   * and those another token holds, which `sitesolide deploy --adopt` takes
+   * back first (`claimRoute`). Read here, so that every judgement that
+   * follows, the deployment's, the logs', the store's, the restart's and the
+   * access', finds them among the token's own slugs, as for a token granted
+   * them one by one.
+   */
+  async function everyProjectOf(identity: Identity, registry: Team, claims: Claims): Promise<Identity> {
+    let folders: string[];
+    try {
+      folders = [...(await system.readManifests()).keys()];
+    } catch (e) {
+      console.error(`control: the projects on the machine do not read (${errorName(e)}): the owner's token reaches its own slugs alone`);
+      return identity;
+    }
+    const slugs = new Set(identity.scope.slugs);
+    for (const slug of folders) {
+      if (reservedReason(slug, options.zone) !== null) continue;
+      const holder = registry.owners[slug];
+      if (holder !== undefined && holder !== identity.id && !(await releasedNow(claims, slug, holder, true))) continue;
+      slugs.add(slug);
+    }
+    return { ...identity, scope: { ...identity.scope, slugs: [...slugs].sort() } };
+  }
+
+  /**
    * The bearer's holder, or the refusal. A person's token is narrowed to
    * their rights as the registry reads now, and refused once they no longer
    * sign in. The last use moves forward at most once an hour; `touching`
@@ -458,6 +487,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     const claims = await claimsNow();
     if (claims === null) return failure("failure", "the tokens' claims on names do not read on the machine, and no token is served meanwhile: the owner must check /var/lib/sitesolide-steward/claims.json");
     holder = { ...holder, identity: await heldNow(holder.identity, claims) };
+    if (everyProject(holder.identity)) holder = { ...holder, identity: await everyProjectOf(holder.identity, registry, claims) };
     const touched = touching ? touch(registry, result.identity.id, now) : null;
     if (touched !== null) {
       // Out of the request's path: a registry that cannot be written does not
@@ -553,6 +583,10 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   async function judgeDeployment(holder: Holder, slug: unknown, state: SlugState): Promise<SlugDecision | Response> {
     const decision = judgeSlug(holder, slug, state);
     if (decision.kind === "refused" || !decision.creating) return decision;
+    // The owner brings a removed project back under its name, with what it
+    // left: the owner's token for every project is not asked, as the owner's
+    // SSH deployment never was.
+    if (everyProject(holder.identity)) return decision;
     const target = slug as string;
     let left: Leftovers;
     try {
@@ -622,6 +656,37 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     });
   }
 
+  /**
+   * `POST /tokens/owner { label, expiresAt }` on the owner's socket, which
+   * root alone opens: the owner's own token, every permission and every
+   * project (`all`), minted for the workstation that runs `sitesolide setup`
+   * over SSH, as the Tokens page mints one under the unlock. Root over SSH
+   * is the proof the unlock stands for: whoever opens this socket already
+   * holds the machine. The secret goes back in this answer alone, which
+   * setup writes into the workstation's vault, never on a screen.
+   */
+  async function ownerToken(req: Request): Promise<Response> {
+    const body = await readBody(req, ["label", "expiresAt"]);
+    if (body instanceof Response) return body;
+    const request = readTokenRequest(
+      { label: body.label, email: OWNER_HOLDER, expiresAt: body.expiresAt ?? null, scope: { slugs: [], create: true, outbound: true, domain: true, public: true, secrets: true, all: true } },
+      system.now(),
+      options.zone,
+    );
+    if ("refusal" in request) return failure("invalid", request.refusal);
+    return serially(async () => {
+      const registry = await team();
+      if (registry instanceof Response) return registry;
+      const created = await createToken(registry, request, system.now(), options.random);
+      if ("refusal" in created) return failure("invalid", created.refusal);
+      const refused = await save(created.team);
+      if (refused !== null) return refused;
+      console.log(`control: token ${created.view.id} created for the owner, every project, over SSH`);
+      const response: CreatedTokenResponse = { token: created.view, secret: created.secret };
+      return Response.json(response, { status: 201 });
+    });
+  }
+
   async function revoke(req: Request): Promise<Response> {
     const body = await readBody(req, ["id"]);
     if (body instanceof Response) return body;
@@ -663,6 +728,110 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     return Response.json(answer);
   }
 
+  /**
+   * `force`, absent or a boolean, and true only for the owner's token for
+   * every project: a unit or a block edited by hand replaced, as
+   * `sitesolide deploy --force` did over SSH. Or the refusal.
+   */
+  function forceAsked(value: unknown, identity: Identity): boolean | Response {
+    if (value === undefined || value === false) return false;
+    if (value !== true) return failure("invalid", "force must be true or false");
+    if (!everyProject(identity)) return failure("out-of-scope", "--force replaces a file edited by hand on the machine: the owner's own token for every project alone may ask it, never a token of chosen projects");
+    return true;
+  }
+
+  /**
+   * A deployment judged and planned, nothing written: `sitesolide deploy
+   * --dry-run`. The judgement is the deployment's own (`judgeDeployment`),
+   * then the manifest the installer would deposit, as the installer computes
+   * it (src/installer/pipeline.ts, `finalManifest`), from the manifests the
+   * machine carries now. What only the installer reads, the units and the
+   * block in service and systemd's reading of a schedule, waits for the
+   * deployment, which stops before writing on any of them.
+   */
+  async function plan(req: Request): Promise<Response> {
+    const body = await readBody(req, ["bearer", "slug", "manifest", "force"]);
+    if (body instanceof Response) return body;
+    const holder = await identify(body.bearer);
+    if (holder instanceof Response) return holder;
+    const { identity } = holder;
+    const { slug, manifest } = body;
+    const force = forceAsked(body.force, identity);
+    if (force instanceof Response) return force;
+    if (typeof manifest !== "string" || new TextEncoder().encode(manifest).length > MAX_MANIFEST_BYTES) {
+      return failure("invalid", "manifest: the text of sitesolide.json, 64 KiB at most");
+    }
+    const state = await slugState(String(slug ?? ""));
+    if (state instanceof Response) return state;
+    const decision = await judgeDeployment(holder, slug, state);
+    if (decision instanceof Response) return decision;
+    if (decision.kind === "refused") return failure(decision.error, decision.message);
+    const target = slug as string;
+    let deposited: Map<string, string>;
+    try {
+      deposited = await system.readManifests();
+    } catch (e) {
+      console.error(`control: the manifests on the machine do not read (${errorName(e)})`);
+      return failure("failure", "the manifests on the machine cannot be read: the owner must read the steward's log");
+    }
+    const request: InstallRequest = {
+      deployment: "0".repeat(24),
+      slug: target,
+      requestedAt: system.now(),
+      token: { id: identity.id, email: identity.email, member: identity.member },
+      scope: identity.scope,
+      creating: decision.creating,
+      manifest,
+    };
+    let final: ReturnType<typeof finalManifest>;
+    try {
+      final = finalManifest(request, deposited);
+    } catch (e) {
+      if (e instanceof Stop) {
+        const known: Record<string, ControlErrorCode> = { "out-of-scope": "out-of-scope", "invalid-manifest": "invalid-manifest", "machine-unreadable": "failure" };
+        const code = known[e.code] ?? "invalid-manifest";
+        return failure(code, e.message, code === "invalid-manifest" ? [e.message] : undefined);
+      }
+      throw e;
+    }
+    const answer: PlanResponse = {
+      slug: target,
+      creating: decision.creating,
+      existing: deposited.has(target),
+      portal: final.portal,
+      allocated: final.allocated,
+      manifest: final.text,
+      placeholders: { zone: options.zone, contact: options.contact ?? "" },
+    };
+    return Response.json(answer);
+  }
+
+  /**
+   * `DELETE /control/claim { bearer, slug }`: the owner's token for every
+   * project takes a name back from the token that holds it, as the owner's
+   * socket does for `sitesolide deploy --adopt` (`takeBackRoute`): the hold
+   * dropped, the store's values moved aside and named. Any other token is
+   * refused, and a name no token holds changes nothing.
+   */
+  async function claimForToken(req: Request): Promise<Response> {
+    const body = await readBody(req, ["bearer", "slug"]);
+    if (body instanceof Response) return body;
+    const holder = await identify(body.bearer);
+    if (holder instanceof Response) return holder;
+    if (!everyProject(holder.identity)) {
+      return failure("out-of-scope", "taking a name back from the token that holds it is the owner's: their own token for every project alone may");
+    }
+    const { slug } = body;
+    if (typeof slug !== "string" || !isValidSlug(slug)) return failure("invalid", "slug: lowercase letters, digits and dashes");
+    const reserved = reservedReason(slug, options.zone);
+    if (reserved !== null) return failure("reserved", reserved);
+    const taken = await takeBack(slug, true);
+    if (taken instanceof Response) return taken;
+    if (taken.released !== null) console.log(`control: ${slug} taken back from token ${taken.released} by the owner's token ${holder.identity.id}`);
+    const answer: ClaimReleased = { slug, ...taken };
+    return Response.json(answer);
+  }
+
   async function isActive(unit: string): Promise<boolean> {
     const answer = await system.systemctl(["is-active", unit], systemctlTimeoutMs);
     const state = answer.output.trim();
@@ -675,12 +844,14 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
   }
 
   async function deploy(req: Request): Promise<Response> {
-    const body = await readBody(req, ["bearer", "deployment", "slug", "manifest"]);
+    const body = await readBody(req, ["bearer", "deployment", "slug", "manifest", "force"]);
     if (body instanceof Response) return body;
     const holder = await identify(body.bearer);
     if (holder instanceof Response) return holder;
     const { identity } = holder;
     const { deployment, slug, manifest } = body;
+    const force = forceAsked(body.force, identity);
+    if (force instanceof Response) return force;
     if (typeof deployment !== "string" || !DEPLOYMENT_ID_SHAPE.test(deployment)) return failure("invalid", "not a deployment id");
     // An id is used once: a result already there is another deployment's,
     // which a creation would otherwise be settled by.
@@ -757,6 +928,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
         scope: identity.scope,
         creating: decision.creating,
         manifest,
+        ...(force ? { force: true } : {}),
       };
       await system.writeRequest(target, `${JSON.stringify(request)}\n`);
       // --no-block: the installer can take minutes, and its progress is read
@@ -2029,6 +2201,8 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     "/tokens/revoke": { POST: revoke },
     "/control/authenticate": { POST: authenticateRoute },
     "/control/preflight": { POST: preflight },
+    "/control/plan": { POST: plan },
+    "/control/claim": { DELETE: claimForToken },
     "/control/deploy": { POST: deploy },
     "/control/deployment": { GET: deploymentResult },
     "/control/logs": { POST: logs },
@@ -2066,6 +2240,7 @@ export function createControlSteward(system: ControlSystem, options: ControlStew
     owner: serve({
       "/tokens/project": { DELETE: forgetProject },
       "/tokens/claim": { GET: claimRoute, DELETE: takeBackRoute },
+      "/tokens/owner": { POST: ownerToken },
       "/control/rename": { POST: (req) => renameRoute(req, "ssh") },
       "/control/lifecycle": { POST: (req) => lifecycleRoute(req, "ssh") },
     }),

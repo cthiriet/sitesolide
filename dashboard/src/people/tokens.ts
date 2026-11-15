@@ -66,6 +66,9 @@ export function mintRefusals(scope: Scope, rights: MemberRights): string[] {
     return [`${email} is a Viewer on every project and may not create projects: a Viewer mints no token`];
   }
   const refusals: string[] = [];
+  // Every project, as the owner, is the owner's own tokens' alone: a
+  // person's token never reaches more than their roles.
+  if (scope.all === true) refusals.push(`scope.all: every project is the owner's own token's alone, never ${email}'s: choose the projects instead`);
   if (scope.slugs.length === 0 && !scope.create) refusals.push("scope.slugs: choose at least one project, or creating projects");
   for (const slug of scope.slugs) {
     const role = roleOn(rights.roles, slug);

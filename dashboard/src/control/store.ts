@@ -49,6 +49,14 @@ export const CONTROL_SCHEMA = [
      member TEXT
    )`,
   `CREATE INDEX IF NOT EXISTS deployments_state ON deployments (state)`,
+  // What a deployment asked beyond its manifest, `--force` alone so far: a
+  // table of its own, created if missing, so that the deployments' table
+  // keeps the shape every dashboard before it reads. A deployment without a
+  // row asked nothing.
+  `CREATE TABLE IF NOT EXISTS deployment_options (
+     id TEXT PRIMARY KEY,
+     force INTEGER NOT NULL
+   )`,
 ] as const;
 
 export type { AuditEntry };
@@ -67,19 +75,24 @@ export type DeploymentRow = {
   startedAt: number | null;
   finishedAt: number | null;
   message: string | null;
+  /** `sitesolide deploy --force`, asked by the owner's token for every project. */
+  force: boolean;
 };
 
-type RawRow = Omit<DeploymentRow, "creating" | "state"> & { creating: number; state: string };
+type RawRow = Omit<DeploymentRow, "creating" | "state" | "force"> & { creating: number; state: string; force: number | null };
 
 /** An audit row as the table holds it, its detail still JSON text. */
 export type RawAuditRow = { id: number; at: string; actor: string; action: string; target: string | null; detail: string | null };
 
 const COLUMNS =
-  "id, token_id AS tokenId, email, member, slug, state, creating, manifest, created_at AS createdAt, started_at AS startedAt, finished_at AS finishedAt, message";
+  "deployments.id AS id, token_id AS tokenId, email, member, slug, state, creating, manifest, created_at AS createdAt, started_at AS startedAt, finished_at AS finishedAt, message, deployment_options.force AS force";
+
+/** Every reading of a deployment carries what it asked beyond its manifest. */
+const FROM = "deployments LEFT JOIN deployment_options ON deployment_options.id = deployments.id";
 
 function row(raw: RawRow | null): DeploymentRow | null {
   if (raw === null) return null;
-  return { ...raw, state: raw.state as DeploymentState, creating: raw.creating === 1 };
+  return { ...raw, state: raw.state as DeploymentState, creating: raw.creating === 1, force: raw.force === 1 };
 }
 
 export type ControlStore = ReturnType<typeof createControlStore>;
@@ -102,15 +115,16 @@ export function createControlStore(db: Database) {
     create: db.query<undefined, [string, string, string, string | null, string, string, number, string, number]>(
       "INSERT INTO deployments (id, token_id, email, member, slug, state, creating, manifest, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ),
-    byId: db.query<RawRow, [string]>(`SELECT ${COLUMNS} FROM deployments WHERE id = ?`),
-    inState: db.query<RawRow, [string]>(`SELECT ${COLUMNS} FROM deployments WHERE state = ? ORDER BY created_at`),
+    options: db.query<undefined, [string, number]>("INSERT INTO deployment_options (id, force) VALUES (?, ?)"),
+    byId: db.query<RawRow, [string]>(`SELECT ${COLUMNS} FROM ${FROM} WHERE deployments.id = ?`),
+    inState: db.query<RawRow, [string]>(`SELECT ${COLUMNS} FROM ${FROM} WHERE state = ? ORDER BY created_at`),
     activeForSlug: db.query<RawRow, [string]>(
-      `SELECT ${COLUMNS} FROM deployments WHERE slug = ? AND state IN ('awaiting-bundle', 'running') ORDER BY created_at DESC LIMIT 1`,
+      `SELECT ${COLUMNS} FROM ${FROM} WHERE slug = ? AND state IN ('awaiting-bundle', 'running') ORDER BY created_at DESC LIMIT 1`,
     ),
     // The rowid breaks a tie within one millisecond in the order of creation,
     // where the random id would pick any of them as the oldest.
     awaitingForToken: db.query<RawRow, [string]>(
-      `SELECT ${COLUMNS} FROM deployments WHERE token_id = ? AND state = 'awaiting-bundle' ORDER BY created_at, rowid`,
+      `SELECT ${COLUMNS} FROM ${FROM} WHERE token_id = ? AND state = 'awaiting-bundle' ORDER BY created_at, deployments.rowid`,
     ),
     countRunning: db.query<{ n: number }, []>("SELECT count(*) AS n FROM deployments WHERE state = 'running'"),
     // One statement, so that the count and the transition cannot be split by
@@ -121,7 +135,7 @@ export function createControlStore(db: Database) {
     finish: db.query<undefined, [string, number, string | null, string]>(
       "UPDATE deployments SET state = ?, finished_at = ?, message = ? WHERE id = ? AND state IN ('awaiting-bundle', 'running')",
     ),
-    recent: db.query<RawRow, [number]>(`SELECT ${COLUMNS} FROM deployments ORDER BY created_at DESC LIMIT ?`),
+    recent: db.query<RawRow, [number]>(`SELECT ${COLUMNS} FROM ${FROM} ORDER BY created_at DESC LIMIT ?`),
   };
 
   return {
@@ -163,8 +177,9 @@ export function createControlStore(db: Database) {
       return queries.pageAudit.all(before ?? Number.MAX_SAFE_INTEGER, limit);
     },
 
-    createDeployment(created: { id: string; tokenId: string; email: string; member?: string | null; slug: string; creating: boolean; manifest: string; createdAt: number }): void {
+    createDeployment(created: { id: string; tokenId: string; email: string; member?: string | null; slug: string; creating: boolean; manifest: string; createdAt: number; force?: boolean }): void {
       queries.create.run(created.id, created.tokenId, created.email, created.member ?? null, created.slug, "awaiting-bundle", created.creating ? 1 : 0, created.manifest, created.createdAt);
+      if (created.force === true) queries.options.run(created.id, 1);
     },
 
     deployment(id: string): DeploymentRow | null {

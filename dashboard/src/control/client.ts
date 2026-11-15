@@ -10,7 +10,7 @@
  */
 import { callSteward, DEFAULT_TIMEOUTS } from "../secrets/client";
 import type { StoreChangeRequest, StoreFileRemoveRequest, StoreFileRequest, StoreGenerateRequest } from "../../borrowed/store-protocol";
-import type { CreateTokenRequest, DeployRequest, LogsRequest } from "./protocol";
+import type { CreateTokenRequest, DeployRequest, LogsRequest, PlanRequest } from "./protocol";
 
 export type ControlSteward = {
   listTokens: () => Promise<Response>;
@@ -19,6 +19,10 @@ export type ControlSteward = {
   authenticate: (bearer: string) => Promise<Response>;
   preflight: (bearer: string, slug: string) => Promise<Response>;
   deploy: (requested: DeployRequest) => Promise<Response>;
+  /** A deployment judged and planned, nothing written: `sitesolide deploy --dry-run`. */
+  plan: (requested: PlanRequest) => Promise<Response>;
+  /** The owner's token for every project takes a name back from the token that holds it: `sitesolide deploy --adopt`. */
+  takeBack: (bearer: string, slug: string) => Promise<Response>;
   deployment: (id: string) => Promise<Response>;
   logs: (requested: LogsRequest) => Promise<Response>;
   /** A project's access, as a token reads it. */
@@ -70,6 +74,8 @@ export function localControlSteward(socket: string, timeoutMs = CONTROL_TIMEOUT_
     authenticate: (bearer) => call("POST", "/control/authenticate", { bearer }),
     preflight: (bearer, slug) => call("POST", "/control/preflight", { bearer, slug }),
     deploy: (requested) => call("POST", "/control/deploy", requested),
+    plan: (requested) => call("POST", "/control/plan", requested),
+    takeBack: (bearer, slug) => call("DELETE", "/control/claim", { bearer, slug }, longMs),
     deployment: (id) => call("GET", `/control/deployment?${new URLSearchParams({ id })}`),
     logs: (requested) => call("POST", "/control/logs", requested),
     accessList: (bearer, slug) => call("POST", "/control/access/list", { bearer, slug }),

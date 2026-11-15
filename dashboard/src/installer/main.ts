@@ -219,7 +219,9 @@ export async function main(argv: string[], env: Environment, overrides: { comman
       reporter.finish({ ok: false, code: "out-of-scope", message: narrowed.refusal, allocated: [] });
       return 0;
     }
-    request = { ...request, scope: narrowed.scope };
+    // Every project, as the owner, is never a person's: dropped whatever the
+    // request carries, with the `force` only it may ask.
+    request = { ...request, scope: { ...narrowed.scope, all: false }, force: false };
   }
 
   const machineConfig = { ...configFrom(env, overrides.systemctl), holder: "installer" as const };

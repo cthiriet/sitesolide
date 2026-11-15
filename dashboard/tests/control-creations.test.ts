@@ -671,7 +671,7 @@ describe("a name a removed project left things under is never a token's creation
 
   const LEFT =
     "the machine still keeps 2 backup snapshots of a project once named shop, which a project created under that name would be handed: no token creates it. " +
-    "Pick another slug, or ask the owner of the machine, who may deploy shop themselves over SSH, or forget the snapshots first";
+    "Pick another slug, or ask the owner of the machine, whose own token for every project may deploy shop, or forget the snapshots first";
 
   for (const store of ["local", "offsite"] as const) {
     test(`its snapshots in ${store === "local" ? "the server's repository" : "the bucket alone"}: Dave's creation of shop refused, before the archive and at the deployment, nothing started`, async () => {
