@@ -489,6 +489,7 @@ export function TokensPage() {
         open={creating.open}
         origin={window.location.origin}
         projects={projects}
+        takenLabels={live.map((token) => token.label)}
         now={serverNow}
         onClose={() => setCreating((previous) => ({ ...previous, open: false }))}
         onCreated={() => void reload()}

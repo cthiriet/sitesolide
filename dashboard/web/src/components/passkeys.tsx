@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useId, useRef, useState, type SyntheticEvent } from "react"
 import { KeyRound, Trash2 } from "lucide-react"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -17,8 +27,9 @@ import { ceremonyMessage, passkeysSupported, readPasskeys, registerPasskey, remo
 const ONE_PASSKEY = "Add a second one on another device or a security key. Lose your only passkey and only root, over SSH, can let you back in."
 
 /**
- * The owner's passkeys, on the Server page: listed by name, one added from
- * this browser, one removed. Adding and removing ask for the unlock, a fresh
+ * The owner's passkeys, on the Server page, the one place they are said:
+ * listed by name, one added from this browser, one removed once the owner
+ * confirmed it by its name. Adding and removing ask for the unlock, a fresh
  * assertion, which the steward checks; the last passkey stays, root removes
  * it over SSH. The steward verifies every ceremony: this panel only runs the
  * browser's prompt and relays.
@@ -31,6 +42,8 @@ export function PasskeysPanel() {
   const [name, setName] = useState("")
   const [busy, setBusy] = useState(false)
   const [unlock, setUnlock] = useState<{ purpose: string; then: () => void } | null>(null)
+  // The passkey whose removal waits for the owner's confirmation.
+  const [confirming, setConfirming] = useState<PasskeyView | null>(null)
   const nameId = useId()
   const add = useRef<HTMLButtonElement>(null)
 
@@ -93,7 +106,7 @@ export function PasskeysPanel() {
   }
 
   return (
-    <Panel full id={PASSKEYS_PANEL_ID} title="Passkeys" count={list?.length} description="Sign in and unlock changes with your device. While one exists, the passwords are for recovery only.">
+    <Panel full id={PASSKEYS_PANEL_ID} title="Passkeys" count={list === null || list.length === 0 ? undefined : list.length} description="Sign in and unlock changes with your device. While one exists, the passwords are for recovery only.">
       <div className="grid gap-4 p-4">
         {list !== null && list.length === 0 && <p className="text-sm text-pretty">No passkey yet. Add one here, then a second on another device.</p>}
         {list !== null && list.length > 0 && (
@@ -108,7 +121,7 @@ export function PasskeysPanel() {
                   </span>
                 </div>
                 {list.length > 1 && (
-                  <Button variant="outline" size="sm" disabled={busy} aria-label={`Remove ${one.name}`} onClick={() => whenUnlocked("remove a passkey", () => remove(one.id))}>
+                  <Button variant="outline" size="sm" disabled={busy} aria-label={`Remove ${one.name}`} onClick={() => setConfirming(one)}>
                     <Trash2 />
                     Remove
                   </Button>
@@ -131,6 +144,33 @@ export function PasskeysPanel() {
         {!passkeysSupported() && <p className="text-sm text-muted-foreground">This browser doesn't offer passkeys.</p>}
         <FormError>{problem}</FormError>
       </div>
+      <AlertDialog
+        open={confirming !== null}
+        onOpenChange={(next) => {
+          if (!next) setConfirming(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="wrap-anywhere">Remove "{confirming?.name}"?</AlertDialogTitle>
+            <AlertDialogDescription className="text-pretty">This passkey stops signing in and unlocking changes. Your other passkeys keep working.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="max-sm:h-10">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              className="max-sm:h-10"
+              onClick={() => {
+                const one = confirming
+                setConfirming(null)
+                if (one !== null) whenUnlocked("remove a passkey", () => remove(one.id))
+              }}
+            >
+              Remove passkey
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <UnlockDialog
         open={unlock !== null}
         purpose={unlock?.purpose ?? null}

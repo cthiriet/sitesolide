@@ -145,6 +145,7 @@ export function CreateTokenDialog({
   open,
   origin,
   projects,
+  takenLabels,
   now,
   onClose,
   onCreated,
@@ -156,6 +157,8 @@ export function CreateTokenDialog({
   origin: string
   /** The projects on the server a token may be given, and what deploying each takes. */
   projects: readonly TokenProject[]
+  /** The names of the live tokens, which a new one may not take. */
+  takenLabels: readonly string[]
   now: number
   onClose: () => void
   onCreated: () => void
@@ -213,7 +216,7 @@ export function CreateTokenDialog({
     event.preventDefault()
     if (inProgress) return
     const slugs = [...chosen].sort()
-    const faults = validateTokenForm({ label, slugs, create: effective.create })
+    const faults = validateTokenForm({ label, slugs, create: effective.create, taken: takenLabels })
     setErrors(faults)
     setFormError("")
     const first = firstTokenField(faults)

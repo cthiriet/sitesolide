@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
 import { flushSync } from "react-dom"
-import { Asterisk, BellRing, Check, Cloud, Eye, EyeOff, HeartPulse, KeyRound, LifeBuoy, RotateCw, UserKey, X, type LucideIcon } from "lucide-react"
+import { Asterisk, BellRing, Check, Cloud, Eye, EyeOff, HeartPulse, LifeBuoy, RotateCw, UserKey, X, type LucideIcon } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { useAnnounce } from "@/components/copy"
@@ -20,11 +20,8 @@ import {
   DELIVERED_SERVER_MS,
   MONITOR_PASS_MS,
   NO_PREFS,
-  PASSKEYS_PANEL_ID,
-  PASSKEYS_ROW,
   RECOVERY_ROW,
   changeDates,
-  passkeysWord,
   proofPhase,
   readSetupPrefs,
   removalOf,
@@ -716,56 +713,9 @@ export function SettingRow({ view, place }: { view: RowView; place: "sites" | "s
   )
 }
 
-/** The Server page's row grid, shared by the setting rows and the two Sign-in rows below. */
+/** The Server page's row grid, shared by the setting rows and the recovery row below. */
 const SERVER_ROW =
   "grid min-h-11 grid-cols-[1.75rem_minmax(0,1fr)_auto] items-center gap-x-2 py-2.5 pr-2 pl-4 @3xl/settings:min-h-13 @3xl/settings:grid-cols-[1.75rem_minmax(0,1fr)_12.5rem_10.5rem] @3xl/settings:py-1.5"
-
-/** Goes to the Passkeys panel lower on the Server page, and into its first field. */
-function toPasskeys() {
-  const panel = document.getElementById(PASSKEYS_PANEL_ID)
-  if (panel === null) return
-  panel.scrollIntoView({ block: "start" })
-  panel.querySelector<HTMLElement>("input, button")?.focus({ preventScroll: true })
-}
-
-/**
- * The Sign-in panel's first row, the owner's passkeys, laid out as a
- * setting's row: how many, and Manage, which goes to the Passkeys panel
- * below. Without one (`count` 0), a call to add one, the panel's primary.
- */
-export function PasskeysRow({ count }: { count: number | null }) {
-  const none = count === 0
-  return (
-    <div role="listitem" className="border-t border-divider first:border-t-0">
-      <div className={SERVER_ROW}>
-        <span className="row-span-2 flex self-start pt-0.5 text-muted-foreground @3xl/settings:row-span-1 @3xl/settings:self-center @3xl/settings:pt-0">
-          <KeyRound aria-hidden="true" className="size-4" />
-        </span>
-        <div className="col-start-2 row-start-1 flex min-w-0 flex-col @5xl/settings:flex-row @5xl/settings:items-baseline @5xl/settings:gap-3">
-          <span className="shrink-0 font-medium text-strong @3xl/settings:w-34">{PASSKEYS_ROW.name}</span>
-          <span className="min-w-0 text-pretty text-muted-foreground">{none ? PASSKEYS_ROW.none : PASSKEYS_ROW.line}</span>
-        </div>
-        <div className="col-start-2 row-start-2 min-w-0 pt-0.5 @3xl/settings:col-start-3 @3xl/settings:row-start-1 @3xl/settings:pt-0 @3xl/settings:pr-2">
-          <span className={cn("text-[0.8125rem] leading-5", none ? "text-muted-foreground" : "font-medium text-ok-text")}>{passkeysWord(count)}</span>
-        </div>
-        <div
-          className={cn(
-            "flex items-center justify-end gap-1",
-            // Its call to action takes a line of its own on a phone, as the passwords' do.
-            none
-              ? "col-span-2 col-start-2 row-start-3 justify-self-start pt-2 @3xl/settings:col-span-1 @3xl/settings:col-start-4 @3xl/settings:row-start-1 @3xl/settings:justify-self-end @3xl/settings:pt-0"
-              : "col-start-3 row-span-2 row-start-1 @3xl/settings:col-start-4 @3xl/settings:row-span-1",
-          )}
-        >
-          <Button variant={none ? "default" : "outline"} size="sm" onClick={toPasskeys} aria-label={none ? undefined : "Manage passkeys"} className="max-md:h-9">
-            {none ? "Add a passkey" : "Manage"}
-          </Button>
-          <span aria-hidden="true" className="size-8 shrink-0 max-md:size-10" />
-        </div>
-      </div>
-    </div>
-  )
-}
 
 /**
  * The two passwords as one muted row, once the owner holds a passkey: the

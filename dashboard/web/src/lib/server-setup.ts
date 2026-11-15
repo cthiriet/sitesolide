@@ -432,26 +432,8 @@ export function serverRow(id: RowId, inputs: RowInputs): RowView {
   }
 }
 
-/**
- * The Sign-in panel's row for the owner's passkeys, first in the panel:
- * how many, and Manage, which goes to the Passkeys panel lower on the page;
- * without one, a call to add one.
- */
-export const PASSKEYS_ROW = {
-  name: "Passkeys",
-  line: "Sign in to the dashboard and private sites.",
-  /** Without a passkey: what adding one changes. */
-  none: "Sign in with this device instead of a password.",
-}
-
-/** Where the Passkeys row leads: the panel that lists them, lower on the Server page. */
+/** The Passkeys panel's id on the Server page, where they are listed, added and removed. */
 export const PASSKEYS_PANEL_ID = "passkeys"
-
-/** "1 passkey", "2 passkeys", "None"; "Registered" while the listing is not known. */
-export function passkeysWord(count: number | null): string {
-  if (count === null) return "Registered"
-  return count === 0 ? "None" : plural(count, "passkey")
-}
 
 /**
  * Once the owner holds a passkey, the steward refuses both passwords

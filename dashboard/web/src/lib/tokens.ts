@@ -202,10 +202,18 @@ export function reachedProjects(token: Pick<TokenView, "owned" | "scope">): { sl
 export type TokenField = "label" | "slugs"
 export type TokenErrors = Partial<Record<TokenField, string>>
 
-/** What the form can see is wrong before sending: a name, and something to deploy. The steward judges the rest. */
-export function validateTokenForm(fields: { label: string; slugs: readonly string[]; create: boolean }): TokenErrors {
+/**
+ * What the form can see is wrong before sending: a name, one no live token
+ * has already (`taken`, their names), and something to deploy. The steward
+ * judges the rest. Two tokens under one name could not be told apart in the
+ * list, nor in Activity, which names a token by its name.
+ */
+export function validateTokenForm(fields: { label: string; slugs: readonly string[]; create: boolean; taken?: readonly string[] }): TokenErrors {
   const errors: TokenErrors = {}
-  if (fields.label.trim() === "") errors.label = "Name the laptop, the workstation or the agent this token is for."
+  const label = fields.label.trim()
+  const same = (fields.taken ?? []).find((one) => one.trim().toLowerCase() === label.toLowerCase())
+  if (label === "") errors.label = "Name the laptop, the workstation or the agent this token is for."
+  else if (same !== undefined) errors.label = `A token named ${same} is already active. Pick another name, or revoke that one first.`
   if (fields.slugs.length === 0 && !fields.create) errors.slugs = "Choose at least one project, or New projects."
   return errors
 }

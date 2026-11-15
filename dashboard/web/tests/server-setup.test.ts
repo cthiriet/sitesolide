@@ -25,7 +25,6 @@ import {
   openingStep,
   otherFormat,
   partialSave,
-  passkeysWord,
   unlockFirst,
   passphraseHint,
   passphraseReady,
@@ -224,13 +223,6 @@ describe("the Server page", () => {
     const row = inputs(server())
     for (const id of ["dashboard-password", "portal-password"] as const) expect(serverRow(id, { ...row, passkeys: false })).toEqual(serverRow(id, row))
     expect(serverRow("dashboard-password", row).action).toEqual({ kind: "password" })
-  })
-
-  test("the Passkeys row counts them, says None without one, or Registered while the listing is unknown", () => {
-    expect(passkeysWord(2)).toBe("2 passkeys")
-    expect(passkeysWord(1)).toBe("1 passkey")
-    expect(passkeysWord(0)).toBe("None")
-    expect(passkeysWord(null)).toBe("Registered")
   })
 
   test("the portal's password waiting for its restart carries the restart", () => {

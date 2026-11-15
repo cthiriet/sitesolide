@@ -69,6 +69,11 @@ describe("the form", () => {
     expect(validateTokenForm({ label: " ", slugs: ["cms"], create: false })).toMatchObject({ label: expect.any(String) })
     expect(validateTokenForm({ label: "Ada", slugs: [], create: false })).toHaveProperty("slugs")
     expect(validateTokenForm({ label: "Ada", slugs: [], create: true })).toEqual({})
+    // A name a live token has already, whatever its case and spaces.
+    expect(validateTokenForm({ label: " shop-ci ", slugs: ["shop"], create: false, taken: ["Laptop", "Shop-CI"] }).label).toBe(
+      "A token named Shop-CI is already active. Pick another name, or revoke that one first.",
+    )
+    expect(validateTokenForm({ label: "shop-ci 2", slugs: ["shop"], create: false, taken: ["shop-ci"] })).toEqual({})
     expect(firstTokenField({ slugs: "x", label: "y" })).toBe("label")
     expect(firstTokenField({})).toBeNull()
   })

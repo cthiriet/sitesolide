@@ -1,10 +1,11 @@
+import { Fragment } from "react"
 import { CloudOff } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useData } from "@/components/data"
 import { InternalLink } from "@/components/navigation"
 import { Banner, ErrorState, PageBody, PageHeader, Panel, PanelSkeleton, useRetry } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
-import { PasskeysRow, RecoveryRow, ServerSetupProvider, SettingRow, useServerSetup } from "@/components/server-setup"
+import { RecoveryRow, ServerSetupProvider, SettingRow, useServerSetup } from "@/components/server-setup"
 import { PasskeysPanel } from "@/components/passkeys"
 import { siteUrl } from "@/lib/pages"
 import { UNREACHABLE } from "@/lib/secrets"
@@ -14,8 +15,9 @@ import { SERVER_GROUPS, serverRow, sitesRowIds } from "@/lib/server-setup"
  * The server's own settings: how it tells you it is down, how you sign
  * in, where its backups go. Every setting, done or not, always in the same
  * order, in three panels; the same rows as the setup guide on Sites, which
- * lists only what is missing. Sign-in leads with the passkeys: once one
- * exists, the two passwords are one muted row, for recovery only. The
+ * lists only what is missing. Sign-in leads with the passkeys, in their own
+ * panel where they are listed, added and removed, said there alone: once
+ * one exists, the two passwords are one muted row, for recovery only. The
  * files they live in stay one link away, in the Secrets of the dashboard
  * site, for repairs.
  */
@@ -79,19 +81,20 @@ function Content() {
         </p>
       )}
       {SERVER_GROUPS.map((group) => (
-        <Panel key={group.id} full title={group.title} actions={group.note === null ? undefined : <span className="text-xs text-muted-foreground">{group.note}</span>}>
-          <div role="list" aria-label={group.title} className="@container/settings">
-            {/* Sign-in leads with the passkeys: with one, the two passwords are one recovery row; without, a call to add one. */}
-            {group.id === "sign-in" && <PasskeysRow count={passkeys.registered ? passkeys.count : 0} />}
-            {group.id === "sign-in" && passkeys.registered ? (
-              <RecoveryRow />
-            ) : (
-              group.rows.map((id) => <SettingRow key={id} view={serverRow(id, setup.inputs)} place="server" />)
-            )}
-          </div>
-        </Panel>
+        <Fragment key={group.id}>
+          {/* Sign-in leads with the passkeys; with one, the two passwords below are one recovery row. */}
+          {group.id === "sign-in" && <PasskeysPanel />}
+          <Panel full title={group.id === "sign-in" ? "Passwords" : group.title} actions={group.note === null ? undefined : <span className="text-xs text-muted-foreground">{group.note}</span>}>
+            <div role="list" aria-label={group.id === "sign-in" ? "Passwords" : group.title} className="@container/settings">
+              {group.id === "sign-in" && passkeys.registered ? (
+                <RecoveryRow />
+              ) : (
+                group.rows.map((id) => <SettingRow key={id} view={serverRow(id, setup.inputs)} place="server" />)
+              )}
+            </div>
+          </Panel>
+        </Fragment>
       ))}
-      <PasskeysPanel />
       <p className="px-1 text-[0.8125rem] text-muted-foreground">
         Advanced: the server's files, in the{" "}
         <InternalLink href={siteUrl("dashboard", "secrets")} className="rounded-sm text-link underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring">

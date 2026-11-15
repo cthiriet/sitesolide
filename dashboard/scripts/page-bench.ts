@@ -1099,11 +1099,13 @@ type BenchToken = {
   revokedAt: number | null;
   lastUsedAt: number | null;
   /** `secrets` absent: a token minted before the permission, which manages none. */
-  scope: { slugs: string[]; create: boolean; outbound: boolean; domain: boolean; public: boolean; secrets?: boolean };
+  scope: { slugs: string[]; create: boolean; outbound: boolean; domain: boolean; public: boolean; secrets?: boolean; all?: boolean };
   owned: string[];
 };
 
 const teamTokens: BenchToken[] = [
+  // The owner's own, every project as the owner: what they deploy with.
+  { id: "e0e1e2e3e4e5", label: "Workstation", email: "owner", createdAt: start - 30 * DAY, expiresAt: start + 60 * DAY, revokedAt: null, lastUsedAt: start - HOUR, scope: { slugs: [], create: true, outbound: true, domain: true, public: true, secrets: true, all: true }, owned: [] },
   // The owner's, for the laptop, which created a project of its own.
   { id: "a1b2c3d4e5f6", label: "Laptop", email: "owner", createdAt: start - 12 * DAY, expiresAt: start + 78 * DAY, revokedAt: null, lastUsedAt: start - 3 * HOUR, scope: { slugs: ["cms"], create: true, outbound: false, domain: false, public: false }, owned: ["notes"] },
   // For an agent, which may manage its project's secrets.
@@ -1123,6 +1125,7 @@ Bun.spawnSync(
      const { createControlStore } = await import("./src/control/store");
      const store = createControlStore(openDatabase(process.env.DATA_DIR + "/dashboard.db"));
      const start = ${start};
+     const labels = { a1b2c3d4e5f6: "Laptop", "0f1e2d3c4b5a": "Release agent" };
      const rows = [
        ["0123456789abcdef00000001", "a1b2c3d4e5f6", "owner", "notes", "succeeded", 1, start - 3 * 3600000, null],
        ${SHOWCASE
@@ -1135,11 +1138,12 @@ Bun.spawnSync(
        { at: start - 12 * 86400000, actor: "owner", action: "token.create", target: null, detail: { id: "a1b2c3d4e5f6", label: "Laptop", email: "owner", expiresAt: start + 78 * 86400000, scope: { slugs: ["cms"], create: true, outbound: false, domain: false, public: false } } },
      ];
      for (const [id, tokenId, email, slug, state, creating, at, message] of rows) {
-       store.createDeployment({ id, tokenId, email, slug, creating: creating === 1, manifest: "{}", createdAt: at });
+       const label = labels[tokenId];
+       store.createDeployment({ id, tokenId, email, slug, creating: creating === 1, manifest: "{}", createdAt: at, label });
        store.markRunning(id, at + 2000);
        store.finish(id, state, at + 60000, message);
-       audit.push({ at: at + 2000, actor: "token:" + tokenId, action: "deploy.start", target: slug, detail: { email, deployment: id } });
-       audit.push({ at: at + 60000, actor: "token:" + tokenId, action: state === "succeeded" ? "deploy.success" : "deploy.failure", target: slug, detail: { email, deployment: id, error: message === null ? undefined : "install-failed" } });
+       audit.push({ at: at + 2000, actor: "token:" + tokenId, action: "deploy.start", target: slug, detail: { email, label, deployment: id } });
+       audit.push({ at: at + 60000, actor: "token:" + tokenId, action: state === "succeeded" ? "deploy.success" : "deploy.failure", target: slug, detail: { email, label, deployment: id, error: message === null ? undefined : "install-failed" } });
      }
      // In the order of time, as the service writes them: the ids grow with it.
      for (const entry of audit.sort((a, b) => a.at - b.at)) store.recordAudit(entry);`,
