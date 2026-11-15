@@ -7,7 +7,7 @@
     "dev": "bun --hot server.ts",
     "start": "NODE_ENV=production bun server.ts",
     "borrow": "bun scripts/borrow.ts",
-    "web:install": "cd web && bun install --silent",
+    "web:install": "cd web && bun install --silent --frozen-lockfile",
     "web:build": "cd web && bunx --bun astro build",
     "web:check": "cd web && bunx --bun astro check && bun test",
     "web:dev": "cd web && bunx --bun astro dev",

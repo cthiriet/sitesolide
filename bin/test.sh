@@ -36,7 +36,15 @@ for site in "$REPO_ROOT/api" "$REPO_ROOT/clouds" "$REPO_ROOT/dashboard" "$REPO_R
   # A fresh clone carries no node_modules: every folder here keeps its own
   # development dependencies. Installing what is missing rather than failing on
   # an unresolved import is what lets this be the first command someone runs.
-  [ -d "$site/node_modules" ] || (cd "$site" && bun install --silent)
+  # A folder with a lockfile installs exactly what it holds: a fresh clone, the
+  # release workflow's, must never resolve a newer version than was committed.
+  if [ ! -d "$site/node_modules" ]; then
+    if [ -f "$site/bun.lock" ]; then
+      (cd "$site" && bun install --silent --frozen-lockfile)
+    else
+      (cd "$site" && bun install --silent)
+    fi
+  fi
   # The deprecation check runs on its own, outside "bun run check": tsc --noEmit
   # does not see them, they only come up from the language service.
   if ! (cd "$site" && bun run check); then
