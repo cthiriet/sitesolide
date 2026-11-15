@@ -280,7 +280,7 @@ function changeWords(slug: string, target: ChangeTarget, from: GeneralAccess): C
       return {
         title: `Use a code for ${slug}?`,
         warning: "Anyone who has the code can open it, without signing in.",
-        consequence: `The server draws a six-character code, shown here to the owner and ${slug}'s Admins with a link that carries it. People with access keep their dashboard roles; Can open and password access stop mattering.`,
+        consequence: `The server draws a ten-character code, shown here to the owner and ${slug}'s Admins with a link that carries it. People with access keep their dashboard roles; Can open and password access stop mattering.`,
         action: "Use a code",
         actionInProgress: "Setting a code…",
         runningTitle: `Setting a code for ${slug}…`,

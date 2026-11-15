@@ -221,6 +221,37 @@ looked into.
 `app/collector.ts` again. `/usr/local/lib/sitesolide/collector.js` stays,
 run by nothing; `sudo rm /usr/local/lib/sitesolide/collector.js` removes it.
 
+## Preview codes of ten characters
+
+**What the release brings.** A site whose general access is *Anyone with
+the code* is now given a code of ten characters, 50 bits, where it was given
+six, about 30. Caddy counts no attempt, so six characters fell to a script
+guessing for a few days; ten take thousands of years. The codes already in
+force are untouched: the codes file, the fragment Caddy compares them from,
+the links already sent and the cookies of the visitors keep opening their
+sites, and the door page accepts both lengths.
+
+**What `sitesolide upgrade` brings**: the gatekeeper, which draws the new
+codes and writes the new door page, and the dashboard. Nothing is converted
+and no project is redeployed.
+
+**Then, for each site locked before**, when its owner can send a new link:
+*New code* in its *Access* section, or from its folder:
+
+```bash
+sitesolide lock --new-code
+```
+
+The old link stops opening the site at once, and the visitors who held its
+cookie are shown the door page again: send them the new link.
+
+**Going back.** A gatekeeper from before reads a ten-character code as
+invalid and refuses to write the locks' fragment, which stops every change
+of general access on the machine, the configuration in service staying as
+it is. Before going back, give every site that holds a ten-character code
+another general access, then lock it again once the previous release is in
+place.
+
 ## The owner signs in with a passkey
 
 **What the release brings.** The owner signs in to the dashboard with a

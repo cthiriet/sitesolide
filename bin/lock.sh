@@ -6,7 +6,7 @@
 #
 # A preview subdomain is publicly reachable: the noindex keeps it out of Google,
 # it closes it to nobody. A site whose general access is Anyone with the code
-# answers a door page to whoever has no code, a six-character one the client
+# answers a door page to whoever has no code, a ten-character one the client
 # receives once in a link and which his browser then keeps in a cookie.
 #
 # SETTING, REPLACING AND REMOVING A CODE IS NOT DONE HERE. One path changes a

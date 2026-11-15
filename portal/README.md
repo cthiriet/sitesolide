@@ -20,7 +20,7 @@ if not the portal answers 401 itself, with its sign-in page in the body.
 { "portal": true, "portalExempt": ["/webhook/*"] }
 ```
 
-Customer previews have nothing to do here: they keep their six-character lock,
+Customer previews have nothing to do here: they keep their ten-character lock,
 general access *Anyone with the code*, and `validate()` refuses a project
 carrying both. The lock's page only reuses the sign-in template, see below.
 

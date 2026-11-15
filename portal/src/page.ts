@@ -252,7 +252,8 @@ const STYLE = `
 
     input::placeholder { color: var(--muted); opacity: 1; }
 
-    /* The code: six characters of a fixed alphabet, set like a key. The indent
+    /* The code: ten characters of a fixed alphabet, or six for one drawn
+       before, set like a key. The indent
        gives back the tracking after the last character, so the code centres. */
     input.code {
       height: 52px;
@@ -603,9 +604,9 @@ export function doorPage(contact: string): string {
     form: `    <form method="get" action="/">
       <label for="key">Access code</label>
       <input id="key" class="code" name="key" type="text" inputmode="text" autocapitalize="characters" autocomplete="off"
-        autocorrect="off" spellcheck="false" maxlength="6" minlength="6" size="6"
-        pattern="[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}" required
-        title="Six characters, without O, I, 0 or 1." placeholder="ABC234" autofocus
+        autocorrect="off" spellcheck="false" maxlength="10" minlength="6" size="10"
+        pattern="[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}|[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}" required
+        title="Ten characters, or six for an older code, without O, I, 0 or 1." placeholder="ABCD234567" autofocus
         oninput="this.value = this.value.toUpperCase()">
       <button type="submit">View site</button>
     </form>`,

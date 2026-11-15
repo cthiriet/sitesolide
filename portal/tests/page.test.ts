@@ -37,7 +37,8 @@ describe("the door page of the previews", () => {
     const page = doorPage("");
     expect(page).toInclude('<form method="get" action="/">');
     expect(page).toInclude('name="key"');
-    expect(page).toInclude('pattern="[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}"');
+    // Ten characters, and the six of a code drawn before, which still opens its site.
+    expect(page).toInclude('pattern="[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}|[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}"');
     expect(page).toInclude("this.value = this.value.toUpperCase()");
   });
 });

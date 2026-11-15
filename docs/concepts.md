@@ -488,7 +488,7 @@ ssh you@your-machine "printf '%s\n' 'Unattended-Upgrade::Automatic-Reboot \"true
 
 Two different things, often confused.
 
-**A preview lock** closes one site behind a six-character code, for showing work
+**A preview lock** closes one site behind a ten-character code, for showing work
 to a client before launch: its general access is then *Anyone with the code*.
 The code is drawn on the machine by the gatekeeper and lives there, never in
 the repository, in a codes file and in the fragment Caddy compares it from,

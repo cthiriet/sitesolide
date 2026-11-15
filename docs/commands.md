@@ -638,7 +638,7 @@ sitesolide lock --status     # what the machine wants, installs and serves, with
 
 `lock` and `unlock` take the same path as the dashboard, and no other: root on
 the machine asks the steward on its owner socket, which launches the
-gatekeeper. The gatekeeper draws the code on the machine, six characters
+gatekeeper. The gatekeeper draws the code on the machine, ten characters
 without O, I, 0 or 1, writes the manifest, the codes file and the locks'
 fragment in one transaction, a restricted site losing its portal in the same
 one, validates, reloads Caddy with systemctl, checks over HTTPS that the door

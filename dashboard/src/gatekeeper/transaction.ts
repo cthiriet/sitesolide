@@ -45,7 +45,7 @@
  * Only `systemctl reload caddy` applies a configuration. See the Production
  * section of CLAUDE.md.
  */
-import { cookieName, DOOR_PAGES_DIR, FRAGMENT_NAME } from "../../borrowed/locks";
+import { cookieName, DOOR_PAGES_DIR, FRAGMENT_NAME, isValidCode } from "../../borrowed/locks";
 import { DOOR_PAGE_MARKER, doorPage } from "../../borrowed/page";
 import { MESSAGE_MAX } from "../secrets/portal";
 import { MAX_PORTAL_MS, type OperationResult } from "../secrets/protocol";
@@ -300,7 +300,7 @@ function sameReading(a: Deployed, b: Deployed): boolean {
 function codesIn(codes: Deployed["codes"]): string[] {
   if (typeof codes !== "string") return [];
   try {
-    return Object.values(JSON.parse(codes) as Record<string, unknown>).filter((value): value is string => typeof value === "string" && /^[A-Z0-9]{6}$/.test(value));
+    return Object.values(JSON.parse(codes) as Record<string, unknown>).filter(isValidCode);
   } catch {
     return [];
   }

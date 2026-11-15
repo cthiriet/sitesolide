@@ -80,8 +80,11 @@ proving them:
   systemd's confinement, gets root on the machine and every project on it.
 - **The owner's SSH account has passwordless sudo.** Whoever holds its key
   holds the machine; that is what "only the owner holds SSH" means.
-- **A preview code is about 30 bits, and nothing limits the attempts.** It
-  keeps a passing visitor out, not an adversary, see
+- **A preview code is 50 bits, and nothing limits the attempts.** Ten
+  characters, out of reach of a script that guesses without being counted;
+  a site locked before that release keeps its six-character code, about 30
+  bits, until its owner draws a *New code*. It keeps a passing visitor out,
+  not an adversary, see
   [api/src/locks.ts](api/src/locks.ts); use Restricted for anything that
   deserves authentication.
 - **The services of one project trust each other.** They run as the same

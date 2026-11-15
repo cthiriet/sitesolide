@@ -7,7 +7,7 @@
  * same reason: a draw that cannot be replayed is a draw nobody checks.
  *
  * This password is not of the same order as a lock code. The code closes a
- * preview to a passing visitor and is worth thirty bits; this one opens the
+ * preview to a passing visitor and is worth fifty bits; this one opens the
  * view onto everything the machine carries, lock codes included. It goes into
  * a password manager and is not retyped: nothing therefore forces it to be
  * shortened.
@@ -20,8 +20,8 @@
  *
  * Its size does not divide 256, and that is accepted: `generatePassword`
  * draws by rejection rather than by modulo, which frees the alphabet from that
- * constraint. The lock code, for its part, bends to it because it holds to its
- * six characters that can be dictated over the telephone.
+ * constraint. The lock code, for its part, bends to it because it holds to
+ * characters that can be dictated over the telephone.
  */
 export const ALPHABET =
   "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";

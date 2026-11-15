@@ -1541,7 +1541,7 @@ steward.js                 rule, confirmation, bound, writes one at a time; the 
    v
 gatekeeper.js              root, one-shot, one transaction per start
    |-- lock   /run/sitesolide-gatekeeper/caddy.lock
-   |-- draws  the code, six characters, on the machine
+   |-- draws  the code, ten characters, on the machine
    |-- writes /srv/sites/<slug>/sitesolide.json, /etc/caddy/sites/<slug>.caddy,
    |          /etc/caddy/locks-codes.json, /srv/garde/<slug>/index.html,
    |          /etc/caddy/locks/verrous.caddy

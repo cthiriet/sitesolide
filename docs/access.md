@@ -135,7 +135,7 @@ marked; the owner and its Admins choose among the three there, *Make public*,
 *Restrict* or *Use a code*. A site that opens with a code shows it to them,
 with its link to copy, and *New code*, which stops the old one at once; a
 Viewer or a Developer reads that the site opens with one, and whom to ask.
-The code is drawn on the machine, six characters without O, I, 0 or 1, and
+The code is drawn on the machine, ten characters without O, I, 0 or 1, and
 `sitesolide lock` from the project's folder reaches the same path. A site that
 serves its own domain opens the same way on every address, the preview and
 the domain together, and the section names both before anything changes. Then its

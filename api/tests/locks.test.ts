@@ -6,6 +6,7 @@ import {
   generateCode,
   previewHost,
   CODE_LENGTH,
+  EARLIER_CODE_LENGTH,
   cookieName,
   isValidLockSlug,
   stanza,
@@ -21,7 +22,7 @@ function bytes(...values: number[]) {
 }
 
 describe("generateCode", () => {
-  test("renders six characters, all taken from the alphabet", () => {
+  test("renders ten characters, all taken from the alphabet", () => {
     const code = generateCode();
     expect(code).toHaveLength(CODE_LENGTH);
     for (const char of code) expect(CODE_ALPHABET).toInclude(char);
@@ -36,7 +37,7 @@ describe("generateCode", () => {
   test("brings every byte back into the alphabet, high values included", () => {
     // 0 -> A, 1 -> B, 31 -> 9, then the values beyond 31 go back through the
     // modulo: 32 -> A, 255 -> 9, 224 -> A.
-    expect(generateCode(bytes(0, 1, 31, 32, 255, 224))).toBe("AB9A9A");
+    expect(generateCode(bytes(0, 1, 31, 32, 255, 224, 2, 3, 33, 63))).toBe("AB9A9ACDB9");
   });
 
   test("a large draw favors no character: 256 is a multiple of 32", () => {
@@ -72,15 +73,23 @@ describe("isValidCode", () => {
     expect(isValidCode(generateCode())).toBe(true);
   });
 
-  test("refuses what is not exactly six characters of the alphabet", () => {
+  test("accepts a six character code drawn before, which still opens its site", () => {
+    expect(EARLIER_CODE_LENGTH).toBe(6);
+    expect(isValidCode("A7B2K9")).toBe(true);
+  });
+
+  test("refuses what is not ten, or six, characters of the alphabet", () => {
     for (const refuse of [
       "A7B2K", // too short
-      "A7B2K99", // too long
+      "A7B2K99", // neither six nor ten
+      "A7B2K9A7B", // nine
+      "A7B2K9A7B2K", // eleven
       "a7b2k9", // lowercase
       "A7B2K0", // zero, outside the alphabet
       "A7B2KI", // I, outside the alphabet
       "A7B2 9", // space
       "A7B2K9\n", // line break, which would break the Set-Cookie
+      "A7B2K9A7B\n", // ten with the line break
       "",
       undefined,
       null,
