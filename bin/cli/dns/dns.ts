@@ -82,7 +82,7 @@ export type DnsContext = {
 
 /** What Caddy needs on the machine to answer the DNS-01 challenge. */
 export type CaddyDns = {
-  /** The module's package, which `caddy add-package` adds to the build: `github.com/caddy-dns/cloudflare`. */
+  /** The module's package, which infra/caddy/build.sh adds to the build at its pinned version: `github.com/caddy-dns/cloudflare`. */
   package: string;
   /** Its id, as `caddy list-modules` prints it: `dns.providers.cloudflare`. */
   module: string;

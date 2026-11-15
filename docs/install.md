@@ -211,9 +211,12 @@ init --server deploy@203.0.113.10 --zone example.com --email you@example.com`
 first, so that the scripts know the machine.
 
 ```bash
-# Caddy from its own repository, then the Cloudflare DNS module the wildcard
-# certificate needs, which the standard build lacks
-ssh you@203.0.113.10 'curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg && curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt | sudo tee /etc/apt/sources.list.d/caddy-stable.list && sudo apt-get update && sudo apt-get install -y caddy && sudo caddy add-package github.com/caddy-dns/cloudflare'
+# Caddy from its own repository, then rebuilt on the machine with the
+# Cloudflare DNS module the wildcard certificate needs, which the standard
+# build lacks, from the versions infra/caddy/build.sh pins. gpg has to show
+# the key 65760C51EDEA2017CEA2CA15155B6D79CA56EA34, Caddy's, before apt trusts it
+ssh you@203.0.113.10 'curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg && gpg --show-keys /usr/share/keyrings/caddy-stable-archive-keyring.gpg && echo "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" | sudo tee /etc/apt/sources.list.d/caddy-stable.list && sudo apt-get update && sudo apt-get install -y caddy'
+ssh you@203.0.113.10 'sudo sh -s github.com/caddy-dns/cloudflare dns.providers.cloudflare /var/tmp/caddy.new && sudo install -m 0755 /var/tmp/caddy.new /usr/bin/caddy && sudo rm /var/tmp/caddy.new && sudo apt-mark hold caddy' < infra/caddy/build.sh
 
 # Bun, at /usr/local/bin/bun, where every unit looks for it: the version and
 # the SHA-256 bin/cli/pins.ts pins (bun-linux-aarch64.zip on an ARM machine,
@@ -225,10 +228,10 @@ ssh you@203.0.113.10 'sudo apt-get install -y unzip && cd "$(mktemp -d)" && curl
 ssh you@203.0.113.10 'sudo install -m 0640 -o root -g caddy /dev/stdin /etc/caddy/cloudflare.env' <<< 'CLOUDFLARE_API_TOKEN=your-token'
 ```
 
-`caddy add-package` replaces the package's binary, and an upgrade of the
-package puts the standard one back: run it again after every `apt upgrade`
-that touches Caddy, or the next reload refuses the configuration for want of
-the DNS module.
+The build replaces the package's binary, and an upgrade of the package would
+put the standard one back, the next reload then refusing the configuration
+for want of the DNS module: hence `apt-mark hold caddy`, and Caddy upgraded
+as [upgrading.md](upgrading.md#upgrading-caddy) says.
 
 Then Caddy's configuration, in three moves:
 

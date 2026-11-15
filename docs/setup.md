@@ -114,7 +114,7 @@ missing. The output is a checklist: `[done]` already there, `[ok]` done now,
 | directories | `/srv/sites`, `/srv/api`, `/srv/data` exist | `mkdir` |
 | ssh | `sshd -T` says no root login, no password, no keyboard-interactive | `/etc/ssh/sshd_config.d/00-sitesolide.conf`, `systemctl reload ssh` |
 | fail2ban | enabled and active | `systemctl enable fail2ban`, a restart, your address spared for the run |
-| caddy | the package installed and Cloudflare's module listed, `dns.providers.cloudflare`, the package held; none of the two under `--dns manual` | Caddy's apt repository, `caddy add-package`, or a build on the machine when Caddy's build service does not deliver within five minutes; `apt-mark hold caddy`, so that no apt upgrade puts back a binary without the module ([upgrading Caddy](upgrading.md#upgrading-caddy)) |
+| caddy | the package installed and Cloudflare's module listed, `dns.providers.cloudflare`, the package held; none of the two under `--dns manual` | Caddy's apt repository, then Caddy built on the machine with the module by `infra/caddy/build.sh`, from pinned versions; `apt-mark hold caddy`, so that no apt upgrade puts back a binary without the module ([upgrading Caddy](upgrading.md#upgrading-caddy)) |
 | bun | `/usr/local/bin/bun` exists and says the pinned version | Bun's release zip at the version `bin/cli/pins.ts` pins, checked against its pinned SHA-256 before it is opened ([upgrading Bun](upgrading.md#upgrading-bun)) |
 | dns-credentials | `/etc/caddy/cloudflare.env` root:caddy 0640, holding the token given, and a running Caddy started after it was written | that file, once the token is proven against the zone, any other DNS credential it held kept; a restart of Caddy when the token changes on a running machine, since Caddy reads it at its start, unless the next step restarts it |
 | tls-zone | `/etc/caddy/tls-zone.caddy` root:root 0644, the zone's `tls` block: Cloudflare's DNS challenge, or `on_demand` | that file; `/etc/caddy/zone-names` under `--dns manual`; a restart of Caddy when it changes on a running machine |
@@ -268,18 +268,18 @@ machine set up with one goes on serving as it is, and setup refuses to run on
 it again until told which of the two it moves to, see
 [upgrading.md](upgrading.md#every-dns-provider-but-cloudflare-removed).
 
-With Cloudflare, setup adds its module to Caddy (`caddy add-package`), lays
+With Cloudflare, setup builds its module into Caddy, lays
 the token in `/etc/caddy/cloudflare.env`, and writes
 `/etc/caddy/tls-zone.caddy`, the `tls` block every block of the zone imports,
 naming the module and reading the token from Caddy's environment.
 
-`caddy add-package` asks Caddy's build service, at caddyserver.com, for a
-build with the module. That service is a single one, sometimes down for hours,
-and Caddy waits on it for ever: setup gives it five minutes, then builds Caddy
-on the machine instead, at the version the package installed, with Debian's Go
-and a pinned xcaddy. Go fetches the toolchain Caddy asks for through its proxy
-and checksum database, and everything it fetched is removed afterwards. The
-build takes a few minutes and a gigabyte of memory.
+The build runs on the machine, `infra/caddy/build.sh`, never at Caddy's
+build service (`caddy add-package`), whose binary nothing could check and
+which would then see every TLS connection and hold the token. Every version
+is pinned in that file: Caddy, the module, Go's toolchain and xcaddy. Debian's
+Go fetches them through Go's proxy, and Go checks each against its checksum
+database, a public append-only log; everything it fetched is removed
+afterwards. The build takes a few minutes and a gigabyte of memory.
 
 **`--dns manual`** works with any registrar and asks no API anything. Setup
 prints the records to create, `<zone>` and `*.<zone>`, an A each and an AAAA

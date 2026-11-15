@@ -329,7 +329,7 @@ const WILDCARD_HELD = `ls -d ${CADDY_CERTIFICATES}/*/wildcard_.* >/dev/null 2>&1
  *                      way systemd loads them, the DNS credentials and the zone.
  *   restart_caddy      `systemctl restart caddy`, then Caddy active three
  *                      seconds in a row. A restart and not a reload: only a
- *                      restart loads a new binary, after `caddy add-package`,
+ *                      restart loads a new binary, one rebuilt with a module,
  *                      and a new environment file, systemd reading
  *                      EnvironmentFile at start alone. A blip on every site.
  *

@@ -6,7 +6,8 @@
  *   dns                the zone and its wildcard at the machine, through
  *                      Cloudflare's API (bin/cli/dns/), or by hand under --dns manual
  *   packages ... fail2ban   the hardening, see bin/cli/harden.ts
- *   caddy, bun         Caddy from its apt repository, with Cloudflare's DNS module;
+ *   caddy, bun         Caddy from its apt repository, rebuilt on the machine with
+ *                      Cloudflare's DNS module from pinned versions (infra/caddy/build.sh);
  *                      Bun at its pinned version, checked (bin/cli/pins.ts)
  *   dns-credentials    /etc/caddy/cloudflare.env, root:caddy 0640, Cloudflare's token
  *   tls-zone           /etc/caddy/tls-zone.caddy, the zone's tls block (bin/cli/tls.ts)
@@ -848,46 +849,30 @@ apt-mark hold caddy >/dev/null`
   );
 }
 
-/** How long Caddy's build service gets to deliver a build with the module, in seconds. */
-export const CADDY_BUILD_SERVICE_SECONDS = 300;
+/** Caddy's build, its versions pinned in it, as the kit carries it: see that file. */
+export const CADDY_BUILD = "infra/caddy/build.sh";
 
-/** The xcaddy that builds Caddy on the machine when the build service does not deliver. */
-export const XCADDY = "github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.7";
+/** What ends the build's text inside the run script, which the file must never hold. */
+const CADDY_BUILD_END = "SITESOLIDE_CADDY_BUILD";
 
 /**
- * Caddy with the module: from Caddy's build service, `caddy add-package`, or,
- * when it does not deliver in time, built on the machine. That service is a
- * single one, sometimes down for hours, and an add-package waiting on it
- * waits for ever. The build here takes Caddy at the version the package
- * installed, with Debian's Go, which fetches the toolchain Caddy asks for
- * through Go's proxy and checksum database, and xcaddy at a pinned version.
- * Go and everything it fetched are removed afterwards, the build failed or not.
+ * Caddy with the module, built on the machine by infra/caddy/build.sh from
+ * pinned versions that Go's checksum database verifies, then laid at
+ * /usr/bin/caddy. Never from Caddy's build service, `caddy add-package`,
+ * whose binary nothing could check. The file travels inside the script, so
+ * that the build is the kit's, byte for byte.
  */
 function caddyModuleScript(module: string, id: string): string {
-  return `if ! timeout ${CADDY_BUILD_SERVICE_SECONDS} caddy add-package ${module} </dev/null; then
-  echo "Caddy's build service did not deliver within ${CADDY_BUILD_SERVICE_SECONDS / 60} minutes: Caddy is built here instead, which takes a few minutes"
-  # On disk: Debian 13's /tmp is a tmpfs of half the memory, which Go's module cache alone fills.
-  work=$(mktemp -d /var/tmp/sitesolide-caddy.XXXXXX)
-  had_go=no
-  dpkg-query -W -f='\${Status}' golang-go 2>/dev/null | grep -q 'ok installed' && had_go=yes
-  cleanup() {
-    status=$?
-    rm -rf "$work"
-    [ "$had_go" = yes ] || ${APT} purge -y -q --autoremove golang-go </dev/null >/dev/null 2>&1 || true
-    exit $status
-  }
-  trap cleanup EXIT
-  [ "$had_go" = yes ] || ${APT} install -y -q --no-install-recommends golang-go </dev/null
-  version=$(caddy version | cut -d' ' -f1)
-  (
-    export HOME="$work" TMPDIR="$work" GOPATH="$work/go" GOCACHE="$work/cache" CGO_ENABLED=0
-    export GOTOOLCHAIN=auto GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org
-    go install ${XCADDY}
-    "$GOPATH/bin/xcaddy" build "$version" --with ${module} --output "$work/caddy"
-  ) </dev/null
-  "$work/caddy" list-modules | grep -q '^${id}$'
-  install -m 0755 "$work/caddy" /usr/bin/caddy
-fi`;
+  const build = readFileSync(join(kitRoot(), CADDY_BUILD), "utf8");
+  if (build.includes(CADDY_BUILD_END)) throw new StepFailure(`${CADDY_BUILD} holds ${CADDY_BUILD_END}, which ends it inside the run script`, []);
+  return `caddy_build=$(mktemp -d /var/tmp/sitesolide-caddy-build.XXXXXX)
+trap 'rm -rf "$caddy_build"' EXIT
+cat > "$caddy_build/build.sh" <<'${CADDY_BUILD_END}'
+${build.endsWith("\n") ? build : `${build}\n`}${CADDY_BUILD_END}
+sh "$caddy_build/build.sh" ${module} ${id} "$caddy_build/caddy"
+install -m 0755 "$caddy_build/caddy" /usr/bin/caddy
+rm -rf "$caddy_build"
+trap - EXIT`;
 }
 
 /** Bun at its pinned version, its download checked against its pin: see bin/cli/pins.ts. */

@@ -67,8 +67,8 @@ tls {
 }
 ```
 
-The module is `github.com/caddy-dns/cloudflare`, which setup adds to Caddy with
-`caddy add-package`. A token given on a later run and different from the one on
+The module is `github.com/caddy-dns/cloudflare`, which setup builds into Caddy
+on the machine, at the version `infra/caddy/build.sh` pins. A token given on a later run and different from the one on
 the machine replaces it; Caddy reads it at its next start.
 
 ## Tests

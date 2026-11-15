@@ -37,7 +37,7 @@ import {
   expectedVariables,
   dnsCredentialsRun,
   dnsLeftoversRun,
-  XCADDY,
+  CADDY_BUILD,
   type Facts,
   type SetupOptions,
 } from "../cli/setup";
@@ -256,15 +256,16 @@ describe("a failure, then the same command again", () => {
     expect(r.print.errors[0]!.details).toContain("E: the run of caddy broke");
   });
 
-  test("Caddy's build service gets five minutes, then Caddy is built on the machine, and the script parses", async () => {
+  test("Caddy is built on the machine from the kit's pinned build, never by Caddy's build service, and the script parses", async () => {
     const { b } = world();
     expect((await setup(b)).code).toBe(0);
     const script = b.machine.calls.find((call) => call.tag === "setup:caddy:run")!.input;
-    expect(script).toContain("timeout 300 caddy add-package github.com/caddy-dns/cloudflare </dev/null");
-    expect(script).toContain(`go install ${XCADDY}`);
-    expect(script).toContain('"$GOPATH/bin/xcaddy" build "$version" --with github.com/caddy-dns/cloudflare --output "$work/caddy"');
-    expect(script).toContain("grep -q '^dns.providers.cloudflare$'");
-    expect(script).toContain("work=$(mktemp -d /var/tmp/sitesolide-caddy.XXXXXX)");
+    const commands = script.split("\n").filter((line) => !line.trimStart().startsWith("#"));
+    expect(commands.filter((line) => line.includes("add-package") || line.includes("caddyserver.com"))).toEqual([]);
+    // The build travels whole inside the script, then runs with the module.
+    expect(script).toContain(readFileSync(join(import.meta.dir, "..", "..", CADDY_BUILD), "utf8"));
+    expect(script).toContain('sh "$caddy_build/build.sh" github.com/caddy-dns/cloudflare dns.providers.cloudflare "$caddy_build/caddy"');
+    expect(script).toContain('install -m 0755 "$caddy_build/caddy" /usr/bin/caddy');
     // The package held, so that no apt upgrade puts back a binary without the module.
     expect(script).toContain("apt-mark hold caddy");
     expect(Bun.spawnSync(["sh", "-n"], { stdin: new TextEncoder().encode(script) }).exitCode).toBe(0);
@@ -757,7 +758,7 @@ describe("switching the zone's DNS on an installed machine", () => {
     expect(r.print.errors).toEqual([]);
     expect(r.code).toBe(0);
     const runs = r.runs();
-    expect(r.b.machine.calls.find((call) => call.tag === "setup:caddy:run")!.input).toContain("caddy add-package github.com/caddy-dns/cloudflare");
+    expect(r.b.machine.calls.find((call) => call.tag === "setup:caddy:run")!.input).toContain('sh "$caddy_build/build.sh" github.com/caddy-dns/cloudflare dns.providers.cloudflare');
     // Every credential line but Cloudflare's is kept: the old provider's, for the policy still in service.
     expect(r.b.machine.calls.filter((call) => call.tag === "setup:dns-credentials:run").at(-1)!.input).toContain("grep -Ev '^[[:space:]]*(CLOUDFLARE_API_TOKEN)='");
     expect(r.b.machine.calls.filter((call) => call.tag === "setup:tls-zone:run").at(-1)!.input).toContain("dns cloudflare {env.CLOUDFLARE_API_TOKEN}");
@@ -837,7 +838,7 @@ describe("--dns", () => {
     expect(r.statuses).toContain("dns:skip");
     expect(b.machine.calls.find((call) => call.tag === "setup:tls-zone:run")!.input).toContain("on_demand");
     expect(b.machine.calls.find((call) => call.tag === "setup:dns-credentials:run")!.input).toContain("# --dns manual");
-    expect(b.machine.calls.find((call) => call.tag === "setup:caddy:run")!.input).not.toContain("add-package");
+    expect(b.machine.calls.find((call) => call.tag === "setup:caddy:run")!.input).not.toContain("build.sh");
     // The stock binary: apt may upgrade it.
     expect(b.machine.calls.find((call) => call.tag === "setup:caddy:run")!.input).not.toContain("apt-mark hold");
     expect(JSON.parse(readFileSync(join(folder, ".config", "sitesolide", "config.json"), "utf8")).dns).toBe("manual");

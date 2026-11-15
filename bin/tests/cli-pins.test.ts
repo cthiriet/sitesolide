@@ -3,7 +3,10 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUN, BUN_CURRENT, bunInstallScript } from "../cli/pins";
-import { rewritePins, rewriteWorkflow } from "../update-pins";
+import { CLOUDFLARE } from "../cli/dns/cloudflare";
+import { dnsEntry } from "../cli/dns/registry";
+import { CADDY_BUILD } from "../cli/setup";
+import { caddyPins, rewritePins, rewriteWorkflow } from "../update-pins";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const read = (path: string) => readFileSync(join(REPO_ROOT, path), "utf8");
@@ -81,5 +84,43 @@ describe("Bun's pin", () => {
     const workflow = rewriteWorkflow(read(".github/workflows/release.yml"), "9.8.7");
     expect(workflow).toContain("bun-version: 9.8.7");
     expect(workflow).not.toContain(`bun-version: ${BUN.version}`);
+  });
+});
+
+describe("Caddy's build", () => {
+  const build = read(CADDY_BUILD);
+
+  test("parses, and pins Caddy, Go's toolchain and xcaddy to exact versions", () => {
+    expect(Bun.spawnSync(["sh", "-n", join(REPO_ROOT, CADDY_BUILD)]).exitCode).toBe(0);
+    const pins = caddyPins(build);
+    expect(pins.CADDY_VERSION).toMatch(/^v\d+\.\d+\.\d+$/);
+    expect(pins.GO_TOOLCHAIN).toMatch(/^go\d+\.\d+\.\d+$/);
+    expect(pins.XCADDY_VERSION).toMatch(/^v\d+\.\d+\.\d+$/);
+  });
+
+  test("pins a version of the module of every DNS provider setup offers", () => {
+    const pins = caddyPins(build);
+    // Every provider dnsEntry takes: Cloudflare alone, today.
+    for (const provider of [CLOUDFLARE]) {
+      expect(dnsEntry(provider.name)).toBe(provider);
+      const module = provider.caddy.package;
+      expect({ module, pinned: pins[module] }).toEqual({ module, pinned: expect.stringMatching(/^v\d+\.\d+\.\d+$/) });
+    }
+  });
+
+  test("never turns Go's checksum database off, nor asks Caddy's build service", () => {
+    const commands = build.split("\n").filter((line) => !line.trimStart().startsWith("#"));
+    expect(commands.join("\n")).toContain("GOSUMDB=sum.golang.org");
+    expect(commands.join("\n")).toContain("GOPROXY=https://proxy.golang.org");
+    expect(commands.filter((line) => /GOSUMDB=off|GONOSUMDB=|GOFLAGS=.*-insecure|GOINSECURE=|add-package|caddyserver\.com|,direct/.test(line))).toEqual([]);
+  });
+
+  test("refuses a module it has no pinned version for, and a wrong call, before anything is installed", () => {
+    const unknown = Bun.spawnSync(["sh", join(REPO_ROOT, CADDY_BUILD), "github.com/caddy-dns/elsewhere", "dns.providers.elsewhere", "/nonexistent/caddy"], { stderr: "pipe" });
+    expect(unknown.exitCode).toBe(2);
+    expect(unknown.stderr.toString()).toContain("no pinned version for the module github.com/caddy-dns/elsewhere");
+    const wrong = Bun.spawnSync(["sh", join(REPO_ROOT, CADDY_BUILD)], { stderr: "pipe" });
+    expect(wrong.exitCode).toBe(2);
+    expect(wrong.stderr.toString()).toContain("usage: build.sh");
   });
 });

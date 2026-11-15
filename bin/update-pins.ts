@@ -12,6 +12,10 @@
  * the binaries with, which bin/tests/cli-pins.test.ts keeps equal. Nothing is
  * committed: read the diff, run bin/test.sh, commit.
  *
+ * Caddy, Go and xcaddy are pinned in infra/caddy/build.sh, by hand: there is
+ * no hash to record there, Go's checksum database verifies every source the
+ * build fetches. This only says what is newer.
+ *
  * Runs from a checkout, with the network; the kit leaves it out.
  */
 import { join } from "node:path";
@@ -20,6 +24,7 @@ import { BUN, BUN_RELEASES, type BunBuild } from "./cli/pins";
 const REPOSITORY = join(import.meta.dir, "..");
 const PINS = join(REPOSITORY, "bin", "cli", "pins.ts");
 const WORKFLOW = join(REPOSITORY, ".github", "workflows", "release.yml");
+const CADDY_BUILD = join(REPOSITORY, "infra", "caddy", "build.sh");
 
 async function get(url: string): Promise<Response> {
   const response = await fetch(url, { headers: { Accept: "application/vnd.github+json", "User-Agent": "sitesolide-update-pins" } });
@@ -30,6 +35,13 @@ async function get(url: string): Promise<Response> {
 async function latestRelease(repository: string): Promise<string> {
   const release = (await (await get(`https://api.github.com/repos/${repository}/releases/latest`)).json()) as { tag_name: string };
   return release.tag_name;
+}
+
+async function latestTag(repository: string): Promise<string> {
+  const tags = (await (await get(`https://api.github.com/repos/${repository}/tags?per_page=100`)).json()) as { name: string }[];
+  const versions = tags.map((tag) => tag.name).filter((name) => /^v\d+\.\d+\.\d+$/.test(name));
+  versions.sort((a, b) => Bun.semver.order(b.slice(1), a.slice(1)));
+  return versions[0] ?? "none";
 }
 
 /** The SHA-256 of each build, from SHASUMS256.txt and from GitHub's digests, which must agree. */
@@ -70,9 +82,32 @@ export function rewriteWorkflow(text: string, version: string): string {
   return text.replace(/(bun-version: )\S+/g, `$1${version}`).replace(/# Bun \d+\.\d+\.\d+, exactly/g, `# Bun ${version}, exactly`);
 }
 
+/** The pinned values of infra/caddy/build.sh. */
+export function caddyPins(text: string): Record<string, string> {
+  const pins: Record<string, string> = {};
+  for (const match of text.matchAll(/^(CADDY_VERSION|GO_TOOLCHAIN|XCADDY_VERSION)=(\S+)$/gm)) pins[match[1]!] = match[2]!;
+  for (const match of text.matchAll(/^\s+(github\.com\/caddy-dns\/[a-z0-9-]+)\) module_version=(\S+) ;;$/gm)) pins[match[1]!] = match[2]!;
+  return pins;
+}
+
 async function report(): Promise<void> {
-  console.log(`bun  pinned ${BUN.version}  newest ${(await latestRelease("oven-sh/bun")).replace(/^bun-v/, "")}`);
-  console.log("\nbun: bun bin/update-pins.ts bun <version>");
+  const caddy = caddyPins(await Bun.file(CADDY_BUILD).text());
+  const latestCaddy = await latestRelease("caddyserver/caddy");
+  const goLine = /^go (\S+)$/m.exec(await (await get(`https://raw.githubusercontent.com/caddyserver/caddy/${latestCaddy}/go.mod`)).text())?.[1] ?? "?";
+  const goReleases = (await (await get("https://go.dev/dl/?mode=json")).json()) as { version: string }[];
+  const rows: [string, string, string][] = [
+    ["bun", BUN.version, (await latestRelease("oven-sh/bun")).replace(/^bun-v/, "")],
+    ["caddy", caddy.CADDY_VERSION ?? "?", `${latestCaddy} (its go.mod asks go ${goLine})`],
+    ["go toolchain", caddy.GO_TOOLCHAIN ?? "?", goReleases.map((release) => release.version).join(", ")],
+    ["xcaddy", caddy.XCADDY_VERSION ?? "?", await latestRelease("caddyserver/xcaddy")],
+  ];
+  for (const [name, version] of Object.entries(caddy)) {
+    if (name.startsWith("github.com/")) rows.push([name, version, await latestTag(name.replace(/^github\.com\//, ""))]);
+  }
+  const width = Math.max(...rows.map((row) => row[0].length));
+  console.log(`${"".padEnd(width)}  pinned      newest`);
+  for (const [name, pinned, newest] of rows) console.log(`${name.padEnd(width)}  ${pinned.padEnd(10)}  ${newest}`);
+  console.log("\nbun: bun bin/update-pins.ts bun <version>; Caddy, Go and xcaddy: infra/caddy/build.sh, then docs/upgrading.md");
 }
 
 async function pinBun(version: string): Promise<void> {

@@ -127,25 +127,31 @@ expected. Nothing upgrades Caddy but you, and Caddy is what the internet
 talks to: read its [releases](https://github.com/caddyserver/caddy/releases)
 for security fixes, and upgrade this way.
 
-1. **A binary of the new version with the module, beside the one in
-   service**, never over it. Caddy's build service makes one (`arm64` on an
-   ARM machine):
+1. **The new versions pinned**, from a checkout: `bun bin/update-pins.ts`
+   lists what `infra/caddy/build.sh` pins, Caddy, its DNS module, Go's
+   toolchain and xcaddy, beside the newest of each. Change the lines at the
+   top of `build.sh`, and the module's in its `case`; `GO_TOOLCHAIN` has to
+   satisfy the `go` line of Caddy's `go.mod`, which the listing shows. Commit.
+   There is no hash to record: Go checks every source the build fetches
+   against its checksum database.
+2. **A binary of the new version with the module, beside the one in
+   service**, never over it, built on the machine by that file. It fails
+   unless the binary says the pinned version and carries the pinned module:
 
    ```bash
-   ssh <server> 'curl -fsSL -o /var/tmp/caddy.new "https://caddyserver.com/api/download?os=linux&arch=amd64&p=github.com/caddy-dns/cloudflare&version=v2.11.9" && chmod 0755 /var/tmp/caddy.new && /var/tmp/caddy.new version && /var/tmp/caddy.new list-modules | grep dns.providers'
+   ssh <server> 'sudo sh -s github.com/caddy-dns/cloudflare dns.providers.cloudflare /var/tmp/caddy.new' < infra/caddy/build.sh
    ```
 
-   Or build it on the workstation with xcaddy (`GOOS=linux GOARCH=amd64
-   xcaddy build v2.11.9 --with github.com/caddy-dns/cloudflare`), and copy it
-   there.
-2. **The configuration in service, validated by the new binary**, with the
+   Never Caddy's build service (`caddy add-package`, or the download API of
+   caddyserver.com): nothing checks what it builds.
+3. **The configuration in service, validated by the new binary**, with the
    environment systemd hands Caddy:
 
    ```bash
    ssh <server> "sudo bash -c 'set -a; . /etc/caddy/cloudflare.env; . /etc/caddy/sitesolide.env; set +a; /var/tmp/caddy.new validate --config /etc/caddy/Caddyfile --adapter caddyfile'"
    ```
 
-3. **The swap, the old binary kept, and a restart**: a reload never loads a
+4. **The swap, the old binary kept, and a restart**: a reload never loads a
    new binary. Never `caddy stop` nor `caddy start`, see CLAUDE.md. Every site
    blinks for the second the restart takes; no deployment should run then.
 
@@ -153,7 +159,7 @@ for security fixes, and upgrade this way.
    ssh <server> 'sudo cp -p /usr/bin/caddy /usr/bin/caddy.previous && sudo install -m 0755 /var/tmp/caddy.new /usr/bin/caddy && sudo systemctl restart caddy && systemctl is-active caddy && caddy version'
    ```
 
-4. **Check**: the monitor's next pass (`journalctl -u sitesolide-monitor -n
+5. **Check**: the monitor's next pass (`journalctl -u sitesolide-monitor -n
    3`), a site of each kind over HTTPS. Should anything be wrong, the old
    binary goes back the same way:
 

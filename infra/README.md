@@ -7,7 +7,7 @@ others. The architecture they carry is described in
 
 | Folder | What it holds | Placed by |
 |---|---|---|
-| `caddy/` | the Caddyfile, its snippets, the drop-in `caddy.service.d/override.conf` | `bin/deploy-caddy.sh`, `sitesolide setup` |
+| `caddy/` | the Caddyfile, its snippets, the drop-in `caddy.service.d/override.conf`; `build.sh`, Caddy built with the zone's DNS module from pinned versions | `bin/deploy-caddy.sh`, `sitesolide setup`, an upgrade of Caddy by hand |
 | `gatekeeper/` | the units that alone touch Caddy from the machine | `bin/deploy-gatekeeper.sh` |
 | `steward/` | the root daemon that writes secrets for the dashboard, and its relay to the portal's admin API | `bin/deploy-steward.sh` |
 | `collector/` | the timer that snapshots the machine for the dashboard, its code built and installed root's | `bin/deploy-collector.sh` |
@@ -59,7 +59,7 @@ the zone under Caddy's default issuers, where the wildcard cannot renew.
 **A change of policy restarts Caddy.** When setup lays a different policy on a
 Caddy in service, a switch of mode or of provider, it takes the Caddy lock,
 validates, and restarts Caddy rather than reloading it: only a restart loads a
-binary `caddy add-package` rebuilt and an environment file systemd reads at
+binary rebuilt with the DNS module and an environment file systemd reads at
 start alone. On any failure the previous file is put back and Caddy restarted
 with it. A policy that is already the one in place changes nothing. A new
 token for the same provider is the same restart, without the policy
