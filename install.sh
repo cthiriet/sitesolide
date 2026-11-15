@@ -9,8 +9,14 @@
 #   SITESOLIDE_INSTALL_DIR=<dir>    where it goes, ~/.local/bin by default
 #   SITESOLIDE_DOWNLOAD_URL=<url>   the folder holding a release's files, for a
 #                                   mirror or a test; overrides the version
+#   SITESOLIDE_ATTESTATION=require  fail unless gh checks the binary's provenance;
+#                                   auto, the default, checks it when gh can,
+#                                   skip never does
 #
 # The binary is checked against the release's SHA256SUMS before it lands, and
+# against the provenance GitHub attests for it when gh is installed and signed
+# in (`gh attestation verify`): only that proves the release workflow of this
+# repository built it, since SHA256SUMS comes from the same release. It
 # replaces an earlier one with a single rename, so that a sitesolide running
 # meanwhile never meets half a file. Nothing here asks for root: the default
 # folder is the user's own, and one that needs sudo is the reader's to pick
@@ -21,7 +27,8 @@
 # it.
 set -eu
 
-RELEASES="https://github.com/cthiriet/sitesolide/releases"
+REPOSITORY="cthiriet/sitesolide"
+RELEASES="https://github.com/$REPOSITORY/releases"
 
 fail() {
   echo "sitesolide install: $*" >&2
@@ -80,6 +87,11 @@ else
   base="$RELEASES/download/$version"
 fi
 directory="${SITESOLIDE_INSTALL_DIR:-${HOME:?HOME is not set}/.local/bin}"
+attestation="${SITESOLIDE_ATTESTATION:-auto}"
+case "$attestation" in
+  auto | require | skip) ;;
+  *) fail "SITESOLIDE_ATTESTATION: $attestation is none of auto, require and skip" ;;
+esac
 
 asset="$(platform)"
 
@@ -96,6 +108,25 @@ expected="$(awk -v name="$asset" '$2 == name || $2 == "*" name { print $1; exit 
 [ -n "$expected" ] || fail "SHA256SUMS lists no $asset"
 actual="$(sha256 "$work/$asset")"
 [ "$actual" = "$expected" ] || fail "$asset does not match SHA256SUMS (expected $expected, got $actual): nothing was installed"
+
+# SHA256SUMS comes from the same release as the binary: it catches a broken
+# download, not a release someone replaced. The provenance GitHub attests for
+# each file, signed through Sigstore when the release workflow built it, does:
+# checked with gh, when gh is installed and signed in.
+case "$attestation" in
+  skip) ;;
+  *)
+    if command -v gh > /dev/null 2>&1 && gh auth status > /dev/null 2>&1; then
+      gh attestation verify "$work/$asset" --repo "$REPOSITORY" --signer-workflow "$REPOSITORY/.github/workflows/release.yml" > /dev/null 2>&1 \
+        || fail "$asset carries no attestation from $REPOSITORY's release workflow: nothing was installed"
+      echo "provenance: built by $REPOSITORY's release workflow (gh attestation verify)"
+    elif [ "$attestation" = require ]; then
+      fail "SITESOLIDE_ATTESTATION=require, and gh is not installed or not signed in: nothing was installed"
+    else
+      echo "provenance not checked: gh is not installed or not signed in; checked against SHA256SUMS alone" >&2
+    fi
+    ;;
+esac
 
 mkdir -p "$directory" 2> /dev/null || fail "cannot create $directory: pick another folder with SITESOLIDE_INSTALL_DIR"
 [ -w "$directory" ] || fail "$directory is not writable: pick another folder with SITESOLIDE_INSTALL_DIR; this script never uses sudo"

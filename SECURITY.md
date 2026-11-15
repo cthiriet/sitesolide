@@ -115,8 +115,11 @@ proving them:
   sources of Caddy, its Cloudflare module, xcaddy and Go's toolchain, at the
   versions `infra/caddy/build.sh` pins, each checked against Go's checksum
   database before Caddy is built on the machine. sitesolide's own releases are
-  checked against checksums from the same release, which catch a broken
-  download, not a compromised release; they are not signed.
+  built by a job whose token only reads, and published by another that runs
+  no code of the repository nor of npm, never overwriting a release's files;
+  each file carries a provenance attestation, signed through Sigstore, which
+  `install.sh` checks with `gh attestation verify` when gh is signed in, and
+  otherwise checks against the release's own checksums alone.
 
 A vulnerability in Bun, Caddy, systemd, restic or Debian belongs to their
 maintainers. How sitesolide configures them belongs here.

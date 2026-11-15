@@ -5,14 +5,23 @@
 #
 #   git tag v0.3.0 && git push origin v0.3.0
 #
-# On macOS rather than Linux: bin/build.ts signs the two darwin binaries again,
-# ad hoc, with codesign, which only macOS has (see signAdHoc there), and Bun
-# cross-compiles the Linux ones from here as well as from anywhere. The tests
-# run where the repository is developed, too; they need no machine, every
-# server they would talk to is faked.
+# TWO JOBS, AND ONLY THE SECOND MAY WRITE. `build` runs the tests and the
+# build, which execute code from npm (the dashboard's Astro, Vite, React and
+# their plugins), with a token that reads the repository and nothing else: a
+# compromised package there can make a bad build, never touch a release.
+# `publish` runs no code of the repository nor of npm. It takes the files
+# `build` uploaded, checks them against SHA256SUMS, attests them with GitHub's
+# artifact attestations (Sigstore-signed provenance: this repository, this
+# workflow, this commit), and creates the release. A release that already
+# carries files is never overwritten: a bad release is fixed by a new tag.
 #
-# The actions are pinned to a commit: this job holds a token that writes
-# releases, and a tag can be moved.
+# On macOS rather than Linux for the build: bin/build.ts signs the two darwin
+# binaries again, ad hoc, with codesign, which only macOS has (see signAdHoc
+# there), and Bun cross-compiles the Linux ones from here as well as from
+# anywhere. The tests run where the repository is developed, too; they need no
+# machine, every server they would talk to is faked.
+#
+# The actions are pinned to a commit: a tag can be moved.
 name: Release
 
 on:
@@ -23,30 +32,35 @@ on:
   # first tag found failures this Mac never showed; a rehearsal costs no tag.
   workflow_dispatch:
 
-permissions:
-  contents: write
+# Nothing by default: each job says what it needs.
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  release:
+  build:
     runs-on: macos-15
     timeout-minutes: 45
+    permissions:
+      contents: read
     env:
       # The tag on a release, dev on a run by hand: bin/build.ts accepts
       # nothing else, and a branch name is neither.
       VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'dev' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       # Bun 1.3.11, exactly: the version every test of this repository runs on,
       # and the one the binary was proven with, its compile, its cross-compiling
       # and the BUN_BE_BUN mode the kit's shims rely on (bin/cli/kit.ts). Each
       # binary embeds this runtime: a floating version would change what ships,
       # and what runs the scripts on every workstation, without a commit saying
-      # so.
+      # so. bin/cli/pins.ts pins the same for the machine, and
+      # bin/update-pins.ts changes both.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.11
@@ -64,7 +78,8 @@ jobs:
         run: bin/test.sh
 
       # Builds the dashboard's interface too, once, for the kit every binary
-      # carries: its packages come from npm, hence the network this needs.
+      # carries: its packages come from npm, at the versions its lockfile
+      # holds, hence the network this needs.
       - name: Build
         run: bun bin/build.ts --version "$VERSION"
 
@@ -80,19 +95,81 @@ jobs:
           env -i HOME="$RUNNER_TEMP/home" PATH=/usr/bin:/bin "$GITHUB_WORKSPACE/dist/sitesolide-darwin-arm64" --help > /dev/null
           (cd "$GITHUB_WORKSPACE/examples/bun-app" && env -i HOME="$RUNNER_TEMP/home" PATH=/usr/bin:/bin "$GITHUB_WORKSPACE/dist/sitesolide-darwin-arm64" detect --json > /dev/null)
 
-      - name: Publish
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+      # Every file the release carries, in one folder, for the job that publishes.
+      - name: Gather
         run: |
           set -euo pipefail
-          files="dist/sitesolide-darwin-arm64 dist/sitesolide-darwin-x64 dist/sitesolide-linux-x64 dist/sitesolide-linux-arm64 dist/SHA256SUMS install.sh deploy.sh"
+          mkdir release
+          cp dist/sitesolide-darwin-arm64 dist/sitesolide-darwin-x64 dist/sitesolide-linux-x64 dist/sitesolide-linux-arm64 dist/SHA256SUMS install.sh deploy.sh release/
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      # The release, its attestations, and the OIDC token Sigstore signs them with.
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      # The artifact's digest, recorded by the upload, is checked on download.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
+          digest-mismatch: error
+
+      # The binaries are the ones SHA256SUMS names, and nothing else rides along.
+      - name: Verify
+        working-directory: release
+        run: |
+          set -euo pipefail
+          test "$(ls | sort | tr '\n' ' ')" = "SHA256SUMS deploy.sh install.sh sitesolide-darwin-arm64 sitesolide-darwin-x64 sitesolide-linux-arm64 sitesolide-linux-x64 "
+          test "$(wc -l < SHA256SUMS | tr -d ' ')" = 4
+          sha256sum --strict -c SHA256SUMS
+
+      # Provenance for every file, signed through Sigstore and stored by
+      # GitHub: `gh attestation verify <file> --repo <owner>/<repo>` checks it,
+      # which install.sh does when gh is there.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            release/sitesolide-darwin-arm64
+            release/sitesolide-darwin-x64
+            release/sitesolide-linux-x64
+            release/sitesolide-linux-arm64
+            release/SHA256SUMS
+            release/install.sh
+            release/deploy.sh
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        working-directory: release
+        run: |
+          set -euo pipefail
+          files="sitesolide-darwin-arm64 sitesolide-darwin-x64 sitesolide-linux-x64 sitesolide-linux-arm64 SHA256SUMS install.sh deploy.sh"
           # A release is titled by its tag, v0.4.2, and by nothing else: the
-          # list reads alike from the first release to the last. One made by
-          # hand beforehand is brought to that title too.
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release upload "$TAG" $files --clobber
+          # list reads alike from the first release to the last.
+          if assets="$(gh release view "$TAG" --json assets --jq '.assets | length' 2> /dev/null)"; then
+            # Made by hand beforehand: it gets its files only if it has none.
+            # A release that carries files was published once, and what was
+            # downloaded from it is never replaced under the same name.
+            if [ "$assets" != 0 ]; then
+              echo "release $TAG already carries $assets file(s): nothing is overwritten, cut a new tag" >&2
+              exit 1
+            fi
+            gh release upload "$TAG" $files
             # Published, never left a draft: releases/latest/download only
             # serves a published release.
             gh release edit "$TAG" --draft=false --title "$TAG"

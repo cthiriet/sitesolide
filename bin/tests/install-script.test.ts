@@ -203,6 +203,59 @@ describe("install.sh", () => {
     }
   });
 
+  describe("provenance", () => {
+    /** A folder holding a `gh` signed in or not, whose verify succeeds or not, recording what it was asked. */
+    function fakeGh(name: string, options: { signedIn: boolean; verifies: boolean }): { path: string; log: string } {
+      const folder = join(WORK, `gh-${name}`);
+      mkdirSync(folder, { recursive: true });
+      const log = join(folder, "log");
+      writeFileSync(
+        join(folder, "gh"),
+        `#!/bin/sh\necho "$*" >> "${log}"\ncase "$1 $2" in\n  "auth status") exit ${options.signedIn ? 0 : 1} ;;\n  "attestation verify") exit ${options.verifies ? 0 : 1} ;;\nesac\nexit 2\n`,
+      );
+      chmodSync(join(folder, "gh"), 0o755);
+      writeFileSync(log, "");
+      return { path: `${folder}:${FAKES}:/usr/bin:/bin`, log };
+    }
+
+    test("checked by gh when it is signed in, against this repository's release workflow", async () => {
+      const gh = fakeGh("good", { signedIn: true, verifies: true });
+      const r = await install("Linux", "x86_64", { path: gh.path });
+      expect(r.code).toBe(0);
+      expect(r.output).toContain("provenance: built by cthiriet/sitesolide's release workflow");
+      const verify = readFileSync(gh.log, "utf8").split("\n").find((line) => line.startsWith("attestation verify"))!;
+      expect(verify).toContain("/sitesolide-linux-x64 --repo cthiriet/sitesolide --signer-workflow cthiriet/sitesolide/.github/workflows/release.yml");
+    });
+
+    test("a binary gh cannot vouch for is refused, and an earlier one stays", async () => {
+      const first = await install("Linux", "x86_64");
+      expect(first.code).toBe(0);
+      const gh = fakeGh("bad", { signedIn: true, verifies: false });
+      const r = await install("Linux", "x86_64", { path: gh.path, env: { SITESOLIDE_INSTALL_DIR: first.directory } });
+      expect(r.code).toBe(1);
+      expect(r.error).toContain("carries no attestation from cthiriet/sitesolide's release workflow: nothing was installed");
+      expect(readFileSync(first.installed, "utf8")).toBe(readFileSync(join(RELEASE, "sitesolide-linux-x64"), "utf8"));
+    });
+
+    test("without gh, said and installed; refused under require; never asked under skip", async () => {
+      const r = await install("Linux", "x86_64");
+      expect(r.code).toBe(0);
+      expect(r.error).toContain("provenance not checked");
+      const signedOut = fakeGh("signed-out", { signedIn: false, verifies: true });
+      const required = await install("Linux", "x86_64", { path: signedOut.path, env: { SITESOLIDE_ATTESTATION: "require" } });
+      expect(required.code).toBe(1);
+      expect(required.error).toContain("SITESOLIDE_ATTESTATION=require");
+      expect(existsSync(required.installed)).toBe(false);
+      const gh = fakeGh("skipped", { signedIn: true, verifies: false });
+      const skipped = await install("Linux", "x86_64", { path: gh.path, env: { SITESOLIDE_ATTESTATION: "skip" } });
+      expect(skipped.code).toBe(0);
+      expect(readFileSync(gh.log, "utf8")).toBe("");
+      const wrong = await install("Linux", "x86_64", { env: { SITESOLIDE_ATTESTATION: "maybe" } });
+      expect(wrong.code).toBe(1);
+      expect(wrong.error).toContain("is none of auto, require and skip");
+    });
+  });
+
   test("it never runs sudo", () => {
     const commands = readFileSync(SCRIPT, "utf8")
       .split("\n")

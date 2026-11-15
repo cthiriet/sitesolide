@@ -58,7 +58,18 @@ curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/insta
 ```
 
 One executable for your system and processor, macOS or Linux, checked against
-the release's checksums and put in `~/.local/bin`. It needs neither Bun nor a
+the release's checksums and put in `~/.local/bin`. With
+[gh](https://cli.github.com) installed and signed in, it also checks the
+binary's provenance, which GitHub attests and Sigstore signs when the release
+workflow builds it: only that proves this repository built it, the checksums
+coming from the same release. `SITESOLIDE_ATTESTATION=require` refuses to
+install without that check. To check the script itself before running it:
+
+```bash
+curl -fsSLO https://github.com/cthiriet/sitesolide/releases/latest/download/install.sh
+gh attestation verify install.sh --repo cthiriet/sitesolide && sh install.sh
+```
+ It needs neither Bun nor a
 clone of this repository: everything the CLI runs is inside it. Your
 workstation needs only what it already has, `bash`, `ssh`, `rsync` and `curl`.
 

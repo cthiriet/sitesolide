@@ -105,9 +105,12 @@ cache by hand: `chmod -R u+w ~/.cache/sitesolide`, then `rm -rf` it.
 
 On macOS the build signs the darwin binaries again, ad hoc, which is why the
 release workflow, `.github/workflows/release.yml`, runs there. On every `v*`
-tag it runs `bin/test.sh`, builds, and publishes the four binaries,
-`SHA256SUMS`, `install.sh` and `deploy.sh` on the tag's release, titled by
-the tag alone.
+tag a job whose token only reads runs `bin/test.sh` and builds; a second
+job, the only one that may write, runs none of the repository's code nor
+npm's, attests the four binaries, `SHA256SUMS`, `install.sh` and `deploy.sh`
+(`actions/attest-build-provenance`), and publishes them on the tag's release,
+titled by the tag alone. It never overwrites a release that already carries
+files.
 Cross-compiling fetches the Bun runtime of each target once, and the
 dashboard's build its packages, so a build needs the network. Cutting a
 release, its notes' format included, is

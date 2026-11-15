@@ -83,7 +83,10 @@ dash, no machine, domain or address of an installation, no secret.
    ```
 
    The release then has its seven files: four binaries, `SHA256SUMS`,
-   `install.sh`, `deploy.sh`.
+   `install.sh`, `deploy.sh`, each with its provenance attested. A tag whose
+   release already carries files is refused rather than overwritten: a bad
+   release is fixed by the next tag, never by replacing its files. Check one:
+   `gh release download vX.Y.Z -p install.sh -D /tmp/check && gh attestation verify /tmp/check/install.sh --repo cthiriet/sitesolide`.
 6. **The notes**, written in a file outside the repository, in the format
    above: `gh release edit vX.Y.Z --notes-file <file>`. Check the title still
    reads `vX.Y.Z` and that `gh api repos/cthiriet/sitesolide/releases/latest -q .tag_name`
