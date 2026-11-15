@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { formatPattern } from "../../bin/cli/egress";
+import { formatPattern, INSTALL_MARKER, INSTALL_REGISTRIES, installMarkerText, type HostPattern } from "../../bin/cli/egress";
 import { DATA_DIR } from "../src/config";
 import { createPolicy } from "../src/policy";
 
@@ -74,6 +74,64 @@ describe("a project's policy", () => {
     try {
       t.manifest("shop", { slug: "shop", egress: ["api.example.com"], later: ["anything"] });
       expect(createPolicy(t.sites).project("shop")).toEqual({ egress: [{ wildcard: false, host: "api.example.com", port: null }] });
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+describe("while an install runs through the proxy", () => {
+  const NOW = 1_800_000_000_000;
+  const own = process.getuid!();
+  const marker = (t: ReturnType<typeof tree>, slug: string, until: number) => {
+    mkdirSync(join(t.sites, slug), { recursive: true });
+    writeFileSync(join(t.sites, slug, INSTALL_MARKER), installMarkerText(until));
+  };
+  const hosts = (policy: { egress: HostPattern[] } | null) => policy?.egress.map(formatPattern) ?? null;
+
+  test("the registries join the project's own list, until the marker's deadline", () => {
+    const t = tree();
+    try {
+      t.manifest("shop", { slug: "shop", egress: ["api.example.com"] });
+      marker(t, "shop", NOW + 60_000);
+      let now = NOW;
+      const policy = createPolicy(t.sites, { markerOwner: own, now: () => now });
+      expect(hosts(policy.project("shop"))).toEqual(["api.example.com", ...INSTALL_REGISTRIES]);
+      now = NOW + 60_001;
+      expect(hosts(policy.project("shop"))).toEqual(["api.example.com"]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("a project being created, with no manifest yet, reaches the registries alone", () => {
+    const t = tree();
+    try {
+      marker(t, "fresh", NOW + 60_000);
+      expect(hosts(createPolicy(t.sites, { markerOwner: own, now: () => NOW }).project("fresh"))).toEqual([...INSTALL_REGISTRIES]);
+      // Taken away, nothing: no manifest, no policy.
+      rmSync(join(t.sites, "fresh", INSTALL_MARKER));
+      expect(createPolicy(t.sites, { markerOwner: own, now: () => NOW }).project("fresh")).toBeNull();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("a marker of another account's, a link, or one that runs too far ahead opens nothing", () => {
+    const t = tree();
+    try {
+      t.manifest("shop", { slug: "shop", egress: ["api.example.com"] });
+      marker(t, "shop", NOW + 60_000);
+      // Root's on the machine: the tests' own file is not.
+      expect(hosts(createPolicy(t.sites, { now: () => NOW }).project("shop"))).toEqual(["api.example.com"]);
+
+      marker(t, "shop", NOW + 60 * 60_000);
+      expect(hosts(createPolicy(t.sites, { markerOwner: own, now: () => NOW }).project("shop"))).toEqual(["api.example.com"]);
+
+      rmSync(join(t.sites, "shop", INSTALL_MARKER));
+      writeFileSync(join(t.root, "elsewhere"), installMarkerText(NOW + 60_000));
+      symlinkSync(join(t.root, "elsewhere"), join(t.sites, "shop", INSTALL_MARKER));
+      expect(hosts(createPolicy(t.sites, { markerOwner: own, now: () => NOW }).project("shop"))).toEqual(["api.example.com"]);
     } finally {
       t.cleanup();
     }

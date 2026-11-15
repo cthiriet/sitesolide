@@ -109,6 +109,28 @@ again: a rule added to another key later must not cut a project off until the
 proxy is rebuilt. An entry that does not read is skipped, which narrows and
 never widens.
 
+## Installs without the outbound permission
+
+A manifest's `install` deployed by a token that may not reach outside hosts
+runs with the loopback alone, `HTTPS_PROXY` and `HTTP_PROXY` pointed here. For
+that time, the installer lays `/srv/sites/<slug>/.installing`, root's, 0644,
+which holds a deadline at most twenty minutes ahead, and takes it away when
+the install ends. While the file is there, a plain file owned by root, and
+its deadline has not passed, the proxy adds the package registries,
+`INSTALL_REGISTRIES` in [bin/cli/egress.ts](../bin/cli/egress.ts), to what the
+project's account may reach, its own `egress` kept; a project being created,
+which has no manifest here yet, reaches them alone. The marker is read with
+one `lstat` per request, like the manifest.
+
+The project's services share the account, and reach the registries too for
+those minutes; the registries are what the install fetches from, and nothing
+else opens. A marker of anyone else's, a link, or one whose deadline runs
+further opens nothing, and one an installer crash left closes by itself.
+
+Without this proxy on the machine, such an install fails to connect: the
+deployment's log says to run `bin/deploy-egress.sh`, or to deploy with a token
+allowed outbound network.
+
 ## Audit
 
 The component's own table, `audit`, in `/var/lib/sitesolide-egress/egress.db`,
