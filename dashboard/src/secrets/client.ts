@@ -13,7 +13,6 @@ import type {
   UnlockRequest,
   FileRequest,
   PasswordRequest,
-  PortalRequest,
   SetRequest,
   ProjectRequest,
   VariableRequest,
@@ -44,7 +43,6 @@ export type Steward = {
   createFile: (requested: FileRequest) => Promise<Response>;
   restoreFile: (requested: FileRequest) => Promise<Response>;
   changePassword: (requested: PasswordRequest) => Promise<Response>;
-  togglePortal: (requested: PortalRequest) => Promise<Response>;
   restart: (requested: ProjectRequest) => Promise<Response>;
   setStoreVariable: (requested: WithToken & StoreSetRequest) => Promise<Response>;
   removeStoreVariables: (requested: WithToken & StoreRemoveRequest) => Promise<Response>;
@@ -123,7 +121,6 @@ export function localSteward(socket: string, timeouts: Timeouts = DEFAULT_TIMEOU
     createFile: (requested) => call("POST", "/file", requested, timeouts.longMs),
     restoreFile: (requested) => call("POST", "/restore", requested, timeouts.longMs),
     changePassword: (requested) => call("POST", "/password", requested, timeouts.longMs),
-    togglePortal: (requested) => call("POST", "/portal", requested, timeouts.longMs),
     restart: (requested) => call("POST", "/restart", requested, timeouts.longMs),
     // Every write, and the reveal, waits its turn under the steward's lock.
     setStoreVariable: (requested) => call("PUT", "/store/variable", requested, timeouts.longMs),

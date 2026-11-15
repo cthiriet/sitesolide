@@ -366,7 +366,6 @@ export type RestartResponse = { verdict: Verdict };
 //   POST   /api/secrets/file        { slug, file } -> FileResponse
 //   POST   /api/secrets/restore      { slug, file } -> FileResponse
 //   POST   /api/secrets/password     { slug, file, variable, dashboardPassword | challengeId + credential, newPassword } -> PasswordResponse
-//   POST   /api/secrets/portal        { slug, active, confirmation } -> PortalResponse
 //   POST   /api/secrets/restart     { slug } -> RestartResponse
 //
 // A session is required everywhere (401), Origin checked on everything that is

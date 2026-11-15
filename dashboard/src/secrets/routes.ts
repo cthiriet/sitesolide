@@ -42,7 +42,6 @@ import type {
   ErrorCode,
   FileRequest,
   PasswordRequest,
-  PortalRequest,
   SetRequest,
   ProjectRequest,
   VariableRequest,
@@ -81,7 +80,6 @@ export type SecretsRoutes = {
   createFile: Handler;
   restoreFile: Handler;
   changePassword: Handler;
-  togglePortal: Handler;
   restart: Handler;
   /** A project's store, under the session's token: the owner's. */
   setStoreVariable: Handler;
@@ -96,7 +94,6 @@ export type SecretsRoutes = {
   backups: Handler;
   /** Starts a restore, under the session's token, the slug retyped. */
   restoreBackup: Handler;
-  backupAudit: Handler;
   /**
    * Not a route: what signing out calls. Forgets the session's token and
    * revokes it as best it can. Never rejects, a mute steward not being allowed
@@ -249,15 +246,6 @@ const extractRestore: Extraction<WithoutToken<RestoreRequest>> = (body) => {
   const names = fields(["slug", "snapshot", "confirmation"] as const)(body);
   if (names instanceof Response) return names;
   return { ...names, actor: SESSION_ACTOR };
-};
-
-/** `/portal`: the slug, `active` a boolean, and the confirmation, a string. */
-export const extractPortal: Extraction<WithoutToken<PortalRequest>> = (body) => {
-  const names = fields(["slug", "confirmation"] as const)(body);
-  if (names instanceof Response) return names;
-  const { active } = body!;
-  if (typeof active !== "boolean") return error(400, "invalid", "Missing or non-boolean field: active.");
-  return { ...names, active };
 };
 
 /** A list of strings, or the refusal that names the field. */
@@ -554,7 +542,6 @@ export function createSecretsRoutes(dependencies: SecretsDependencies, clock: ()
         if (requested.slug === "dashboard" && requested.file === DASHBOARD_HASH_FILE) dependencies.passwordChanged?.(sessionHash);
       },
     }),
-    togglePortal: withToken(extractPortal, (requested) => steward.togglePortal(requested)),
     restart: withToken(fields(PROJECT_FIELDS), (requested) => steward.restart(requested)),
 
     setStoreVariable: withToken(STORE_EXTRACTIONS.set, (requested) => steward.setStoreVariable(requested), { secrets: STORE_WITHHELD.set }),
@@ -573,18 +560,6 @@ export function createSecretsRoutes(dependencies: SecretsDependencies, clock: ()
       if (dependencies.backups === undefined) return unreachable();
       const backups = dependencies.backups;
       return relay(await reach(() => backups.readBackups(wanted[0]!), null));
-    },
-
-    async backupAudit(req) {
-      const open = await check(req, false);
-      if (open instanceof Response) return open;
-      const wanted = new URL(req.url).searchParams.getAll("slug");
-      if (wanted.length > 1) return error(400, "invalid", "Name one site at most.");
-      const slug = wanted[0] ?? null;
-      if (slug !== null && (slug === "" || slug.length > MAX_LOG_SLUG)) return error(400, "invalid", "Unreadable site name.");
-      if (dependencies.backups === undefined) return unreachable();
-      const backups = dependencies.backups;
-      return relay(await reach(() => backups.readBackupAudit(slug), null));
     },
 
     restoreBackup: withToken(extractRestore, (requested) =>

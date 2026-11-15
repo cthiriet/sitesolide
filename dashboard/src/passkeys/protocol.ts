@@ -51,9 +51,6 @@ export type LinkResponse = { link: string; expiresAt: number };
 /** How long root's registration link lives, and it is used once. */
 export const LINK_DURATION_MS = 15 * 60 * 1000;
 
-/** The fragment the dashboard's page reads a registration link from: never sent to a server in a URL. */
-export const LINK_FRAGMENT = "passkey";
-
 /**
  * Whether the owner holds a passkey, and whether the password still signs
  * in. Once a passkey exists, it does not: the page offers the passkey alone,

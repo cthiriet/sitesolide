@@ -97,25 +97,6 @@ export type Routes = {
   state: (req: Request) => Promise<Response>;
 };
 
-/**
- * The portal's response, returned as it stands to the page: its audit.
- * Unreachable, it is said unreachable: an exception here would return a mute
- * 500.
- */
-export async function relay(call: () => Promise<Response>): Promise<Response> {
-  let response: Response;
-  try {
-    response = await call();
-  } catch {
-    return Response.json({ error: "portal-unreachable" }, { status: 502, headers: NO_CACHE });
-  }
-  const body = response.status === 204 ? null : await response.text();
-  return new Response(body, {
-    status: response.status,
-    headers: { "Content-Type": "application/json", ...NO_CACHE },
-  });
-}
-
 export type SessionReader = (req: Request, now: number) => Promise<Session | null>;
 
 /**

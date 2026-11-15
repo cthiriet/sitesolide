@@ -398,7 +398,7 @@ row per actor, site and minute: the row keeps the time of the first, and
 takes a row of the last 30 days: a loop of sign-ins cannot push the last
 month out of the audit, and the file may then grow past the cap, by at most a row a
 minute per actor, site and action. The dashboard reads them through
-`GET /api/portal/audit`.
+`GET /admin/audit`, for its Activity page.
 
 ## The page
 

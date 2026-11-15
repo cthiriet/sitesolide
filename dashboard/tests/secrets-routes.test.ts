@@ -106,7 +106,6 @@ function fakeSteward() {
     createFile: () => Response.json({ file: FILE }),
     restoreFile: () => Response.json({ file: FILE }),
     changePassword: () => Response.json({ file: FILE, password: DRAWN_PASSWORD }),
-    togglePortal: () => Response.json({ portal: PORTAL, detail: "portal installed" }),
     restart: () => Response.json({ verdict: VERDICT }),
     setStoreVariable: () => Response.json(STORE_CHANGE),
     removeStoreVariables: () => Response.json(STORE_CHANGE),
@@ -133,7 +132,6 @@ function fakeSteward() {
     createFile: (requested) => call("createFile", requested),
     restoreFile: (requested) => call("restoreFile", requested),
     changePassword: (requested) => call("changePassword", requested),
-    togglePortal: (requested) => call("togglePortal", requested),
     restart: (requested) => call("restart", requested),
     setStoreVariable: (requested) => call("setStoreVariable", requested),
     removeStoreVariables: (requested) => call("removeStoreVariables", requested),
@@ -263,7 +261,6 @@ type TokenRouteName =
   | "createFile"
   | "restoreFile"
   | "changePassword"
-  | "togglePortal"
   | "restart"
   | "setStoreVariable"
   | "removeStoreVariables"
@@ -289,7 +286,6 @@ const TOKEN_ROUTES: Required<TokenRoute>[] = ([] as TokenRoute[]).concat([
     body: { slug: "portal", file: "portal.env", variable: "PASSWORD_HASH", dashboardPassword: PASSWORD, newPassword: null },
     texts: ["slug", "file", "variable"],
   },
-  { route: "togglePortal", http: "POST", path: "/portal", body: { slug: "cms", active: false, confirmation: "cms" }, texts: ["slug", "confirmation"] },
   { route: "restart", http: "POST", path: "/restart", body: { slug: "cms" } },
   { route: "setStoreVariable", http: "PUT", path: "/store/variable", body: { slug: "cms", name: "API_KEY", value: "a-store-value-set-77c1" } },
   { route: "removeStoreVariables", http: "DELETE", path: "/store/variable", body: { slug: "cms", names: ["API_KEY", "OLD"] }, texts: ["slug"] },
@@ -307,7 +303,6 @@ const EXPECTED_RESPONSES: Record<TokenRouteName, unknown> = {
   createFile: { file: FILE },
   restoreFile: { file: FILE },
   changePassword: { file: FILE, password: DRAWN_PASSWORD },
-  togglePortal: { portal: PORTAL, detail: "portal installed" },
   restart: { verdict: VERDICT },
   setStoreVariable: STORE_CHANGE,
   removeStoreVariables: STORE_CHANGE,
@@ -922,7 +917,7 @@ describe("a site's journal", () => {
  * through the steward's exclusion lock or through its queue of argon2id
  * verifications.
  */
-const LONG_ROUTES = ["/unlock", "/value", "/variable", "/file", "/restore", "/password", "/portal", "/restart"];
+const LONG_ROUTES = ["/unlock", "/value", "/variable", "/file", "/restore", "/password", "/restart"];
 
 describe("localSteward, on a real Unix socket", () => {
   let folder = "";
@@ -962,7 +957,6 @@ describe("localSteward, on a real Unix socket", () => {
         "/file": { POST: note(() => Response.json({ file: FILE })) },
         "/restore": { POST: note(() => Response.json({ file: FILE })) },
         "/password": { POST: note(() => Response.json({ file: FILE, password: null })) },
-        "/portal": { POST: note(() => Response.json({ portal: PORTAL, detail: "done" })) },
         "/restart": { POST: note(() => Response.json({ verdict: VERDICT })) },
         "/vol": { POST: note(() => Response.json({ stolen: true })) },
       },
@@ -1002,9 +996,8 @@ describe("localSteward, on a real Unix socket", () => {
       await steward.readLog("test-zone.invalid"),
       await steward.readLog("cms&slug=x/../y"),
       await steward.changePassword({ ...password, token }),
-      await steward.togglePortal({ token, slug: "cms", active: true, confirmation: "" }),
     ];
-    expect(responses.map((r) => r.status)).toEqual([200, 200, 200, 204, 200, 201, 200, 200, 200, 200, 200, 200, 200, 200]);
+    expect(responses.map((r) => r.status)).toEqual([200, 200, 200, 204, 200, 201, 200, 200, 200, 200, 200, 200, 200]);
     expect(await responses[4]!.json()).toEqual({ value: "fake_live_value" });
 
     const json = "application/json";
@@ -1023,7 +1016,6 @@ describe("localSteward, on a real Unix socket", () => {
       // Encoded: the name changes neither the path nor the parameters.
       { method: "GET", path: "/log", type: null, body: "", query: "?slug=cms%26slug%3Dx%2F..%2Fy" },
       { method: "POST", path: "/password", type: json, body: JSON.stringify({ ...password, token }) },
-      { method: "POST", path: "/portal", type: json, body: JSON.stringify({ token, slug: "cms", active: true, confirmation: "" }) },
     ]);
   });
 
@@ -1051,7 +1043,6 @@ describe("localSteward, on a real Unix socket", () => {
       steward.restoreFile(file),
       steward.restart({ token: "j", slug: "cms" }),
       steward.changePassword({ ...variable, dashboardPassword: "m", newPassword: null }),
-      steward.togglePortal({ token: "j", slug: "cms", active: true, confirmation: "" }),
     ]);
     expect(responses.every((response) => response.status < 300)).toBe(true);
     expect(await responses[6]!.json()).toEqual({ verdict: VERDICT });

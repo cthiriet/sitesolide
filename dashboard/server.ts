@@ -30,7 +30,7 @@ import { OWNER_IDLE_MS } from "./src/sessions";
 import { localPasskeySteward } from "./src/passkeys/client";
 import { createPasskeyRoutes } from "./src/passkeys/routes";
 import { createPasskeyState } from "./src/passkeys/state";
-import { createPortalAuditRoute, localPortalAudit } from "./src/portal-audit";
+import { localPortalAudit } from "./src/portal-audit";
 import { localAccessSteward } from "./src/access/client";
 import { createAccessRoutes } from "./src/access/routes";
 import { DEFAULT_TIMEOUTS, localSteward } from "./src/secrets/client";
@@ -171,9 +171,6 @@ const routes = createRoutes(store, {
   forgetUnlock: secrets.forgetUnlock,
 });
 
-// The portal's audit, read with the owner's session. See src/portal-audit.ts.
-const portalAudit = createPortalAuditRoute({ session: ownerReader, portal: localPortalAudit(PORTAL_URL) });
-
 // The Activity page: every component's audit, read through the very clients
 // above, merged newest first. Read with the session alone. See src/audit/.
 const audit = createAuditRoutes({
@@ -196,8 +193,8 @@ const audit = createAuditRoutes({
 /**
  * A route that waits on the steward: the delay of the relay towards it, and
  * five seconds more to answer the page (`STEWARD_IDLE_S`). It covers the
- * longest action under its lock, `/portal`, and therefore everything waiting
- * behind, unlocking included. Bun caps this setting at 255 seconds.
+ * longest action under its lock, a general access changed through the
+ * gatekeeper, and therefore everything waiting behind, unlocking included. Bun caps this setting at 255 seconds.
  */
 function long(
   req: Request,
@@ -243,7 +240,6 @@ const server = Bun.serve({
     "/api/access": { GET: accessRoutes.list },
     "/api/access/entry": { PUT: accessRoutes.put, DELETE: accessRoutes.remove },
     "/api/access/general": { PUT: (req, server) => long(req, server, accessRoutes.general) },
-    "/api/portal/audit": { GET: portalAudit },
     "/api/audit": { GET: audit.list },
     "/api/secrets": { GET: secrets.dashboard },
     "/api/secrets/log": { GET: secrets.log },
@@ -266,7 +262,6 @@ const server = Bun.serve({
     "/api/secrets/restore": { POST: (req, server) => long(req, server, secrets.restoreFile) },
     // A password hash changes with the dashboard's own password.
     "/api/secrets/password": { POST: (req, server) => long(req, server, secrets.changePassword) },
-    "/api/secrets/portal": { POST: (req, server) => long(req, server, secrets.togglePortal) },
     "/api/secrets/restart": { POST: (req, server) => long(req, server, secrets.restart) },
     // A project's store: the owner's writes under the session's unlock.
     "/api/secrets/store/variable": {
@@ -328,7 +323,6 @@ const server = Bun.serve({
     // The backups go through the steward too: it reads them as root, and starts
     // a restore under the same lock and the same unlocking as the secrets.
     "/api/backups": { GET: secrets.backups },
-    "/api/backups/audit": { GET: secrets.backupAudit },
     "/api/backups/restore": { POST: (req, server) => long(req, server, secrets.restoreBackup) },
   },
 

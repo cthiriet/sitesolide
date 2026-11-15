@@ -333,7 +333,6 @@ describe("the dashboard's relay", () => {
     expect(received.at(-1)).toEqual({ method: "readBackups", requested: "cms" });
     expect((await routes.backups(request("GET", "/api/backups?slug=cms", undefined, {}))).status).toBe(401);
     expect((await routes.backups(request("GET", "/api/backups"))).status).toBe(400);
-    expect((await routes.backupAudit(request("GET", "/api/backups/audit"))).status).toBe(200);
   });
 
   test("a restore needs the origin, an unlock, and goes out with the session's requester, not the page's", async () => {

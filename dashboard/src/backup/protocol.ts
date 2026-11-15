@@ -15,7 +15,6 @@
  *
  *   GET  /api/backups?slug=<s>
  *   POST /api/backups/restore     { slug, snapshot, confirmation }
- *   GET  /api/backups/audit[?slug=<s>]
  *
  * A steward from before this contract answers 404 `no such route`: the page
  * says the steward needs updating, and nothing else breaks.
