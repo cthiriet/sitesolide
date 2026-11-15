@@ -137,8 +137,9 @@ missing. The output is a checklist: `[done]` already there, `[ok]` done now,
 | installer | its code and unit template present | `bin/deploy-installer.sh` |
 | egress | the proxy active, the steward restarted since | `bin/deploy-egress.sh`, `bin/deploy-steward.sh` |
 
-`--minimal` leaves out the last three; running setup again without it adds
-them. Caddy is only ever touched through `bin/deploy-caddy.sh` and
+`--minimal` leaves out the backups and the egress proxy; running setup again
+without it adds them. It never leaves out the installer: every deployment
+goes through it, the owner's included. Caddy is only ever touched through `bin/deploy-caddy.sh` and
 `systemctl`, never `caddy stop` nor `caddy start`. A component already active
 is never deployed again: bringing the installed components to a newer
 release's code is `sitesolide upgrade`'s, with these same checks and scripts,
@@ -317,8 +318,21 @@ runs; `--acme production` brings the installation back to Let's Encrypt.
 ## After setup
 
 ```bash
+sitesolide login --owner
 cd your-project && sitesolide deploy
 ```
+
+Every deployment goes through the dashboard's API with a token, the owner's
+included: none goes over SSH but the platform's own components, which setup
+deploys. Setup ends by naming `sitesolide login --owner`, which mints the
+owner's token for every project through the steward's owner socket, over
+the SSH access setup just used, and keeps it in the workstation's vault,
+`~/.config/sitesolide/secrets/team-token`, never shown. It is a command of
+its own rather than a step of setup: a token is a credential the workstation
+that deploys keeps, which may not be the one that ran setup, and the same
+command mints a new one after a revocation or a lost laptop, without running
+setup again. The dashboard's *Tokens* page mints the same, *Every project, as
+you*, under the unlock. See [access.md](access.md#the-owners-own-token).
 
 Then give the monitor a heartbeat, five minutes:
 [monitor/README.md](../monitor/README.md#alerting-healthchecksio-in-five-minutes).

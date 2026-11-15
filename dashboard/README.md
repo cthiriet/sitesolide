@@ -1528,11 +1528,15 @@ served in the clear again.
 
 ## The control API
 
-Deploying over SSH means holding root on the machine: `sitesolide deploy`
-drives `sudo`. That cannot be handed to a colleague, nor to an agent in a
+Deploying over SSH meant holding root on the machine: `sitesolide deploy`
+drove `sudo`. That cannot be handed to a colleague, nor to an agent in a
 sandbox with no key. A **token** deploys over HTTPS instead, through this
-dashboard, and its holder never holds root. The owner's SSH path does not
-change. The holder's side is in [docs/access.md](../docs/access.md); this is the
+dashboard, and its holder never holds root. **Every deployment goes this way,
+the owner's included**: the CLI deploys over SSH only the platform's own
+components, this dashboard and the portal, which `sitesolide setup` and
+`upgrade` deploy from the kit and which no token may touch. The owner
+deploys with their own token for every project (`scope.all`, below). The
+holder's side is in [docs/access.md](../docs/access.md); this is the
 machine's side.
 
 ```
@@ -1609,7 +1613,19 @@ differ, both on purpose:
 - A block or a unit that is exactly what the previous deposited manifest
   generates is replaced without `--force`: the machine can tell a manifest
   that changed from a hand edit, which the workstation cannot. A real hand
-  edit still stops the deployment, and the owner settles it over SSH.
+  edit still stops the deployment; the owner's token for every project
+  replaces it with `--force`, carried to the installer in the request
+  (`force: true`, src/installer/pipeline.ts, `replaceable`), which any other
+  token is refused.
+
+**A plan, before anything is written.** `POST /api/v1/deployments/plan`,
+relayed to the steward's `POST /control/plan`, judges the manifest as the
+deployment would (the slug, the scope, the leftovers, the door) and runs the
+installer's own `finalManifest` on the manifests the machine carries: the
+ports it would choose, the door it keeps, the final text. It writes nothing,
+starts nothing, and is what `sitesolide deploy --dry-run` shows, the units
+and the block generated on the workstation from that final text by the same
+generators.
 
 ### Tokens
 
@@ -1622,6 +1638,19 @@ differ, both on purpose:
   [portal/README.md](../portal/README.md) gives for password access: 256 random
   bits leave nothing to guess, and a fast hash finds the token by lookup. The
   value is `sst_` and 43 characters of base64url.
+- **The owner's own, for every project** (`scope.all`): every project the
+  machine carries but the reserved ones and those another token holds
+  (src/control/steward.ts, `everyProjectOf`), every permission, creation
+  under a name a removed project left, the `lock` key kept, no token cap
+  on memory or services, a new name on a domain switched on, `--force`,
+  and `DELETE /control/claim`, which takes a name back from the token that
+  holds it (`sitesolide deploy --adopt`). Minted on the *Tokens* page under
+  the unlock, *Every project, as you*, or on the owner's socket,
+  `POST /tokens/owner`, which root alone opens (`sitesolide login --owner`).
+  A person's token never carries it: the mint refuses `scope.all` for
+  anyone but the owner, and the installer narrows a member's request to
+  `all: false` and no force whatever the request says
+  (src/installer/main.ts).
 - **One per person**: whose it is, the owner's or a person's from *People*, a
   label, one line of 64 characters at most with no control character, C1
   included, since the owner's terminal prints it when its person leaves, an
@@ -1675,7 +1704,8 @@ earlier by the steward and the dashboard: see
   `sitesolide remove`: the project created again would list its
   predecessor's snapshots, its creator being its Admin, and restore them. The
   refusal counts them, never names a snapshot, and says what the owner may
-  do: deploy it over SSH, which is not asked, or forget the snapshots
+  do: deploy it with their own token for every project, which is not
+  asked, or forget the snapshots
   ([src/backup/README.md](src/backup/README.md#a-name-a-removed-project-left-behind)).
   Asked of the deployment itself, right before the installer starts; an
   index that does not read refuses the creation, `failure`, never taken for
@@ -1916,6 +1946,7 @@ run `sitesolide upgrade`; its queue of writes full, or a restart's turn, a
 
 | Threat | What stops it |
 |---|---|
+| The owner's token for every project, stolen | An accepted risk, the price of no deployment over SSH: it deploys code to every project but the platform's, as the owner's SSH did, without root and judged by the steward and the installer like any other. It never reads a secret back, never touches the dashboard or the portal, never switches a domain on, never gives access beyond Can open, and every deployment is in the audit under its id. Kept in the workstation's vault, 0600; revoked from the *Tokens* page in one click, no password asked. Give an agent or a CI a token of chosen projects instead. |
 | A stolen token | Its scope: the projects granted and its own, private sites unless allowed. Every deployment is in the audit with the token's id and email. A domain it declares, never switched on: the machine's `active` stands. Of access, Can open alone, to the company's people and domains, never password access for someone outside them, and the removal of Can open entries, every change in the steward's journal under `token:<id>`, its refused ones within its 60 refusals an hour, what it lets in stopping at half the access log. It restarts the projects it deploys, 30 times an hour at most, one at a time, never holding the secrets' lock. Revoking takes one click and no password; an expiry ends it anyway. |
 | A stolen token with *Manage secrets* | An accepted risk, the permission being the opt-in, and bounded: it writes without an unlock, but never reads a value, a size or a previous version back; any name of its projects' stores and their files, never `PASSWORD_HASH`, a variable the unit sets, a reserved one (`LD_PRELOAD`, `HTTPS_PROXY`), another project's store or a platform project's; an owner's token without `public` only on a project restricted on the machine that it could deploy as it stands; 120 changes an hour. Every change is a line of the steward's journal under `token:<id>`, in the token's sheet and in *Activity*, and the store keeps its previous version, which the owner or an Admin restores. Its refusals are journaled too, 60 an hour, then refused `too-many-attempts` unjournaled: one token writes 210 lines an hour at most, and the journal keeps its latest 500 at least, so a stolen token cannot push its last hour out by itself. The token's sheet shows its last ten lines; *Activity*, narrowed to it, goes further back. The 256 KiB cap and the files' bounds tell it roughly how much the store holds, nothing of its values. The default expiry stays 90 days. |
 | A malicious archive | Read by the project's account in a confined unit, never by root; links, devices, `..`, absolute paths and duplicates refused, data and entries capped while reading; nothing served changes until the whole archive extracted. |
@@ -1924,7 +1955,7 @@ run `sitesolide upgrade`; its queue of writes full, or a restart's turn, a
 | Resource exhaustion | Upload counted while it streams (Bun's own cap does not hold for a chunked body), 100 MiB; extraction 512 MiB, 20,000 entries, 256 MiB of memory, five minutes; `install` 1G and fifteen minutes; three deployments running at a time on the machine, claimed when the archive arrives, one per project; three waiting for their archive per token, the newest replacing the oldest, and none of them counted against the machine; an archive that does not arrive in fifteen minutes expires. |
 | A token reaching another project | The slug decision on the steward, again on the installer; secrets limited to its own project's store, whose folder the slug names; `install` runs without the loopback, where the other projects listen, and the extraction without any network. |
 | A token naming its project after a platform project | The steward refuses a new slug starting with a platform project's name and a dash, `dashboard-*`, `reserved`, keeping those names free for what the platform lays later. A manifest names no file: a project's values are in its own store, under a folder the slug names. |
-| A token reusing a removed project's name | The snapshots are keyed by the slug, and outlive `sitesolide remove`: the steward refuses a token creating a slug the backups' index still names, `reserved`, and an index that does not read refuses the creation too. The owner's deployment over SSH is not asked. See [What a token's project may not do](#what-a-tokens-project-may-not-do). |
+| A token reusing a removed project's name | The snapshots are keyed by the slug, and outlive `sitesolide remove`: the steward refuses a token creating a slug the backups' index still names, `reserved`, and an index that does not read refuses the creation too. The owner's token for every project is not asked. See [What a token's project may not do](#what-a-tokens-project-may-not-do). |
 | A replayed request | The installer refuses a request older than ten minutes or for another slug, and writes nothing for it. |
 | A compromised dashboard | It sees the bearers that pass and can use them within their scope, a person's within the person's roles, and read deployment logs; it cannot mint a token without the password or a person's own unlock, nor deploy without one, nor hand root a file it could not read, nor name a token as the actor of a change of access it made itself: the steward journals the token it judged. It sees the values a token's change of secrets carries as it relays them, as it sees the code that token deploys, which runs with those values anyway: no escalation beyond the token. It reads none back: the steward answers names alone. |
 | A token giving access too widely | It gives Can open alone, on the projects it may deploy, a person's own only where the person is Admin now, to the company's people and domains alone, never password access to someone outside them, never public; it removes Can open entries alone. The steward judges it and writes, every change is in its journal under `token:<id>`, and the owner or an Admin takes it back from *Access*. |
@@ -1939,6 +1970,22 @@ own code would reach, not what it may legitimately do; what keeps a token from
 using it as root is that it never interprets the archive, that every file it
 writes is generated by the repository's generators, and that each decision is
 the one `sitesolide deploy` already takes.
+
+Every deployment going through it now, the owner's included, changes none of
+that: the archive is read by the project's account, never by root, with the
+same refusals; the owner's token widens the decisions the steward takes (which
+projects, which caps), never what the installer accepts of an archive or
+writes from it. `--force` replaces a unit or a block with the generated one,
+never with anything the request carries.
+
+**`install` has the network, as before.** A manifest's `install` runs with
+`IPAddressDeny=localhost` alone, so it reaches the internet, and with it the
+cloud's metadata address (169.254.169.254) and the private ranges, whatever
+the token's outbound permission; a unit with `network: outbound` is not
+filtered from them either. Closing link-local and RFC 1918 would need the
+machine's resolver allowed first (`/etc/resolv.conf`), which on GCP and AWS
+is itself at such an address: a follow-up to test on each cloud, not a
+change made blind.
 
 ### Deployment of the control API
 

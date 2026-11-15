@@ -166,6 +166,62 @@ first, with that release's binary and [its
 notes](https://github.com/cthiriet/sitesolide/blob/v0.16.0/docs/upgrading.md),
 which go back to 0.1; this release converts nothing an earlier one left.
 
+## Every deployment goes through a token
+
+**What the release brings.** `sitesolide deploy` no longer goes over SSH, the
+owner's included: it builds on the workstation and uploads through the
+dashboard's API with a token. The CLI keeps SSH for `setup`, `upgrade`,
+`refresh`, the owner's machine-wide commands, and the deployments of the
+platform's own components, the dashboard and the portal, which setup and
+upgrade make from the kit. The owner deploys with a new kind of token, their
+own for every project (`scope.all`), which reaches every project the machine
+carries but the platform's and those another token holds, carries every
+permission, keeps a `lock` key, is bounded by no token cap, and alone carries
+`deploy --force` and `deploy --adopt`. A dry run with a token is now the
+machine's plan (`POST /api/v1/deployments/plan`), which writes nothing, and
+the ports a deployment chose, the door set from the dashboard and the former
+names a rename left are written back into `sitesolide.json`, as over SSH.
+`setup --minimal` no longer leaves the installer out.
+
+**What `sitesolide upgrade` brings**: the steward (the plan, the take back of
+a name, the owner's socket's `POST /tokens/owner`, the widened scope), the
+installer (`--force` carried, a member's request narrowed), and the
+dashboard (the routes, the *Every project, as you* choice on the *Tokens*
+page, and a `deployment_options` table its database creates by itself, the
+deployments' table left as it is). No project is redeployed.
+
+**The steps, on the owner's workstation, in this order:**
+
+1. Install the new CLI, then `sitesolide upgrade --dry-run`, then
+   `sitesolide upgrade`. The steward, the installer and the dashboard are
+   among the components it lists out of date.
+2. A machine set up with `--minimal` has no installer, and no deployment can
+   go through without it: `sitesolide setup <user@host> --zone <zone> --email
+   <you>`, without `--minimal`, installs it (and the backups and the egress
+   proxy). `sitesolide upgrade --dry-run` lists it `missing` until then.
+3. Mint your token: `sitesolide login --owner`. It asks the steward's owner
+   socket over your SSH access, keeps the token in
+   `~/.config/sitesolide/secrets/team-token`, 0600, with the dashboard's
+   address beside it, and never shows it. Or mint it on the *Tokens* page,
+   under the unlock, *New token*, *Every project, as you*, then `sitesolide
+   login --url https://dashboard.<zone>`.
+4. `sitesolide status --json` from any folder reads the machine over SSH as
+   before; `cd <a project> && sitesolide deploy --dry-run` reads the plan
+   through the token. Deploy as usual from there.
+5. CI jobs or scripts that ran `sitesolide deploy` with only SSH set up now
+   need `SITESOLIDE_API` and `SITESOLIDE_TOKEN`: give each a token of the
+   projects it deploys, from the *Tokens* page, rather than yours.
+
+Without a token, `sitesolide deploy` stops before anything is sent and says
+how to mint one. Nothing on the machine changes for the projects it serves.
+
+**Going back.** The previous release's binary deploys over SSH again, with
+the same configuration. The owner's token stays valid on the steward until
+revoked from the *Tokens* page; a steward from before ignores `all` and
+reads it as a token that may create projects, with every permission, and
+reaches no existing one: revoke it if you go back for good. The
+`deployment_options` table is ignored by a dashboard from before.
+
 ## Renaming, turning off and deleting wait for the backups
 
 **What the release brings.** A rename, a project turned off or on, and a

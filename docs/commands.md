@@ -4,6 +4,16 @@ Every command runs from a project's folder, the one holding its
 `sitesolide.json`, except `setup`, `upgrade`, `refresh`, `init`, `status`,
 `login`, `machine`, `people`, `help` and `--version`. This is what `sitesolide --help` prints.
 
+**Every deployment goes through the dashboard's API with a token, the
+owner's included: none goes over SSH.** `sitesolide deploy` builds here and
+uploads to `https://dashboard.<zone>`; the owner's SSH access carries
+`setup`, `upgrade`, `refresh` and the machine-wide commands below, and the
+deployments of the platform's own components, the dashboard and the portal,
+which setup and upgrade make from the kit. A workstation with a server and no
+token is told how to get one: `sitesolide login --owner` mints the owner's,
+for every project, over SSH, straight into the vault. See
+[Deploying with a token](#deploying-with-a-token).
+
 ```text
 sitesolide setup                alone at a terminal: pick a cloud, a region and a size, then order and install
 sitesolide setup <user@host>    install a fresh Debian 13 machine, resumable, a no-op once done
@@ -16,7 +26,7 @@ sitesolide setup <user@host>    install a fresh Debian 13 machine, resumable, a 
    --skip-dns                   create the DNS records by hand: setup lists them and waits
    --dns-replace                replace records that point elsewhere, on your decision alone
    --cloudflare-token-stdin     read the Cloudflare token from standard input
-   --minimal                    leave out backups, the installer and the egress proxy
+   --minimal                    leave out backups and the egress proxy
    --any-os                     go on with a system other than Debian 13, at your own risk
    --config-dir <dir>           another installation's own configuration folder
    --dry-run                    check every step, change nothing
@@ -36,13 +46,14 @@ sitesolide init                 write ~/.config/sitesolide/config.json
 sitesolide detect               the sitesolide.json this folder implies, written nowhere
    --write                      write it, never over an existing one
    --slug <name>                name the project, rather than after its folder
-sitesolide deploy               prepare, build, push, install, restart, verify
-   --dry-run                    show the unit and the fragment, install nothing, build nothing
+sitesolide deploy               build here, upload through the dashboard with your token, follow the machine's log
+                                every deployment goes through the API, the owner's too: none over SSH
+   --dry-run                    the machine's plan: the units, the block and the ports, nothing changed
    --build                      with --dry-run: run the build too, the folder's own code, here
-   --compare                    with --dry-run: build, then list what would change on the server
-   --force                      switch a hand-written unit to the generated one
+   --compare                    with --dry-run, in the dashboard's or the portal's folder: what would change on the server
+   --force                      switch a hand-written unit or block to the generated one (the owner's token)
    --yes [--slug <name>]        no sitesolide.json: write the inferred one, then deploy
-   --adopt                      take back a name a token holds that the server does not carry, then deploy
+   --adopt                      take back a name another token holds, then deploy (the owner's token)
 sitesolide status               what the server actually runs
 sitesolide logs [--follow]      journalctl for this project
    --lines <n>                  how many lines back, 50 by default
@@ -79,8 +90,10 @@ sitesolide secrets              this project's secrets: names, sources, states, 
    --restart                    with a change: then restart the service, and say whether it holds
 sitesolide run -- <command>     the workstation's own credentials for this project, from the vault, then run
 sitesolide login --url <https://dashboard.zone>
-                                a person with a token: deploy, set secrets and restart without SSH
+                                keep a token, the one every deployment goes through
    --token-stdin                read the token from standard input
+sitesolide login --owner        the owner's token for every project, minted over SSH into the vault, never shown
+   --replace                    a new one even if the vault holds one the dashboard accepts
 sitesolide machine create|list|destroy --provider <provider>
                                 a VM ordered by API, before setup: sitesolide machine lists the options
 sitesolide machine providers    the clouds it orders from, and which have credentials here
@@ -113,14 +126,12 @@ its number and reason, never its content. See
 
 `sitesolide deploy` resolves the build secrets first, `secrets.build`, from
 your environment, else from that same workstation file, and stops before
-anything is read on the machine when one is missing. It then reads the
-machine before anything is pushed, and refuses there what a cloned folder
-could reach through it: a `publicDir` that is a link out of the repository
-holding the manifest,
-unless that manifest is in your sites repository; and a link among the
-public files that leads out of them, which Caddy would follow on the machine.
-Each refusal names the file or the link, and nothing was sent. See
-[manifest.md](manifest.md#secrets).
+anything is sent when one is missing. It refuses before anything leaves what
+a cloned folder could reach through it: a `publicDir` that is a link out of
+the repository holding the manifest, unless that manifest is in your sites
+repository; and a link among the public files, which the machine refuses in
+an archive. Each refusal names the file or the link, and nothing was sent.
+See [manifest.md](manifest.md#secrets).
 
 A runtime secret the project's store lacks never stops it. Before the build,
 at a terminal, it asks for each missing name whether to set it, generate it on
@@ -135,27 +146,22 @@ stops there when they cannot be laid or are not root's. See
 
 A name may be a token's: its deployment was accepted, or its write made the
 project's store ahead of one, or, on a project the machine carries, a
-creation made that token its Admin. Before those prompts, on every
-deployment over SSH, `deploy` asks the steward. A deployment of the token's
-still under way is waited for first, with `--adopt` too. Then a name a token
-holds stops it, naming the token by its label, id and address, and whether
-the store it holds is the token's: deploying there would set your values in
-a store, and put your project under a name, that token may deploy code to.
-`--adopt` takes the name back, dropping the token's hold, and moves what the
-project's store holds aside, kept as its previous versions, naming it; the
-prompts that follow ask for what the manifest declares, then it deploys. In
-a dry run it only says it would. A steward from before claims holds none, and
-one without an owner's socket is warned of. Claims that do not read stop
-it, unless `--adopt`: restore the file the message names from the steward's
-backups, never delete it, since a claim dropped hands the name to whoever
-deploys it next. `--adopt` is the owner's alone: with a token it is
-refused.
+creation made that token its Admin. The steward judges every deployment
+against those holds: a name another token holds is refused, `out-of-scope`,
+to the owner's token for every project too, its message naming `--adopt`:
+deploying there would set your values in a store, and put your project under
+a name, that token may deploy code to. `sitesolide deploy --adopt`, with the
+owner's token for every project, takes the name back first
+(`DELETE /api/v1/projects/<slug>/claim`), dropping the token's hold and
+moving what the project's store holds aside, kept as its previous versions,
+naming it; then it deploys, asking for what the manifest declares. In a dry
+run it only says it would. Any other token is refused `--adopt`.
 
 `sitesolide remove` deletes the project's store and its previous versions,
 after its units are stopped. Its name is free again for a token that may create
 projects, once the machine keeps none of the removed project's backup
 snapshots: until then a token creating it is refused
-`reserved`, and you deploy it over SSH, or clear what was left
+`reserved`, but the owner's token for every project deploys it, or you clear what was left
 ([dashboard/src/backup/README.md](../dashboard/src/backup/README.md#a-name-a-removed-project-left-behind)).
 
 `sitesolide logs` shows every service of a project, interleaved by time, the
@@ -176,8 +182,10 @@ unit of a project whose services are all scheduled, its anchor, is `active`
 and holds no memory, since it runs nothing. See
 [manifest.md](manifest.md#services) for the kinds of service.
 
-`deploy --dry-run --compare` runs the build, as `--build` does, then measures
-on the server what this deployment would change there, and changes nothing:
+`deploy --dry-run --compare`, in the dashboard's or the portal's folder, the
+platform's components that setup and upgrade deploy over SSH, runs the
+build, as `--build` does, then measures on the server what this deployment
+would change there, and changes nothing:
 the files its rsync would send or delete (compared by content, a time or a
 mode alone does not count), the deposited manifest, a missing unit, a Caddy
 block that differs. A unit edited on the machine is reported and never
@@ -691,15 +699,42 @@ server, never one set from the conversation; `setup`, `upgrade` and
 `refresh`, which change the machine itself or every app on it, only when the
 user asked. See [agents.md](agents.md).
 
-## With a token
+## Deploying with a token
 
-A workstation with no `server`, but the dashboard's address and a token, never
-touches SSH: someone's own, or an agent's. See [access.md](access.md).
+Every deployment goes through a token: the owner's, a person's own, or an
+agent's. A workstation with no `server`, but the dashboard's address and a
+token, never touches SSH; one with a server uses the token for `deploy`, and
+SSH for the owner's other commands. See [access.md](access.md).
+
+The owner's own token covers every project the server carries but the
+platform's (`scope.all`): it creates any project, opens a site to the
+public, declares a domain and `"network": "outbound"`, sets secrets, keeps a
+`lock` key, is bounded by no token cap, deploys under a name a removed
+project left, and alone carries `--force` and `--adopt`. It is minted in one
+of two ways:
+
+```bash
+sitesolide login --owner          # over your SSH access, into the vault, never shown
+```
+
+or on the dashboard's Tokens page, under the unlock: *New token*, *Every
+project, as you*, then `sitesolide login --url https://dashboard.<zone>` with
+it. `login --owner` asks the steward's owner socket, which root alone opens,
+to mint it; the secret travels on the SSH session into the vault,
+`secrets/team-token`, 0600, never on a screen, in an event or an argument. A
+vault already holding a token the dashboard accepts for every project keeps
+it, unless `--replace`; revoke the old one on the Tokens page then.
+`setup` ends by naming this command.
 
 ```text
 sitesolide login --url <https://dashboard.zone>   keep the token, check it
    --token-stdin                                  read it from standard input
 sitesolide deploy                                 build here, upload, follow the machine's log
+   --dry-run                                      the machine judges and plans it: units, block, ports; nothing changed
+   --build                                        in a dry run, build all the same
+   --yes [--slug <name>]                          a folder without sitesolide.json: deploy the inferred one, written here
+   --force                                        replace a unit or a block edited by hand (the owner's token for every project)
+   --adopt                                        take the name back from the token that holds it first (same)
 sitesolide status                                 the projects this token may deploy
 sitesolide logs [--follow]                        the journal of this folder's project
    --lines <n>                                    how many lines back, 50 by default, 500 at most
@@ -738,11 +773,28 @@ it, and what it may do is the steward's reading of those roles at that
 moment. `share` gives Can open alone, and never password access, see
 [access.md](access.md#giving-access-to-what-you-deployed).
 
-`deploy` sends the manifest first, so that a refusal arrives before the build,
-then a gzip-compressed tar holding `app/` and `public/`, exactly what rsync
-would have sent, and follows the machine's log until the end; it exits
-non-zero when the deployment fails. A manifest with a `start` and no `port`
-gets one chosen on the machine.
+`deploy` asks the machine for its plan first, `POST /api/v1/deployments/plan`,
+which judges the manifest as the deployment would and writes nothing: a
+refusal arrives before the build. It writes back into `sitesolide.json` what
+the machine keeps of the project, general access set from the dashboard
+(`portal`, `lock`) and the former names a rename left, then sends the
+manifest, builds, sends a gzip-compressed tar holding `app/` and `public/`,
+and follows the machine's log until the end; it exits non-zero when the
+deployment fails. A manifest with a `start` and no `port` gets one chosen on
+the machine, written back after `start` once the deployment succeeded, to be
+committed. The result's `status` is what the project's address answers this
+workstation, a GET with no credential; the machine has already verified it
+from its own side, and judged the answer.
+
+`--dry-run` stops at the plan: the systemd units and the Caddy block the
+installer would lay, generated from the manifest the machine would keep with
+its ports chosen and its door, shown as files; the ports; what the store
+lacks, said and never asked for; the archive measured. It builds nothing
+unless `--build`, and sends nothing but the manifest. `--yes` in a folder
+without `sitesolide.json` deploys the inferred manifest and writes it, unless
+the server already carries a project of that name. `--force` replaces a unit
+or a block edited by hand on the machine: the owner's token for every project
+alone.
 
 `secrets` lists the project in the folder's secret names, where each value
 comes from, what is missing and whether a restart is pending, and never a
@@ -772,14 +824,15 @@ it for eight seconds: it exits non-zero unless the service holds. Over the
 owner's SSH, `restart` points to *Restart service*, in a project's
 *Overview*. See [access.md](access.md#secrets-with-a-token).
 
-Any other option is refused before a request leaves, `deploy --dry-run` first:
-a dry run reads the machine over the owner's SSH access, which a token does
-not carry, and the control API has no route that judges without deploying.
-`--json` prints the same events as over SSH, and one final `result` or `error`.
+Any other option is refused before a request leaves, rather than passed
+over. `--json` prints the same events as over SSH, and one final `result` or
+`error`.
 
-The other commands need the owner's SSH access and say so. The owner, whose
-configuration has a `server`, keeps SSH for every command; `--api` makes one
-go through the dashboard instead, to see what a token's holder sees.
+The other commands need the owner's SSH access and say so: `lock`,
+`unlock`, `domain`, `remove`, `rename`, `disable`, `enable`, `run`, `people`,
+`refresh`, `backups`, `setup` and `upgrade`, and `share` beyond Can open. The
+owner, whose configuration has a `server`, keeps SSH for those; `--api` makes
+one go through the dashboard instead, to see what a token's holder sees.
 
 `sitesolide backups` lists the snapshots the machine keeps of the project's
 data folder, on the server and in the bucket, with the size of each and what

@@ -5,9 +5,11 @@ and a list of people with access, each with a role: Can open, Viewer,
 Developer or Admin. The owner can do everything; tokens let people and agents
 deploy, never beyond their person's roles.
 
-The owner of the machine deploys over SSH, as root. Nobody else needs that, and
-nobody else should have it. Two things let others work on the machine, and
-neither is root:
+Every deployment goes through the dashboard's API with a token, the owner's
+included: none goes over SSH. The owner keeps root SSH for installing and
+upgrading the machine and for its machine-wide commands; nobody else needs
+it, and nobody else should have it. Two things let others work on the
+machine, and neither is root:
 
 - **people with access**: someone, by their email, holds a role on a project,
   opens its site when it is restricted, and from Viewer up signs in to the
@@ -223,6 +225,40 @@ the restarts it made, which the steward journals under `token:<id>` with the
 person beside it. A token's sheet on the *Tokens* page lists both, its last
 ten lines, and *All activity* opens the rest in *Activity*.
 
+## The owner's own token
+
+The owner deploys with a token too: their own, for every project
+(`scope.all`). It reaches every project the server carries but the
+platform's own, the dashboard and the portal, and those another token holds;
+creates any project, opens a site to the public, declares a domain and
+`"network": "outbound"`, sets secrets, keeps a `lock` key, is bounded by no
+token cap, and deploys under a name a removed project left. It alone carries
+two options: `--force`, which replaces a unit or a block edited by hand on the
+machine, and `--adopt`, which takes a name back from the token that holds it
+(`DELETE /api/v1/projects/<slug>/claim`), its store moved aside as previous
+versions. A person's token never has it: minting one for someone is refused.
+
+It is minted in one of two ways, both the owner's alone:
+
+```bash
+sitesolide login --owner        # over the owner's SSH access, into the vault, never shown
+```
+
+which asks the steward's owner socket, `POST /tokens/owner`, root's alone:
+root over SSH is the proof the dashboard's unlock stands for. The secret
+travels on the SSH session into `~/.config/sitesolide/secrets/team-token`,
+0600, the dashboard's address beside it, never on a screen, in an event or
+an argument. A vault already holding a token the dashboard accepts for every
+project keeps it, unless `--replace`. Or on the dashboard's *Tokens* page,
+under the unlock: *New token*, *Every project, as you*, then `sitesolide
+login --url https://dashboard.<zone>` with it. `sitesolide setup` ends by
+naming the first.
+
+It is the strongest credential after root SSH: whoever holds it deploys code
+to every project. Keep it on the owner's workstation; give an agent or a CI a
+token of the projects it works on instead, and revoke it from the *Tokens*
+page when a laptop is lost.
+
 ## What you get from the owner
 
 - the dashboard's address, `https://dashboard.<zone>`;
@@ -266,10 +302,12 @@ cannot refuse is an environment that adds an authority of its own,
 `NODE_EXTRA_CA_CERTS`, beside a proxy, `HTTPS_PROXY`, that answers with a
 certificate it signed: an agent's sandbox is set up by whoever trusts it.
 
-A workstation with no `server` in its configuration uses the dashboard for
-`deploy`, `status`, `logs`, `share`, `secrets` and `restart`. Every other
-command (`lock`, `unlock`, `domain`, `remove`, `run`, `people`, `refresh`,
-`backups`) needs the owner's SSH access and says so.
+`deploy` always goes through the dashboard, whatever the configuration
+holds. A workstation with no `server` in its configuration uses the dashboard
+for `status`, `logs`, `share`, `secrets` and `restart` too. Every other
+command (`lock`, `unlock`, `domain`, `remove`, `rename`, `disable`, `enable`,
+`run`, `people`, `refresh`, `backups`) needs the owner's SSH access and says
+so.
 
 ### In an agent's sandbox
 
@@ -307,11 +345,15 @@ $ sitesolide deploy
 
 In order:
 
-1. **The manifest goes first.** The dashboard judges it, with the same
-   validation as the owner's CLI and your token's scope, before anything is
-   built or sent. Every reason it refuses comes back at once. Before even
-   that, the CLI finds the value of every name under `secrets.build` (below):
-   one missing stops the deployment with nothing sent.
+1. **The manifest goes first, to be planned.** The dashboard judges it, with
+   the same validation as the CLI's and your token's scope, then the steward
+   plans it as the installer would, `POST /api/v1/deployments/plan`, writing
+   nothing: every reason it refuses comes back before anything is built or
+   sent. What the machine keeps of the project, general access set from the
+   dashboard and the former names a rename left, is written back into
+   `sitesolide.json`. Before even that, the CLI finds the value of every name
+   under `secrets.build` (below): one missing stops the deployment with
+   nothing sent.
 2. **The build runs on your workstation**, as for the owner: the machine
    receives its result, not your toolchain. It gets a clean environment: a
    short list of your variables a toolchain needs (`PATH`, `HOME`, the
@@ -330,8 +372,16 @@ In order:
    non-zero if the deployment fails.
 
 **The port is optional.** A manifest with a `start` and no `port` gets the
-lowest free one, and keeps it on later deployments. The CLI prints it: write
-it in `sitesolide.json` to make it explicit.
+lowest free one, and keeps it on later deployments. The CLI writes it into
+`sitesolide.json`, after `start`, once the deployment succeeded: commit it.
+`deploy.sh` prints it for you to write.
+
+**A dry run is the machine's plan.** `sitesolide deploy --dry-run` sends the
+manifest alone, to `POST /api/v1/deployments/plan`, and shows what the
+installer would lay: the systemd units and the Caddy block generated from
+the manifest the machine would keep, its ports chosen and its door, and what
+the store lacks; it builds nothing unless `--build`, writes nothing, and is
+refused exactly where the deployment would be.
 
 ### What a token's project may not do
 
@@ -342,8 +392,8 @@ it in `sitesolide.json` to make it explicit.
 | `"network": "outbound"` | the token may use outbound network | services reach only the loopback otherwise |
 | `egress` | the token may use outbound network | the hosts it lists are reached through the egress proxy, a way out all the same |
 | `domain` | the token may declare a domain | switching to it stays the owner's job: the machine's `active` stands whatever the manifest says, and a name or an alias it did not cover before stays inactive; on a domain switched on, a new name or alias is refused, since it would switch the whole domain off |
-| `lock` | never | a preview code is chosen in the site's *Access* section, by its Admin or the owner, or with `sitesolide lock` over the owner's SSH |
-| `memory` above 1G, more than 6 services | never | one machine serves everyone |
+| `lock` | the owner's token for every project | a preview code is chosen in the site's *Access* section, by its Admin or the owner, or with `sitesolide lock` over the owner's SSH |
+| `memory` above 1G, more than 6 services | the owner's token for every project | one machine serves everyone |
 
 A manifest without `portal` is not refused: a new project a token creates
 without the public permission is Restricted whatever the manifest says. A
@@ -390,11 +440,8 @@ sitesolide logs --follow
 ```
 
 `--json` works here as over SSH (see [agents.md](agents.md)): one event per
-line, and one final `result` or `error` carrying a `hint`. `deploy --dry-run`
-is refused, and nothing is sent: a dry run reads the machine over the owner's
-SSH access, which a token does not carry. Review `sitesolide.json` instead; the
-machine judges it before anything is built or uploaded. Every other option a
-command does not take with a token is refused the same way.
+line, and one final `result` or `error` carrying a `hint`. An option a
+command does not take with a token is refused, and nothing is sent.
 
 ## Secrets with a token
 
@@ -716,7 +763,9 @@ curl -s -H "$AUTH" -X PUT -H 'Content-Type: application/json' \
 | Route | What it does |
 |---|---|
 | `GET /api/v1/whoami` | the token's holder, scope and projects |
-| `POST /api/v1/deployments` `{ manifest }` | judges the manifest, opens a deployment for 15 minutes; a token holds three waiting for their archive, a fourth replaces the oldest |
+| `POST /api/v1/deployments/plan` `{ manifest, force }` | judges the manifest as a deployment would and plans it, writing nothing: `{ plan }`, `slug`, `creating`, `existing`, `portal`, `allocated` (the ports the machine would choose), `manifest` (the text the installer would lay, its ports and the machine's door applied) and `placeholders`; what `sitesolide deploy --dry-run` shows |
+| `POST /api/v1/deployments` `{ manifest, force }` | judges the manifest, opens a deployment for 15 minutes; a token holds three waiting for their archive, a fourth replaces the oldest. `force`, true to replace a unit or a block edited by hand, the owner's token for every project alone |
+| `DELETE /api/v1/projects/<slug>/claim` | the owner's token for every project alone: takes the name back from the token that holds it, its store moved aside as previous versions; `{ claim }`, `slug`, `released` (the token's id, or null), `dropped` (`variables`, `files`, names only): `sitesolide deploy --adopt` |
 | `PUT /api/v1/deployments/<id>/bundle` | the archive, 100 MiB compressed at most; starts the installer |
 | `GET /api/v1/deployments/<id>?after=<n>` | state, log lines from `n`, `next`, `error`, `url`, `placeholders` (what `{zone}` and `{contact}` become, for the build), and once the installer is done `missingSecrets`, the declared `runtime` names and `files` the store lacked, null for a static site |
 | `GET /api/v1/projects` | the projects the token reaches, with their status |
@@ -781,9 +830,16 @@ Download it outside the project, or its archive carries it:
 curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/deploy.sh -o ~/deploy.sh
 export SITESOLIDE_API=https://dashboard.<zone>
 read -rs SITESOLIDE_TOKEN && export SITESOLIDE_TOKEN   # typed, kept out of the history
+bash ~/deploy.sh --dry-run                   # the machine's plan, nothing built, sent nor changed
 bash ~/deploy.sh                             # from the project's folder, or name it
+bash ~/deploy.sh --force                     # over a unit or a block edited by hand, the owner's token alone
 bash ~/deploy.sh --archive bundle.tar.gz     # build and write the archive, send nothing
 ```
+
+`--dry-run` posts the manifest to the plan route and prints what the machine
+would lay, the manifest it would keep with its ports and door, then stops.
+The ports a deployment chose are printed, for you to write into
+`sitesolide.json`; the CLI writes them itself.
 
 It is `sitesolide deploy` with a token, step for step: the same refusals
 before anything leaves (a folder of dependencies present and not excluded, a
@@ -840,8 +896,9 @@ reader, with each of the four JSON readers.
   give opens the site until it can. What you give is kept; tell the owner of
   the machine.
 - **`edited-by-hand`**: a file of your project on the machine, its unit or its
-  Caddy block, was changed by hand. The owner reads it and deploys once over SSH
-  with `--force`; yours works again afterwards.
+  Caddy block, was changed by hand. The owner reads it and deploys once with
+  their own token for every project and `--force`; yours works again
+  afterwards.
 - **`caddy-busy`**: the owner or the dashboard is changing Caddy. Nothing served
   changed: deploy again in a moment.
 - **A project you created and can no longer deploy**: your token was revoked.
@@ -850,8 +907,8 @@ reader, with each of the four JSON readers.
   again: any token that may create projects may create one of that name,
   once the machine keeps none of its backup snapshots. Until then the name
   is `reserved` to every token: a project created under it would list its
-  predecessor's snapshots and restore them. The owner deploys it over SSH,
-  or clears what was left.
+  predecessor's snapshots and restore them. The owner deploys it with their
+  own token for every project, or clears what was left.
   A person's own token answers to their role instead: a project they created
   is theirs to deploy as long as they are its Developer or Admin, with any
   token of theirs that names it.

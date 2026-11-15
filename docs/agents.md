@@ -7,10 +7,15 @@ more than a person at a terminal has:
 - **the CLI with `--json`**, which an agent runs as you would;
 - **a skill**, `skills/sitesolide/SKILL.md`, which teaches the workflow.
 
-The commands are yours, with the same refusals. A deploy an agent starts
-reads the general access the dashboard set, takes the Caddy lock, says which
-secrets the server lacks and rolls a broken Caddy block back exactly as yours
-would. Leave `sitesolide deploy`, `sitesolide share` and
+The commands are yours, with the same refusals. Every deployment goes
+through the dashboard's API with a token, yours included, none over SSH: an
+agent needs `SITESOLIDE_API=https://dashboard.<zone>` and `SITESOLIDE_TOKEN`
+in its environment and nothing else, no configuration and no SSH key. A
+deploy an agent starts is judged by the machine as yours is, follows the
+general access the dashboard set, says which secrets the server lacks, and
+the installer rolls a broken Caddy block back exactly as for yours. Give an
+agent a token of the projects it works on rather than your own for every
+project: what that token may not do is refused `out-of-scope`. Leave `sitesolide deploy`, `sitesolide share` and
 `sitesolide secrets generate` among the commands your client asks you about,
 rather than allowing them once and for all, so that every real deploy, every
 person let in and every key drawn is yours to approve.
@@ -22,7 +27,7 @@ person let in and every key drawn is yours to approve.
 | infer a manifest for a folder (`detect`) | remove a project, whose data since the last backup is lost for good |
 | dry-run a deploy, and deploy | lock or unlock a preview, switch a domain |
 | read the server's status, a project's logs, its lock state | `--force` over a file someone edited on the machine |
-| report a name a token holds, which `deploy` stops on over SSH, naming the token | take the name back with `deploy --adopt`, unless you asked for it: it drops that token's hold |
+| report a name another token holds, which `deploy` stops on, `out-of-scope` naming `--adopt` | take the name back with `deploy --adopt`, unless you asked for it: it drops that token's hold, and only your own token for every project carries it |
 | give the people you named access to a project, by email or `@domain`, with a role, and read who has access | give access to anyone you did not name, or make a site Public, which is its general access, the dashboard's |
 | list the machines sitesolide created at a cloud provider | destroy one, unless you asked for that machine to be destroyed |
 | check a machine with `setup --dry-run`, and install it when you asked | replace DNS records that point elsewhere (`setup --dns-replace`), unless you decided it |
@@ -259,8 +264,8 @@ servers' ports itself, since its services name each other's in their `env`.
 
 **A dry run runs nothing of the folder.** The manifest's `build` is the
 folder's own code, and a dry run is what an agent tries first, on a folder it
-may have just cloned, from the workstation that holds root SSH to the machine:
-it shows the build as a `planned` event, and does not run it. Only a person
+may have just cloned, from a workstation that holds a token: it shows the
+build as a `planned` event, and does not run it. Only a person
 typing `sitesolide deploy --dry-run --build` runs it in a dry run, never an
 agent on its own. Likewise, a name inference would put into a command, a folder
 under `cmd/` or a server file, is declined unless it is made of letters,
@@ -320,12 +325,14 @@ Through a token, the same holds.
 
 ```console
 $ sitesolide deploy --dry-run --json
-{"type":"step","message":"project shop, service"}
-{"type":"step","message":"port 3042, the lowest free one on the server"}
-{"type":"planned","message":"write /home/me/shop/sitesolide.json with \"port\": 3042"}
+{"type":"step","message":"project shop, through https://dashboard.example.com: a dry run, nothing is changed on the machine nor here"}
+{"type":"step","message":"plan: a new project"}
+{"type":"info","message":"port 3042, chosen by the machine"}
 {"type":"file","name":"shop.service","content":"# Service of project shop, ..."}
-{"type":"planned","message":"rsync -a --delete --exclude node_modules ..."}
-{"type":"result","ok":true,"command":"deploy","slug":"shop","kind":"service","dryRun":true,"manifestWritten":false,"port":3042,"portChosen":"free","portal":false,"url":"https://shop.example.com/","status":null}
+{"type":"file","name":"shop.caddy","content":"..."}
+{"type":"planned","message":"upload 12 file(s), 48213 bytes, 15102 compressed, unbuilt: --build builds first"}
+{"type":"planned","message":"the installer lays it, restarts the services and verifies https://shop.example.com/"}
+{"type":"result","ok":true,"command":"deploy","slug":"shop","kind":"service","dryRun":true,"port":3042,"manifestWritten":false,"portal":false,"url":"https://shop.example.com/","status":null,"creating":true,"missingSecrets":null,"buildSecrets":[]}
 ```
 
 | `type` | Fields | What it is |
@@ -346,7 +353,7 @@ What `result` carries:
 
 | Command | Fields |
 |---|---|
-| `deploy` | `slug`, `kind` (`static`, `service`, `services`), `runs` for an app (`servers`, `workers`, `scheduled`, how many of each), `dryRun`, `port` (null when the main service listens on nothing), `portChosen` (`kept`, `free`) when chosen, `portal`, `inferred` when the manifest was, `manifestWritten`, `url`, `status` (HTTP, null in a dry run), `headless` (true for a project that serves no page), `missingSecrets` (`runtime` and `files`, the declared names the server lacks, empty lists when none, null in a dry run or when the store could not be listed), `buildSecrets` (each `name` and `source`, `environment` or `workstation`, never a value), `takenBack` after `--adopt` took a name back (`from`, the token's id or null, and the `variables` and `files` its store held, moved aside, names only); with `--compare`, `compared`, `changes` (what would change on the server, empty when nothing would) and `kept` (units edited on the machine, which deploy leaves) |
+| `deploy` | `slug`, `kind` (`static`, `service`, `services`), `runs` for an app (`servers`, `workers`, `scheduled`, how many of each), `dryRun`, `port` (null when the main service listens on nothing), `portChosen` (`kept`, `free`) when chosen, `portal`, `inferred` when the manifest was, `manifestWritten`, `url`, `status` (the HTTP status the address answers this workstation, null in a dry run or when it does not answer here yet; the machine verified it before), `deployment` and `creating`, `headless` (true for a project that serves no page), `missingSecrets` (`runtime` and `files`, the declared names the server lacks, empty lists when none, null in a dry run or when the store could not be listed), `buildSecrets` (each `name` and `source`, `environment` or `workstation`, never a value), `takenBack` after `--adopt` took a name back (`from`, the token's id or null, and the `variables` and `files` its store held, moved aside, names only); with `--compare`, in the dashboard's or the portal's folder alone, `compared`, `changes` (what would change on the server, empty when nothing would) and `kept` (units edited on the machine, which deploy leaves) |
 | `detect` | `kind`, `manifest`, `reasons`, `notes`, `written` |
 | `status` | `projects` (each with its `services`), `ports`, `memory`, in megabytes; a scheduled service between two runs reads `waiting`, and carries `schedule`, `lastRun`, `lastResult` and `nextRun` |
 | `logs` | `slug`, `units`, `entries` |

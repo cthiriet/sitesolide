@@ -133,7 +133,7 @@ What still stops a deployment, and why:
 |---|---|---|
 | a build secret missing | before anything is read on the machine or sent | the remedy is on your workstation, and nothing is half done |
 | a workstation secrets file that does not parse | the same | a guess would build with a wrong value |
-| over SSH, a name a token holds that the machine does not carry yet, without `--adopt` | before the prompts | your values would sit in a store, and your project under a name, that token may deploy code to ([commands.md](commands.md)) |
+| a name another token holds, without `--adopt` (the owner's token for every project) | before the prompts, at the plan | your values would sit in a store, and your project under a name, that token may deploy code to ([commands.md](commands.md)) |
 | the store's folder is a link, not a folder, or not root's | before the units and the code | systemd would read through it |
 | the store's folders cannot be laid | the same | without `files/`, every start of the project fails |
 | the build, `install` or the stability check fails | as always | |
@@ -258,7 +258,7 @@ and no Unicode noncharacter (U+FDD0 to U+FDEF, the last two code points of a
 plane): systemd reads a file holding one as invalid and starts the service
 with none of its variables. A refused value never lands.
 
-**Made before the units.** Every deployment of an app, over SSH or by token,
+**Made before the units.** Every deployment of an app, by token or of a platform component over SSH,
 and `sitesolide refresh`, lay the store's folders before they write a unit:
 `files/` must exist, empty or not, or every start fails with 243. The steward
 never deletes `files/` nor the project's folder, only files inside them; a

@@ -28,6 +28,7 @@ sitesolide setup
 ```
 
 ```bash
+sitesolide login --owner            # your deploy token, minted over SSH into the vault
 cd your-project && sitesolide deploy
 ```
 
@@ -65,9 +66,13 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
   looking after the project: `sitesolide share alice@example.com`. Someone
   outside the company gets password access. See
   [portal/README.md](portal/README.md).
-- **Personal tokens instead of root SSH.** Colleagues and agents deploy with a
-  personal, scoped, revocable token, never stronger than its holder's roles;
-  only the owner holds SSH.
+- **Every deploy through a token, never root SSH.** The owner deploys with
+  their own token for every project, colleagues and agents with a personal,
+  scoped, revocable one, never stronger than its holder's roles. The machine
+  judges each, and installs it without the deployer ever holding root; only
+  the owner holds SSH, to install and upgrade the machine. An agent needs
+  [llms.txt](llms.txt) and two variables, `SITESOLIDE_API` and
+  `SITESOLIDE_TOKEN`.
 - **Secrets on the server**, never in git: `sitesolide.json` lists their
   names, the server keeps each project's values in its own store, set from
   the dashboard or with `sitesolide secrets set API_KEY`, typed at a prompt,
@@ -106,7 +111,7 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
 - [How it works](docs/concepts.md): the parts, and who may touch what
 - [The manifest](docs/manifest.md): every key of `sitesolide.json`
 - [Commands](docs/commands.md): everything the CLI does
-- [People and tokens](docs/access.md): roles on a project, and deploying with a token instead of SSH
+- [People and tokens](docs/access.md): roles on a project, the owner's token, and deploying with a token
 - [Secrets](docs/secrets.md): what goes in `env`, in the server's store, in a file, or with whoever deploys, and why never in git
 - [Agents](docs/agents.md): `--json` and the skill
 - [Upgrading](docs/upgrading.md): from one release to the next on a running machine

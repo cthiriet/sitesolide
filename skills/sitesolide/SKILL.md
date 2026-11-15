@@ -8,12 +8,37 @@ when_to_use: Requests such as "deploy this", "put it online", "publish the site"
 
 sitesolide serves every project of its owner from one machine they own. A
 project is a folder; `sitesolide deploy` builds it on this workstation, uploads
-it, installs a confined service and its Caddy block, and checks that the site
-answers over HTTPS. There is no staging: **what you deploy is live, for every
-visitor, at once.**
+it to the dashboard's API with a token, and the machine installs a confined
+service and its Caddy block and checks that the site answers over HTTPS.
+There is no staging: **what you deploy is live, for every visitor, at once.**
 
 Run the CLI with `--json`: every line of standard output is one JSON event,
 the last one a `result` or an `error`.
+
+## The token
+
+Every deployment goes through a token, `sst_` then 43 characters, the
+owner's included: none goes over SSH. All you need is
+`SITESOLIDE_API=https://dashboard.<zone>` and `SITESOLIDE_TOKEN` in your
+environment, both together; or a token the user kept with
+`sitesolide login --url https://dashboard.<zone> --token-stdin`. Never ask
+the user to paste a token into the conversation, never read
+`~/.config/sitesolide/secrets/`, never point `SITESOLIDE_API` at another
+address than the one the user gave.
+
+- The owner's own token covers every project and alone carries `--force`
+  and `--adopt`. The owner mints it with `sitesolide login --owner`, over
+  their SSH access, into the vault and never shown, or on the dashboard's
+  Tokens page ("Every project, as you"). Suggest it when a deploy on the
+  owner's workstation says it needs a token; minting is the user's to run.
+- Any other token covers the projects it was given, and what it may not do
+  is refused `out-of-scope`: never work around it with another slug or token.
+
+Without the CLI, `deploy.sh` makes the same deployment with bash and curl:
+`curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/deploy.sh -o ~/deploy.sh`,
+then `bash ~/deploy.sh --dry-run` and, on the user's yes, `bash ~/deploy.sh`
+from the project's folder. It needs a `sitesolide.json` and prints the
+ports the machine chose, which you write into it.
 
 ## The workflow
 
@@ -50,17 +75,18 @@ the last one a `result` or an `error`.
      site: say so first (`docs/manifest.md`, "What fits on the machine");
    - the slug, which is the address: `<slug>.<their zone>`.
    Write `sitesolide.json` (`detect --write`, or by hand) and edit it there.
-3. **Dry run.** `sitesolide deploy --dry-run --json`. It reads the server,
-   shows the generated unit and block and every step, and changes nothing; it
-   does not run the project's build either, which is the folder's own code.
-   Show the user what it plans. With a token instead of SSH, a dry run is
-   refused: review `sitesolide.json` with the user.
+3. **Dry run.** `sitesolide deploy --dry-run --json`. The machine judges
+   the manifest as the deployment would and plans it, writing nothing: the
+   units and the block it would lay come as `file` events, the ports it
+   would choose as `info`, and a refusal comes back now. It does not run the
+   project's build either, which is the folder's own code (`--build` does).
+   Show the user what it plans.
 4. **Deploy**, once the user agrees: `sitesolide deploy --json`. A folder
-   still without a manifest needs `--yes`; with a token, write it first with
-   `sitesolide detect --write`.
-5. **Read the result.** On success, give the user the `url`. When
-   `manifestWritten` is true, `sitesolide.json` changed on disk (a port chosen,
-   an inferred manifest, general access set from the dashboard): commit it.
+   still without a manifest needs `--yes`, which writes the inferred one.
+5. **Read the result.** On success, give the user the `url`; `status` is
+   what the address answers here. When `manifestWritten` is true,
+   `sitesolide.json` changed on disk (a port chosen, an inferred manifest,
+   general access set from the dashboard, a former name): commit it.
    `missingSecrets` lists the declared names the server has no value for:
    the deploy went through without them. For a key the project checks
    itself, a session secret or an internal token, offer
@@ -86,6 +112,10 @@ the last one a `result` or an `error`.
 
 Every error carries a `hint`: follow it. The usual ones:
 
+- **`unauthenticated`, "sitesolide deploy needs a token".** No token here:
+  the user sets `SITESOLIDE_API` and `SITESOLIDE_TOKEN`, or runs
+  `sitesolide login`; the owner mints theirs with `sitesolide login --owner`.
+  Never look for a token elsewhere.
 - **`missing settings`.** Nothing is configured on this workstation. A new
   server is `sitesolide machine create --provider <cloud>`, then `sitesolide
   setup` with the `next` command it printed, run only when the user asks, with
@@ -117,9 +147,11 @@ Every error carries a `hint`: follow it. The usual ones:
 - **A schedule systemd does not read.** The deploy stopped before writing
   anything: fix the expression in `schedule`, check it with the user, deploy
   again.
-- **A block or unit "no longer matches the manifest".** Someone edited it on
-  the machine. Show the user the differing lines; only they decide whether
-  `--force` replaces it.
+- **A block or unit "no longer matches the manifest"** (`edited-by-hand`).
+  Someone edited it on the machine. Tell the user; only the owner decides
+  whether `--force` replaces it, and only their own token carries it.
+- **The name is held by another token.** The owner alone takes it back,
+  with `sitesolide deploy --adopt`, on their decision.
 - **A port is taken.** Delete `port` from `sitesolide.json`; deploy picks a free
   one and writes it back.
 - **The name already exists on the server.** Another project uses it: pick

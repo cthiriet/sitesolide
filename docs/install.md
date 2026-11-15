@@ -12,6 +12,7 @@ sitesolide setup
 ```
 
 ```bash
+sitesolide login --owner
 cd your-project && sitesolide deploy
 ```
 
@@ -127,8 +128,13 @@ The dashboard is then at `https://dashboard.example.com`.
 ## 4. Deploy something of your own
 
 ```bash
+sitesolide login --owner          # once: your token for every project, into the vault
 cd your-project && sitesolide deploy
 ```
+
+Every deployment goes through the dashboard's API with a token, yours
+included: `login --owner` mints it over the SSH access setup used, never
+shown. See [access.md](access.md#the-owners-own-token).
 
 A folder without `sitesolide.json` gets one inferred from what it holds:
 `sitesolide detect` shows it, `sitesolide deploy --yes` writes it and deploys.
@@ -166,10 +172,11 @@ What the monitor finds down also shows among the dashboard's Issues.
 
 ## 6. Let others in, without SSH
 
-Colleagues and agents deploy with a personal token instead of root SSH: create
-one on the dashboard's *Tokens* page, and send its holder to [access.md](access.md),
-"People and tokens". Setup installed what it needs, unless it ran with
-`--minimal`. Once signing in with a company account is set up
+Every deployment goes through a token, yours included: `sitesolide login
+--owner` mints your own, for every project, once setup is done. Colleagues
+and agents deploy with a personal token instead of root SSH: create one on
+the dashboard's *Tokens* page, and send its holder to [access.md](access.md),
+"People and tokens". Once signing in with a company account is set up
 ([portal/README.md](../portal/README.md#signing-in-with-a-company-account)), give
 colleagues a role on a project instead, from its *Access* section in the
 dashboard or with `sitesolide share <email> --role developer` in its folder:
