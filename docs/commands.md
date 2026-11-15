@@ -27,11 +27,21 @@ sitesolide setup <user@host>    install a fresh Debian 13 machine, resumable, a 
    --dns-replace                replace records that point elsewhere, on your decision alone
    --cloudflare-token-stdin     read the Cloudflare token from standard input
    --minimal                    leave out backups and the egress proxy
+   --ssh-from <networks>        ssh allowed from these networks alone, recorded: docs/ssh.md
+   --ssh-interface <name>       ssh allowed on this interface alone, tailscale0 for a tailnet, recorded
+   --ssh-public                 ssh open to all again, the break-glass: drops what the two above recorded
+   --tailscale                  join a tailnet, key in TS_AUTHKEY or on standard input, never Tailscale SSH
+   --tailscale-tag <tag:name>   the tag the machine joins with, tag:server by default
+   --tailscale-key-stdin        read the Tailscale auth key from standard input
+   --host-key <SHA256:...>      the host key the provider's console showed, pinned before the first login
    --any-os                     go on with a system other than Debian 13, at your own risk
    --config-dir <dir>           another installation's own configuration folder
    --dry-run                    check every step, change nothing
 sitesolide upgrade              bring every installed component to this release's code, resumable
    --dry-run                    list each component, up to date, out of date or missing, change nothing
+   --ssh-from <networks>        ssh allowed in ufw from these networks alone, recorded: docs/ssh.md
+   --ssh-interface <name>       ssh allowed in ufw on this interface alone, tailscale0 for a tailnet, recorded
+   --ssh-public                 ssh open to all again in ufw, the break-glass
 sitesolide refresh <slug>       its units generated again from the manifest on the server, no code sent
    --all                        every project, one at a time, stopping at the first that fails
    --dry-run                    show the units it would write, change nothing
@@ -97,7 +107,7 @@ sitesolide login --url <https://dashboard.zone>
    --token-stdin                read the token from standard input
 sitesolide login --owner        the owner's token for every project, minted over SSH into the vault, never shown
    --replace                    a new one even if the vault holds one the dashboard accepts
-sitesolide machine create|list|destroy --provider <provider>
+sitesolide machine create|list|destroy|firewall --provider <provider>
                                 a VM ordered by API, before setup: sitesolide machine lists the options
 sitesolide machine providers    the clouds it orders from, and which have credentials here
 any command --api               go through the dashboard's API even with a server
@@ -695,15 +705,21 @@ sitesolide machine create --provider <provider> --name <name>
    --backups                    the provider's daily backups, where it has them, at a price
    --ssh-key <path.pub>         ~/.ssh/id_ed25519.pub, id_ecdsa.pub or id_rsa.pub by default,
                                 else the SSH agent's key; or SHA256:... for one the agent holds
+   --ssh-from <networks>        port 22 open to these networks alone, 203.0.113.0/24,2001:db8::/32
 sitesolide machine list --provider <provider>
                                 the machines sitesolide created, their addresses and price
+sitesolide machine firewall <name> --provider <provider>
+                                who reaches port 22 at the provider's firewall; Hetzner's for now
+   --ssh-from <networks>        these networks alone
+   --ssh-closed                 nobody: the owner comes in over a tailnet, see docs/ssh.md
+   --ssh-public                 everyone again: the break-glass
 sitesolide machine destroy <name> --provider <provider>
                                 delete the machine and its firewall, for good
    --confirm <name>             the name typed back, where no terminal can ask for it
    --delete-key                 delete the SSH key uploaded for it too
 sitesolide machine providers
                                 the providers, and whether this workstation holds credentials for each
-create, list or destroy --token-stdin
+create, list, firewall or destroy --token-stdin
                                 read the credentials from standard input rather than the environment
 
 providers: hetzner, digitalocean, aws, gcp, azure, scaleway, vultr, linode

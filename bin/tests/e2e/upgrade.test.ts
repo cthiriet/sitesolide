@@ -104,7 +104,7 @@ describe("sitesolide upgrade, in front of the fake machine", () => {
     vm = createFakeVm();
     const r = await upgrade(vm, workstation(), ["--force", "--json"]);
     expect(r.code).toBe(1);
-    expect(events(r.output).at(-1)).toMatchObject({ type: "error", message: "usage: sitesolide upgrade [--dry-run] [--json]" });
+    expect(events(r.output).at(-1)).toMatchObject({ type: "error", message: "usage: sitesolide upgrade [--dry-run] [--json] [--ssh-from <networks>] [--ssh-interface <name>] [--ssh-public]" });
     expect(vm.logs()).toEqual([]);
   });
 

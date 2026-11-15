@@ -7,10 +7,13 @@
  *   packages      sudo ufw fail2ban unattended-upgrades rsync git curl unzip, and nft;
  *                 fail2ban installed without being started
  *   account       the deploy account: sudo without a password, the operator's keys
- *   firewall      ufw: 22 (or the port ssh answers on), 80 and 443 in, the rest refused
+ *   firewall      ufw: 22 (or the port ssh answers on), 80 and 443 in, the rest refused;
+ *                 ssh from the networks of --ssh-from and the interfaces of
+ *                 --ssh-interface alone when given (bin/cli/ssh-access.ts)
  *   updates       unattended security updates, every day
  *   directories   /srv/sites, /srv/api, /srv/data
- *   ssh           no root login, no password: only once a login as the deploy account is proven
+ *   ssh           no root login, no password, the deploy account alone, modern
+ *                 algorithms, no forwarding: only once a login as the deploy account is proven
  *   fail2ban      enabled and running, last, the workstation's address spared for the run
  *
  * NO LOGIN AS AN ACCOUNT THAT DOES NOT EXIST. Until the account step has found
@@ -44,6 +47,7 @@
  * passwords would win over a 99-hardening.conf. The check reads what sshd
  * actually applies, `sshd -T`, not the file setup wrote.
  */
+import { accessAdvice, accessProblem, describeAccess, isPublic, PUBLIC_SSH, sshRuleConditions, sshRulesRun, type SshAccess, type SshConnection } from "./ssh-access";
 import { checkScript, readCheck, StepFailure, type Check, type Step } from "./steps";
 
 /** What one command on the machine gave back. */
@@ -93,6 +97,14 @@ export type HardenContext = {
   clientAddress: string | null;
   /** The address fail2ban was told to spare for the run, to be withdrawn at its end; null when none. */
   ignoredAddress: string | null;
+  /**
+   * Who may open an ssh connection, see bin/cli/ssh-access.ts: everyone when
+   * absent. `sshReopen`, `--ssh-public`: the port opened to all again.
+   */
+  sshAccess?: SshAccess;
+  sshReopen?: boolean;
+  /** The connection the run arrived by: what proves a restricted access before public ssh is closed. */
+  connection?: SshConnection;
 };
 
 /**
@@ -300,13 +312,20 @@ chmod 600 "$keys"
 const WEB_PORTS = [80, 443];
 
 /**
- * The port ssh answered on rather than 22 by habit: a machine whose sshd
- * listens elsewhere would be cut off by the first `ufw enable`. Behind a
- * tunnel, that port alone: every request comes in over the connector's own
- * connection out, and Let's Encrypt asks the zone's DNS, never the machine.
+ * The ports the firewall opens: the port ssh answered on rather than 22 by
+ * habit, a machine whose sshd listens elsewhere would be cut off by the first
+ * `ufw enable`, and the web's. Behind a tunnel, ssh's alone: every request
+ * comes in over the connector's own connection out, and Let's Encrypt asks
+ * the zone's DNS, never the machine. Who may reach the ssh port is
+ * ssh-access.ts's: everyone, or the networks and interfaces given.
  */
 export function firewallPorts(sshPort: number, tunnel = false): number[] {
   return [...new Set([sshPort, ...(tunnel ? [] : WEB_PORTS)])].sort((a, b) => a - b);
+}
+
+/** The web's ports the firewall opens to all, the ssh port apart: its rules are ssh-access.ts's. */
+function webPorts(sshPort: number, tunnel: boolean): number[] {
+  return firewallPorts(sshPort, tunnel).filter((port) => port !== sshPort);
 }
 
 /**
@@ -319,11 +338,17 @@ export function closedPorts(sshPort: number): number[] {
   return WEB_PORTS.filter((port) => port !== sshPort);
 }
 
-export function firewallCheck(sshPort: number, tunnel = false): string {
+/**
+ * ufw active, incoming denied, the web's ports open, and ssh as the access
+ * says: with none, any rule that lets it in, so that a run given no
+ * restriction never reopens what an earlier one closed.
+ */
+export function firewallCheck(sshPort: number, tunnel = false, access: SshAccess = PUBLIC_SSH, reopen = false): string {
   return machineCheck("setup:firewall:check", [
     { label: "ufw-active", test: "ufw status | grep -q '^Status: active'" },
     { label: "ufw-deny-incoming", test: "ufw status verbose | grep -q 'Default: deny (incoming)'" },
-    ...firewallPorts(sshPort, tunnel).map((port) => ({ label: `ufw-${port}`, test: `ufw status | grep -Eq '^${port}/tcp +ALLOW'` })),
+    ...sshRuleConditions(sshPort, access, reopen),
+    ...webPorts(sshPort, tunnel).map((port) => ({ label: `ufw-${port}`, test: `ufw status | grep -Eq '^${port}/tcp +ALLOW'` })),
   ]);
 }
 
@@ -343,18 +368,34 @@ export function webPortsRun(sshPort: number): string {
 /**
  * The ports are opened before the default turns to deny, and both before
  * ufw is enabled: every command setup sends is a new connection, and one
- * refused between two lines would leave the script half run.
+ * refused between two lines would leave the script half run. ssh's rules
+ * come first, and with a restricted access the restricted rules are laid
+ * before the public ones are deleted: see ssh-access.ts. A run asks
+ * proveAccessPath first.
  */
-export function firewallRun(sshPort: number, tunnel = false): string {
+export function firewallRun(sshPort: number, tunnel = false, access: SshAccess = PUBLIC_SSH, reopen = false): string {
+  const web = webPorts(sshPort, tunnel);
   return runScript(
     "setup:firewall:run",
     `
-for port in ${firewallPorts(sshPort, tunnel).join(" ")}; do ufw allow "$port/tcp" >/dev/null </dev/null; done
+${sshRulesRun(sshPort, access, reopen)}
+${web.length === 0 ? "" : `for port in ${web.join(" ")}; do ufw allow "$port/tcp" >/dev/null </dev/null; done`}
 ufw default deny incoming >/dev/null </dev/null
 ufw default allow outgoing >/dev/null </dev/null
 ufw --force enable >/dev/null </dev/null
 `,
   );
+}
+
+/**
+ * Whether a run may close public ssh: the connection it holds must arrive by
+ * the path that stays open. Throws the refusal before anything changes.
+ */
+export function proveAccessPath(context: Pick<HardenContext, "sshAccess" | "connection">): void {
+  const access = context.sshAccess ?? PUBLIC_SSH;
+  if (isPublic(access)) return;
+  const problem = accessProblem(access, context.connection ?? { client: null, local: null, port: null, device: null });
+  if (problem !== null) throw new StepFailure(`public ssh stays open: ${problem}`, accessAdvice(access));
 }
 
 // --- fail2ban, updates, directories ------------------------------------------------
@@ -458,28 +499,72 @@ export const SSHD_DROP_IN = "/etc/ssh/sshd_config.d/00-sitesolide.conf";
 export const SSH_SAFETY_UNIT = "sitesolide-ssh-rollback";
 export const SSH_SAFETY_SECONDS = 120;
 
-export const SSHD_SETTINGS = [
-  ["PermitRootLogin", "no"],
-  ["PasswordAuthentication", "no"],
-  ["KbdInteractiveAuthentication", "no"],
-] as const;
+/**
+ * What the drop-in sets, each with the label its check reports and the value
+ * `sshd -T` prints back, lowercase. Keys only, no root, the deploy account
+ * alone; no forwarding of any kind, which nothing sitesolide runs over ssh
+ * uses (rsync and commands, never a tunnel); a short grace time; and the key
+ * exchanges, ciphers and MACs OpenSSH 10 offers that a reviewer has no reason
+ * to doubt: ML-KEM and Streamlined NTRU Prime hybrids first, against a
+ * recorded session decrypted later, then curve25519; AEAD ciphers and CTR
+ * with encrypt-then-MAC. Every OpenSSH client since 6.5 speaks them, macOS's
+ * included.
+ *
+ * MaxAuthTries is 5 rather than 3: every key an agent offers before the right
+ * one counts as a try, and a password manager's agent often holds several. A
+ * key alone opens the account, so the tries guess nothing; fail2ban counts
+ * the refusals all the same.
+ *
+ * Security keys, `sk-ssh-ed25519@openssh.com`, are accepted as OpenSSH accepts
+ * them by default, and `touch-required` makes the touch mandatory for every
+ * one of them: a key made with `ssh-keygen -t ed25519-sk` asks for it already.
+ * See docs/ssh.md.
+ */
+export function sshdSettings(user: string): readonly { key: string; value: string; label: string }[] {
+  return [
+    { key: "PermitRootLogin", value: "no", label: "root-login-off" },
+    { key: "PasswordAuthentication", value: "no", label: "password-off" },
+    { key: "KbdInteractiveAuthentication", value: "no", label: "keyboard-interactive-off" },
+    { key: "AuthenticationMethods", value: "publickey", label: "publickey-only" },
+    { key: "AllowUsers", value: user, label: "allow-users" },
+    { key: "MaxAuthTries", value: "5", label: "max-auth-tries" },
+    { key: "LoginGraceTime", value: "30", label: "login-grace-time" },
+    { key: "X11Forwarding", value: "no", label: "x11-forwarding-off" },
+    { key: "AllowAgentForwarding", value: "no", label: "agent-forwarding-off" },
+    { key: "AllowTcpForwarding", value: "no", label: "tcp-forwarding-off" },
+    { key: "AllowStreamLocalForwarding", value: "no", label: "stream-forwarding-off" },
+    { key: "PermitTunnel", value: "no", label: "tunnel-off" },
+    { key: "PermitUserEnvironment", value: "no", label: "user-environment-off" },
+    { key: "PubkeyAuthOptions", value: "touch-required", label: "security-key-touch" },
+    { key: "KexAlgorithms", value: KEX_ALGORITHMS.join(","), label: "kex-algorithms" },
+    { key: "Ciphers", value: CIPHERS.join(","), label: "ciphers" },
+    { key: "MACs", value: MACS.join(","), label: "macs" },
+  ];
+}
 
-export const SSHD_CONTENT = [
-  "# Laid by sitesolide setup: keys only, and no root login.",
-  "#",
-  "# Named to be read before every other file of this folder: sshd keeps the",
-  "# first value it reads for a keyword, and a provider's file allowing",
-  "# passwords must not win over this one. See bin/cli/harden.ts.",
-  ...SSHD_SETTINGS.map(([key, value]) => `${key} ${value}`),
-  "",
-].join("\n");
+export const KEX_ALGORITHMS = ["mlkem768x25519-sha256", "sntrup761x25519-sha512", "sntrup761x25519-sha512@openssh.com", "curve25519-sha256", "curve25519-sha256@libssh.org"] as const;
+export const CIPHERS = ["chacha20-poly1305@openssh.com", "aes256-gcm@openssh.com", "aes128-gcm@openssh.com", "aes256-ctr", "aes192-ctr", "aes128-ctr"] as const;
+export const MACS = ["hmac-sha2-512-etm@openssh.com", "hmac-sha2-256-etm@openssh.com", "umac-128-etm@openssh.com"] as const;
 
-export function sshCheck(): string {
+export function sshdContent(user: string): string {
+  return [
+    "# Laid by sitesolide setup: keys only, no root login, the deploy account",
+    "# alone, no forwarding, and modern algorithms.",
+    "#",
+    "# Named to be read before every other file of this folder: sshd keeps the",
+    "# first value it reads for a keyword, and a provider's file allowing",
+    "# passwords must not win over this one. See bin/cli/harden.ts.",
+    ...sshdSettings(user).map(({ key, value }) => `${key} ${value}`),
+    "",
+  ].join("\n");
+}
+
+export function sshCheck(user: string, tag = "setup:ssh:check"): string {
   return machineCheck(
-    "setup:ssh:check",
-    SSHD_SETTINGS.map(([key, value]) => ({
-      label: { PermitRootLogin: "root-login-off", PasswordAuthentication: "password-off", KbdInteractiveAuthentication: "keyboard-interactive-off" }[key],
-      test: `printf '%s\\n' "$effective" | grep -qx '${key.toLowerCase()} ${value}'`,
+    tag,
+    sshdSettings(user).map(({ key, value, label }) => ({
+      label,
+      test: `printf '%s\\n' "$effective" | grep -qxF '${key.toLowerCase()} ${value.toLowerCase()}'`,
     })),
     "effective=$(sshd -T 2>/dev/null)",
   );
@@ -488,28 +573,31 @@ export function sshCheck(): string {
 /**
  * The change itself, sent once the proof has passed. A drop-in refused by
  * `sshd -t` is withdrawn, the previous one put back if there was one, and
- * nothing is reloaded. The safety net is armed before the reload, and only the
- * disarm below, run as the deploy account after a second proof, stops it.
+ * nothing is reloaded. The safety net is armed before the reload: it puts
+ * the previous drop-in back, or removes this one on a machine that had none,
+ * and only the disarm below, run as the deploy account after a second proof,
+ * stops it. The previous drop-in waits beside it under a name sshd does not
+ * include, `.rollback`.
  */
-export function sshRun(): string {
+export function sshRun(user: string): string {
   return runScript(
     "setup:ssh:run",
     `
 drop_in=${SSHD_DROP_IN}
 mkdir -p /etc/ssh/sshd_config.d
 systemctl stop ${SSH_SAFETY_UNIT}.timer ${SSH_SAFETY_UNIT}.service >/dev/null 2>&1 || true
-rm -f "$drop_in.before"
+rm -f "$drop_in.before" "$drop_in.rollback"
 if [ -f "$drop_in" ]; then cp "$drop_in" "$drop_in.before"; fi
 install -m 644 -o root -g root /dev/stdin "$drop_in" <<'SSHD'
-${SSHD_CONTENT}SSHD
+${sshdContent(user)}SSHD
 [ -d /run/sshd ] || install -d -m 755 /run/sshd
 if ! sshd -t </dev/null; then
   if [ -f "$drop_in.before" ]; then mv "$drop_in.before" "$drop_in"; else rm -f "$drop_in"; fi
   echo "sshd -t refused the configuration: the drop-in was withdrawn, nothing was reloaded" >&2
   exit 1
 fi
-rm -f "$drop_in.before"
-systemd-run --quiet --unit=${SSH_SAFETY_UNIT} --on-active=${SSH_SAFETY_SECONDS} /bin/sh -c "rm -f $drop_in; systemctl reload ssh || true" </dev/null
+if [ -f "$drop_in.before" ]; then mv "$drop_in.before" "$drop_in.rollback"; fi
+systemd-run --quiet --unit=${SSH_SAFETY_UNIT} --on-active=${SSH_SAFETY_SECONDS} /bin/sh -c "if [ -f $drop_in.rollback ]; then mv $drop_in.rollback $drop_in; else rm -f $drop_in; fi; systemctl reload ssh || true" </dev/null
 systemctl reload ssh </dev/null
 `,
   );
@@ -521,6 +609,7 @@ export function sshDisarm(): string {
     `
 systemctl stop ${SSH_SAFETY_UNIT}.timer ${SSH_SAFETY_UNIT}.service >/dev/null 2>&1 || true
 ! systemctl is-active --quiet ${SSH_SAFETY_UNIT}.timer
+rm -f ${SSHD_DROP_IN}.rollback
 `,
   );
 }
@@ -561,11 +650,14 @@ export function hardeningSteps<C extends HardenContext>(): Step<C>[] {
     {
       id: "firewall",
       title: "firewall",
-      check: check("setup:firewall:check", (context) => firewallCheck(context.sshPort, (context.tunnel ?? null) !== null)),
+      check: check("setup:firewall:check", (context) => firewallCheck(context.sshPort, (context.tunnel ?? null) !== null, context.sshAccess, context.sshReopen)),
       run: async (context) => {
         const tunnel = (context.tunnel ?? null) !== null;
-        await rootRun(context.machine, context.operator, "setup:firewall:run", firewallRun(context.sshPort, tunnel), "ufw refused the rules");
-        return `ufw: ${firewallPorts(context.sshPort, tunnel).join(", ")} in, the rest refused${tunnel ? ": the web comes in through the tunnel" : ""}`;
+        const access = context.sshAccess ?? PUBLIC_SSH;
+        if (context.sshReopen !== true) proveAccessPath(context);
+        await rootRun(context.machine, context.operator, "setup:firewall:run", firewallRun(context.sshPort, tunnel, access, context.sshReopen), "ufw refused the rules");
+        const ssh = context.sshReopen === true || isPublic(access) ? "" : `, ${context.sshPort} ${describeAccess(access).replace(/^ssh /, "")}`;
+        return `ufw: ${firewallPorts(context.sshPort, tunnel).filter((port) => ssh === "" || port !== context.sshPort).join(", ")} in${ssh}, the rest refused${tunnel ? ": the web comes in through the tunnel" : ""}`;
       },
       inspect: (context) => inspect(context, "sudo ufw status verbose"),
     },
@@ -590,7 +682,7 @@ export function hardeningSteps<C extends HardenContext>(): Step<C>[] {
       // one, a sudoer's: the deploy account's login is proven here, once it is
       // known to exist, before any step logs in as it.
       check: async (context) => {
-        const found = await rootCheck(context.machine, context.operator, "setup:ssh:check", sshCheck());
+        const found = await rootCheck(context.machine, context.operator, "setup:ssh:check", sshCheck(context.deployUser));
         if (found.state !== "done" || context.operator === context.deployUser || !context.accountReady) return found;
         if ((await context.machine.exec(context.deployUser, PROOF)).code !== 0) return { state: "missing", missing: ["deploy-login"] };
         context.operator = context.deployUser;
@@ -604,7 +696,7 @@ export function hardeningSteps<C extends HardenContext>(): Step<C>[] {
         }
         return closeSsh(context);
       },
-      inspect: (context) => `ssh ${context.deployUser}@${context.host} 'sudo sshd -T | grep -E "^(permitrootlogin|passwordauthentication|kbdinteractiveauthentication) "'`,
+      inspect: (context) => `ssh ${context.deployUser}@${context.host} 'sudo sshd -T | grep -E "^(permitrootlogin|passwordauthentication|kbdinteractiveauthentication|allowusers|kexalgorithms) "'`,
     },
     {
       id: "fail2ban",
@@ -638,17 +730,17 @@ export async function closeSsh(context: HardenContext): Promise<string> {
     ]);
   }
 
-  const change = await asRoot(context.machine, context.operator, "setup:ssh:run", sshRun(), true);
+  const change = await asRoot(context.machine, context.operator, "setup:ssh:run", sshRun(context.deployUser), true);
   if (change.code !== 0) {
     const said = `${change.output}\n${change.error}`.split("\n").filter((line) => line.trim() !== "").slice(-3);
     throw new StepFailure("sshd refused the change", [...said, `if the reload went through, the safety net withdraws ${SSHD_DROP_IN} within ${SSH_SAFETY_SECONDS / 60} minutes`]);
   }
   context.operator = context.deployUser;
 
-  const after = await rootCheck(context.machine, context.deployUser, "setup:ssh:check", sshCheck());
+  const after = await rootCheck(context.machine, context.deployUser, "setup:ssh:check", sshCheck(context.deployUser));
   if (after.state !== "done") {
     throw new StepFailure(`after the reload, ${after.state === "missing" ? `still missing: ${after.missing.join(", ")}` : `the login as ${server} failed: ${after.reason}`}`, [
-      `the safety net withdraws ${SSHD_DROP_IN} within ${SSH_SAFETY_SECONDS / 60} minutes: root login and passwords come back on their own`,
+      `the safety net puts sshd's previous configuration back within ${SSH_SAFETY_SECONDS / 60} minutes, on its own`,
       "a directive placed before the Include line of /etc/ssh/sshd_config wins over the drop-in",
     ]);
   }

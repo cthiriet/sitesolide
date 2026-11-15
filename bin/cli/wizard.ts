@@ -749,6 +749,13 @@ export async function runWizard(deps: WizardDependencies): Promise<number> {
       // The wizard installs for real: the configuration's, else production.
       acme: null,
       tunnel: null,
+      // The ssh access and the tailnet: what the configuration recorded, as setup reads it.
+      sshFrom: null,
+      sshInterfaces: null,
+      sshPublic: false,
+      tailscale: null,
+      tailscaleKeyStdin: false,
+      hostKey: null,
       configDir,
       json: false,
     };

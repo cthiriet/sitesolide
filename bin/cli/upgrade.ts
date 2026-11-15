@@ -17,6 +17,12 @@
  *   caddy-config   the Caddyfile              bin/deploy-caddy.sh
  *   portal         the portal                 sitesolide deploy in portal/
  *   monitor        the monitor                bin/deploy-monitor.sh
+ *   ssh            sshd's drop-in             setup's own run: sshd -t, a reload under a safety net, a new login
+ *   ssh-firewall   ssh's rules in ufw         the access the configuration records, never wider by itself
+ *
+ * The two ssh components come last: a component that depends on nothing of
+ * them is not held back by a refusal to close public ssh, which a run
+ * connected over the public address meets (bin/cli/ssh-access.ts).
  *
  * The order is docs/upgrading.md's: the backup install before the steward,
  * whose unit opens the backups' folder only if it exists when it starts; the
@@ -66,8 +72,9 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { CONFIG_DIR_VARIABLE, IncompleteConfig, mergeConfig, privateFolder, type Config } from "./config";
-import { BAN_ADVICE, CONNECTION_LOST, HOST_KEY_CHANGED, hostKeyAdvice, machineCheck, rootCheck, rootRun, type Machine } from "./harden";
+import { CONFIG_DIR_VARIABLE, IncompleteConfig, mergeConfig, privateFolder, writeConfig, type Config } from "./config";
+import { BAN_ADVICE, closeSsh, CONNECTION_LOST, HOST_KEY_CHANGED, hostKeyAdvice, machineCheck, proveAccessPath, rootCheck, rootRun, runScript, SSHD_DROP_IN, sshCheck, type Machine } from "./harden";
+import { ACCESS_KEYS, accessFromConfig, accessToConfig, connectionScript, describeAccess, parseInterfaces, parseNetworks, PUBLIC_SSH, readConnection, sameAccess, sshRuleConditions, sshRulesRun, type SshAccess, type SshConnection } from "./ssh-access";
 import { isCompiled, KitUnavailable, kitRoot, VERSION } from "./kit";
 import { formatEvent } from "./output";
 import {
@@ -93,15 +100,36 @@ import { tunnelConditions, tunnelRun, TUNNEL_KIT_FILES, TUNNEL_UNIT, TUNNEL_UNIT
 
 // --- the command line ------------------------------------------------------------
 
-export type UpgradeOptions = { dryRun: boolean; json: boolean };
+/**
+ * `--ssh-from` and `--ssh-interface` restrict ssh in ufw, `--ssh-public` opens
+ * it to all again, as setup's options of the same names do; each is recorded
+ * in the configuration once the run succeeds. They are here because a
+ * machine in service is upgraded rather than set up, and setup over a
+ * tailnet name finds no record of having installed that host. Null: not given.
+ */
+export type UpgradeOptions = { dryRun: boolean; json: boolean; sshFrom?: string[] | null; sshInterfaces?: string[] | null; sshPublic?: boolean };
 
 export type Refusal = { message: string; details: string[] };
 
-export const UPGRADE_USAGE = "usage: sitesolide upgrade [--dry-run] [--json]";
+export const UPGRADE_USAGE = "usage: sitesolide upgrade [--dry-run] [--json] [--ssh-from <networks>] [--ssh-interface <name>] [--ssh-public]";
 
 /** The command line, read; a refusal for anything it does not take. */
 export function parseUpgradeArguments(arguments_: readonly string[]): UpgradeOptions | Refusal {
-  const unknown = arguments_.filter((argument) => argument !== "--dry-run" && argument !== "--json");
+  const refusal = (detail: string): Refusal => ({ message: UPGRADE_USAGE, details: [detail, "see docs/upgrading.md"] });
+  const unknown: string[] = [];
+  const values: Record<string, string> = {};
+  for (let index = 0; index < arguments_.length; index++) {
+    const argument = arguments_[index]!;
+    if (argument === "--ssh-from" || argument === "--ssh-interface") {
+      const value = arguments_[index + 1];
+      if (value === undefined || value.startsWith("--")) return refusal(`${argument} needs a value`);
+      if (values[argument] !== undefined) return refusal(`${argument} given twice`);
+      values[argument] = value;
+      index++;
+    } else if (argument !== "--dry-run" && argument !== "--json" && argument !== "--ssh-public") {
+      unknown.push(argument);
+    }
+  }
   if (unknown.length > 0) {
     return {
       message: UPGRADE_USAGE,
@@ -112,7 +140,21 @@ export function parseUpgradeArguments(arguments_: readonly string[]): UpgradeOpt
       ],
     };
   }
-  return { dryRun: arguments_.includes("--dry-run"), json: arguments_.includes("--json") };
+  let sshFrom: string[] | null = null;
+  let sshInterfaces: string[] | null = null;
+  if (values["--ssh-from"] !== undefined) {
+    const parsed = parseNetworks(values["--ssh-from"]);
+    if ("problem" in parsed) return refusal(`--ssh-from: ${parsed.problem}`);
+    sshFrom = parsed.networks;
+  }
+  if (values["--ssh-interface"] !== undefined) {
+    const parsed = parseInterfaces(values["--ssh-interface"]);
+    if ("problem" in parsed) return refusal(`--ssh-interface: ${parsed.problem}`);
+    sshInterfaces = parsed.interfaces;
+  }
+  const sshPublic = arguments_.includes("--ssh-public");
+  if (sshPublic && (sshFrom !== null || sshInterfaces !== null)) return refusal("--ssh-public opens ssh to all: it does not go with --ssh-from nor --ssh-interface");
+  return { dryRun: arguments_.includes("--dry-run"), json: arguments_.includes("--json"), sshFrom, sshInterfaces, sshPublic };
 }
 
 // --- what upgrade depends on -------------------------------------------------------
@@ -140,6 +182,12 @@ export type UpgradeContext = {
   childEnvironment: Record<string, string>;
   /** The components the machine carries. */
   installed: ReadonlySet<string>;
+  /** Who may reach ssh, as the configuration records it: see bin/cli/ssh-access.ts. */
+  sshAccess: SshAccess;
+  /** --ssh-public: port 22 opened to all again, whatever restricts it. */
+  sshReopen?: boolean;
+  /** The connection upgrade arrived by, read once, when the ssh firewall's check first needs it. */
+  connection?: SshConnection;
 };
 
 // --- fingerprints ---------------------------------------------------------------------
@@ -320,6 +368,15 @@ function tunnelFiles(context: UpgradeContext): TunnelFiles {
   return { id, unit: read(TUNNEL_KIT_FILES.unit), caddy: read(TUNNEL_KIT_FILES.caddy) };
 }
 
+/** The connection upgrade arrives by, read once: what proves a restricted access, and the port ssh answers on. */
+async function connection(context: UpgradeContext): Promise<SshConnection> {
+  if (context.connection !== undefined) return context.connection;
+  const execution = await context.machine.exec(context.operator, "sh -s upgrade:connection:read", { input: connectionScript("upgrade:connection:read") });
+  if (execution.code !== 0) throw new StepFailure(`could not read the connection: ${execution.error.trim().split("\n").at(-1) || `exit code ${execution.code}`}`);
+  context.connection = readConnection(execution.output);
+  return context.connection;
+}
+
 /** A script of the kit's bin/, run with upgrade's environment; what it printed quoted when it fails. */
 async function script(context: UpgradeContext, name: string, args: string[] = []): Promise<void> {
   const { code, output } = await context.deps.kit({ kind: "script", name, args }, context.childEnvironment);
@@ -493,6 +550,33 @@ export function upgradeComponents(): Component[] {
       run: (context) => script(context, "deploy-monitor.sh"),
       inspect: (context) => journal(context, "sitesolide-monitor"),
     },
+    {
+      id: "ssh",
+      title: "sshd's drop-in",
+      installed: { label: "installed", test: "test -d /etc/ssh/sshd_config.d" },
+      plan: "the drop-in, sshd -t, a reload under a two-minute safety net, then a new login that finds it in effect",
+      check: (context) => rootCheck(context.machine, context.operator, "upgrade:ssh:check", sshCheck(context.operator, "upgrade:ssh:check")),
+      run: async (context) => {
+        const host = context.server.slice(context.server.lastIndexOf("@") + 1);
+        await closeSsh({ machine: context.machine, host, operator: context.operator, deployUser: context.operator, sshPort: 22, accountReady: true, clientAddress: null, ignoredAddress: null });
+      },
+      inspect: (context) => `ssh ${context.server} 'sudo sshd -T | grep -E "^(permitrootlogin|passwordauthentication|allowusers|kexalgorithms) "; cat ${SSHD_DROP_IN}'`,
+    },
+    {
+      id: "ssh-firewall",
+      title: "ssh in the firewall",
+      installed: { label: "installed", test: "ufw status | grep -q '^Status: active'" },
+      plan: "the access the configuration records laid in ufw, the public rules deleted after, once this connection proves it arrives by that access",
+      check: async (context) => machineState(context, "ssh-firewall", sshRuleConditions((await connection(context)).port ?? 22, context.sshAccess, context.sshReopen === true)),
+      run: async (context) => {
+        const seen = await connection(context);
+        // Opening to all needs no proof: it is the way back in.
+        if (context.sshReopen !== true) proveAccessPath({ sshAccess: context.sshAccess, connection: seen });
+        const tag = "upgrade:ssh-firewall:run";
+        await rootRun(context.machine, context.operator, tag, runScript(tag, sshRulesRun(seen.port ?? 22, context.sshAccess, context.sshReopen === true)), "ufw refused the rules");
+      },
+      inspect: (context) => `ssh ${context.server} 'sudo ufw status verbose'`,
+    },
   ];
 }
 
@@ -631,9 +715,20 @@ export async function runUpgrade(options: UpgradeOptions, deps: UpgradeDependenc
     ]);
   }
 
+  // Who may reach ssh: what the options say, else what was recorded, never
+  // wider by itself.
+  const configFile = join(folder, "config.json");
+  const recorded = accessFromConfig(readJson(configFile) ?? {});
+  const given = options.sshPublic === true || options.sshFrom != null || options.sshInterfaces != null;
+  if (!given && "problem" in recorded) return refuse(`the configuration's ssh access is not valid: ${recorded.problem}`, ["nothing was changed", "see docs/ssh.md"]);
+  const sshAccess: SshAccess = options.sshPublic === true ? PUBLIC_SSH : given ? { from: options.sshFrom ?? [], interfaces: options.sshInterfaces ?? [] } : (recorded as SshAccess);
+  if (given) out.say(`   ssh: ${describeAccess(sshAccess)}, recorded once the run succeeds`);
+
   const context: UpgradeContext = {
     machine,
     operator,
+    sshAccess,
+    sshReopen: options.sshPublic === true,
     server: config.server,
     config,
     options,
@@ -676,6 +771,16 @@ export async function runUpgrade(options: UpgradeOptions, deps: UpgradeDependenc
       ...(upgraded.length === 0 ? [] : [`upgraded before it: ${upgraded.join(", ")}`]),
     ]);
     return 1;
+  }
+
+  // The access given, recorded once ufw holds it, so that the next run of
+  // setup or upgrade keeps it.
+  if (given && !options.dryRun && ("problem" in recorded || !sameAccess(recorded, sshAccess))) {
+    const file = readJson(configFile) ?? {};
+    delete file[ACCESS_KEYS.from];
+    delete file[ACCESS_KEYS.interfaces];
+    await writeConfig(configFile, { ...(file as Record<string, string>), ...accessToConfig(sshAccess) });
+    out.say(`   ssh access recorded in ${configFile}: ${describeAccess(sshAccess)}`);
   }
 
   out.say("");

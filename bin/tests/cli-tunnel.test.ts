@@ -488,7 +488,8 @@ describe("the firewall behind a tunnel", () => {
     expect(firewallPorts(22, true)).toEqual([22]);
     expect(firewallPorts(22)).toEqual([22, 80, 443]);
     const run = firewallRun(22, true);
-    expect(run).toContain(`for port in 22; do ufw allow "$port/tcp"`);
+    expect(run).toContain("|| ufw allow 22/tcp");
+    expect(run).not.toContain("for port in");
     // Never in the firewall step: a machine served directly would lose its visitors before the tunnel took them.
     expect(run).not.toContain("delete");
     expect(firewallCheck(22, true)).not.toContain("closed");

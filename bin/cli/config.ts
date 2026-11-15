@@ -86,6 +86,16 @@ export type Config = {
    * its credentials, which the machine alone keeps. See bin/cli/tunnel.ts.
    */
   tunnel?: string;
+  /**
+   * The networks ssh is open to, comma separated, as setup was told with
+   * `--ssh-from`; absent, ssh is open to all unless `sshInterface` says
+   * otherwise. See bin/cli/ssh-access.ts.
+   */
+  sshFrom?: string;
+  /** The interfaces ssh is open on, `tailscale0` for a tailnet, as setup was told with `--ssh-interface`. */
+  sshInterface?: string;
+  /** The tag the machine joined its tailnet with, as setup was told with `--tailscale`. See bin/cli/tailscale.ts. */
+  tailscale?: string;
 };
 
 /** The one value of `acme` that changes anything. */
@@ -181,6 +191,13 @@ export function configPath(home = homedir(), environment: Record<string, string 
 export const OPTIONAL_SETTINGS = ["contact", "vault", "sites", "api", "dns", "acme", "tunnel"] as const;
 
 /**
+ * What setup alone writes, with options of its own that check their values,
+ * and what every other writer carries over as it is: `init` run again must
+ * not drop the restriction on ssh, or the next setup would open it to all.
+ */
+export const SETUP_SETTINGS = ["sshFrom", "sshInterface", "tailscale"] as const;
+
+/**
  * The file `sitesolide init` writes, and `sitesolide setup` too: the three
  * settings that name the machine, then each optional one given now or already
  * in the file. A file that stays silent about a path lets the defaults play,
@@ -197,6 +214,10 @@ export function composeConfig(
   const config: Record<string, string> = { ...required };
   for (const key of OPTIONAL_SETTINGS) {
     const value = given[key] ?? previous[key];
+    if (typeof value === "string" && value !== "") config[key] = value;
+  }
+  for (const key of SETUP_SETTINGS) {
+    const value = previous[key];
     if (typeof value === "string" && value !== "") config[key] = value;
   }
   return config;

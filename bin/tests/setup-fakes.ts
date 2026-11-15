@@ -82,6 +82,7 @@ export class FakeMachine implements Machine {
       architecture: "amd64",
       free: String(40 * 1024 * 1024),
       ssh: `198.51.100.2 50000 ${HOST} 22`,
+      sshdev: "eth0",
       route4: JSON.stringify([{ dst: "default", gateway: "172.31.1.1", dev: "eth0" }]),
       route6: JSON.stringify([{ dst: "default", gateway: "fe80::1", dev: "eth0" }]),
       addresses: JSON.stringify([
@@ -312,6 +313,7 @@ export function bench(mock: CloudflareMock, home: string, options: MachineOption
         const token = options.token === undefined ? TOKEN : options.token;
         return token === null ? null : { CLOUDFLARE_API_TOKEN: token };
       },
+      tailscaleKey: async () => null,
       drawPassword: async () => {
         drawn.count++;
         return { password: PORTAL_PASSWORD, hash: PORTAL_HASH };

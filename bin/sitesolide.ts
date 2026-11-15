@@ -266,7 +266,7 @@ import { shellQuote } from "./cli/harden";
 import { askAddress, VERIFY_RETRY_MS, WARM_UP_MS } from "./cli/verify";
 import { realClock } from "../clouds/src/provider";
 import { declaresEgress, egressStateCommand, readEgressState } from "./cli/egress";
-import { machine, sshLogin } from "./cli/machine";
+import { machine, readConfiguredConnection, sshLogin } from "./cli/machine";
 import { DNS_CHOICES, dnsEntry, shownDns } from "./cli/dns/registry";
 import { deploysOverSsh, eventOutput, humanOutput, login, promptWithoutEcho, remoteMode, REMOTE_USAGE, runRemote, type BuildContext } from "./cli/remote";
 import { ownerLogin } from "./cli/owner-token";
@@ -4180,11 +4180,21 @@ function usage(zone: string | null): string {
     "     --dns-replace                replace records that point elsewhere, on your decision alone",
     "     --cloudflare-token-stdin     read the Cloudflare token from standard input",
     "     --minimal                    leave out backups and the egress proxy",
+    "     --ssh-from <networks>        ssh allowed from these networks alone, recorded: docs/ssh.md",
+    "     --ssh-interface <name>       ssh allowed on this interface alone, tailscale0 for a tailnet, recorded",
+    "     --ssh-public                 ssh open to all again, the break-glass: drops what the two above recorded",
+    "     --tailscale                  join a tailnet, key in TS_AUTHKEY or on standard input, never Tailscale SSH",
+    "     --tailscale-tag <tag:name>   the tag the machine joins with, tag:server by default",
+    "     --tailscale-key-stdin        read the Tailscale auth key from standard input",
+    "     --host-key <SHA256:...>      the host key the provider's console showed, pinned before the first login",
     "     --any-os                     go on with a system other than Debian 13, at your own risk",
     "     --config-dir <dir>           another installation's own configuration folder",
     "     --dry-run                    check every step, change nothing",
     "  sitesolide upgrade              bring every installed component to this release's code, resumable",
     "     --dry-run                    list each component, up to date, out of date or missing, change nothing",
+    "     --ssh-from <networks>        ssh allowed in ufw from these networks alone, recorded: docs/ssh.md",
+    "     --ssh-interface <name>       ssh allowed in ufw on this interface alone, tailscale0 for a tailnet, recorded",
+    "     --ssh-public                 ssh open to all again in ufw, the break-glass",
     "  sitesolide refresh <slug>       its units generated again from the manifest on the server, no code sent",
     "     --all                        every project, one at a time, stopping at the first that fails",
     "     --dry-run                    show the units it would write, change nothing",
@@ -4248,7 +4258,7 @@ function usage(zone: string | null): string {
     "     --token-stdin                read the token from standard input",
     "  sitesolide login --owner        the owner's token for every project, minted over SSH into the vault, never shown",
     "     --replace                    a new one even if the vault holds one the dashboard accepts",
-    "  sitesolide machine create|list|destroy --provider <provider>",
+    "  sitesolide machine create|list|destroy|firewall --provider <provider>",
     "                                  a VM ordered by API, before setup: sitesolide machine lists the options",
     "  sitesolide machine providers    the clouds it orders from, and which have credentials here",
     "  any command --api               go through the dashboard's API even with a server",
@@ -4382,9 +4392,13 @@ if (import.meta.main) {
   const remoteOutput = jsonOutput ? eventOutput() : humanOutput;
 
   // `machine` orders the VM the configuration will name: it comes before
-  // there is one to read, and talks to the provider's API, never over SSH.
+  // there is one to read, and talks to the provider's API; over SSH only for `firewall`, to prove a narrowing safe.
   // See bin/cli/machine.ts.
-  if (command === "machine") process.exit(await machine(arguments_, { environment: process.env, output: remoteOutput, login: sshLogin }));
+  if (command === "machine") {
+    // `firewall` narrows ssh only once the configured server, reached now, proves it stays reachable.
+    const configured = () => readConfiguredConnection(process.env.SITESOLIDE_SERVER ?? readConfigFile().server ?? null);
+    process.exit(await machine(arguments_, { environment: process.env, output: remoteOutput, login: sshLogin, configuredConnection: configured }));
+  }
   // `login --owner` mints the owner's token over SSH: it reads the configuration, below.
   const ownerLoginAsked = command === "login" && arguments_.includes("--owner");
   if (command === "login" && !ownerLoginAsked) process.exit(await login(arguments_, { environment: process.env, output: remoteOutput }));

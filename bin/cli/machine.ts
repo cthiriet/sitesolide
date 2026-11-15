@@ -5,6 +5,7 @@
  *   sitesolide machine create --provider hetzner --name web
  *   sitesolide machine list --provider aws
  *   sitesolide machine destroy web --provider gcp
+ *   sitesolide machine firewall web --provider hetzner --ssh-closed
  *   sitesolide machine providers
  *
  * It replaces what infra/main.tf did with Terraform: a server, its firewall,
@@ -35,6 +36,17 @@
  * where there is none. The SSH key stays unless `--delete-key`, and DNS
  * records are never touched: the zone is not the provider's.
  *
+ * **ssh at the provider's firewall.** `create --ssh-from <networks>` opens
+ * port 22 to those networks alone, where the provider takes rules other than
+ * the web server's (Hetzner, GCP, Scaleway; the others refuse it before
+ * ordering anything). `firewall` changes it on a machine already created,
+ * Hetzner's for now: `--ssh-from`, `--ssh-closed` for a machine its owner
+ * reaches over a tailnet, whose packets the provider's firewall never sees as
+ * ssh, or `--ssh-public` to open it again, the break-glass of docs/ssh.md.
+ * Narrowing it is refused unless a connection to the configured server, made
+ * in the same run, proves that it does not need what is being closed. A
+ * machine created with `--ssh-from` proves it by the wait for its login.
+ *
  * A refusal carries a code of REMOTE_HINTS in bin/cli/hints.ts, as `share`
  * and the team commands do: bin/tests/cli-machine.test.ts fails on a code this
  * file or a provider uses and the table lacks.
@@ -44,6 +56,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { expandHome } from "./config";
 import { HOST_KEY_CHANGED, hostKeyAdvice } from "./harden";
+import { connectionScript, describeAccess, inNetwork, parseNetworks, readConnection, type SshConnection } from "./ssh-access";
 import { AWS } from "../../clouds/src/aws";
 import { AZURE } from "../../clouds/src/azure";
 import { DIGITALOCEAN } from "../../clouds/src/digitalocean";
@@ -63,6 +76,7 @@ import {
   type CredentialField,
   type Credentials,
   type Fetch,
+  type Inbound,
   type Machine,
   type Provider,
   type ProviderEntry,
@@ -102,15 +116,21 @@ export const MACHINE_USAGE = [
   "     --backups                    the provider's daily backups, where it has them, at a price",
   "     --ssh-key <path.pub>         ~/.ssh/id_ed25519.pub, id_ecdsa.pub or id_rsa.pub by default,",
   "                                  else the SSH agent's key; or SHA256:... for one the agent holds",
+  "     --ssh-from <networks>        port 22 open to these networks alone, 203.0.113.0/24,2001:db8::/32",
   "  sitesolide machine list --provider <provider>",
   "                                  the machines sitesolide created, their addresses and price",
+  "  sitesolide machine firewall <name> --provider <provider>",
+  "                                  who reaches port 22 at the provider's firewall; Hetzner's for now",
+  "     --ssh-from <networks>        these networks alone",
+  "     --ssh-closed                 nobody: the owner comes in over a tailnet, see docs/ssh.md",
+  "     --ssh-public                 everyone again: the break-glass",
   "  sitesolide machine destroy <name> --provider <provider>",
   "                                  delete the machine and its firewall, for good",
   "     --confirm <name>             the name typed back, where no terminal can ask for it",
   "     --delete-key                 delete the SSH key uploaded for it too",
   "  sitesolide machine providers",
   "                                  the providers, and whether this workstation holds credentials for each",
-  "  create, list or destroy --token-stdin",
+  "  create, list, firewall or destroy --token-stdin",
   "                                  read the credentials from standard input rather than the environment",
   "",
   `providers: ${PROVIDER_LIST.map((entry) => entry.name).join(", ")}`,
@@ -118,11 +138,12 @@ export const MACHINE_USAGE = [
   "credentials are never an option, where ps would show them: see docs/machine.md",
 ];
 
-type Action = "create" | "list" | "destroy" | "providers";
+type Action = "create" | "list" | "destroy" | "firewall" | "providers";
 
 /** The options of each command, and whether one takes a value. `--json` is everyone's. */
 const OPTIONS: Readonly<Record<Action, Readonly<Record<string, boolean>>>> = {
-  create: { "--provider": true, "--name": true, "--type": true, "--location": true, "--image": true, "--backups": false, "--ssh-key": true, "--token-stdin": false },
+  create: { "--provider": true, "--name": true, "--type": true, "--location": true, "--image": true, "--backups": false, "--ssh-key": true, "--ssh-from": true, "--token-stdin": false },
+  firewall: { "--provider": true, "--ssh-from": true, "--ssh-closed": false, "--ssh-public": false, "--token-stdin": false },
   list: { "--provider": true, "--token-stdin": false },
   destroy: { "--provider": true, "--confirm": true, "--delete-key": false, "--token-stdin": false },
   providers: {},
@@ -142,6 +163,13 @@ export type MachineDependencies = {
   clock?: Clock;
   /** Whether a TCP connection to that address opens; tests point it at a local listener. */
   probe?: (hostname: string, port: number) => Promise<boolean>;
+  /**
+   * The connection to the configured server, as the machine sees it, read in
+   * the run that narrows ssh at the provider's firewall; null when there is no
+   * configured server or it cannot be reached. Without it, `firewall` only
+   * opens ssh, never narrows it.
+   */
+  configuredConnection?: () => Promise<{ server: string; connection: SshConnection & { addresses: string[] } } | null>;
   /** Where port 22 of a new machine is tried; tests point it at a local port. */
   sshTarget?: (address: string) => { hostname: string; port: number };
   /**
@@ -150,6 +178,8 @@ export type MachineDependencies = {
    * wizard give the real one, sshLogin.
    */
   login?: (account: string, address: string, identity: string | null) => Promise<LoginAttempt>;
+  /** The fingerprints known_hosts holds for an address, `SHA256:...`; tests give a fake one. */
+  knownFingerprints?: (address: string) => Promise<string[]>;
   /** What `discover` may read: the provider CLIs, a key file. Tests give a fake one. */
   workstation?: Workstation;
   /** Credentials typed at the wizard, by variable: they win over the environment and are scrubbed like it. */
@@ -203,7 +233,7 @@ export function parseMachineArguments(arguments_: string[]): MachineArguments | 
   if (action === undefined || !Object.hasOwn(OPTIONS, action)) {
     return {
       error: "machine-usage",
-      message: action === undefined || action.startsWith("-") ? "sitesolide machine needs a command: create, list, destroy or providers" : `unknown machine command: ${shown(action)}`,
+      message: action === undefined || action.startsWith("-") ? "sitesolide machine needs a command: create, list, firewall, destroy or providers" : `unknown machine command: ${shown(action)}`,
       details: usage,
     };
   }
@@ -240,7 +270,7 @@ export function parseMachineArguments(arguments_: string[]): MachineArguments | 
     }
     positionals.push(word);
   }
-  const allowed = action === "destroy" ? 1 : 0;
+  const allowed = action === "destroy" || action === "firewall" ? 1 : 0;
   if (positionals.length > allowed) {
     return { error: "machine-option", message: `unexpected argument: ${shown(positionals[allowed]!)}`, details: [takes, ...(action === "destroy" ? ["the machine to destroy is named once: sitesolide machine destroy <name>"] : [])] };
   }
@@ -825,6 +855,16 @@ export async function sshLogin(account: string, address: string, identity: strin
 
 const AGENT_UNSIGNED = /signing failed for .* from agent|agent refused operation/;
 
+/** What known_hosts holds for an address, read by ssh-keygen: the fingerprints, never the keys' trust changed. */
+export async function knownFingerprints(address: string): Promise<string[]> {
+  const keygen = Bun.which("ssh-keygen");
+  if (keygen === null) return [];
+  const proc = Bun.spawn([keygen, "-l", "-F", address], { stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: 10_000 });
+  const [code, output] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
+  if (code !== 0) return [];
+  return [...new Set(output.split("\n").flatMap((line) => /\b(SHA256:[A-Za-z0-9+/]{43})\b/.exec(line)?.[1] ?? []))];
+}
+
 // --- what is printed -------------------------------------------------------------------------
 
 function addresses(machine: Machine): string {
@@ -869,6 +909,82 @@ export function machineTable(machines: Machine[]): string[] {
 export function nextCommand(machine: Machine): string {
   const user = machine.login === "root" ? "" : " --user deploy";
   return `sitesolide setup ${machine.login}@${machine.ipv4 ?? machine.ipv6 ?? "<address>"} --zone <your zone> --email <you>${user}`;
+}
+
+// --- ssh at the provider's firewall --------------------------------------------------------
+
+/** Who reaches port 22 at the provider's firewall: these networks, nobody, or everyone. */
+export type ProviderSsh = { kind: "from"; networks: string[] } | { kind: "closed" } | { kind: "public" };
+
+/** The web server's rules with ssh's sources replaced, or ssh's rule left out. */
+export function inboundFor(ssh: ProviderSsh): Inbound[] {
+  return WEB_SERVER.flatMap((rule) => {
+    if (rule.protocol !== "tcp" || rule.port !== 22 || ssh.kind === "public") return [rule];
+    return ssh.kind === "closed" ? [] : [{ ...rule, sources: ssh.networks }];
+  });
+}
+
+export function describeProviderSsh(ssh: ProviderSsh): string {
+  if (ssh.kind === "public") return "port 22 open to everyone";
+  if (ssh.kind === "closed") return "port 22 closed to everyone: ssh only over a path the provider's firewall does not filter, a tailnet";
+  return `port 22 ${describeAccess({ from: ssh.networks, interfaces: [] }).replace(/^ssh /, "")}`;
+}
+
+/** `--ssh-from`, `--ssh-closed`, `--ssh-public`: one of them, read. */
+function readProviderSsh(parsed: MachineArguments, required: boolean): ProviderSsh | Failure | null {
+  const from = parsed.values["--ssh-from"];
+  const chosen = [from !== undefined, parsed.flags.has("--ssh-closed"), parsed.flags.has("--ssh-public")].filter(Boolean).length;
+  if (chosen > 1) return { error: "ssh-access", message: "--ssh-from, --ssh-closed and --ssh-public: one of them at a time", details: ["see docs/ssh.md"] };
+  if (chosen === 0) return required ? { error: "ssh-access", message: "say who reaches port 22: --ssh-from <networks>, --ssh-closed or --ssh-public", details: ["see docs/ssh.md"] } : null;
+  if (parsed.flags.has("--ssh-closed")) return { kind: "closed" };
+  if (parsed.flags.has("--ssh-public")) return { kind: "public" };
+  const networks = parseNetworks(from!);
+  if ("problem" in networks) return { error: "ssh-access", message: `--ssh-from is not valid: ${networks.problem}`, details: ["networks without host bits, comma separated: 203.0.113.0/24,2001:db8::/32"] };
+  return { kind: "from", networks: networks.networks };
+}
+
+/**
+ * Why narrowing ssh at the provider's firewall would cut the configured
+ * server off, or null when the connection read in this run proves it would
+ * not: the configured server is this machine (one of its public addresses
+ * is on the machine), and the connection either does not arrive on a public
+ * address, a tailnet's, or comes from one of the networks left open.
+ */
+export function providerSshProblem(ssh: ProviderSsh, machine: Machine, found: { server: string; connection: SshConnection & { addresses: string[] } } | null): string | null {
+  if (ssh.kind === "public") return null;
+  if (found === null) return "no configured server answered: nothing proves the machine stays reachable once port 22 is narrowed";
+  const { server, connection } = found;
+  const publicAddresses = [machine.ipv4, machine.ipv6].filter((address): address is string => address !== null);
+  if (!publicAddresses.some((address) => connection.addresses.includes(address))) {
+    return `${server} is not this machine: none of its public addresses, ${publicAddresses.join(", ") || "none"}, is on the machine it reaches`;
+  }
+  const throughProvider = connection.local !== null && publicAddresses.includes(connection.local);
+  if (!throughProvider) return null;
+  if (ssh.kind === "from" && connection.client !== null && ssh.networks.some((network) => inNetwork(connection.client!, network))) return null;
+  return `${server} reaches the machine on its public address ${connection.local}, from ${connection.client ?? "an address it did not say"}: ${describeProviderSsh(ssh)} would cut it off`;
+}
+
+/**
+ * The connection to the configured server, read over ssh as every command
+ * reads it: the configuration's server, `sh -s` on standard input.
+ */
+export async function readConfiguredConnection(server: string | null): Promise<{ server: string; connection: SshConnection & { addresses: string[] } } | null> {
+  if (server === null) return null;
+  const environment = withoutSecrets(process.env);
+  const ssh = Bun.which("ssh", { PATH: environment.PATH ?? "" });
+  if (ssh === null) return null;
+  const script = `${connectionScript("machine:connection:read")}echo "addresses=$(ip -o addr show 2>/dev/null | awk '{ split($4, p, "/"); printf "%s ", p[1] }')"\n`;
+  const proc = Bun.spawn([ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "LogLevel=ERROR", server, "sh -s machine:connection:read"], {
+    env: environment,
+    stdin: new TextEncoder().encode(script),
+    stdout: "pipe",
+    stderr: "ignore",
+    timeout: 30_000,
+  });
+  const [code, output] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
+  if (code !== 0) return null;
+  const line = output.split("\n").find((entry) => entry.startsWith("addresses=")) ?? "";
+  return { server, connection: { ...readConnection(output), addresses: line.slice("addresses=".length).trim().split(/\s+/).filter((address) => address !== "") } };
 }
 
 // --- the commands --------------------------------------------------------------------------
@@ -934,6 +1050,8 @@ async function create(context: Context): Promise<number> {
       return report(output, { error: "machine-option", message: `--${option}: not ${option === "image" ? "an" : "a"} ${option} name: ${shown(value)}`, details: ["letters, digits, dots, dashes and underscores, as the provider names them"] });
     }
   }
+  const sshFrom = readProviderSsh(parsed, false);
+  if (sshFrom !== null && isFailure(sshFrom)) return report(output, sshFrom);
   const backups = parsed.flags.has("--backups");
   if (backups && !entry.backups) {
     return report(output, {
@@ -957,7 +1075,11 @@ async function create(context: Context): Promise<number> {
   const provider = await open(context, (line) => output.say(line));
   if (isFailure(provider)) return report(output, provider);
   output.say(`   SSH key ${chosen.shown}`);
-  const outcome = await provider.create({ name, ...choices, backups, key, inbound: WEB_SERVER }, (line) => output.say(line));
+  if (sshFrom !== null) output.say(`   ${describeProviderSsh(sshFrom)}`);
+  const outcome = await provider.create({ name, ...choices, backups, key, inbound: sshFrom === null ? WEB_SERVER : inboundFor(sshFrom) }, (line) => output.say(line));
+  if (!outcome.created && sshFrom !== null) {
+    output.say(`!! ${name} was created by an earlier run: its firewall is left as it is; sitesolide machine firewall ${name} --provider ${entry.name} changes it`);
+  }
 
   const address = outcome.machine.ipv4 ?? outcome.machine.ipv6;
   const clock = dependencies.clock ?? realClock;
@@ -965,9 +1087,27 @@ async function create(context: Context): Promise<number> {
     output.say("!! the machine has no public address: there is no port 22 to wait for");
   } else {
     output.say(`-> SSH on ${address}`);
-    await waitForSsh(address, dependencies, clock, (line) => output.say(line));
-    const identity = parsed.values["--ssh-key"] === undefined || path === null ? null : path.replace(/\.pub$/, "");
-    if (dependencies.login !== undefined) await waitForLogin(outcome.machine.login, address, dependencies.login, clock, (line) => output.say(line), identity);
+    try {
+      await waitForSsh(address, dependencies, clock, (line) => output.say(line));
+      const identity = parsed.values["--ssh-key"] === undefined || path === null ? null : path.replace(/\.pub$/, "");
+      if (dependencies.login !== undefined) await waitForLogin(outcome.machine.login, address, dependencies.login, clock, (line) => output.say(line), identity);
+    } catch (error) {
+      // Restricted to networks this workstation is not in, port 22 never answers it.
+      if (error instanceof ProviderError && sshFrom !== null && sshFrom.kind === "from") {
+        throw new ProviderError({
+          ...error.failure,
+          details: [...(error.failure.details ?? []), `port 22 is open to ${sshFrom.networks.join(", ")} alone: is this workstation's address among them?`, `sitesolide machine firewall ${name} --provider ${entry.name} --ssh-public opens it to all again`],
+        });
+      }
+      throw error;
+    }
+    // What this workstation now trusts for the machine: a host key accepted on
+    // first contact, to compare with the one the provider's console shows.
+    const pinned = await (dependencies.knownFingerprints ?? knownFingerprints)(address);
+    if (pinned.length > 0) {
+      output.say(`   host key accepted on first contact: ${pinned.join(", ")}`);
+      output.say("   compare it with the machine's own, in the provider's console: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub");
+    }
   }
 
   const next = nextCommand(outcome.machine);
@@ -1063,6 +1203,56 @@ async function destroy(context: Context): Promise<number> {
 }
 
 /**
+ * `machine firewall <name>`: who reaches port 22 at the provider's firewall
+ * of a machine sitesolide created. Narrowing is refused unless the configured
+ * server, reached in this same run, would still be: see providerSshProblem.
+ * Opening is never refused: it is the way back in.
+ */
+async function firewall(context: Context): Promise<number> {
+  const { parsed, output, dependencies, entry } = context;
+  const name = parsed.positionals[0];
+  if (name === undefined || !isValidMachineName(name)) return report(output, nameFailure(name, "sitesolide machine firewall <name>"));
+  const ssh = readProviderSsh(parsed, true);
+  if (ssh === null || isFailure(ssh)) return report(output, ssh ?? { error: "ssh-access", message: "say who reaches port 22" });
+  const provider = await open(context);
+  if (isFailure(provider)) return report(output, provider);
+  if (provider.setInbound === undefined) {
+    return report(output, {
+      error: "provider-unsupported",
+      message: `sitesolide does not set ${entry.title}'s firewall of a machine already created yet`,
+      details: ["nothing was changed", "change the ssh rule in the provider's console, or restrict ssh in ufw with sitesolide setup --ssh-from or --ssh-interface: see docs/ssh.md"],
+    });
+  }
+  output.say(`-> machine ${name} at ${entry.title}: ${describeProviderSsh(ssh)}`);
+  const found = await provider.find(name);
+  if (found === null) return report(output, { error: "machine-not-found", message: `no machine named ${name} in this ${entry.title} account`, details: ["nothing was changed"] });
+  if (!found.managed) {
+    return report(output, { error: "machine-not-managed", message: `${name} was not created by sitesolide: its firewall is not changed from here`, details: ["nothing was changed"] });
+  }
+  if (ssh.kind !== "public") {
+    const read = await (dependencies.configuredConnection ?? (async () => null))();
+    const problem = providerSshProblem(ssh, found, read);
+    if (problem !== null) {
+      return report(output, {
+        error: "ssh-unproven",
+        message: `port 22 left as it is: ${problem}`,
+        details: [
+          "nothing was changed: ssh is narrowed only by a run whose own connection to the configured server proves it stays reachable",
+          "set the configuration's server to the machine's tailnet name or address (sitesolide init --server deploy@<name>), check that ssh to it works, then run this again",
+          "see docs/ssh.md",
+        ],
+      });
+    }
+    output.say(`   ${read!.server} reaches the machine without what is being closed: ${read!.connection.local ?? "an address"} from ${read!.connection.client ?? "an address"}`);
+  }
+  const outcome = await provider.setInbound(found, inboundFor(ssh), (line) => output.say(line));
+  output.say(outcome.changed ? `-> ${describeProviderSsh(ssh)}` : "-> already so: nothing was changed");
+  if (ssh.kind !== "public") output.say(`   the way back in, should the tailnet fail: sitesolide machine firewall ${name} --provider ${entry.name} --ssh-public, or the provider's console`);
+  output.succeeded("machine firewall", { provider: provider.name, name, ssh: ssh.kind, ...(ssh.kind === "from" ? { networks: ssh.networks } : {}), firewall: outcome.firewall, changed: outcome.changed });
+  return 0;
+}
+
+/**
  * `machine providers`: every provider, and whether this workstation holds
  * credentials for it, read without asking anything and without calling any
  * provider's API. Where they come from is said, never what they are.
@@ -1115,6 +1305,8 @@ export async function machine(arguments_: string[], dependencies: MachineDepende
         return await list(context);
       case "destroy":
         return await destroy(context);
+      case "firewall":
+        return await firewall(context);
     }
   } catch (error) {
     if (error instanceof ProviderError) return report(output, error.failure);

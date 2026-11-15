@@ -11,6 +11,7 @@
  *                      Bun at its pinned version, checked (bin/cli/pins.ts)
  *   dns-credentials    /etc/caddy/cloudflare.env, root:caddy 0640, Cloudflare's token
  *   tls-zone           /etc/caddy/tls-zone.caddy, the zone's tls block (bin/cli/tls.ts)
+ *   tailscale          under --tailscale, the machine joins a tailnet (bin/cli/tailscale.ts)
  *   tunnel             under --tunnel, the Cloudflare Tunnel's connector (bin/cli/tunnel.ts)
  *   resolution         this workstation resolves the zone to the machine
  *   caddy-zone ...     bin/deploy-caddy.sh, the drop-in, bin/deploy-caddy.sh again
@@ -73,6 +74,21 @@ import { fieldsToAsk, fromEnvironment, isFailure, missingFields, parseStdinCrede
 import { ProviderError, type Credentials, type Fetch } from "../../clouds/src/provider";
 import { CADDY_RESTART, caddyRestartScript, policyPending, tlsZoneCheck, tlsZoneContent, tlsZoneRun, TLS_ZONE_FILE, TLS_ZONE_RESTARTED } from "./tls";
 import { ACME_STAGING, composeConfig, CONFIG_DIR_VARIABLE, expandHome, privateFolder, writeConfig, type Config } from "./config";
+import {
+  ACCESS_KEYS,
+  accessFromConfig,
+  accessToConfig,
+  describeAccess,
+  isPublic,
+  parseInterfaces,
+  parseNetworks,
+  PUBLIC_SSH,
+  readConnection,
+  sameAccess,
+  type SshAccess,
+  type SshConnection,
+} from "./ssh-access";
+import { AUTH_KEY, AUTH_KEY_VARIABLE, DEFAULT_TAG, needsAuthKey, TAILSCALE_SAID, TAILSCALE_TAG, tailscaleCheck, tailscaleRun } from "./tailscale";
 import {
   APT,
   BAN_ADVICE,
@@ -151,12 +167,39 @@ export type SetupOptions = {
    * configuration's tunnel, else none. See bin/cli/tunnel.ts.
    */
   tunnel: string | null;
+  /**
+   * `--ssh-from` and `--ssh-interface`: ssh open to these networks and on
+   * these interfaces alone, null when not given: the configuration's, else
+   * open to all. Given, they replace the configuration's as a whole.
+   * `sshPublic`, `--ssh-public`: open to all again, the one way to widen it.
+   * See bin/cli/ssh-access.ts.
+   */
+  sshFrom: string[] | null;
+  sshInterfaces: string[] | null;
+  sshPublic: boolean;
+  /**
+   * `--tailscale`, or `--tailscale-tag <tag>`: the machine joins a tailnet
+   * with that tag, `tag:server` unless named. Null when neither is given:
+   * the configuration's, else none. See bin/cli/tailscale.ts.
+   */
+  tailscale: string | null;
+  /** `--tailscale-key-stdin`: the auth key on standard input, rather than in TS_AUTHKEY. */
+  tailscaleKeyStdin: boolean;
+  /**
+   * `--host-key SHA256:...`: the fingerprint of the machine's host key, read
+   * from the provider's console, that the first contact must find. Null: the
+   * key is accepted on first contact, as ssh's accept-new does.
+   */
+  hostKey: string | null;
   configDir: string | null;
   json: boolean;
 };
 
-const VALUED = ["--zone", "--email", "--contact", "--user", "--config-dir", "--dns", "--acme", "--tunnel"] as const;
-const FLAGS = ["--skip-dns", "--dns-replace", "--minimal", "--any-os", "--dry-run", "--cloudflare-token-stdin", "--json"] as const;
+const VALUED = ["--zone", "--email", "--contact", "--user", "--config-dir", "--dns", "--acme", "--tunnel", "--ssh-from", "--ssh-interface", "--tailscale-tag", "--host-key"] as const;
+const FLAGS = ["--skip-dns", "--dns-replace", "--minimal", "--any-os", "--dry-run", "--cloudflare-token-stdin", "--json", "--ssh-public", "--tailscale", "--tailscale-key-stdin"] as const;
+
+/** A host key's fingerprint as ssh-keygen -l prints it: SHA256 and 43 characters of base64. */
+export const HOST_KEY_FINGERPRINT = /^SHA256:[A-Za-z0-9+/]{43}$/;
 
 export const ACCOUNT = /^[a-z_][a-z0-9_-]{0,31}$/;
 export const HOST = /^[A-Za-z0-9][A-Za-z0-9.:-]*$/;
@@ -256,6 +299,22 @@ export const REFUSALS = {
     message: `${shownTunnel(path)} is not a tunnel's credentials: ${problem}`,
     details: ["nothing of it is shown: it holds the tunnel's secret"],
   }),
+  sshAccess: (problem: string): Refusal => ({
+    message: `setup: the ssh access is not valid: ${problem}`,
+    details: ["--ssh-from takes networks, 203.0.113.0/24,2001:db8::/32; --ssh-interface takes interfaces, tailscale0", "see docs/ssh.md"],
+  }),
+  tailscaleKey: (where: string): Refusal => ({
+    message: `the Tailscale auth key ${where} is not one`,
+    details: ["an auth key starts with tskey-: make one in the tailnet's admin console, Settings, Keys, tagged and pre-approved", "nothing of it is shown"],
+  }),
+  hostKeyMismatch: (host: string, expected: string, presented: string[]): Refusal => ({
+    message: `${host} does not present the host key ${expected}`,
+    details: [
+      presented.length === 0 ? "no host key could be read from it" : `it presents ${presented.join(", ")}`,
+      "stop: something else may answer at that address. Nothing was sent to it",
+      "read the fingerprint again in the provider's console: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub",
+    ],
+  }),
 };
 
 const MINIMUM_FREE_GB = 2;
@@ -320,6 +379,29 @@ export function parseSetupArguments(arguments_: readonly string[]): SetupOptions
   if (acme !== null && acme !== "production" && acme !== ACME_STAGING) {
     return REFUSALS.invalid("--acme", /^[a-z]{1,20}$/.test(acme) ? acme : "(not shown)", "production, the default, or staging, for a test installation whose certificates no browser trusts");
   }
+  let sshFrom: string[] | null = null;
+  let sshInterfaces: string[] | null = null;
+  if (values["--ssh-from"] !== undefined) {
+    const parsed = parseNetworks(values["--ssh-from"]);
+    if ("problem" in parsed) return REFUSALS.sshAccess(`--ssh-from ${parsed.problem}`);
+    sshFrom = parsed.networks;
+  }
+  if (values["--ssh-interface"] !== undefined) {
+    const parsed = parseInterfaces(values["--ssh-interface"]);
+    if ("problem" in parsed) return REFUSALS.sshAccess(`--ssh-interface ${parsed.problem}`);
+    sshInterfaces = parsed.interfaces;
+  }
+  const sshPublic = flags.has("--ssh-public");
+  if (sshPublic && (sshFrom !== null || sshInterfaces !== null)) return REFUSALS.usage("--ssh-public opens ssh to all: it does not go with --ssh-from nor --ssh-interface");
+  const tag = values["--tailscale-tag"];
+  if (tag !== undefined && !TAILSCALE_TAG.test(tag)) return REFUSALS.invalid("--tailscale-tag", /^[a-z0-9:-]{1,60}$/.test(tag) ? tag : "(not shown)", "a tag of the tailnet, tag:server for instance");
+  const tailscale = tag ?? (flags.has("--tailscale") ? DEFAULT_TAG : null);
+  if (flags.has("--tailscale-key-stdin") && tailscale === null) return REFUSALS.usage("--tailscale-key-stdin goes with --tailscale");
+  if (flags.has("--tailscale-key-stdin") && flags.has("--cloudflare-token-stdin")) {
+    return REFUSALS.usage("one secret on standard input at a time: give Cloudflare's token in CLOUDFLARE_API_TOKEN, or the auth key in TS_AUTHKEY");
+  }
+  const hostKey = values["--host-key"] ?? null;
+  if (hostKey !== null && !HOST_KEY_FINGERPRINT.test(hostKey)) return REFUSALS.invalid("--host-key", "(not shown)", "the fingerprint ssh-keygen -lf prints, SHA256: and 43 characters");
 
   return {
     login,
@@ -337,9 +419,28 @@ export function parseSetupArguments(arguments_: readonly string[]): SetupOptions
     dns,
     acme,
     tunnel,
+    sshFrom,
+    sshInterfaces,
+    sshPublic,
+    tailscale,
+    tailscaleKeyStdin: flags.has("--tailscale-key-stdin"),
+    hostKey,
     configDir: values["--config-dir"] ?? null,
     json,
   };
+}
+
+/**
+ * The ssh access a run applies: the options', as a whole, when given; open
+ * to all again under --ssh-public; else what the configuration recorded.
+ * Never widened by an absent option: see bin/cli/ssh-access.ts.
+ */
+export function chooseAccess(given: Pick<SetupOptions, "sshFrom" | "sshInterfaces" | "sshPublic">, file: Record<string, unknown>): { access: SshAccess; reopen: boolean } | Refusal {
+  if (given.sshPublic) return { access: PUBLIC_SSH, reopen: true };
+  if (given.sshFrom !== null || given.sshInterfaces !== null) return { access: { from: given.sshFrom ?? [], interfaces: given.sshInterfaces ?? [] }, reopen: false };
+  const recorded = accessFromConfig(file);
+  if ("problem" in recorded) return REFUSALS.sshAccess(recorded.problem);
+  return { access: recorded, reopen: false };
 }
 
 // --- the configuration on the workstation --------------------------------------
@@ -480,6 +581,8 @@ export type Facts = {
   sshPort: number;
   /** The workstation's address as the machine sees it, from $SSH_CONNECTION; null when not an address. */
   clientAddress: string | null;
+  /** The connection the preflight arrived by: its addresses, and the interface it reached. */
+  connection: SshConnection;
   sudo: "root" | "yes" | "no";
   /** The zone the machine already serves, from /etc/caddy/sitesolide.env; null on a fresh one. */
   zone: string | null;
@@ -506,6 +609,8 @@ export function preflightScript(): string {
     'echo "uid=$(id -u)"',
     "echo \"free=$(df -Pk / | awk 'NR==2 {print $4}')\"",
     'echo "ssh=${SSH_CONNECTION:-}"',
+    "local_address=$(printf '%s\\n' \"${SSH_CONNECTION:-}\" | cut -d' ' -f3)",
+    "echo \"sshdev=$(ip -o addr show 2>/dev/null | awk -v a=\"$local_address\" '{ split($4, p, \"/\"); if (p[1] == a) { print $2; exit } }')\"",
     'if [ "$(id -u)" = 0 ]; then echo "sudo=root"; elif sudo -n true >/dev/null 2>&1 </dev/null; then echo "sudo=yes"; else echo "sudo=no"; fi',
     "echo \"zone=$(sed -n 's/^SITESOLIDE_ZONE=//p' /etc/caddy/sitesolide.env 2>/dev/null | head -n 1)\"",
     'echo "route4=$(ip -j -4 route show default 2>/dev/null)"',
@@ -588,6 +693,7 @@ export function readFacts(output: string): Facts | null {
     // Only an address goes into fail2ban's configuration: nothing else this
     // field could carry is written into a script.
     clientAddress: isIP(client) === 0 ? null : client,
+    connection: readConnection(output),
     sudo: sudo === "root" || sudo === "yes" ? sudo : "no",
     zone: values.get("zone") || null,
     ipv4,
@@ -667,6 +773,14 @@ export type SetupDependencies = {
    */
   dnsCredentials(entry: DnsEntry, ask: boolean): Promise<Credentials | null>;
   drawPassword(): Promise<{ password: string; hash: string }>;
+  /** The Tailscale auth key, from TS_AUTHKEY or standard input; null when none was given. Never printed. */
+  tailscaleKey(): Promise<string | null>;
+  /**
+   * The fingerprints of the host keys the machine presents, and whether the
+   * workstation knows the host already; `pin` records the key of that
+   * fingerprint in known_hosts. See pinHostKey.
+   */
+  hostKeys?: { presented(host: string): Promise<{ fingerprint: string; line: string }[]>; known(host: string): Promise<boolean>; pin(line: string): Promise<void> };
   sleep(ms: number): Promise<void>;
   now(): number;
   random(): string;
@@ -693,6 +807,8 @@ export type SetupContext = HardenContext & {
    * file, null when the machine is to hold them already.
    */
   tunnel: { id: string; credentials: string | null } | null;
+  /** The tag the machine joins its tailnet with, null when it joins none. */
+  tailscale: string | null;
   /** Who serves the zone's DNS; null for `--dns manual`. */
   dns: DnsEntry | null;
   /** Its credentials once obtained; undefined until a step asked for them. */
@@ -1514,7 +1630,9 @@ function configurationStep(): Step<SetupContext> {
         file.email === context.options.email &&
         (file.contact ?? null) === context.contact &&
         (file.dns ?? "cloudflare") === (context.options.dns ?? "cloudflare") &&
-        (file.acme ?? "production") === (context.options.acme ?? "production");
+        (file.acme ?? "production") === (context.options.acme ?? "production") &&
+        sameRecordedAccess(file as Record<string, unknown>, context.sshAccess ?? PUBLIC_SSH) &&
+        (file.tailscale ?? null) === context.tailscale;
       return same ? { state: "done" } : { state: "missing", missing: [path(context)] };
     },
     run: async (context) => {
@@ -1526,6 +1644,13 @@ function configurationStep(): Step<SetupContext> {
       // Production too: written only for staging.
       if (context.options.acme === ACME_STAGING) config.acme = ACME_STAGING;
       else delete config.acme;
+      // The ssh access as this run applies it, absent when open to all: a
+      // later run without the options reads it back.
+      delete config[ACCESS_KEYS.from];
+      delete config[ACCESS_KEYS.interfaces];
+      Object.assign(config, accessToConfig(context.sshAccess ?? PUBLIC_SSH));
+      if (context.tailscale === null) delete config.tailscale;
+      else config.tailscale = context.tailscale;
       // The marker first, so that a run stopped anywhere after this point is
       // this install's to resume. One left by an install on another machine
       // or zone, whose configuration is gone, is replaced: this step only
@@ -1541,6 +1666,12 @@ function configurationStep(): Step<SetupContext> {
     },
     inspect: (context) => `cat ${path(context)}`,
   };
+}
+
+/** Whether the configuration records this access, read the way chooseAccess reads it. */
+function sameRecordedAccess(file: Record<string, unknown>, access: SshAccess): boolean {
+  const recorded = accessFromConfig(file);
+  return !("problem" in recorded) && sameAccess(recorded, access);
 }
 
 /**
@@ -1647,8 +1778,43 @@ function dnsStep(): Step<SetupContext> {
  * so that they propagate while it installs; behind a tunnel they come once
  * the connector runs (installSteps), Cloudflare answering them at once.
  */
-export function setupSteps(tunnel = false): Step<SetupContext>[] {
-  return [configurationStep(), ...(tunnel ? [] : [dnsStep()]), ...hardeningSteps<SetupContext>(), ...installSteps(tunnel)];
+export function setupSteps(tunnel = false, tailscale = false): Step<SetupContext>[] {
+  return [configurationStep(), ...(tunnel ? [] : [dnsStep()]), ...hardeningSteps<SetupContext>(), ...(tailscale ? [tailscaleStep()] : []), ...installSteps(tunnel)];
+}
+
+/**
+ * The tailnet, under --tailscale alone, once the hardening is done: the auth
+ * key asked for only when the machine has not joined yet, and scrubbed from
+ * anything the run said.
+ */
+function tailscaleStep(): Step<SetupContext> {
+  return {
+    id: "tailscale",
+    title: "tailnet",
+    check: (context) => rootCheck(context.machine, context.operator, "setup:tailscale:check", tailscaleCheck(context.tailscale!)),
+    run: async (context, missing) => {
+      const tag = context.tailscale!;
+      let key: string | null = null;
+      if (needsAuthKey(missing)) {
+        key = await context.deps.tailscaleKey();
+        if (key === null) {
+          throw new StepFailure("no Tailscale auth key: the machine has not joined a tailnet", [
+            `set ${AUTH_KEY_VARIABLE} in the environment, or pipe it to --tailscale-key-stdin; never as an argument`,
+            `a tagged, pre-approved key from the tailnet's admin console, allowed to apply ${tag}: see docs/ssh.md`,
+          ]);
+        }
+        if (!AUTH_KEY.test(key)) throw new StepFailure(REFUSALS.tailscaleKey("given").message, REFUSALS.tailscaleKey("given").details);
+      }
+      const execution = await asRoot(context.machine, context.operator, "setup:tailscale:run", tailscaleRun(tag, key), true);
+      const scrub = (text: string) => (key === null ? text : text.replaceAll(key, "[key]"));
+      if (execution.code !== 0) {
+        throw new StepFailure(`the machine did not join the tailnet (exit code ${execution.code})`, scrub(`${execution.output}\n${execution.error}`).split("\n").filter((line) => line.trim() !== "").slice(-6));
+      }
+      const done = [execution.output.includes(TAILSCALE_SAID.installed) ? "installed" : null, execution.output.includes(TAILSCALE_SAID.joined) ? `joined as ${tag}` : null].filter(Boolean);
+      return `${done.length === 0 ? `on the tailnet as ${tag}` : done.join(", ")}, Tailscale SSH off: OpenSSH answers over the tailnet`;
+    },
+    inspect: (context) => `ssh ${context.server} 'tailscale status; sudo journalctl -u tailscaled -n 50'`,
+  };
 }
 
 /** The web's ports closed behind a tunnel, once the zone resolves to Cloudflare: see closedPorts in harden.ts. */
@@ -1677,7 +1843,7 @@ export function withoutToken(environment: Record<string, string | undefined>, js
   const child: Record<string, string> = {};
   // The DNS credentials, Cloudflare's token: a script setup launches never
   // needs them, and reaches them through nothing.
-  const kept = new Set(dnsVariables());
+  const kept = new Set([...dnsVariables(), AUTH_KEY_VARIABLE]);
   for (const [key, value] of Object.entries(environment)) {
     if (value !== undefined && !kept.has(key)) child[key] = value;
   }
@@ -1770,6 +1936,12 @@ export async function runSetup(given: SetupOptions, deps: SetupDependencies): Pr
     }
   }
   const options: SetupOptions = { ...given, dns: dnsName, acme: acmeName, tunnel: tunnel?.id ?? null, skipDns: given.skipDns || dnsName === MANUAL };
+  // Who may reach ssh: the options', else the configuration's, never wider
+  // by itself. The tailnet likewise.
+  const chosenAccess = chooseAccess(given, file as Record<string, unknown>);
+  if ("message" in chosenAccess) return refuse(chosenAccess);
+  const recordedTag = typeof file.tailscale === "string" && TAILSCALE_TAG.test(file.tailscale) ? file.tailscale : null;
+  const tailscaleTag = given.tailscale ?? recordedTag;
   const configured = {
     server: deps.environment.SITESOLIDE_SERVER ?? file.server,
     zone: deps.environment.SITESOLIDE_ZONE ?? file.zone,
@@ -1780,6 +1952,13 @@ export async function runSetup(given: SetupOptions, deps: SetupDependencies): Pr
   const contact = options.contact ?? (typeof file.contact === "string" && file.contact !== "" ? file.contact : null);
 
   out.say(`-> setup of ${options.host}, zone ${options.zone}, deploying as ${options.user}${options.dryRun ? ", dry run: nothing is changed" : ""}`);
+  if (!isPublic(chosenAccess.access) || chosenAccess.reopen) out.say(`   ${describeAccess(chosenAccess.access)}${chosenAccess.reopen ? ", asked by --ssh-public" : ""}`);
+
+  // The host key, pinned before the first connection when its fingerprint was given.
+  if (options.hostKey !== null) {
+    const pinned = await pinHostKey(options.host, options.hostKey, deps);
+    if (pinned !== null) return refuse(pinned);
+  }
   if (guard.kind === "installed") out.say(`   ${configPath} names this machine, which setup did not install: it is only read`);
   if (guard.kind === "ours") out.say(`   resuming the install ${configPath} records`);
 
@@ -1831,6 +2010,10 @@ export async function runSetup(given: SetupOptions, deps: SetupDependencies): Pr
     clientAddress: facts.clientAddress,
     ignoredAddress: null,
     tunnel,
+    sshAccess: chosenAccess.access,
+    sshReopen: chosenAccess.reopen,
+    connection: facts.connection,
+    tailscale: tailscaleTag,
     options,
     deps,
     folder,
@@ -1842,7 +2025,7 @@ export async function runSetup(given: SetupOptions, deps: SetupDependencies): Pr
     dashboardDrawn: false,
     childEnvironment: childEnvironment(deps.environment, { server, zone: options.zone, email: options.email, contact, folder, acme: acmeName }, options.json),
   };
-  const steps = setupSteps(tunnel !== null);
+  const steps = setupSteps(tunnel !== null, tailscaleTag !== null);
 
   // 3. Read only: a dry run, or a machine setup did not install, which it
   // leaves alone unless every step is already done there.
@@ -1950,6 +2133,29 @@ export function showSecrets(deps: Pick<SetupDependencies, "secrets" | "output">)
     "                    store it now: it is shown this once, and changed from the dashboard",
     "",
   ]);
+}
+
+/**
+ * The first contact with a host key checked rather than trusted: the
+ * fingerprint given, read from the provider's console, must be among the
+ * keys the machine presents, and only that key is recorded in known_hosts,
+ * before any connection that would accept another. A host the workstation
+ * knows already is left to ssh, which compares it with what it recorded and
+ * refuses a change. Null when setup may go on, the refusal otherwise.
+ */
+export async function pinHostKey(host: string, fingerprint: string, deps: Pick<SetupDependencies, "hostKeys" | "output">): Promise<Refusal | null> {
+  const keys = deps.hostKeys;
+  if (keys === undefined) return { message: "--host-key cannot be checked here", details: ["ssh-keyscan and ssh-keygen are needed on this workstation"] };
+  if (await keys.known(host)) {
+    deps.output.say(`   host key: ${host} is in known_hosts already, which ssh compares on every connection`);
+    return null;
+  }
+  const presented = await keys.presented(host);
+  const match = presented.find((key) => key.fingerprint === fingerprint);
+  if (match === undefined) return REFUSALS.hostKeyMismatch(host, fingerprint, presented.map((key) => key.fingerprint));
+  await keys.pin(match.line);
+  deps.output.say(`   host key: ${fingerprint}, as given, recorded in known_hosts before the first login`);
+  return null;
 }
 
 // --- the real dependencies ------------------------------------------------------
@@ -2063,6 +2269,31 @@ async function sameMachine(a: string, b: string): Promise<boolean> {
   return first.some((address) => second.includes(address));
 }
 
+/** The host keys a machine presents, read with ssh-keyscan, and known_hosts read and written with ssh-keygen and a file append. */
+function workstationHostKeys(environment: Record<string, string>): NonNullable<SetupDependencies["hostKeys"]> {
+  const run = (command: string[], input?: string) =>
+    Bun.spawnSync(command, { env: environment, stdin: input === undefined ? "ignore" : new TextEncoder().encode(input), stdout: "pipe", stderr: "pipe", timeout: 30_000 });
+  const knownHosts = join(homedir(), ".ssh", "known_hosts");
+  return {
+    presented: async (host) => {
+      const scan = run(["ssh-keyscan", "-T", "10", "-t", "ed25519,ecdsa,rsa", host]);
+      const lines = scan.stdout.toString().split("\n").filter((line) => line.trim() !== "" && !line.startsWith("#"));
+      return lines.flatMap((line) => {
+        const [, type = "", blob = ""] = line.trim().split(/\s+/);
+        if (!/^[A-Za-z0-9+/=]+$/.test(blob)) return [];
+        const digest = new Bun.CryptoHasher("sha256").update(Buffer.from(blob, "base64")).digest("base64").replace(/=+$/, "");
+        return [{ fingerprint: `SHA256:${digest}`, line: `${host} ${type} ${blob}` }];
+      });
+    },
+    known: async (host) => run(["ssh-keygen", "-F", host, "-f", knownHosts]).exitCode === 0,
+    pin: async (line) => {
+      mkdirSync(join(homedir(), ".ssh"), { recursive: true, mode: 0o700 });
+      const before = existsSync(knownHosts) ? readFileSync(knownHosts, "utf8") : "";
+      writeFileSync(knownHosts, `${before}${before === "" || before.endsWith("\n") ? "" : "\n"}${line}\n`, { mode: 0o600 });
+    },
+  };
+}
+
 /** Typed without echo, on the terminal, as dashboard/scripts/fingerprint.ts reads a password. */
 async function readHidden(question: string): Promise<string> {
   process.stderr.write(question);
@@ -2150,6 +2381,7 @@ export async function setupFromWorkstation(options: SetupOptions, extras: SetupE
   // Read at once when it is piped: the scripts launched later inherit this
   // standard input, and must find it empty rather than holding the token.
   const piped = options.tokenStdin ? (await Bun.stdin.text()).trim() : null;
+  const pipedAuthKey = options.tailscaleKeyStdin ? (await Bun.stdin.text()).trim() : null;
   const environment = { ...process.env };
   const secrets: Secrets = { portal: null };
   const sshEnvironment = withoutToken(environment, json);
@@ -2181,6 +2413,11 @@ export async function setupFromWorkstation(options: SetupOptions, extras: SetupE
       }
       return typed;
     },
+    tailscaleKey: async () => {
+      const key = pipedAuthKey ?? environment[AUTH_KEY_VARIABLE] ?? "";
+      return key === "" ? null : key;
+    },
+    hostKeys: workstationHostKeys(sshEnvironment),
     drawPassword: async () => {
       const password = generatePassword();
       const hash = await Bun.password.hash(password, "argon2id");

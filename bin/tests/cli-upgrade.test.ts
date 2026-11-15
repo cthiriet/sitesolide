@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { countItemized } from "../cli/comparison";
 import { hintFor } from "../cli/hints";
 import type { KitRunner, KitTask } from "../cli/setup";
 import { COMPONENT_CONDITIONS } from "../cli/setup";
+import { sshdSettings } from "../cli/harden";
 import {
   API_LEFT_OUT,
   labelFor,
@@ -58,7 +59,7 @@ function folder(prefix = "upgrade-"): string {
 }
 
 /** The order the components of a machine served directly are brought up to date in, as docs/upgrading.md gives it. */
-const ORDER = ["caddy-unit", "backups", "egress", "steward", "api", "dashboard", "collector", "gatekeeper", "installer", "caddy-config", "portal", "monitor"];
+const ORDER = ["caddy-unit", "backups", "egress", "steward", "api", "dashboard", "collector", "gatekeeper", "installer", "caddy-config", "portal", "monitor", "ssh", "ssh-firewall"];
 
 /** Every component, the tunnel's included, which a machine served directly does not carry. */
 const ALL = ["caddy-unit", "tunnel", ...ORDER.slice(1)];
@@ -156,6 +157,9 @@ function currentLabels(): string[] {
     "override.conf",
     "portal-password",
     "dashboard-password",
+    // sshd as setup closes it, for the deploy account, and ufw letting ssh in.
+    ...sshdSettings("deploy").map((setting) => setting.label),
+    "ufw-22",
   ];
 }
 
@@ -191,13 +195,13 @@ function runs(w: World): string[] {
 }
 
 describe("the command line", () => {
-  test("--dry-run and --json, nothing else", () => {
-    expect(parseUpgradeArguments([])).toEqual({ dryRun: false, json: false });
-    expect(parseUpgradeArguments(["--dry-run", "--json"])).toEqual({ dryRun: true, json: true });
+  test("--dry-run, --json and the ssh access, nothing else", () => {
+    expect(parseUpgradeArguments([])).toEqual({ dryRun: false, json: false, sshFrom: null, sshInterfaces: null, sshPublic: false });
+    expect(parseUpgradeArguments(["--dry-run", "--json"])).toMatchObject({ dryRun: true, json: true });
     const refused = parseUpgradeArguments(["--force"]);
-    expect("message" in refused && refused.message).toBe("usage: sitesolide upgrade [--dry-run] [--json]");
+    expect("message" in refused && refused.message).toBe("usage: sitesolide upgrade [--dry-run] [--json] [--ssh-from <networks>] [--ssh-interface <name>] [--ssh-public]");
     expect("details" in refused && refused.details[0]).toBe("not an option of upgrade: --force");
-    expect(hintFor("usage: sitesolide upgrade [--dry-run] [--json]")).toContain("--dry-run");
+    expect(hintFor("usage: sitesolide upgrade [--dry-run] [--json] [--ssh-from <networks>] [--ssh-interface <name>] [--ssh-public]")).toContain("--dry-run");
     // Another installation is the environment's, as for every command.
     expect(parseUpgradeArguments(["--config-dir", "/tmp/x"])).toMatchObject({ message: expect.stringContaining("usage") });
   });
@@ -353,8 +357,9 @@ describe("a machine whose every component is current", () => {
     expect(runs(w)).toEqual([]);
     expect(r.print.lines).toContain(`-> every installed component of ${SERVER} was up to date: nothing was changed`);
     expect(r.print.results[0]).toMatchObject({ dryRun: false, server: SERVER, zone: ZONE, upgraded: [], upToDate: ORDER, missing: [] });
-    // Every check went through sudo -n as the account the configuration names.
-    expect(w.machine.calls.every((call) => call.account === "deploy" && call.command.startsWith("sudo -n sh -s upgrade:"))).toBe(true);
+    // Every check went through sudo -n as the account the configuration names, but the read of the
+    // connection itself, which sudo would strip of $SSH_CONNECTION.
+    expect(w.machine.calls.filter((call) => call.tag !== "upgrade:connection:read").every((call) => call.account === "deploy" && call.command.startsWith("sudo -n sh -s upgrade:"))).toBe(true);
   });
 
   test("set up with a DNS provider since removed: upgraded as any other, its DNS left as it is", async () => {
@@ -685,5 +690,69 @@ describe("--json", () => {
     const events = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(events.at(-1)).toMatchObject({ type: "error", message: "upgrade stopped at monitor: bin/deploy-monitor.sh failed (exit code 1)" });
     expect(String(events.at(-1)!.hint)).toContain("sitesolide upgrade");
+  });
+});
+
+describe("ssh access, through upgrade", () => {
+  const configOf = (w: World) => JSON.parse(readFileSync(join(w.home, ".config", "sitesolide", "config.json"), "utf8")) as Record<string, unknown>;
+  const firewallRun = (w: World) => w.machine.calls.find((call) => call.tag === "upgrade:ssh-firewall:run");
+
+  test("the options read, and refused together or malformed", () => {
+    expect(parseUpgradeArguments(["--ssh-interface", "tailscale0", "--dry-run"])).toMatchObject({ dryRun: true, sshInterfaces: ["tailscale0"], sshFrom: null });
+    expect(parseUpgradeArguments(["--ssh-from", "203.0.113.0/24,198.51.100.7"])).toMatchObject({ sshFrom: ["203.0.113.0/24", "198.51.100.7/32"] });
+    expect(parseUpgradeArguments(["--ssh-public", "--ssh-from", "203.0.113.0/24"])).toMatchObject({ details: ["--ssh-public opens ssh to all: it does not go with --ssh-from nor --ssh-interface", "see docs/upgrading.md"] });
+    expect(parseUpgradeArguments(["--ssh-from", "203.0.113.9/24"])).toMatchObject({ details: ["--ssh-from: 203.0.113.9/24: host bits set: the network is 203.0.113.0/24", "see docs/upgrading.md"] });
+    expect(parseUpgradeArguments(["--ssh-interface"])).toMatchObject({ details: ["--ssh-interface needs a value", "see docs/upgrading.md"] });
+  });
+
+  test("a machine in service, nothing recorded: port 22 found open and left so", async () => {
+    const w = world();
+    const r = await upgrade(w);
+    expect(r.code).toBe(0);
+    expect(r.statuses).toContain("ssh-firewall:done");
+    expect(firewallRun(w)).toBeUndefined();
+  });
+
+  test("--ssh-interface over the public address: refused at ssh-firewall, nothing changed, nothing recorded", async () => {
+    const w = world();
+    const r = await upgrade(w, { sshInterfaces: ["tailscale0"] });
+    expect(r.code).toBe(1);
+    expect(r.print.errors[0]!.message).toBe("upgrade stopped at ssh-firewall: public ssh stays open: this connection comes from 198.51.100.2 on eth0, which ssh on tailscale0 only would refuse");
+    expect(firewallRun(w)).toBeUndefined();
+    expect(configOf(w)).not.toHaveProperty("sshInterface");
+  });
+
+  test("--ssh-interface over the tailnet: the rule laid, the public ones deleted, recorded, and kept by the next run", async () => {
+    const w = world();
+    w.machine.facts.ssh = "100.101.102.103 50000 100.64.0.7 22";
+    w.machine.facts.sshdev = "tailscale0";
+    const r = await upgrade(w, { sshInterfaces: ["tailscale0"] });
+    expect(r.print.errors).toEqual([]);
+    expect(r.code).toBe(0);
+    const run = firewallRun(w)!.input;
+    expect(run).toContain("ufw allow in on tailscale0 to any port 22 proto tcp");
+    expect(run).toContain("ufw delete allow 22/tcp");
+    expect(configOf(w)).toMatchObject({ server: SERVER, zone: ZONE, email: EMAIL, sshInterface: "tailscale0" });
+
+    const again = await upgrade(w);
+    expect(again.code).toBe(0);
+    expect(again.statuses).toContain("ssh-firewall:done");
+    expect(w.machine.calls.filter((call) => call.tag === "upgrade:ssh-firewall:run")).toHaveLength(1);
+  });
+
+  test("--ssh-public: open to all again without proof, the record dropped", async () => {
+    const w = world({ config: { server: SERVER, zone: ZONE, email: EMAIL, sshInterface: "tailscale0" } });
+    w.machine.install(["ufw-22-on-tailscale0", "ufw-22-public-closed"]);
+    const r = await upgrade(w, { sshPublic: true });
+    expect(r.print.errors).toEqual([]);
+    expect(r.code).toBe(0);
+    expect(firewallRun(w)!.input).toContain("ufw allow 22/tcp");
+    expect(configOf(w)).not.toHaveProperty("sshInterface");
+  });
+
+  test("--dry-run records nothing", async () => {
+    const w = world();
+    expect((await upgrade(w, { dryRun: true, sshFrom: ["203.0.113.0/24"] })).code).toBe(0);
+    expect(configOf(w)).not.toHaveProperty("sshFrom");
   });
 });

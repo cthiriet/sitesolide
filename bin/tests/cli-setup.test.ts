@@ -309,7 +309,7 @@ describe("closing ssh to root", () => {
   });
 
   test("the change: sshd -t before the reload, a safety net armed before it, the drop-in read first", () => {
-    const script = sshRun();
+    const script = sshRun("deploy");
     const lines = script.split("\n");
     const check = lines.findIndex((line) => line.includes("sshd -t"));
     const arm = lines.findIndex((line) => line.startsWith("systemd-run") && line.includes("sitesolide-ssh-rollback"));
@@ -364,7 +364,9 @@ describe("closing ssh to root", () => {
 
   test("the firewall keeps the port ssh answered on, opened before the default turns to deny", () => {
     const script = firewallRun(2222);
-    expect(script).toContain("for port in 80 443 2222; do");
+    expect(script).toContain("for port in 80 443; do");
+    // Opened to all only when no rule lets ssh in: a restriction an earlier run laid stays.
+    expect(script).toContain("|| ufw allow 2222/tcp");
     expect(script.indexOf("ufw allow")).toBeLessThan(script.indexOf("ufw default deny incoming"));
     expect(script.indexOf("ufw default deny incoming")).toBeLessThan(script.indexOf("ufw --force enable"));
   });
@@ -510,7 +512,7 @@ describe("the preflight", () => {
   });
 
   test("an account without passwordless sudo, too little disk, another zone: refused before any step", () => {
-    const facts: Facts = { os: "debian", version: "13", system: "Debian", architecture: "amd64", uid: 1000, freeKb: 40 * 1024 * 1024, sshPort: 22, clientAddress: null, sudo: "yes", zone: null, ipv4: HOST, ipv6: null };
+    const facts: Facts = { os: "debian", version: "13", system: "Debian", architecture: "amd64", uid: 1000, freeKb: 40 * 1024 * 1024, sshPort: 22, clientAddress: null, connection: { client: null, local: null, port: null, device: null }, sudo: "yes", zone: null, ipv4: HOST, ipv6: null };
     const given = { host: HOST, zone: ZONE, anyOs: false };
     expect(judgeFacts(facts, given, "admin")).toBeNull();
     expect(judgeFacts({ ...facts, sudo: "no" }, given, "admin")?.message).toBe(`admin@${HOST} has no sudo without a password`);
@@ -1010,7 +1012,7 @@ describe("what setup runs", () => {
       fail2banRelease("198.51.100.2"),
       updatesRun(),
       directoriesRun(),
-      sshRun(),
+      sshRun("deploy"),
       sshDisarm(),
       caddyUnitRun(readFileSync(join(import.meta.dir, "..", "..", "infra", "caddy", "caddy.service.d", "override.conf"), "utf8")),
       portalPasswordRun(PORTAL_HASH),
@@ -1031,7 +1033,7 @@ describe("what setup runs", () => {
       fail2banRelease("198.51.100.2"),
       updatesRun(),
       directoriesRun(),
-      sshRun(),
+      sshRun("deploy"),
       sshDisarm(),
       portalPasswordRun(PORTAL_HASH),
       preflightScript(),
@@ -1110,6 +1112,9 @@ describe("the command line", () => {
       REFUSALS.tunnelDns("manual"),
       REFUSALS.tunnelUnreadable("~/.cloudflared/x.json"),
       REFUSALS.tunnelCredentials("~/.cloudflared/x.json", "it is not JSON"),
+      REFUSALS.sshAccess("--ssh-from x: not an IPv4 or IPv6 address"),
+      REFUSALS.tailscaleKey("given"),
+      REFUSALS.hostKeyMismatch(HOST, `SHA256:${"A".repeat(43)}`, []),
     ];
     expect(samples).toHaveLength(Object.keys(REFUSALS).length);
     const failures = [
@@ -1122,6 +1127,10 @@ describe("the command line", () => {
       "setup stopped at caddy: Caddy could not be installed (exit code 1)",
       "setup stopped at tunnel: the machine holds no credentials for the tunnel 6f1c2b8e-1d3a-4c5b-9e7f-0a1b2c3d4e5f",
       "setup stopped at tunnel: the tunnel's connector could not be set up (exit code 1)",
+      `setup stopped at firewall: public ssh stays open: this connection comes from 198.51.100.2 on eth0, which ssh on tailscale0 only would refuse`,
+      "upgrade stopped at ssh-firewall: public ssh stays open: this connection comes from 198.51.100.2 on eth0, which ssh on tailscale0 only would refuse",
+      "setup stopped at tailscale: no Tailscale auth key: the machine has not joined a tailnet",
+      "setup stopped at tailscale: the machine did not join the tailnet (exit code 1)",
     ];
     for (const message of [...samples.map((sample) => sample.message), ...failures]) {
       expect({ message, covered: hintFor(message) !== DEFAULT_HINT }).toEqual({ message, covered: true });

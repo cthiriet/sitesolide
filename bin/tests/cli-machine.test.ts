@@ -251,7 +251,7 @@ describe("the public key", () => {
 
 describe("the arguments", () => {
   test("a command is required, and only the three exist", () => {
-    expect(parseMachineArguments(["machine"])).toMatchObject({ error: "machine-usage", message: "sitesolide machine needs a command: create, list, destroy or providers" });
+    expect(parseMachineArguments(["machine"])).toMatchObject({ error: "machine-usage", message: "sitesolide machine needs a command: create, list, firewall, destroy or providers" });
     expect(parseMachineArguments(["machine", "--json"])).toMatchObject({ error: "machine-usage" });
     expect(parseMachineArguments(["machine", "start"])).toMatchObject({ error: "machine-usage", message: "unknown machine command: start" });
   });

@@ -99,7 +99,8 @@ describe("a machine at home, behind a NAT", () => {
 
     // The firewall: ssh alone opened, the web's ports closed at the end.
     const firewall = b.machine.calls.find((call) => call.tag === "setup:firewall:run")!;
-    expect(firewall.input).toContain(`for port in 22; do ufw allow`);
+    expect(firewall.input).toContain("|| ufw allow 22/tcp");
+    expect(firewall.input).not.toContain("for port in");
     expect(b.machine.calls.find((call) => call.tag === "setup:web-ports:run")!.input).toContain(`for port in 80 443; do ufw delete allow`);
 
     // The loopback rule checked for the connector's line: a table laid before
