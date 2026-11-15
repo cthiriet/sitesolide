@@ -502,7 +502,12 @@ comment.
 
 - **With a passkey, a fresh assertion**, the user verified, which the steward
   checks against its registry, as a sign-in but for the purpose `unlock`:
-  the password then unlocks nothing. See [Passkeys](#passkeys).
+  the password then unlocks nothing. See [Passkeys](#passkeys). *Change
+  password*, which asks for the owner's proof again on top of the unlock,
+  takes a fresh assertion then too, and refuses the password. The page no
+  longer offers it for the dashboard's and the portal's own passwords, which
+  it shows as the break-glass alone: they come back once root removes every
+  passkey (`sitesolide passkey remove`).
 - **Without one, the password is the dashboard's**, retyped, and **checked by the steward**
   against `PASSWORD_HASH` in `/etc/sitesolide/dashboard.env`, re-read on every
   attempt. The dashboard's service checks only its shape.
