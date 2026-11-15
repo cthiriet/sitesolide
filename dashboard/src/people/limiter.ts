@@ -1,15 +1,18 @@
 /**
  * The rate limiting of members' sign-ins, beside the owner's password
- * counter, which stays global (src/auth.ts).
+ * counter, counted per client too (src/auth.ts).
  *
  * - **Per identity**: three refusals tolerated for one email, then five
  *   seconds doubling up to an hour, the password's rule. An address the
  *   registry does not name cannot keep the steward busy, and one person who
  *   was removed and keeps trying blocks nobody else. Ten sign-ins in ten
  *   minutes at most for one email, refused or not: each one opens a session.
- * - **For everyone**: sixty sign-ins a minute, the whole machine together. A
- *   sign-in already costs a round trip through the identity provider; beyond
- *   that, something is replaying codes, and the next minute is soon enough.
+ * - **Per client**: sixty sign-ins a minute from one address (an IPv6 one
+ *   by its /64, `clientKey`), counted before the portal is asked to redeem
+ *   the code. A sign-in already costs a round trip through the identity
+ *   provider; beyond that, something is replaying codes, and the next minute
+ *   is soon enough. Per client and not for the whole machine: a single
+ *   counter let anyone with a made-up cookie keep every member out.
  *
  * In memory: a restart forgets it, and costs whoever floods one sign-in at
  * the provider per attempt anyway. Pure apart from its maps, its clock a
@@ -19,13 +22,13 @@ import { remainingWait } from "../auth";
 
 export const ATTEMPTS_PER_WINDOW = 10;
 export const WINDOW_MS = 10 * 60 * 1000;
-export const GLOBAL_PER_MINUTE = 60;
-/** Identities remembered at most; past it, the oldest are forgotten. */
+export const CLIENT_PER_MINUTE = 60;
+/** Identities, and clients, remembered at most; past it, the oldest are forgotten. */
 export const MAX_IDENTITIES = 10_000;
 
 export type SignInLimiter = {
-  /** Milliseconds before anyone may sign in again, zero when the way is clear. Counts the attempt. */
-  global: (now: number) => number;
+  /** Milliseconds before this client may sign in again, zero when the way is clear. Counts the attempt. */
+  client: (client: string, now: number) => number;
   /** Milliseconds before this email may sign in again, zero when the way is clear. Counts the attempt. */
   identity: (email: string, now: number) => number;
   /** A refusal for this email: not a member, a sign-in too old. */
@@ -38,8 +41,7 @@ type Record_ = { failures: number; lastFailureAt: number; attempts: number[] };
 
 export function createSignInLimiter(): SignInLimiter {
   const identities = new Map<string, Record_>();
-  let minute = -1;
-  let count = 0;
+  const clients = new Map<string, { minute: number; count: number }>();
 
   function recordOf(email: string): Record_ {
     let record = identities.get(email);
@@ -52,14 +54,20 @@ export function createSignInLimiter(): SignInLimiter {
   }
 
   return {
-    global(now) {
+    client(client, now) {
       const current = Math.floor(now / 60_000);
-      if (current !== minute) {
-        minute = current;
-        count = 0;
+      let kept = clients.get(client);
+      if (kept === undefined || kept.minute !== current) {
+        clients.delete(client);
+        if (clients.size >= MAX_IDENTITIES) {
+          for (const [key, one] of clients) if (one.minute !== current) clients.delete(key);
+          while (clients.size >= MAX_IDENTITIES) clients.delete(clients.keys().next().value!);
+        }
+        kept = { minute: current, count: 0 };
+        clients.set(client, kept);
       }
-      if (count >= GLOBAL_PER_MINUTE) return (current + 1) * 60_000 - now;
-      count++;
+      if (kept.count >= CLIENT_PER_MINUTE) return (current + 1) * 60_000 - now;
+      kept.count++;
       return 0;
     },
 

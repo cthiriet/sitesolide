@@ -26,6 +26,7 @@
  */
 import { DASHBOARD_AUDIENCE, readPublicKey, verifyAssertion, type PublicKey } from "../../borrowed/assertion";
 import { reach, type Reached } from "../control/client";
+import { clientKey } from "../auth";
 import { isAcceptableOrigin, setCookie } from "../sessions";
 import type { Tokens } from "../secrets/tokens";
 import type { DashboardPortal, MembersSteward } from "./client";
@@ -302,7 +303,9 @@ export function createMembersRoutes(dependencies: MembersRoutesDependencies, clo
       const binding = carried === null ? null : reauth ? carried.slice(0, -REAUTH_MARK.length) : carried;
       const code = new URL(req.url).searchParams.get("code") ?? "";
       if (binding === null) return refused("expired", spent);
-      if (limiter.global(now) > 0) return refused("busy", spent);
+      // Per client, before the portal is asked: a flood of made-up cookies
+      // makes its sender wait, never the members.
+      if (limiter.client(clientKey(req.headers.get("x-forwarded-for")), now) > 0) return refused("busy", spent);
 
       let assertion: string | null = null;
       let returnTo = "/";

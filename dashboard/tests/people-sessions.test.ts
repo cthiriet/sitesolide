@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DATA_DIR } from "../src/config";
 import { applyRotation, closeSession, openDatabase, openSession, purgeSessions, readSession, recordSession } from "../src/database";
-import { createSignInLimiter, ATTEMPTS_PER_WINDOW, GLOBAL_PER_MINUTE } from "../src/people/limiter";
+import { createSignInLimiter, ATTEMPTS_PER_WINDOW, CLIENT_PER_MINUTE } from "../src/people/limiter";
 import { createIdentityResolver } from "../src/people/identity";
 import { MEMBER_SESSION_DURATION_MS } from "../src/people/protocol";
 import { createSessionReader, ownerSessions } from "../src/routes";
@@ -160,10 +160,11 @@ describe("the rate limiting of member sign-ins", () => {
     expect(limiter.identity("alice@acme.test", 100)).toBeGreaterThan(0);
   });
 
-  test("sixty a minute for the whole machine", () => {
+  test("sixty a minute for one client, and the others go on", () => {
     const limiter = createSignInLimiter();
-    for (let i = 0; i < GLOBAL_PER_MINUTE; i++) expect(limiter.global(60_000)).toBe(0);
-    expect(limiter.global(60_001)).toBe(59_999);
-    expect(limiter.global(120_000)).toBe(0);
+    for (let i = 0; i < CLIENT_PER_MINUTE; i++) expect(limiter.client("203.0.113.7", 60_000)).toBe(0);
+    expect(limiter.client("203.0.113.7", 60_001)).toBe(59_999);
+    expect(limiter.client("198.51.100.1", 60_001)).toBe(0);
+    expect(limiter.client("203.0.113.7", 120_000)).toBe(0);
   });
 });

@@ -1,12 +1,9 @@
 /**
  * The rate limiting of failed authentications on the control API.
  *
- * **Per address, unlike the dashboard's sign-in.** The sign-in counts globally
- * because the dashboard has one user (src/auth.ts): changing address would
- * sidestep a per-address counter, and an attacker locking the owner out for an
- * hour is a price an internal tool pays. Here there are as many holders as
- * tokens, and a global counter would let anyone lock the whole team out with a
- * few wrong guesses. Guessing a token is hopeless anyway, 256 random bits: what
+ * **Per address, like the dashboard's sign-in** (src/auth.ts). There are as
+ * many holders as tokens, and a global counter would let anyone lock the
+ * whole team out with a few wrong guesses. Guessing a token is hopeless anyway, 256 random bits: what
  * this stops is the noise, and the steward's work for nothing.
  *
  * The schedule is the sign-in's (`remainingWait`): three failures tolerated,

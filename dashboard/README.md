@@ -999,7 +999,7 @@ nobody out.
 |---|---|
 | Lifetime | twelve hours, the steward's and the cookie's alike. The portal spares a dashboard sign-in the provider only while its own session is younger than twelve hours (`DASHBOARD_REAUTH_S`): a person closed at the provider is out of the dashboard a day after they last proved themselves there at most, as out of every site |
 | Assertion | five minutes, once: its nonce is remembered on disk until it would have expired. A sign-in at the provider older than a day opens no session |
-| Rate limiting | per identity, three refusals tolerated then five seconds doubling up to an hour, and ten sign-ins in ten minutes for one email; sixty sign-ins a minute for the whole machine; the owner's sign-in counted apart, per client (src/people/limiter.ts, src/auth.ts) |
+| Rate limiting | per identity, three refusals tolerated then five seconds doubling up to an hour, and ten sign-ins in ten minutes for one email; sixty sign-ins a minute per client; the owner's sign-in counted apart, per client (src/people/limiter.ts, src/auth.ts) |
 | Bounds | ten live sessions per person, the oldest giving way; a thousand on the machine; two hundred people who sign in to the dashboard; six hundred entries per project |
 | Rotation | a new owner's password closes the owner's sessions, never a person's, which do not rest on it |
 | Sign-out | closes the dashboard's row and the steward's session, which journals `dashboard.signout` |
