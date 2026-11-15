@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BUN, BUN_CURRENT, bunInstallScript } from "../cli/pins";
+import { APT_KEYS, aptKeyScript, BUN, BUN_CURRENT, bunInstallScript } from "../cli/pins";
 import { CLOUDFLARE } from "../cli/dns/cloudflare";
 import { dnsEntry } from "../cli/dns/registry";
 import { CADDY_BUILD } from "../cli/setup";
@@ -21,12 +21,14 @@ function fakeCurl(body: string): { bin: string; log: string } {
   const folder = mkdtempSync(join(tmpdir(), "sitesolide-pins-"));
   folders.push(folder);
   const log = join(folder, "curl.log");
+  const served = join(folder, "served");
+  writeFileSync(served, body);
   writeFileSync(
     join(folder, "curl"),
     `#!/bin/sh
 echo "$@" >> ${JSON.stringify(log)}
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = -o ]; then printf %s ${JSON.stringify(body)} > "$2"; shift; fi
+  if [ "$1" = -o ]; then cat ${JSON.stringify(served)} > "$2"; shift; fi
   shift
 done
 `,
@@ -122,5 +124,57 @@ describe("Caddy's build", () => {
     const wrong = Bun.spawnSync(["sh", join(REPO_ROOT, CADDY_BUILD)], { stderr: "pipe" });
     expect(wrong.exitCode).toBe(2);
     expect(wrong.stderr.toString()).toContain("usage: build.sh");
+  });
+});
+
+describe("the apt repositories' keys", () => {
+  test("each pinned by its full fingerprint, the sources line written rather than downloaded", () => {
+    for (const key of Object.values(APT_KEYS)) {
+      expect(key.fingerprint).toMatch(/^[0-9A-F]{40}$/);
+      expect(key.url).toStartWith("https://");
+      expect(Bun.spawnSync(["sh", "-n"], { stdin: new TextEncoder().encode(aptKeyScript(key)) }).exitCode).toBe(0);
+    }
+    const setup = read("bin/cli/setup.ts");
+    expect(setup).not.toContain("debian.deb.txt");
+    expect(setup).not.toContain("--dearmor");
+  });
+
+  test.skipIf(Bun.which("gpg") === null)("a key file holding the pinned key alone is laid; another key, or a second one beside it, is refused", () => {
+    const home = mkdtempSync(join(tmpdir(), "sitesolide-keys-"));
+    folders.push(home);
+    const gpg = (...args: string[]) => Bun.spawnSync(["gpg", "--batch", ...args], { env: { GNUPGHOME: home }, stdout: "pipe", stderr: "pipe" });
+    const make = (name: string): string => {
+      expect(gpg("--passphrase", "", "--quick-gen-key", `${name} <${name}@test-zone.invalid>`, "ed25519", "sign", "never").exitCode).toBe(0);
+      return /^fpr:+([0-9A-F]{40}):/m.exec(gpg("--with-colons", "--list-keys", `${name}@test-zone.invalid`).stdout.toString())![1]!;
+    };
+    const pinned = make("pinned");
+    const other = make("other");
+    const exported = (...fingerprints: string[]) => gpg("--armor", "--export", ...fingerprints).stdout.toString();
+    const run = (served: string, keyring: string) => {
+      const curl = fakeCurl(served);
+      return Bun.spawnSync(["sh", "-c", `set -e\n${aptKeyScript({ url: "https://keys.test-zone.invalid/key.asc", fingerprint: pinned, keyring })}`], {
+        env: { PATH: `${curl.bin}:${process.env.PATH}` },
+        stderr: "pipe",
+      });
+    };
+
+    const good = join(home, "keyrings", "good.gpg");
+    expect(run(exported(pinned), good).exitCode).toBe(0);
+    const laid = gpg("--show-keys", "--with-colons", good).stdout.toString();
+    expect(laid).toContain(`fpr:::::::::${pinned}:`);
+    expect(laid).not.toContain(other);
+
+    for (const [served, said] of [
+      [exported(other), other],
+      [exported(pinned, other), other],
+      ["not a key", "rather than the pinned"],
+    ] as const) {
+      const keyring = join(home, "keyrings", "refused.gpg");
+      const refused = run(served, keyring);
+      expect(refused.exitCode).toBe(1);
+      expect(refused.stderr.toString()).toContain(said);
+      expect(refused.stderr.toString()).toContain("nothing was laid");
+      expect(Bun.file(keyring).size).toBe(0);
+    }
   });
 });

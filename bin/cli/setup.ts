@@ -94,7 +94,7 @@ import {
   type Machine,
 } from "./harden";
 import { hintFor } from "./hints";
-import { BUN, BUN_CURRENT, BUN_PATH, bunInstallScript } from "./pins";
+import { APT_KEYS, aptKeyScript, BUN, BUN_CURRENT, BUN_PATH, bunInstallScript } from "./pins";
 import { isCompiled, kitEnv, kitRoot } from "./kit";
 import { eventFor, forEachLine, formatEvent, type OutputEvent } from "./output";
 import { runSteps, StepFailure, type Check, type Condition, type Step, type StepReport } from "./steps";
@@ -827,9 +827,10 @@ function caddyRun(dns: DnsEntry | null): string {
     "setup:caddy:run",
     `
 if ! dpkg-query -W -f='\${Status}' caddy 2>/dev/null | grep -q 'ok installed'; then
-  command -v gpg >/dev/null 2>&1 || ${APT} install -y -q gpg </dev/null
-  curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-  curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > /etc/apt/sources.list.d/caddy-stable.list
+${aptKeyScript(APT_KEYS.caddy)}
+  # The line written here, not downloaded: a list served by the repository
+  # could name any source, or mark one trusted.
+  echo 'deb [signed-by=${APT_KEYS.caddy.keyring}] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main' > /etc/apt/sources.list.d/caddy-stable.list
   ${APT} update -q </dev/null
   ${APT} install -y -q caddy </dev/null
 fi

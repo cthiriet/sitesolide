@@ -110,7 +110,8 @@ proving them:
   Whoever controls one of them is not stopped here.
 - **What `setup` downloads**, as root, over HTTPS: Bun's release zip, at the
   version `bin/cli/pins.ts` pins and refused unless its SHA-256 is the
-  pinned one; Caddy's apt repository and its key; and the
+  pinned one; Caddy's apt repository, and Cloudflare's under `--tunnel`, each
+  key refused unless it is the one `bin/cli/pins.ts` pins by fingerprint; and the
   sources of Caddy, its Cloudflare module, xcaddy and Go's toolchain, at the
   versions `infra/caddy/build.sh` pins, each checked against Go's checksum
   database before Caddy is built on the machine. sitesolide's own releases are

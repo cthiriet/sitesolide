@@ -55,6 +55,7 @@
  */
 import { INACTIVE_HEADER, isSwitchedOff } from "./fragment";
 import { APT, machineCheck, runScript, shellQuote } from "./harden";
+import { APT_KEYS, aptKeyScript } from "./pins";
 import { CADDY_HTTPS_PORT, LOOPBACK_TABLE, TUNNEL_ORIGIN } from "./loopback";
 import type { Condition } from "./steps";
 
@@ -537,9 +538,8 @@ if ! ${LOOPBACK_IPV6} 2>/dev/null; then
   exit 1
 fi
 if ! dpkg-query -W -f='\${Status}' cloudflared 2>/dev/null | grep -q 'ok installed'; then
-  install -d -m 0755 /usr/share/keyrings
-  curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
-  echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' > /etc/apt/sources.list.d/cloudflared.list
+${aptKeyScript(APT_KEYS.cloudflared)}
+  echo 'deb [signed-by=${APT_KEYS.cloudflared.keyring}] https://pkg.cloudflare.com/cloudflared any main' > /etc/apt/sources.list.d/cloudflared.list
   ${APT} update -q </dev/null
   ${APT} install -y -q cloudflared </dev/null
   echo "${TUNNEL_SAID.installed}"

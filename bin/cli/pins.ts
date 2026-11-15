@@ -1,9 +1,11 @@
 /**
  * What setup downloads to the machine and runs as root, pinned: Bun at one
- * version and the SHA-256 of each build it may install.
+ * version and the SHA-256 of each build it may install, and the fingerprint of
+ * each apt repository's signing key. Caddy is pinned beside its build, in
+ * infra/caddy/build.sh, which a person also runs by hand.
  *
- * A download is checked against these values before anything runs it,
- * and a mismatch stops the step: a compromised CDN, release
+ * A download is checked against these values before anything runs it
+ * or apt trusts it, and a mismatch stops the step: a compromised CDN, release
  * or mirror then fails setup rather than landing as root on the machine that
  * serves every site.
  *
@@ -13,6 +15,9 @@
  * workflow builds with, which a test keeps equal: the binary embeds the same
  * runtime the machine runs. Review the diff, run bin/test.sh, commit.
  */
+
+import { dirname } from "node:path";
+import { APT, shellQuote } from "./harden";
 
 export const BUN = {
   version: "1.3.11",
@@ -74,3 +79,48 @@ echo "bun: ${BUN_PATH} $(${BUN_PATH} --version), bun-linux-$build.zip sha256 $ac
 
 /** Whether the machine runs the pinned Bun: setup installs it when not. */
 export const BUN_CURRENT = `[ "$(${BUN_PATH} --version 2>/dev/null)" = ${BUN.version} ]`;
+
+/**
+ * The apt repositories setup adds, each with its signing key's primary
+ * fingerprint. A vendor that rotates its key makes the step fail with both
+ * fingerprints said: check the new one on the vendor's own documentation,
+ * then change it here.
+ */
+export const APT_KEYS = {
+  /** https://caddyserver.com/docs/install#debian-ubuntu-raspbian */
+  caddy: {
+    url: "https://dl.cloudsmith.io/public/caddy/stable/gpg.key",
+    fingerprint: "65760C51EDEA2017CEA2CA15155B6D79CA56EA34",
+    keyring: "/usr/share/keyrings/caddy-stable-archive-keyring.gpg",
+  },
+  /** https://pkg.cloudflare.com/index.html */
+  cloudflared: {
+    url: "https://pkg.cloudflare.com/cloudflare-main.gpg",
+    fingerprint: "CC94B39C77AE7342A68B89628A682D308D4E5E73",
+    keyring: "/usr/share/keyrings/cloudflare-main.gpg",
+  },
+} as const;
+
+/**
+ * Downloads a repository's key and lays it as an apt keyring only when the
+ * file holds exactly one primary key, the pinned one; what is laid is that
+ * key exported again by gpg, nothing else the file may have carried. A
+ * throwaway GNUPGHOME, so root's own keyring is never touched.
+ */
+export function aptKeyScript(key: { url: string; fingerprint: string; keyring: string }): string {
+  return `command -v gpg >/dev/null 2>&1 || ${APT} install -y -q gpg </dev/null
+key_home=$(mktemp -d)
+curl -fsSL --proto '=https' --retry 3 -o "$key_home/download" ${shellQuote(key.url)}
+found=$(GNUPGHOME="$key_home" gpg --batch --show-keys --with-colons "$key_home/download" 2>/dev/null | awk -F: '$1 == "pub" { primary = 1; next } $1 == "fpr" && primary { print $10; primary = 0 }')
+if [ "$found" != ${key.fingerprint} ]; then
+  rm -rf "$key_home"
+  echo "apt key: ${key.url} holds $(echo $found) rather than the pinned ${key.fingerprint} alone: nothing was laid" >&2
+  exit 1
+fi
+GNUPGHOME="$key_home" gpg --batch --quiet --import "$key_home/download" 2>/dev/null
+install -d -m 0755 ${dirname(key.keyring)}
+GNUPGHOME="$key_home" gpg --batch --export ${key.fingerprint} > ${key.keyring}.new
+chmod 0644 ${key.keyring}.new
+mv -f ${key.keyring}.new ${key.keyring}
+rm -rf "$key_home"`;
+}
