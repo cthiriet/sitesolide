@@ -7,8 +7,10 @@ import { useData } from "@/components/data"
 import { FormError, Panel } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { UnlockDialog } from "@/components/secrets-dialogs"
+import { announcePasskeysChanged } from "@/hooks/use-owner-passkeys"
 import { dateTime } from "@/lib/format"
 import { refusalOf } from "@/lib/secrets"
+import { PASSKEYS_PANEL_ID } from "@/lib/server-setup"
 import { ceremonyMessage, passkeysSupported, readPasskeys, registerPasskey, removePasskey, type PasskeyView } from "@/lib/webauthn"
 
 /** What the owner is told while they hold one passkey: a lost device would leave root's link as the only way in. */
@@ -59,6 +61,7 @@ export function PasskeysPanel() {
       const result = await registerPasskey(name.trim() === "" ? "Passkey" : name.trim())
       if (result.ok) {
         setName("")
+        announcePasskeysChanged()
         return void (await load())
       }
       if (result.status === 423) return secrets.setUnlockedUntil(null)
@@ -73,7 +76,10 @@ export function PasskeysPanel() {
     setProblem("")
     try {
       const { status, body } = await removePasskey(id)
-      if (status === 200 && body !== null) return setList(body.passkeys)
+      if (status === 200 && body !== null) {
+        announcePasskeysChanged()
+        return setList(body.passkeys)
+      }
       setProblem(actions.refusal(refusalOf(status, body)) ?? "")
     } finally {
       setBusy(false)
@@ -87,7 +93,7 @@ export function PasskeysPanel() {
   }
 
   return (
-    <Panel full title="Passkeys" count={list?.length} description="How you sign in as the owner. Once you have one, the dashboard password no longer signs in or unlocks.">
+    <Panel full id={PASSKEYS_PANEL_ID} title="Passkeys" count={list?.length} description="How you sign in as the owner. Once you have one, the dashboard password no longer signs in or unlocks.">
       <div className="grid gap-4 p-4">
         {list !== null && list.length === 0 && <p className="text-sm text-pretty">No passkey yet. Register one here, then a second on another device.</p>}
         {list !== null && list.length > 0 && (

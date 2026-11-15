@@ -6,13 +6,14 @@ import { RowMenuLink } from "@/components/data-table"
 import { InfoButton, Panel } from "@/components/page"
 import { SettingRow, useServerSetup } from "@/components/server-setup"
 import { pageUrl } from "@/lib/pages"
+import { BREAK_GLASS } from "@/lib/password"
 import { sitesRows } from "@/lib/server-setup"
 
 /**
  * "Set up this server", under the strip of the home page: the owner's
  * alone, the same rows as the Server page but only what the server still
  * lacks, the optional ones skippable, the passwords as two links at its
- * foot. It goes once everything is set or skipped, or when the viewer hides
+ * foot, or the line that says a passkey replaced them. It goes once everything is set or skipped, or when the viewer hides
  * it; every setting stays on the Server page.
  */
 export function SetupPanel() {
@@ -82,12 +83,19 @@ export function SetupPanel() {
       </div>
       <div className="flex min-h-11 flex-wrap items-center gap-x-5 gap-y-1 border-t border-divider bg-cell px-4 py-2 text-[0.8125rem]">
         <span className="mono-label">Passwords</span>
-        <Button variant="link" onClick={() => setup.changePassword("dashboard-password")} className="h-auto p-0 text-[0.8125rem] max-md:min-h-8">
-          Change the dashboard password
-        </Button>
-        <Button variant="link" onClick={() => setup.changePassword("portal-password")} className="h-auto p-0 text-[0.8125rem] max-md:min-h-8">
-          Change the portal password
-        </Button>
+        {/* Once the owner holds a passkey, both passwords are refused: nothing to change, only what they are now. */}
+        {setup.inputs.passkeys === true ? (
+          <span className="text-pretty text-muted-foreground">{BREAK_GLASS}</span>
+        ) : (
+          <>
+            <Button variant="link" onClick={() => setup.changePassword("dashboard-password")} className="h-auto p-0 text-[0.8125rem] max-md:min-h-8">
+              Change the dashboard password
+            </Button>
+            <Button variant="link" onClick={() => setup.changePassword("portal-password")} className="h-auto p-0 text-[0.8125rem] max-md:min-h-8">
+              Change the portal password
+            </Button>
+          </>
+        )}
       </div>
     </Panel>
   )

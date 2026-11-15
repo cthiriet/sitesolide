@@ -9,6 +9,7 @@ import { fileKey, useSecretsActions, type FileTarget } from "@/components/secret
 import { LockGlyph } from "@/components/unlock"
 import { ON_HOVER, RevealButtons, RevealMenuItems, ValueCell, useValueTable, type ValueTable } from "@/components/secrets-variables"
 import { ago, capitalise } from "@/lib/format"
+import { BREAK_GLASS, offersPasswordChange } from "@/lib/password"
 import { PENDING_LABEL, splitReason, fileOffer, variableOffer, projectProblems, fileSummary, type Problem } from "@/lib/secrets"
 import type { FileView, ProjectView } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -199,9 +200,14 @@ export function FilesPanel({ project }: { project: ProjectView }) {
           )
         }
         if (variableOffer(line.file, line.name) === "password") {
+          const breakGlass = !actions.person && !offersPasswordChange({ slug, file: line.file.name, variable: line.name }, actions.passkeys.registered)
           return (
             <span className="text-xs text-pretty text-muted-foreground">
-              {actions.person ? "A password hash. It never shows, and only the owner changes it." : "A password hash. It never shows: change the password instead."}
+              {actions.person
+                ? "A password hash. It never shows, and only the owner changes it."
+                : breakGlass
+                  ? `A password hash. It never shows. ${BREAK_GLASS}`
+                  : "A password hash. It never shows: change the password instead."}
             </span>
           )
         }
@@ -249,7 +255,7 @@ export function FilesPanel({ project }: { project: ProjectView }) {
         if (line.kind === "note") return null
         const variable = { ...target, variable: line.name }
         if (variableOffer(line.file, line.name) === "password") {
-          if (actions.person) return null
+          if (actions.person || !offersPasswordChange(variable, actions.passkeys.registered)) return null
           return (
             <Button variant="outline" size="sm" data-password-variable={line.name} onClick={() => actions.changePassword(variable)} className={cn("max-md:h-10", WIDE_ONLY)}>
               <RectangleEllipsis />
@@ -306,7 +312,7 @@ export function FilesPanel({ project }: { project: ProjectView }) {
     }
     const variable = { ...target, variable: line.name }
     if (variableOffer(line.file, line.name) === "password") {
-      if (actions.person) return null
+      if (actions.person || !offersPasswordChange(variable, actions.passkeys.registered)) return null
       return (
         <RowMenu label={`Actions for ${line.name}`}>
           <DropdownMenuItem onClick={() => actions.changePassword(variable)} className="h-9">

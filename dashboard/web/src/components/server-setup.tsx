@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
 import { flushSync } from "react-dom"
-import { Asterisk, BellRing, Check, Cloud, Eye, EyeOff, HeartPulse, LogIn, RotateCw, UserKey, X, type LucideIcon } from "lucide-react"
+import { Asterisk, BellRing, Check, Cloud, Eye, EyeOff, HeartPulse, KeyRound, LogIn, RotateCw, UserKey, X, type LucideIcon } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { useAnnounce } from "@/components/copy"
@@ -21,7 +21,10 @@ import {
   DELIVERED_SERVER_MS,
   MONITOR_PASS_MS,
   NO_PREFS,
+  PASSKEYS_PANEL_ID,
+  PASSKEYS_ROW,
   changeDates,
+  passkeysWord,
   proofPhase,
   readSetupPrefs,
   removalOf,
@@ -436,7 +439,7 @@ export function ServerSetupProvider({ place, children }: { place: "sites" | "ser
 
   const changed = useMemo(() => changeDates(states, log), [states, log])
   const skippedSet = useMemo(() => new Set<RowId>(prefs.skipped), [prefs.skipped])
-  const inputs: RowInputs = { states, alerting, serverNow, changed, proof, offsite, skipped: skippedSet }
+  const inputs: RowInputs = { states, alerting, serverNow, changed, proof, offsite, skipped: skippedSet, passkeys: actions.passkeys.registered }
   const ready = owner && projects !== null && states.heartbeat.presence !== "unknown"
 
   const value: ServerSetup = {
@@ -718,6 +721,42 @@ export function SettingRow({ view, place }: { view: RowView; place: "sites" | "s
         </div>
       </div>
       {server && <RevealedValues id={view.id} />}
+    </div>
+  )
+}
+
+/**
+ * The Sign-in panel's row for the owner's passkeys, once they hold one, laid
+ * out as a setting's row on the Server page: how many, and Manage, which
+ * goes to the Passkeys panel below.
+ */
+export function PasskeysRow({ count }: { count: number | null }) {
+  function manage() {
+    const panel = document.getElementById(PASSKEYS_PANEL_ID)
+    if (panel === null) return
+    panel.scrollIntoView({ block: "start" })
+    panel.querySelector<HTMLElement>("input, button")?.focus({ preventScroll: true })
+  }
+  return (
+    <div role="listitem" className="border-t border-divider first:border-t-0">
+      <div className="grid min-h-11 grid-cols-[1.75rem_minmax(0,1fr)_auto] items-center gap-x-2 py-2.5 pr-2 pl-4 @3xl/settings:min-h-13 @3xl/settings:grid-cols-[1.75rem_minmax(0,1fr)_12.5rem_10.5rem] @3xl/settings:py-1.5">
+        <span className="row-span-2 flex self-start pt-0.5 text-muted-foreground @3xl/settings:row-span-1 @3xl/settings:self-center @3xl/settings:pt-0">
+          <KeyRound aria-hidden="true" className="size-4" />
+        </span>
+        <div className="col-start-2 row-start-1 flex min-w-0 flex-col @5xl/settings:flex-row @5xl/settings:items-baseline @5xl/settings:gap-3">
+          <span className="shrink-0 font-medium text-strong @3xl/settings:w-34">{PASSKEYS_ROW.name}</span>
+          <span className="min-w-0 text-pretty text-muted-foreground">{PASSKEYS_ROW.line}</span>
+        </div>
+        <div className="col-start-2 row-start-2 min-w-0 pt-0.5 @3xl/settings:col-start-3 @3xl/settings:row-start-1 @3xl/settings:pt-0 @3xl/settings:pr-2">
+          <span className="text-[0.8125rem] leading-5 font-medium text-ok-text">{passkeysWord(count)}</span>
+        </div>
+        <div className="col-start-3 row-span-2 row-start-1 flex items-center justify-end gap-1 @3xl/settings:col-start-4 @3xl/settings:row-span-1">
+          <Button variant="outline" size="sm" onClick={manage} aria-label="Manage passkeys" className="max-md:h-9">
+            Manage
+          </Button>
+          <span aria-hidden="true" className="size-8 shrink-0 max-md:size-10" />
+        </div>
+      </div>
     </div>
   )
 }

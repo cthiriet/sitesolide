@@ -26,6 +26,7 @@ import {
   openingStep,
   otherFormat,
   partialSave,
+  passkeysWord,
   unlockFirst,
   passphraseHint,
   passphraseReady,
@@ -216,6 +217,36 @@ describe("the Server page", () => {
     const row = inputs(server({ dashboard: { restartPending: true, modifiedAt: NOW - 4 * MINUTE } }))
     expect(serverRow("dashboard-password", row)).toMatchObject({ word: "Restart pending", tone: "attention", extra: "changed 4 minutes ago", menu: ["restart"], action: { kind: "password" } })
     expect(serverRow("dashboard-password", row).tip).toBe("Sign-in uses the new password after the dashboard restarts.")
+  })
+
+  test("once the owner holds a passkey, both passwords are the break-glass: no Change, no restart, company sign-in as before", () => {
+    const row = inputs(server({ dashboard: { restartPending: true, modifiedAt: NOW - 4 * MINUTE } }), { passkeys: true })
+    for (const id of ["dashboard-password", "portal-password"] as const) {
+      const view = serverRow(id, row)
+      expect(view).toMatchObject({ word: "Break-glass", tone: "neutral", action: null, menu: [] })
+      expect(view.line).toContain("you sign in with a passkey")
+      expect(view.line).toContain("sitesolide passkey remove")
+      expect(view.tip).toContain("removing every passkey")
+    }
+    expect(serverRow("dashboard-password", row).line).toContain("The dashboard password")
+    expect(serverRow("portal-password", row).line).toContain("The portal password")
+    const signin = inputs(server({ portal: SIGNIN_THREE }))
+    expect(serverRow("company-signin", { ...signin, passkeys: true })).toEqual(serverRow("company-signin", signin))
+    // Never set: still no Change to offer, and no attention, since nothing signs in with it.
+    const unset = inputs(server({ dashboard: { variables: [], passwords: [] } }), { passkeys: true })
+    expect(serverRow("dashboard-password", unset)).toMatchObject({ word: "Not set", tone: "neutral", action: null })
+  })
+
+  test("without a passkey, the passwords' rows are exactly as before", () => {
+    const row = inputs(server())
+    for (const id of ["dashboard-password", "portal-password"] as const) expect(serverRow(id, { ...row, passkeys: false })).toEqual(serverRow(id, row))
+    expect(serverRow("dashboard-password", row).action).toEqual({ kind: "password" })
+  })
+
+  test("the Passkeys row counts them, or says Registered while the listing is unknown", () => {
+    expect(passkeysWord(2)).toBe("2 passkeys")
+    expect(passkeysWord(1)).toBe("1 passkey")
+    expect(passkeysWord(null)).toBe("Registered")
   })
 
   test("company sign-in waiting for the portal's restart carries the restart before Remove", () => {

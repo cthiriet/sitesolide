@@ -34,6 +34,7 @@ import {
   type WebhookFormat,
 } from "./machine-settings"
 import { plural } from "./format"
+import { breakGlassLine } from "./password"
 import type { Tone } from "./tones"
 import type { Alerting, LogEntry } from "./types"
 
@@ -283,6 +284,11 @@ export type RowInputs = {
   /** null until the backups have been read, or when they could not be. */
   offsite: OffsiteReading | null
   skipped: ReadonlySet<RowId>
+  /**
+   * The owner holds a passkey (lib/webauthn.ts, `ownerPasskeys`): the two
+   * passwords are then the break-glass alone. Absent: none, as before passkeys.
+   */
+  passkeys?: boolean
 }
 
 /** "Set, changed 12 days ago", or "Set" when the date is not known. */
@@ -327,6 +333,8 @@ const RESTART_TIPS: Readonly<Partial<Record<RowId, string>>> = {
   "company-signin": "The portal uses the new settings when it restarts.",
 }
 
+const BREAK_GLASS_TIP = "Refused while a passkey exists. Root gives it back over SSH by removing every passkey."
+
 /** A row of the Server page: every setting, done or not, its state, its one action and its menu. */
 export function serverRow(id: RowId, inputs: RowInputs): RowView {
   const { states, alerting, serverNow, changed, proof, offsite, skipped } = inputs
@@ -344,6 +352,10 @@ export function serverRow(id: RowId, inputs: RowInputs): RowView {
   // The project's own file missing (the portal's holds its password and company sign-in): red, and where the reason is.
   if ((password || id === "company-signin") && state.presence === "no-file") {
     return { ...row, word: "Missing", tone: "error", error: true, action: { kind: "secrets", label: "See why", slug: setting.slug } }
+  }
+  // Once the owner holds a passkey, the steward refuses both passwords: no Change, only what they are now.
+  if (password && inputs.passkeys === true) {
+    return { ...row, line: breakGlassLine(id === "dashboard-password" ? "dashboard" : "portal"), word: state.presence === "set" ? "Break-glass" : "Not set", tip: BREAK_GLASS_TIP }
   }
   if (password && state.presence === "not-set") return { ...row, word: "Not set", tone: "attention", action: { kind: "password" } }
 
@@ -438,6 +450,23 @@ export function serverRow(id: RowId, inputs: RowInputs): RowView {
       return { ...row, word: setWord(when, serverNow), action: change, menu }
     }
   }
+}
+
+/**
+ * The Sign-in panel's row for the owner's passkeys, shown once they hold
+ * one, above the two passwords it replaces: how many, as the steward lists
+ * them, or a plain word while the listing is not known.
+ */
+export const PASSKEYS_ROW = {
+  name: "Passkeys",
+  line: "Sign you in to this dashboard and to every restricted site, and unlock changes.",
+}
+
+/** Where the Passkeys row leads: the panel that lists them, lower on the Server page. */
+export const PASSKEYS_PANEL_ID = "passkeys"
+
+export function passkeysWord(count: number | null): string {
+  return count === null ? "Registered" : plural(count, "passkey")
 }
 
 // --- The Sites panel -------------------------------------------------------------

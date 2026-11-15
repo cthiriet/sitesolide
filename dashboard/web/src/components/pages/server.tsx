@@ -3,7 +3,8 @@ import { Button } from "@/components/ui/button"
 import { useData } from "@/components/data"
 import { InternalLink } from "@/components/navigation"
 import { Banner, ErrorState, PageBody, PageHeader, Panel, PanelSkeleton, useRetry } from "@/components/page"
-import { ServerSetupProvider, SettingRow, useServerSetup } from "@/components/server-setup"
+import { useSecretsActions } from "@/components/secrets-actions"
+import { PasskeysRow, ServerSetupProvider, SettingRow, useServerSetup } from "@/components/server-setup"
 import { PasskeysPanel } from "@/components/passkeys"
 import { siteUrl } from "@/lib/pages"
 import { UNREACHABLE } from "@/lib/secrets"
@@ -19,6 +20,7 @@ import { SERVER_GROUPS, serverRow, sitesRowIds } from "@/lib/server-setup"
  */
 function Content() {
   const setup = useServerSetup()
+  const { passkeys } = useSecretsActions()
   const { secrets } = useData()
   const { projects, problem, reload } = secrets
   const { retrying, retry } = useRetry(reload)
@@ -78,6 +80,8 @@ function Content() {
       {SERVER_GROUPS.map((group) => (
         <Panel key={group.id} full title={group.title} actions={<span className="text-xs text-muted-foreground">{group.note}</span>}>
           <div role="list" aria-label={group.title} className="@container/settings">
+            {/* The owner's passkeys first once they hold one: the two passwords below are then the break-glass alone. */}
+            {group.id === "sign-in" && passkeys.registered && <PasskeysRow count={passkeys.count} />}
             {group.rows.map((id) => (
               <SettingRow key={id} view={serverRow(id, setup.inputs)} place="server" />
             ))}
