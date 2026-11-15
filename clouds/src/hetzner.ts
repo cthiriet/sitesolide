@@ -788,6 +788,38 @@ export function hetzner(context: ProviderContext): Provider {
       return { machine: toMachine(running, await currency(), owner), created, resources };
     },
 
+    async setInbound(machine, inbound, report) {
+      checkRequest(TITLE, { name: machine.name, type: "", location: "", image: "", backups: false, key: null, inbound }, SUPPORTS);
+      const server = await call<{ server: HetznerServer }>("GET", `/servers/${Number(machine.id)}`, `read the server ${machine.name}`);
+      if (!owner.manages(server.server.labels)) {
+        throw new ProviderError({ error: "machine-not-managed", message: `the server ${server.server.name} lacks the label ${owner.mark}: ${owner.name} did not create it`, details: ["nothing was changed"] });
+      }
+      // Found by its labels, as destroy finds it, and applied to this server:
+      // a firewall of the owner's made for another machine is never touched.
+      const madeFor = { label_selector: `${owner.mark},${owner.machineLabel}=${machine.name}` };
+      const firewalls = (await listAll<HetznerFirewall>("/firewalls", "firewalls", "read the firewalls", madeFor)).filter(
+        (candidate) => owner.manages(candidate.labels) && candidate.labels?.[owner.machineLabel] === machine.name && candidate.applied_to.some((target) => target.server?.id === server.server.id),
+      );
+      if (firewalls.length !== 1) {
+        throw new ProviderError({
+          error: "provider-unsupported",
+          message: `${firewalls.length === 0 ? "no firewall" : `${firewalls.length} firewalls`} created by ${owner.name} for ${machine.name} and applied to it`,
+          details: ["nothing was changed: the rules are set on the one firewall sitesolide machine create made for it", "Hetzner's console, Firewalls, shows what is applied"],
+        });
+      }
+      const firewall = firewalls[0]!;
+      const rules = firewallRules(inbound);
+      report(`-> firewall ${firewall.name}`);
+      if (holdsRules(firewall.rules, rules)) {
+        report(`   already ${describeInbound(inbound)}`);
+        return { firewall: firewall.name, changed: false };
+      }
+      const set = await call<{ actions?: HetznerAction[] }>("POST", `/firewalls/${firewall.id}/actions/set_rules`, `set the rules of the firewall ${firewall.name}`, { rules });
+      for (const action of set.actions ?? []) await waitForAction(action, report);
+      report(`   set: ${describeInbound(inbound)}`);
+      return { firewall: firewall.name, changed: true };
+    },
+
     async locations(): Promise<Choice[]> {
       const locations = await listAll<HetznerLocation>("/locations", "locations", "read the locations");
       const first = (name: string) => (name === HETZNER_DEFAULTS.location ? 0 : 1);

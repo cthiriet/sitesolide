@@ -359,6 +359,13 @@ export interface Provider {
   list(): Promise<Machine[]>;
   /** Deletes a machine `find` returned as managed, then what was created for it alone. */
   destroy(machine: Machine, options: { deleteKey: boolean }, report: Report): Promise<DestroyOutcome>;
+  /**
+   * Sets the inbound rules of the firewall created for a machine `find`
+   * returned as managed, and of no other: the rules given, and nothing else.
+   * Absent where the provider's firewall is not set from here yet; `create`
+   * then remains the only writer of its rules.
+   */
+  setInbound?(machine: Machine, inbound: readonly Inbound[], report: Report): Promise<{ firewall: string; changed: boolean }>;
   /** Where machines can be ordered, for the wizard; the default location first. Read only. */
   locations(): Promise<Choice[]>;
   /**
