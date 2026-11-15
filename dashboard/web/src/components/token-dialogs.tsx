@@ -14,7 +14,6 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectGroup, SelectGroupLabel, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Command, CopyFallback, useAnnounce, useCopy } from "@/components/copy"
 import { Banner, FormError, INPUT_DIALOG, SEGMENTED } from "@/components/page"
 import { createToken } from "@/lib/api"
@@ -25,14 +24,10 @@ import {
   PERMISSION_WORDS,
   expiryFrom,
   firstTokenField,
-  holderLine,
   messageText,
   loginCommand,
-  mintableProjects,
   neededLine,
   neededOptions,
-  noProjectText,
-  optionsAllowed,
   requestScope,
   tokenRefusal,
   tokenSummary,
@@ -42,8 +37,7 @@ import {
   type TokenField,
   type TokenProject,
 } from "@/lib/tokens"
-import { roleLabel } from "@/lib/access"
-import type { Role, Roles, Scope, TokenView } from "@/lib/types"
+import type { Scope, TokenView } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /**
@@ -54,17 +48,10 @@ import { cn } from "@/lib/utils"
  * asks for the password first, and a 423 from the service closes this dialog
  * and asks again, the steward having forgotten the unlock.
  *
- * Every token belongs to someone. The owner chooses whose: their own, for
- * their agents, offered every project on the server; or a person of People,
- * made exactly as that person's own would be. A person's token, whoever makes
- * it, offers the projects where they are a Developer or an Admin; creating
- * projects only with the right the owner granted them; and the options only
- * for projects they are an Admin of. An option a project chosen cannot be
- * deployed without is ticked, and says which: a token without it would be
- * refused there at its first deployment. Managing secrets is not one of
- * them: a Developer already changes a project's secrets, and every project a
- * person's token offers is one they deploy, so it is never taken away. The
- * steward judges it all again.
+ * Every token is the owner's, for themselves and their agents: every project,
+ * or the ones chosen. An option a project chosen cannot be deployed without
+ * is ticked, and says which: a token without it would be refused there at
+ * its first deployment. The steward judges it all again.
  */
 
 const COPY_WARNING = "You haven't copied the token. It can't be shown again."
@@ -93,7 +80,6 @@ function Choice({
   mixed = false,
   onChange,
   title,
-  meta,
   disabled = false,
   locked = false,
   dense = false,
@@ -105,8 +91,6 @@ function Choice({
   mixed?: boolean
   onChange: (next: boolean) => void
   title: string
-  /** Beside the title, right aligned: a person's role on a project. */
-  meta?: string
   disabled?: boolean
   locked?: boolean
   /** A project in the list: 36 px, so that six rows fit before it scrolls. */
@@ -139,11 +123,8 @@ function Choice({
         className="mt-0.5 size-4 shrink-0 accent-primary"
       />
       <span className="grid min-w-0 flex-1 gap-0.5">
-        <span className="flex items-baseline gap-2">
-          <span title={title} className="min-w-0 truncate text-sm font-medium">
-            {title}
-          </span>
-          {meta !== undefined && <span className="ml-auto shrink-0 text-xs text-muted-foreground">{meta}</span>}
+        <span title={title} className="min-w-0 truncate text-sm font-medium">
+          {title}
         </span>
         {children !== undefined && <span className="text-xs text-pretty text-muted-foreground">{children}</span>}
         {note !== undefined && <span className="text-xs font-medium text-secondary-foreground">{note}</span>}
@@ -152,12 +133,10 @@ function Choice({
   )
 }
 
-const NO_OPTION = { public: [], domain: [] }
-
 /** From this many projects, the list has a filter above it. */
 const PROJECTS_FILTER_FROM = 8
 
-/** Every permission off, as a token starts and as choosing another holder resets it. */
+/** Every permission off, as a token starts. */
 const NO_SCOPE: Omit<Scope, "slugs"> = { create: false, outbound: false, domain: false, public: false, secrets: false }
 
 export type CreatedToken = { token: TokenView; secret: string }
@@ -166,23 +145,17 @@ export function CreateTokenDialog({
   open,
   origin,
   projects,
-  person = null,
   now,
   onClose,
   onCreated,
   onLocked,
   onSessionExpired,
-  holders = [],
 }: {
   open: boolean
   /** The dashboard's address, which the holder logs in to. */
   origin: string
   /** The projects on the server a token may be given, and what deploying each takes. */
   projects: readonly TokenProject[]
-  /** A person minting their own: their roles and the create right. Null for the owner. */
-  person?: { roles: Roles; create: boolean } | null
-  /** For the owner, the people a token may be made for, with their roles and the create right. */
-  holders?: readonly { email: string; roles: Roles; create: boolean }[]
   now: number
   onClose: () => void
   onCreated: () => void
@@ -192,32 +165,19 @@ export function CreateTokenDialog({
 }) {
   const announce = useAnnounce()
   const [label, setLabel] = useState("")
-  // Whose token, for the owner: `owner`, their own, or a person's email.
-  const [holder, setHolder] = useState("owner")
   const [expiry, setExpiry] = useState<number | null>(DEFAULT_EXPIRY_DAYS)
   const [scope, setScope] = useState(NO_SCOPE)
   const [chosen, setChosen] = useState<string[]>([])
   // The projects list's filter, and the permissions' disclosure, closed while nothing asks for one.
   const [filter, setFilter] = useState("")
   const [permissionsOpen, setPermissionsOpen] = useState(false)
-  // The person the token will be made for: the one minting their own, or the one the owner chose.
-  const target = person ?? (holder === "owner" ? null : (holders.find((one) => one.email === holder) ?? null))
-  // The person the owner makes it for, by name; null for the owner's own, or a person's own.
-  const holderEmail = person === null && holder !== "owner" ? holder : null
-  // The projects offered: every one for the owner's own, a person's where they deploy, with their role.
-  const offered: { slug: string; role: Exclude<Role, "viewer"> | null }[] =
-    target === null ? projects.map(({ slug }) => ({ slug, role: null })) : mintableProjects(target.roles)
-  const options = target === null || optionsAllowed(target.roles, chosen, scope.create)
-  const needed = options ? neededOptions(projects, chosen, target !== null) : NO_OPTION
-  // A person's options fall as soon as their choice no longer allows them; one a project needs is on.
-  // Managing secrets stays as ticked: a Developer may already.
-  // Every project, as the owner: the owner's own token alone, every permission with it, as the steward mints it.
-  const every = target === null && person === null && scope.all === true
+  const offered = projects.map(({ slug }) => slug)
+  const needed = neededOptions(projects, chosen)
+  // Every project, as the owner: every permission with it, as the steward mints it. Otherwise one a project needs is on.
+  const every = scope.all === true
   const effective = every
     ? { create: true, outbound: true, domain: true, public: true, secrets: true, all: true }
-    : options
-      ? { ...scope, all: false, public: scope.public || needed.public.length > 0, domain: scope.domain || needed.domain.length > 0 }
-      : { ...scope, all: false, outbound: false, domain: false, public: false }
+    : { ...scope, all: false, public: scope.public || needed.public.length > 0, domain: scope.domain || needed.domain.length > 0 }
   const [errors, setErrors] = useState<TokenErrors>({})
   const [formError, setFormError] = useState("")
   const [inProgress, setInProgress] = useState(false)
@@ -228,7 +188,6 @@ export function CreateTokenDialog({
   const labelField = useRef<HTMLInputElement>(null)
   const projectsField = useRef<HTMLFieldSetElement>(null)
   const labelId = useId()
-  const holderId = useId()
   const projectsId = useId()
   const expiryId = useId()
   const permissionsId = useId()
@@ -262,8 +221,7 @@ export function CreateTokenDialog({
 
     setInProgress(true)
     try {
-      // A person minting their own sends no holder: the token is theirs, the steward says so.
-      const { status, body } = await createToken({ label: label.trim(), ...(person === null ? { holder } : {}), expiresAt: expiryFrom(expiry, now), scope: requestScope(effective, slugs) })
+      const { status, body } = await createToken({ label: label.trim(), expiresAt: expiryFrom(expiry, now), scope: requestScope(effective, slugs) })
       if (status === 401) {
         onClose()
         return onSessionExpired()
@@ -279,17 +237,16 @@ export function CreateTokenDialog({
         return focusField(refusal.field)
       }
       setCreated({ token: body.token, secret: body.secret })
-      announce(`Token created for ${body.token.member ?? "you"}. Copy it now: it won't be shown again.`)
+      announce("Token created. Copy it now: it won't be shown again.")
       onCreated()
     } finally {
       setInProgress(false)
     }
   }
 
-  const empty = target === null ? "No project on the server yet." : noProjectText(target.roles, person !== null ? null : holderEmail)
-  const shown = filter.trim() === "" ? offered : offered.filter(({ slug }) => slug.includes(filter.trim().toLowerCase()))
-  const allShown = shown.length > 0 && shown.every(({ slug }) => chosen.includes(slug))
-  const someShown = shown.some(({ slug }) => chosen.includes(slug))
+  const shown = filter.trim() === "" ? offered : offered.filter((slug) => slug.includes(filter.trim().toLowerCase()))
+  const allShown = shown.length > 0 && shown.every((slug) => chosen.includes(slug))
+  const someShown = shown.some((slug) => chosen.includes(slug))
   const held = PERMISSION_ORDER.filter(
     (key): key is Exclude<PermissionKey, "create"> => key !== "create" && (key === "secrets" ? effective.secrets === true : key === "all" ? effective.all === true : effective[key]),
   )
@@ -297,8 +254,7 @@ export function CreateTokenDialog({
   const summary = tokenSummary({ slugs: chosen, create: effective.create, permissions: held, expiryDays: expiry })
 
   function toggleShown(next: boolean) {
-    const slugs = shown.map(({ slug }) => slug)
-    setChosen((before) => (next ? [...new Set([...before, ...slugs])] : before.filter((one) => !slugs.includes(one))))
+    setChosen((before) => (next ? [...new Set([...before, ...shown])] : before.filter((one) => !shown.includes(one))))
     setErrors(({ slugs: _, ...rest }) => rest)
   }
 
@@ -319,18 +275,14 @@ export function CreateTokenDialog({
             <DialogHeader>
               <DialogTitle>New token</DialogTitle>
               <DialogDescription className="text-pretty">
-                {person !== null
-                  ? "For your CLI or an agent, to run sitesolide deploy. It never does more than your roles, and you can revoke it at any time."
-                  : target !== null
-                    ? `For ${holderEmail}, made as their own would be: it never does more than their roles, and goes with them if they leave.`
-                    : "For an agent or a workstation, to run sitesolide deploy over HTTPS, without SSH. You can revoke it at any time."}
+                For an agent or a workstation, to run sitesolide deploy over HTTPS, without SSH. It gives nobody access to a site. You can
+                revoke it at any time.
               </DialogDescription>
             </DialogHeader>
 
             {/* One track that never grows past the dialog: a long line, the permissions' summary, cuts with an ellipsis instead. */}
             <div className="-mx-4 grid min-h-0 grid-cols-1 gap-4 overflow-y-auto px-4 pt-0.5 pb-1">
-              <div className={cn("grid grid-cols-1 gap-4", person === null && holders.length > 0 && "sm:grid-cols-2")}>
-                <Field id={labelId} labelText="Name" error={errors.label}>
+              <Field id={labelId} labelText="Name" error={errors.label}>
                   <Input
                     ref={labelField}
                     id={labelId}
@@ -347,47 +299,10 @@ export function CreateTokenDialog({
                     className="h-10 sm:h-9"
                   />
                 </Field>
-                {person === null && holders.length > 0 && (
-                  <Field id={holderId} labelText="Whose token">
-                    <Select
-                      id={holderId}
-                      value={holder}
-                      items={{ owner: "Mine", ...Object.fromEntries(holders.map((one) => [one.email, one.email])) }}
-                      onValueChange={(next) => {
-                        if (next === null) return
-                        setHolder(next)
-                        setChosen([])
-                        setScope(NO_SCOPE)
-                        setErrors({})
-                        setFilter("")
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="owner" description="Yours, for your own agents">
-                          Mine
-                        </SelectItem>
-                        <SelectSeparator />
-                        <SelectGroup>
-                          <SelectGroupLabel>For someone in People</SelectGroupLabel>
-                          {holders.map((one) => (
-                            <SelectItem key={one.email} value={one.email} description={holderLine(one)}>
-                              {one.email}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                )}
-              </div>
 
               <fieldset ref={projectsField} aria-describedby={errors.slugs !== undefined ? `${projectsId}-error` : undefined}>
                 <legend className="mb-2 text-sm leading-none font-medium">Projects it may deploy</legend>
-                {target === null && person === null && (
-                  <div className="mb-2 overflow-clip rounded-lg border border-input p-1">
+                <div className="mb-2 overflow-clip rounded-lg border border-input p-1">
                     <Choice
                       checked={every}
                       onChange={(next) => {
@@ -399,10 +314,9 @@ export function CreateTokenDialog({
                       Every project on the server and every permission below: the token you deploy with. Also takes a name back from another token, and replaces a unit or a block edited by hand.
                     </Choice>
                   </div>
-                )}
                 <div className={cn("overflow-clip rounded-lg border border-input", every && "pointer-events-none opacity-50")} aria-disabled={every || undefined}>
                   {offered.length === 0 ? (
-                    <p className="px-3 py-2.5 text-xs text-muted-foreground">{empty}</p>
+                    <p className="px-3 py-2.5 text-xs text-muted-foreground">No project on the server yet.</p>
                   ) : (
                     <>
                       {offered.length > 1 && (
@@ -444,7 +358,7 @@ export function CreateTokenDialog({
                       ) : (
                         // Two columns even on a phone, a slug being short; six rows, then it scrolls within itself.
                         <div className="grid max-h-[13.5rem] grid-cols-2 gap-x-1 overflow-y-auto p-1">
-                          {shown.map(({ slug, role }) => (
+                          {shown.map((slug) => (
                             <Choice
                               key={slug}
                               checked={chosen.includes(slug)}
@@ -453,7 +367,6 @@ export function CreateTokenDialog({
                                 setErrors(({ slugs: _, ...rest }) => rest)
                               }}
                               title={slug}
-                              meta={role === null ? undefined : roleLabel(role)}
                               dense
                             />
                           ))}
@@ -461,24 +374,18 @@ export function CreateTokenDialog({
                       )}
                     </>
                   )}
-                  {(target === null || target.create) && (
-                    <div className="border-t border-input p-1">
-                      <Choice
-                        checked={effective.create}
-                        onChange={(next) => {
-                          setScope({ ...scope, create: next })
-                          setErrors(({ slugs: _, ...rest }) => rest)
-                        }}
-                        title="New projects"
-                      >
-                        {target === null
-                          ? "Projects it creates itself, which it then deploys."
-                          : person !== null
-                            ? "Projects it creates itself. You become Admin of each."
-                            : "Projects it creates itself. They become Admin of each."}
-                      </Choice>
-                    </div>
-                  )}
+                  <div className="border-t border-input p-1">
+                    <Choice
+                      checked={effective.create}
+                      onChange={(next) => {
+                        setScope({ ...scope, create: next })
+                        setErrors(({ slugs: _, ...rest }) => rest)
+                      }}
+                      title="New projects"
+                    >
+                      Projects it creates itself, which it then deploys.
+                    </Choice>
+                  </div>
                 </div>
                 {errors.slugs !== undefined && (
                   <p id={`${projectsId}-error`} role="alert" className="mt-2 text-xs text-destructive">
@@ -505,16 +412,13 @@ export function CreateTokenDialog({
                 </button>
                 <div id={permissionsId} hidden={!permissionsOpen} className="border-t border-input">
                   <p id={`${projectsId}-options`} className="px-3 pt-2 text-xs text-pretty text-muted-foreground">
-                    {options
-                      ? "Off unless you tick them. One a chosen project needs is ticked for you."
-                      : `Public sites, outbound network and a domain only when ${person !== null ? "you are" : "they are"} an Admin of every project chosen.`}
+                    Off unless you tick them. One a chosen project needs is ticked for you.
                   </p>
                   {/* No rule between them: each choice is a rounded row, and a rule under one bent up at its corners. */}
                   <fieldset aria-describedby={`${projectsId}-options`} className="grid gap-0.5 p-1">
                     <legend className="sr-only">Permissions</legend>
                     <Choice
                       checked={effective.public}
-                      disabled={!options}
                       locked={needed.public.length > 0}
                       note={needed.public.length > 0 ? neededLine(needed.public) : undefined}
                       onChange={(next) => setScope({ ...scope, public: next })}
@@ -522,20 +426,18 @@ export function CreateTokenDialog({
                     >
                       Sites anyone opens without signing in. Off: what it deploys asks to sign in.
                     </Choice>
-                    <Choice checked={effective.outbound} disabled={!options} onChange={(next) => setScope({ ...scope, outbound: next })} title="Use outbound network">
+                    <Choice checked={effective.outbound} onChange={(next) => setScope({ ...scope, outbound: next })} title="Use outbound network">
                       For services that call an outside API, directly or through the egress proxy.
                     </Choice>
                     <Choice
                       checked={effective.domain}
-                      disabled={!options}
                       locked={needed.domain.length > 0}
                       note={needed.domain.length > 0 ? neededLine(needed.domain) : undefined}
                       onChange={(next) => setScope({ ...scope, domain: next })}
                       title="Declare a domain"
                     >
-                      A domain of its own in sitesolide.json. Switching to it stays {person === null ? "yours" : "the owner's"}.
+                      A domain of its own in sitesolide.json. Switching to it stays yours.
                     </Choice>
-                    {/* Never disabled: every project offered to a person's token is one where they may change secrets. */}
                     <Choice checked={effective.secrets === true} onChange={(next) => setScope({ ...scope, secrets: next })} title="Manage secrets">
                       Lists each project's secret names, and sets, generates and removes its variables and files on the server. Never reads a value back.
                     </Choice>
@@ -608,9 +510,7 @@ function TokenScreen({ created, origin, warned, onCopied, onDone }: { created: C
       <DialogHeader>
         <DialogTitle className="pr-8 leading-snug wrap-anywhere">Token for {created.token.label}</DialogTitle>
         <DialogDescription className="text-pretty">
-          {created.token.member !== null && created.token.by === "owner"
-            ? `Send it to ${created.token.member}. They run the command below and paste the token at its prompt. The token is shown only once.`
-            : "Run the command below where it deploys from, and paste the token at its prompt. The token is shown only once."}
+          Run the command below where it deploys from, and paste the token at its prompt. The token is shown only once.
         </DialogDescription>
       </DialogHeader>
 
@@ -631,7 +531,7 @@ function TokenScreen({ created, origin, warned, onCopied, onDone }: { created: C
       </div>
 
       <div className="grid gap-2">
-        <p className="text-xs text-muted-foreground">To sign in, on their workstation or in an agent's sandbox:</p>
+        <p className="text-xs text-muted-foreground">To sign in, on the workstation or in an agent's sandbox:</p>
         <Command text={loginCommand(origin)} />
         <p className="text-xs text-pretty text-muted-foreground">
           An agent without files sets SITESOLIDE_API={origin} and SITESOLIDE_TOKEN instead. Then sitesolide deploy works from any

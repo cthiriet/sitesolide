@@ -98,7 +98,7 @@ rest, under the names shadcn's components read.
 | `strong` | `#0b0e0d` | `#f7f9f8` | what is current or chosen: the sidebar's page, a selected filter, a site's name |
 | `secondary-foreground` | `#3a413d` | `#c4ccc7` | text a step below the body: navigation, the filters not chosen, a counter |
 | `muted-foreground` | `#636862` | `#949e99` | meta, help text, a mono label |
-| `faint` | `#9ea39c` | `#5f6964` | a neutral dot, a role's unlit bars |
+| `faint` | `#9ea39c` | `#5f6964` | a neutral dot |
 | `muted`, `secondary`, `accent` | `#e7e9e2` | `#222b29`, `#222b29`, `#252f2c` | a hover, the neutral pill, a skeleton; a step past `sunk` and `popover`, so that a hover shows inside a well and in a dialog; `accent` a menu item's highlight |
 | `border` | `#e2e3dc` | `#232c2a` | the hairline: a panel's frame, a header's rule, a chip's edge |
 | `divider` | `#e9eae4` | `#1c2422` | the rule between two rows of a list or a table |
@@ -111,8 +111,8 @@ rest, under the names shadcn's components read.
 | `mark-hi`, `mark-lo` | `#14899a`, `#0a5560` | the same | the logo's gradient |
 | `track`, `tick` | `#e2e3dc`, `#8b9089` | `#0c1110`, `#66706b` | a gauge's empty bar, its threshold ticks |
 | `destructive` | `#ae4029` | `#f0896d` | errors, and only errors |
-| `share-tint`, `share-ink` | `#e9e4f2`, `#654e99` | `#211c33`, `#b9a6ea` | the share feature: a role's bars |
-| `signin-tint`, `signin-ink` | `#e0e8f3`, `#2d5a96` | `#15233a`, `#91b4ea` | the sign-in feature: the provider's button |
+| `share-tint`, `share-ink` | `#e9e4f2`, `#654e99` | `#211c33`, `#b9a6ea` | the share feature |
+| `signin-tint`, `signin-ink` | `#e0e8f3`, `#2d5a96` | `#15233a`, `#91b4ea` | the sign-in feature |
 | `recover-tint`, `recover-ink` | `#deede2`, `#2c7247` | `#13291d`, `#7fc99c` | the recover feature, for a tile of the backups' own |
 | `sidebar-accent`, `sidebar-primary` | as `muted`, `primary` | as `muted`, `primary` | a hover in the sidebar, and the current page's icon |
 
@@ -122,8 +122,8 @@ pressed. Dark lifts the accent and turns the tint into a deep teal surface.
 
 **The landing page's features**, a tint and its ink each, come in three, and
 only for what is that feature's own and no larger than a chip or a 40 px
-tile: share, the violet of a role's bars; sign-in, the blue of the provider's
-button; recover, the green of a backup. Its two others stay out of the page:
+tile: share, the violet; sign-in, the blue; recover, the green of a
+backup. Its two others stay out of the page:
 its coral, monitor, would read as an error, and its amber, run, as a warning,
 and here red means error and amber attention, nothing else.
 
@@ -282,7 +282,6 @@ Computer (>= 768 px), machine level
 | example.com  +-----------------------------------------------------------+
 | Sites      6 | [Banner: Can't reach the dashboard / collector stale]     |
 | Activity     |                                                           |
-| People       |                                                           |
 | Tokens       |   machine strip, server banners, filters, list of sites   |
 | Server     * |                                                           |
 | Dark mode    |                                                           |
@@ -318,39 +317,22 @@ beside an entry sits on its tone's solid badge. The sidebar's own controls
 (theme, sign out, collapse) sit at its foot in `muted-foreground`, the release
 below them in mono.
 
-**Two levels.** On the machine's pages (Sites, Activity, People, Tokens
-and Server), the sidebar carries them. Inside a site it becomes that site's: the *All sites*
+**Two levels.** On the machine's pages (Sites, Activity, Tokens and
+Server), the sidebar carries them. Inside a site it becomes that site's: the *All sites*
 return, the current site on a raised card (its initial on a tile, its name,
 then its kind when fine, "App", "Static site", and its state in its tone with
 a dot when not, "Restarting, 3 errors", quiet when fine like the Overview's
 header), which opens the site switcher, every site by name, a dot on those in
 trouble alone; then its five sections, Overview, Services, Secrets, Access
 and Backups, Services only for an app. Collapsed, the site is just its initial, with its dot while in
-trouble. On a phone the tabs follow the level: six for the
-owner's machine, five for an app, on one row.
-
-**A person's shell.** Someone signed in with their company account sees the
-pages that are theirs and no other entry (`machinePagesFor` and `sectionsFor`
-in `lib/pages.ts`, following the steward's own table of powers). At the
-machine level, Sites and Activity, and Tokens when a role or the create right
-lets them mint a token. In a site, by their role there:
-
-| Role | Sections |
-|---|---|
-| Viewer | Overview, Services, Access read only: its general access and its people with access |
-| Developer | Overview, Services, Secrets, Access |
-| Admin | all five |
-
-Their email sits above the sidebar's own controls, in `muted-foreground`. A
-page of the owner's, reached by its address, says *Only the owner's* in an
-empty state rather than an error, and a section their role does not open,
-*Not part of your role*: the service refuses both too.
+trouble. On a phone the tabs follow the level: four for the machine, five
+for an app, on one row.
 
 Indicators (`lib/sidebar.ts`). Machine: *Sites* the number of discrepancies (error
 if there is one, otherwise attention); *Server* a dot and no count, in
 attention while the heartbeat is not set, since nothing outside the server
 would then notice it go down, in error while it fails (`serverSignal` in
-`lib/server-setup.ts`); Activity, People and Tokens report
+`lib/server-setup.ts`); Activity and Tokens report
 nothing. Site: *Overview* its discrepancies; *Secrets* what
 its store and its files ask for, a declared name or file not set in the tone
 of the warning the verdict counts it by, a platform file missing as an
@@ -375,7 +357,7 @@ gutters, bottom margin, touch target size.
 | `@container/body` | `@4xl/body:` (56 rem) | two columns: a site's Overview |
 | Activity's tables, one per day | `narrowBelow` 48 rem | five columns, otherwise two lines |
 | `@container/facts`, a site's Overview panels | `@sm/facts:` (24 rem) | a 6.5 rem label column, otherwise 5.5 rem |
-| `@container/people`, a site's people with access | `@xl/people:` (36 rem) | what a row is beside its name, otherwise under it |
+| `@container/guests`, a site's guests | `@xl/guests:` (36 rem) | what a row is beside its name, otherwise under it |
 
 Useful content widths: 1088 px at 1440 with the sidebar expanded, 984 at 1280,
 912 at 1024 collapsed, 728 at 1024 expanded, 358 on a phone.
@@ -411,13 +393,10 @@ Title [count] (i)        [primary action] [History] [Unlocked, 9 min x]  * All c
   it, the actions and History sharing their row when they fit.
 - **Title.** The home page is called *Sites*. Inside a site, Overview carries
   the slug, the other sections their name.
-- **Banners** follow the header: data unreachable or stale, a person's unlock
-  that came back refused, a lock refused, and, after a person's re-sign-in,
-  "Unlocked. Press New token to finish.".
+- **Banners** follow the header: data unreachable or stale, a lock refused.
 - Panel actions: `size="sm"`.
-- An action does not appear until what it presupposes has been read: *Add
-  people* and the role menus wait for the list of people with access, *Make
-  public* and *Restrict* for the steward's word on whether the site may
+- An action does not appear until what it presupposes has been read: *Give
+  access* waits for the list of guests, *Make public* and *Restrict* for the steward's word on whether the site may
   change.
 
 ## 4. The primitives
@@ -428,10 +407,10 @@ A page does not write its own version of any of them.
 
 | Name | File | Use |
 |---|---|---|
-| `useData()` | `data.tsx` | everything the pages read: snapshot, verdict, age, secrets, who is signed in (`identity`), `sessionExpired`, `refresh` |
+| `useData()` | `data.tsx` | everything the pages read: snapshot, verdict, age, secrets, `sessionExpired`, `refresh` |
 | `useNavigation()` | `navigation.tsx` | `{ page, path, params, fromHistory, navigate(href, { replace? }) }` |
 | `useListState(spec)` | `filter-bar.tsx` | a list's search, facets and sort, read from the address and written back to it (`?q=`, a parameter per facet, `?sort=`), replacing the entry; the pure half in `lib/list-state.ts`, `narrowList` for the rows and the facets' counts |
-| `useSheet(param)` | `detail-sheet.tsx` | `{ id, open(id), close() }`: a sheet addressed by `?token=`, `?person=`, `?event=`; open adds a history entry, so Back closes it |
+| `useSheet(param)` | `detail-sheet.tsx` | `{ id, open(id), close() }`: a sheet addressed by `?token=`, `?event=`; open adds a history entry, so Back closes it |
 | `historyUrl(filter)`, `readHistory(params)` | `lib/history.ts` | Activity's address, the one every History link speaks: `actor`, `action`, `target`, `source`, `type`, `since` |
 | `InternalLink` | `navigation.tsx` | every link to another dashboard page, a real `<a href>` |
 | `readAddress`, `requestedSite` | `lib/pages.ts` | the page and parameters of an address |
@@ -451,7 +430,7 @@ afterwards. A page never reads `window.location` itself.
 | Name | When |
 |---|---|
 | `PageBody` | the content container, and the `body` query container |
-| `SitePage` | a site's section: header with breadcrumb and switcher, body, "No site named x" for an unknown slug, "No project named x that you have a role on" for a person, with whom to ask |
+| `SitePage` | a site's section: header with breadcrumb and switcher, body, "No site named x" for an unknown slug |
 | `Panel` | a panel, `rounded-xl`, its hairline and `shadow-panel`, clipped rather than scrolled so that a head can stick; with `title`, a 44 px header row; `full` for a table or list that touches the edges |
 | `DataTable` | `data-table.tsx`: the one list pattern (5, *Lists*), inside a `Panel full` |
 | `FilterBar` | `filter-bar.tsx`: the one filter row (5, *Search and filters*) |
@@ -483,7 +462,6 @@ on screen.
 | `HistoryLink` | the header's *History*, Activity narrowed |
 | `Count` | the number beside a title, the landing page's mono chip: `cell`, the hairline, Plex Mono |
 | `CHIP`, `AccessWord` | a 20 or 24 px chip; a site's general access as the landing page's badges, *Restricted* with a lock, *Public* with a globe and quieter, *Anyone with the code* with a key over the code in its well |
-| `RoleBars` | a role as four rising bars, as many lit in `share-ink` as the role has rungs, before its word: beside a site's name, in a role's menu, in what each role can do |
 | `ExternalLink` | a site address, underlined at rest, in a new tab; the address in mono |
 | `MachineStrip` | the strip, reserved for the home page: a status line, no panel, load, memory and disk on one 32 px line, each a mono label, a 56 px bar, its figure in its level's colour and, from 56 rem of the line (`@container/strip`), its caption ("1.3 on 6 cores"); each the button of a sort, Load of CPU |
 | `MemoryUsage`, `UsageRing` | a service's memory, or a site's running services' together, the same wherever it shows, the Sites list's Memory column, the Overview's Service panel and Services table, a card on the Services canvas and its sheet: an 18 px ring of it against the limit (`UsageRing`) in the level of the service's own bounds, then the figure, muted in a list and plain among facts, amber from a peak at 80 % of the limit and red past 90 %; "47 of 256 MB" where there is room, "47 MB" in the Sites list; the limit, the share and the peak in its tooltip (`memoryReading` in `lib/sites.ts`) |
@@ -549,9 +527,8 @@ the dashboard:
 - **One action in the row at most**, the page's job, as a small outline or
   ghost button in its own column or on hover; everything else in the
   `RowMenu`.
-- **A project's name** on People and Tokens, in a row as in a sheet, is a
-  link to its site (`ProjectLink`): its Overview, People's to its Access,
-  where the role is changed. A project the server does not serve, a token's
+- **A project's name** on Tokens, in a row as in a sheet, is a
+  link to its site (`ProjectLink`): its Overview. A project the server does not serve, a token's
   not deployed yet, stays plain text.
 - `heading`, for a list cut into groups: one table per group, its heading
   a sticky mono line in place of the column heads, pushed up by the next
@@ -577,9 +554,8 @@ actor*). Its body: every field as a key and its value (`SheetFacts`, 36 px
 lines), the sections the object needs (`SheetSection`, a mono label over
 its content), then *Recent*, the object's last ten lines of Activity, and
 *All activity* (`history`); last, at its foot, the destructive action, an
-outline button in red, still confirmed: *Revoke token*, *Remove from every
-project*. Its address is the page's (`useSheet`): `?token=`, `?person=`,
-`?event=`; Back closes it, a link opens it.
+outline button in red, still confirmed: *Revoke token*. Its address is the
+page's (`useSheet`): `?token=`, `?event=`; Back closes it, a link opens it.
 
 **History.** A page's own activity is in Activity, never in a panel of the
 page: the header's *History* opens it narrowed (`historyUrl`), a sheet's
@@ -595,8 +571,7 @@ host), `source` (`dashboard`, `portal`, `egress`, `backups`, `steward`),
 icon, the state, one action ("No token yet." *New token*). A section with
 nothing in it and nothing to ask disappears: an issues list at zero, revoked
 tokens, requests, files. The tiled `EmptyState` stays for a page with
-nothing at all: a first run, *Only the owner's*, *Not part of your role*,
-a search that finds nothing. An empty list is never a bordered box with "0".
+nothing at all: a first run, a search that finds nothing. An empty list is never a bordered box with "0".
 
 **Icons.** lucide's, 16 px in a row, muted unless they carry a state, each
 with one meaning everywhere and its words in its tooltip (`lib/legend.ts`):
@@ -609,17 +584,15 @@ with one meaning everywhere and its words in its tooltip (`lib/legend.ts`):
 | `CalendarClock` | Scheduled: every service runs on a schedule, serves no page | muted |
 | `FileQuestion` | No manifest | muted |
 | `Globe` | Public, the quiet default | muted |
-| `Lock` | Restricted to the people with access, once signed in; the tooltip names the exempt paths, "Open to anyone, guarded by the app alone" | foreground |
+| `Lock` | Restricted: the owner and the site's guests, once signed in; the tooltip names the exempt paths, "Open to anyone, guarded by the app alone" | foreground |
 | `KeyRound` | Anyone with the code; the tooltip shows the code to whoever may read it | foreground |
 | `ShieldAlert` | `sitesolide.json` and the server disagree on how it opens | destructive |
 | `CircleX`, `TriangleAlert` | an error, a warning, in the gutter | their tone |
 | `History` | Activity, narrowed | muted |
-| `User`, `RectangleEllipsis`, `Building2` | People's rows: someone with a company account, someone with password access, everyone at a domain | muted |
-| `Pause`, 12 px | a project or a permission a person's token holds but may not use now, their role being below it | muted |
 | `Lock`, 12 px, after a label | a write that asks for the unlock first | the label's |
 | `Server`, `Cloud` | where a snapshot lives: on this server, in the offsite copy | muted |
-| `Layers`, `History`, `UsersRound`, `KeySquare`, `SlidersHorizontal` | the machine's pages in the sidebar, the tabs and the Sites row menu: Sites, Activity, People, Tokens, Server | `secondary-foreground` |
-| `HeartPulse`, `BellRing`, `Cloud`, `LogIn`, `UserKey`, `Asterisk` | the server's own settings, on the Server page and in the setup guide: the heartbeat, the alert webhook, the offsite copy (the same `Cloud` as a snapshot's), company sign-in, the dashboard password, the portal password | muted |
+| `Layers`, `History`, `KeySquare`, `SlidersHorizontal` | the machine's pages in the sidebar, the tabs and the Sites row menu: Sites, Activity, Tokens, Server | `secondary-foreground` |
+| `HeartPulse`, `BellRing`, `Cloud`, `UserKey`, `Asterisk` | the server's own settings, on the Server page and in the setup guide: the heartbeat, the alert webhook, the offsite copy (the same `Cloud` as a snapshot's), the dashboard password, the portal password | muted |
 | `Gauge`, `Workflow`, `SquareAsterisk`, `ShieldCheck`, `DatabaseBackup` | a site's sections, there and in the Sites row menu: Overview, Services, Secrets, Access, Backups | `secondary-foreground` |
 | `AppWindow`, `Cog`, `CalendarClock`, `Database` | a service on the Services canvas and in its table: a server, a worker, a scheduled service, one that keeps a database live by its backup command | muted, on a tile |
 | `MousePointer2`, `Files`, `Waypoints`, `CircleDashed` | the canvas's other cards: visitors through Caddy, a site's static files, the egress proxy or any host, another process | muted, on a tile |
@@ -636,17 +609,14 @@ legend. A sheet's facts use `LegendEntry`, the icon and its word.
 
 **Writes and the unlock.** The unlock is asked for just in time, as a sudo
 mode: no page carries an *Unlock changes* button nor an *Unlock to ...*
-one. A write says what it does, *New token*, *Add*, *Make public*,
+one. A write says what it does, *New token*, *Give access*, *Make public*,
 *Restore*, and while changes are locked carries `LockGlyph`, 12 px after its
 label; pressed, it opens the unlock, titled after what waits ("Unlock to
 create a token", the write's `purpose`), then performs (`WriteButton`,
 `WriteMenuItem`, `useWrite().run` for a form or a checkbox). A write the
-steward takes without the unlock, *Restrict*, *Revoke*, a person's
-*Restart*, has `unlock={false}` and no glyph. The confirmations stay where
-they were, after the unlock. A person unlocks by signing in again at their
-provider: they leave the page and come back to it, what they typed kept by
-`beforeLeave`, and the header says what to press again, "Unlocked. Press
-New token to finish." (`resume`). A 423 met on the way locks and asks
+steward takes without the unlock, *Restrict*, *Revoke*, *Remove*, has
+`unlock={false}` and no glyph. The confirmations stay where they were, after
+the unlock. A 423 met on the way locks and asks
 again, without replaying the write. While unlocked, the header's pill says
 *Unlocked, 9 min*; its x locks at once.
 
@@ -729,9 +699,9 @@ or a value never passes. Under the sign-in of an expired session, the page is
 
 | Object | Word | Do not write |
 |---|---|---|
-| Machine pages | Sites (the home page), Activity, People, Tokens, Server | Dashboard, Home, Overview, Members, Team, Settings, Machine |
-| The server's own settings | Alerts, Sign-in, Backups (the Server page's panels); Heartbeat, Alert webhook, Dashboard password, Portal password, Company sign-in, Offsite copy; Not set, Set, Set, changed 12 days ago, Incomplete, 3 of 5 needed settings are set, Delivered, Failed, last ping did not go through, 3 undelivered, Off, On, Misconfigured, Unmanaged, See why, Restart pending, skipped; Set up, Change, Change the URL, See progress, Change password, Reveal for 30 s, Hide value, Hides in 24s, Hide now, Restart portal, Restart dashboard, Skip, Unskip, Remove; Set up this server, Why these are here, Open the Server page, Hide the setup guide, Show it again, Passwords, Change the dashboard password, Change the portal password; Advanced: the server's files, in the Secrets of the dashboard site | a file or a variable name, Configure, Enable, Disable, Settings, Wizard, Onboarding |
-| The guides | Step 2 of 3, Before you start, One command to run first, Check again, Next, Back, Save and continue, Save, Done; Create a check, Paste its ping URL, Ping URL, Wait for the first ping, Waiting for the monitor's next pass, Last pass 26s ago, Next pass; Choose where messages go, Paste the Slack address, Webhook address, Message format, From the address, Keep the current one, read from the address, as you chose; Create a bucket, Enter its details, Change its details, Endpoint, Bucket, Access key, Secret key, Region, Folder, Optional, Leave empty to keep it, Encryption passphrase, New passphrase, Generate, Copy, I saved it; Register the app, Issuer, Client ID, Client secret, Allowed domains, Admin emails, Provider name | Submit, Finish, Wizard, URL for a webhook (Webhook address), Prefix, Access key ID |
+| Machine pages | Sites (the home page), Activity, Tokens, Server | Dashboard, Home, Overview, Members, People, Team, Settings, Machine |
+| The server's own settings | Alerts, Sign-in, Backups (the Server page's panels); Heartbeat, Alert webhook, Dashboard password, Portal password, Offsite copy; Not set, Set, Set, changed 12 days ago, Incomplete, 3 of 5 needed settings are set, Delivered, Failed, last ping did not go through, 3 undelivered, Off, On, Misconfigured, Unmanaged, See why, Restart pending, skipped; Set up, Change, Change the URL, See progress, Change password, Reveal for 30 s, Hide value, Hides in 24s, Hide now, Restart portal, Restart dashboard, Skip, Unskip, Remove; Set up this server, Why these are here, Open the Server page, Hide the setup guide, Show it again, Passwords, Change the dashboard password, Change the portal password; Advanced: the server's files, in the Secrets of the dashboard site | a file or a variable name, Configure, Enable, Disable, Settings, Wizard, Onboarding |
+| The guides | Step 2 of 3, Before you start, One command to run first, Check again, Next, Back, Save and continue, Save, Done; Create a check, Paste its ping URL, Ping URL, Wait for the first ping, Waiting for the monitor's next pass, Last pass 26s ago, Next pass; Choose where messages go, Paste the Slack address, Webhook address, Message format, From the address, Keep the current one, read from the address, as you chose; Create a bucket, Enter its details, Change its details, Endpoint, Bucket, Access key, Secret key, Region, Folder, Optional, Leave empty to keep it, Encryption passphrase, New passphrase, Generate, Copy, I saved it | Submit, Finish, Wizard, URL for a webhook (Webhook address), Prefix, Access key ID |
 | Toasts | Setup guide hidden. Every setting stays on the Server page., Undo, Offsite copy skipped. You can set it up on the Server page., The setup guide is back on Sites., The server is set up. The setup guide is gone., Heartbeat removed., Dismiss | Success, Done! |
 | The Services canvas | Visitors, Through Caddy, over HTTPS, Static files, Egress proxy, These hosts, and no other, Any host, Another process; Server, Internal server, Database, Background, Scheduled, main service; All other paths, Every path; Open now, Seen before, Routed by Caddy, Declared; 2 open, 19h ago (a lit line's badge); 3 connections open, Last seen 2h ago, Declared in API_URL, Every service gets INFERENCE_URL, Declared on its command line; Loopback only, Loopback, out through the proxy, Outbound network; Zoom in, Zoom out, Fit to view, Actual size, Reset layout; See how they connect; Connections, From, To | Graph, Node, Edge, Topology, Upstream, Downstream, Dependency |
 | The machine | Server | VM, host |
@@ -741,10 +711,9 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | Service | Running, Starting, Restarting, Stopping, Down; Static files, No manifest; Unknown; Scheduled, for a project whose every service is | Up, Offline, Dead |
 | Workers and scheduled services | Background; Runs hourly, or the schedule as written; Waiting, Running, Last run failed, Schedule stopped, No timer, Not loaded; Last run 3h ago, Failed 3h ago: exit code 1, Started 2m ago, Last started 5h ago, No run yet, Next run in 42m; Main unit; Runs in the background, serves no page | Idle, Cron, Job, Daemon, Down for a scheduled service between its runs |
 | General access | General access, Public, Restricted, Anyone with the code, Current, Change; Make public, Restrict; in a disagreement, On the server, In sitesolide.json, Keep Public, Apply Restricted; Preview code, Replace the code, Remove the code; Open to anyone, guarded by the app alone (the exempt paths); See changes in Activity | Door, Gate, Portal on, Portal off, Turn on portal, Behind the portal, Private, Password protected, Enable, Disable |
-| People with access | People with access, Add people, Add, Remove access; Can open, Viewer, Developer, Admin; company account, password access, Password access lasts, No expiry, expires in 5d, Expired, Added by; Can't sign in until company sign-in is set up; Copy message; What each role can do, a disclosure from Can open to Admin, (your role), (you); Also open it | Sharing, Share, Guest, Member, Team, Invite, Permissions, ACL, work account, Super admin, Project admin; an Owner row or rung |
-| People | People, Person, Projects, Expires, Type; Company account, Password access, Domain, as facets Company accounts, Password access, Domains; Creates projects (a row's tag), May create projects, Let someone create projects, Let create projects, Stop creating projects, Allow, Company email, Remove from every project, Remove expired, 1 password access has ended.; No project yet, Every site, as admin: set on the server in OIDC_ADMIN_EMAILS | Members, Invite |
-| Tokens | Tokens, New token, Create token, Name, Owner, Projects, Permissions, Last used, Expires; You, Never, No expiry, in 4d, Expired, Revoked, Paused; the chips Public sites, Secrets, Domain, Network, New projects, and their sentences Can deploy public sites, Can manage secrets, Can declare a domain, Can use outbound network, Can create projects; Paused: no longer allowed, Paused: Viewer now; Made by, Created by it; Whose token, Mine, For someone in People, Projects it may deploy, All projects (13), Filter projects, Permissions: None, Needed by cms, Deploys cms and brand, expires in 90 days, no extra permission.; Show 1 revoked or expired, View activity, Revoke token, Revoke "alice-ci"?, Copy message | Team, API key, Yours, Their own, Active, Public sites allowed, Restricted sites only, Write secrets, Secrets access, Recent deployments, Token activity |
-| The lock | Unlocked, 9 min, and its x, Lock changes now; in its dialog, Unlock changes, Unlock to create a token (the write that waits), Unlock, Sign in again; under a field, Giving Developer asks to unlock changes first.; after a person's re-sign-in, Unlocked. Press Add to finish.; in Activity, Unlocked changes, Locked changes | Unlock the secrets, Locked, Unlock to add, Unlock to create, Unlock to allow, an Unlock changes button |
+| Guests | Guests, Address, Give access, Access lasts, Until removed, Valid until, Remove, Password, Copy password, Copy message, Done, Close without copying | Sharing, Share, People with access, Member, Team, Invite, Permissions, ACL, Viewer, Developer, Admin |
+| Tokens | Tokens, New token, Create token, Name, Owner, Projects, Permissions, Last used, Expires; You, Never, No expiry, in 4d, Expired, Revoked, Paused; the chips Public sites, Secrets, Domain, Network, New projects, and their sentences Can deploy public sites, Can manage secrets, Can declare a domain, Can use outbound network, Can create projects; Created by it; Projects it may deploy, All projects (13), Filter projects, Permissions: None, Needed by cms, Deploys cms and brand, expires in 90 days, no extra permission.; Show 1 revoked or expired, View activity, Revoke token, Revoke "alice-ci"?, Copy message | Team, API key, Yours, Their own, Active, Public sites allowed, Restricted sites only, Write secrets, Secrets access, Recent deployments, Token activity |
+| The lock | Unlocked, 9 min, and its x, Lock changes now; in its dialog, Unlock changes, Unlock to create a token (the write that waits), Unlock, Sign in again; in Activity, Unlocked changes, Locked changes | Unlock the secrets, Locked, Unlock to add, Unlock to create, Unlock to allow, an Unlock changes button |
 | Kind | Static site, App, Background, Scheduled, No manifest; as facets, Static, Apps, Background, Scheduled, Platform; Runs in the background, serves no page | Worker, Service, Job, Cron, Daemon |
 | Lists | Search sites, Filter, Clear filters, Sort, Issues first, Name, Last deployed, Memory, Disk, 3 of 14, All, Show all, Show 1 revoked or expired; an access facet's Public, Restricted, Anyone with the code, Mismatch; Access mismatch beside a name | Reset, Filter by, Results, No results |
 | Secrets | Restart pending, Unmanaged, Missing, Restart service, Restore previous version, Add variable, Create file, Change, Change password; Reveal value, Hide value, Copy value, Hides in 24s; a store's: Variables, Files, Not set, Not declared, Empty, Set, Generate, Add (Variable, Generated value, File), Type a value, Type a new value, Generate a new value, Generate on the server, Upload, Replace, Copy path, Remove variable, Remove file, Read at, Build and public names (3), Build, kept by whoever deploys, Public, from the repository | Vault, Decrypt, Edit file, Rotate, Secret store, Environment |
@@ -753,7 +722,7 @@ or a value never passes. Under the sign-in of an expired session, the page is
 | Activity | Event, Actor, Action, Target, Source, Type, Date, Search activity, Any time, Last 24 hours, Last 7 days, Last 30 days, Custom range, From, To, Apply, Today, Yesterday, Recorded, Same actor, Same site, Same target, Load older, 50 events read, Nothing matches in the 250 latest events, Export, CSV, JSON lines, Clear filters; a type is Deployments, Access changes, Secrets, Sign-ins, Tokens, Backups, Egress; a source that is not read: Can't read, Needs updating, and its latest 50 entries under the log; an actor is Owner, The server, Someone, alice@example.com (token), Example Accounting (password access) | Log entry, Audit trail, Download, Reset, Details, Site or host |
 | Unreachable | Can't reach the dashboard., Can't reach the server's secrets., Can't reach the access service on the server. | is not answering |
 | Common actions | Refresh, Retry, Sign in, Sign out, Copy, Copied, Cancel, Close, Done, Manage, See, History, All activity, Recent | Reload, Try again, Log out, Submit, Audit, Logs |
-| Empty states | No issues, No sites match "x", No sites match these filters, No sites deployed yet, No project of yours yet, No project named x that you have a role on, Nobody else has access to cms yet, Nobody has access to a project yet, cms has no secret files, Not part of your role, Only the owner's | Nothing here! |
+| Empty states | No issues, No sites match "x", No sites match these filters, No sites deployed yet, cms has no secret files | Nothing here! |
 
 "Portal" names the component, on the machine: Activity's source for sign-ins,
 the banner saying the portal on the server still reads its own lists, the
@@ -770,7 +739,6 @@ One page per served file, the site in `?s=`:
 |---|---|---|
 | Sites, the home page | `/` | `index.html` |
 | Activity | `/activity/` | `activity/index.html` |
-| People | `/people/` | `people/index.html` |
 | Tokens | `/tokens/` | `tokens/index.html` |
 | Server, the owner's alone | `/server/` | `server/index.html` |
 | A site's Overview | `/site/?s=cms` | `site/index.html` |
@@ -782,7 +750,8 @@ One page per served file, the site in `?s=`:
 Older addresses keep their file and redirect client-side, with no history
 entry (`LEGACY_PATHS` in `lib/pages.ts`): `/sites/?site=cms` and
 `/secrets/?site=cms` from before the per-site page, `/guests/` to the home
-page, `/team/` to Tokens, `/members/` to People, and a site's
+page, `/team/` to Tokens, `/people/` and `/members/`, from before company
+sign-in was removed, to the home page, and a site's
 `/site/guests/`, `/site/sharing/` and `/site/members/` to its Access, and
 `/site/audience/`, from before Audience was removed, to its Overview, `?s=`
 kept, and `/connectors/`, from before Connectors was removed, to Activity. A
@@ -816,7 +785,7 @@ LOAD âââ 22% 1.3 on 6 cores   MEMORY âââ 49% 5.7 o
   are here, its "..." with *Open the Server page* and *Hide the setup
   guide*. Its rows are the Server page's (7, *Server*), only what the
   server still lacks, in the guide's order: the heartbeat, the alert
-  webhook, the offsite copy and company sign-in, each with why it is
+  webhook and the offsite copy, each with why it is
   missing, "Nothing outside the server notices if it goes down.", *Set up*
   on the first one the panel's one primary button, *Skip* in the menu of
   the two optional ones; the heartbeat in trouble comes back to it, *Failed*
@@ -839,8 +808,8 @@ LOAD âââ 22% 1.3 on 6 cores   MEMORY âââ 49% 5.7 o
 - **The row**, `DataTable` of 44 px: the gutter, drawn only while some row
   is in trouble; the kind icon (`KindIcon`, its tooltip the number of
   services or the next run), the slug, the real link, underlined only
-  under the pointer, its description in its title, the *Platform* tag or a
-  person's role, "CPU 18%" in a muted chip when the site takes 15 % of the
+  under the pointer, its description in its title, the *Platform* tag,
+  "CPU 18%" in a muted chip when the site takes 15 % of the
   processor or more (`BUSY_PROCESSOR_SHARE`, every core counted, the Load
   gauge's scale), then, only when not fine, the state: the first issue's `label` from the server, errors
   first, in its tone, "+2" for the others, every message whole in its
@@ -883,11 +852,7 @@ LOAD âââ 22% 1.3 on 6 cores   MEMORY âââ 49% 5.7 o
   sitesolide deploy in a project's folder." with *Show platform projects*
   when there are some; "No sites match "x"." with *Clear search*; "1
   platform project matches." with *Search platform projects*; "No sites
-  match these filters." with *Clear filters*. A person with no project yet
-  reads "No project of yours yet", and with the create right "You may create
-  projects: create a token on the Tokens page, then run sitesolide deploy in
-  the project's folder. You become its Admin.", never the server's
-  folders.
+  match these filters." with *Clear filters*.
 - The search covers what the row shows and what it folds: names,
   descriptions, the kind's words, addresses and their notes, aliases,
   ports, access words, the service's state, variable names, *Restart
@@ -913,9 +878,8 @@ The log: one table per day under its sticky heading, *Today*,
 *Yesterday*, *Fri, Oct 23*, rows of 40 px in time order: the actor by name
 (*Owner*, *The server*, *Someone*, `alice@example.com (token)`, `Example
 Accounting (password access)`, *Someone with password access* on older
-rows); the sentence ("Gave dana@example.com Developer on cms", "Changed
-dana@example.com from Developer to Can open on cms", "Restricted cms",
-"Signed in with the owner's password", "Opened calendar as Admin"), in its
+rows); the sentence ("Gave dana@example.com password access to cms",
+"Restricted cms", "Signed in with the owner's password"), in its
 tone with the severity icon in the gutter when it went wrong, followed then
 by why, muted, "Refused: no secrets permission"; the site linked; the
 source, muted; the time, an age today and the time of day under an older
@@ -932,94 +896,40 @@ times while the rows read hold nothing, then says "Nothing matches in the
 250 latest events." with *Load older*. Under the panel, which sources only
 hand over their latest entries.
 
-**People.** The owner's alone. Its intro, behind the title's (i): roles are
-given and changed in each project's Access section, here someone is let
-create projects or removed from every project at once. In the header, while
-company sign-in is set up, *Let someone create projects*: it asks for the
-unlock, then a small dialog takes a company email and *Allow*; *History*
-opens Activity on access changes. A banner when company sign-in is not set
-up, since everyone added then gets password access.
-
-Then one list, the header counting its rows: everyone with access to a
-project, by email or name, then every domain; from ten rows a search and a
-*Type* facet, *Company accounts*, *Password access*, *Domains*, with the
-rows' icons. A row, 44 px: its kind as an icon, `User`, `RectangleEllipsis`
-or `Building2`, and who, *Creates projects* as a quiet tag on whoever may;
-its projects, each linked to its Access section with the role muted beside
-it, "calendar Admin, cms Developer +1", a password access's project alone, a
-domain's *Can open*, "Every site, as admin" for an admin email with no
-project; *Expires* for password access alone, the soonest end still open,
-"in 14h" in attention under a day, "in 6d", "No expiry", *Expired* muted.
-The row menu: *Let create projects*, offered only to someone with a company
-account, which asks for the unlock, or *Stop creating projects*, which does
-not; then, under a separator, *Remove from every project*, in a destructive
-confirmation: they lose every role and password access at their next
-request, may no longer create projects, are signed out, and the tokens it
-revokes are named, "Also revokes 2 tokens: Alice's laptop (made by you),
-alice-ci (made by them)." A click opens the sheet (`?person=`): what they
-are, the create right or why it is not offered, "Every site, as admin: set
-on the server in OIDC_ADMIN_EMAILS.", every project with its role and a
-password access's end, linked to its Access, the tokens they hold, their
-last ten actions, and *Remove from every project* at its foot; a domain's
-sheet, its projects alone. While a password access has ended, one line under
-the rows says how many, with *Remove expired*, which lists them in a
-confirmation and takes each off its project.
-
 **Tokens.** One table, OpenRouter's keys: the tokens, and nothing of equal
 weight beside them. Its intro, behind the title's (i), says what a token
-does, the owner's or a person's; *New token*, the header's primary action,
+does, and that it never gives anyone access to a site; *New token*, the header's primary action,
 asks for the unlock first; *History* opens what tokens did,
 `/activity/?actor=token:`. The header counts the tokens that deploy; the
 revoked and the expired fold under the rows, *Show 1 revoked or expired*.
 
-A row, 44 px: *Name*; *Owner*, "You" or the person's email, for the owner
-alone; *Projects*, "cms, brand" then "+2", each linked to its site, a project where the person's
-role is below Developer muted after the `Pause` glyph; *Permissions*, what
-it may do beyond deploying, at most two chips then "+N", *Public sites*,
-*Secrets*, *Domain*, *Network*, *New projects*, a person's paused one dashed
-and muted with the glyph, why in its tooltip, "Can create projects (paused:
-no longer allowed)", "Can use outbound network (paused: not Admin of cms
-now)", "Can manage secrets (paused: no project to deploy now)", and nothing
-for a token that only deploys; *Last used*, "5h ago" or "Never"; *Expires*,
+A row, 44 px: *Name*; *Projects*, "cms, brand" then "+2", each linked to its
+site; *Permissions*, what it may do beyond deploying, at most two chips then
+"+N", *Public sites*, *Secrets*, *Domain*, *Network*, *New projects*, and
+nothing for a token that only deploys; *Last used*, "5h ago" or "Never"; *Expires*,
 "Jan 21", "in 4d" in attention within a week, "No expiry", *Expired*,
-*Revoked*. No *Active*: the normal state says nothing; a token every project
-of which is paused says *Paused* beside its name. Below 56 rem of the table,
-two lines: the name and Expires, then the owner and the projects. The row
+*Revoked*. No *Active*: the normal state says nothing. Below 56 rem of the
+table, two lines: the name and Expires, then the projects. The row
 menu: *View activity*, then *Revoke token*, which needs no unlock.
 
-A click opens the sheet (`?token=`): whose it is, who made it when that is
-not its owner, created, last used and its expiry, each with its date; each
-project with the role today, "Developer", "Paused: Viewer now", "Created by
-it" for the owner's own; each permission with its sentence, a paused one
-with why; its last ten actions in Activity's words, each over the site it
-touched, and *All activity*; *Revoke token* at its foot. A person sees their
-own tokens alone, with no Owner column, and mints them under their own
-unlock, never beyond their roles; a person who is a Viewer everywhere reads
-"Tokens are for Developers and Admins. You're a Viewer on every project."
+A click opens the sheet (`?token=`): created, last used and its expiry,
+each with its date; each project, "Created by it" for one it created; each
+permission with its sentence; its last ten actions in Activity's words,
+each over the site it touched, and *All activity*; *Revoke token* at its
+foot. A token a person held when people signed in with a company account
+stays listed, refused at every use, for the owner to revoke.
 
 The dialog fits a 900 px screen: its fields scroll between the title and
-the buttons. A *Name*, and for the owner *Whose token* beside it: a menu
-drawn by the page, not the browser's, with *Mine*, "Yours, for your own
-agents", then *For someone in People*, each person by their email over a
-line saying where they deploy and whether they may create projects, "Admin
-on calendar, Developer on cms", "May create projects". A Viewer everywhere is
-not offered, since the steward mints them no token, and with nobody to offer
-the menu is left out. Then *Projects it may deploy*, a list to tick, never
+the buttons. A *Name*, then *Projects it may deploy*, a list to tick, never
 slugs to type, six rows high before it scrolls, *All projects (13)* at its
-head to tick them all and, from eight projects, *Filter projects*: the
-owner's own offered every project on the server but the platform's, a
-person's only those where they are a Developer or an Admin, each with that
-role; and below them *New projects*, the create right, for a person only
-while they hold it. Then *Permissions*, a disclosure closed while all are
-off, its summary saying what is on, "Permissions None"; inside, one line each
-on when it is needed: *Deploy public sites*, *Use outbound network*,
-*Declare a domain*, the three of a person's only when they are an Admin of
-every project chosen, the note saying so, "Public sites, outbound network
-and a domain only when you are an Admin of every project chosen."; and
-*Manage secrets*, "Lists each project's secret names, and sets, generates
-and removes its variables and files on the server. Never reads a value
-back.", never greyed for a person, a Developer changing a project's secrets
-already, and sent only when ticked, so that a steward from before it still
+head to tick them all and, from eight projects, *Filter projects*, every
+project on the server but the platform's; and below them *New projects*.
+Then *Permissions*, a disclosure closed while all are off, its summary
+saying what is on, "Permissions None"; inside, one line each on when it is
+needed: *Deploy public sites*, *Use outbound network*, *Declare a domain*;
+and *Manage secrets*, "Lists each project's secret names, and sets,
+generates and removes its variables and files on the server. Never reads a
+value back.", sent only when ticked, so that a steward from before it still
 mints the rest; ticked against one, the dialog says "The server's steward
 predates this permission: run sitesolide upgrade." One a project chosen
 cannot be deployed without is ticked for you and says which, "Needed by
@@ -1043,24 +953,13 @@ controls with 12 px corners, the field the same well as every other, the
 same pressable teal. It is the one place the dashboard takes the landing
 page's sizes, being a page read once (section 8, point 15).
 
-**The sign-in page, with a provider.** Above the password, *Sign in with
-<provider>*, an outline link to `/api/sso/begin` and not a form, the flow
-leaving for the portal's host; then a rule with *or with the owner's
-password* in its middle. A sign-in that came back without a session says why
-above both, in `destructive`: `can-open-only`, "This account can open some
-sites, but the dashboard starts at Viewer. Ask an Admin of the project if you
-need more."; `no-role`, "This account has no access to any project
-here. Ask the owner, or an Admin of the project, to add you."; a domain not
-allowed, expired, not available.
-
 **Server.** The owner's alone, at `/server/`, `SlidersHorizontal` in the
 sidebar and a fifth tab on a phone, a dot beside it while the heartbeat is
 not set: the server's own settings, how it tells you it is down, who signs
 in, where its backups go. Its header is the other machine pages': the
 title, the (i) ("Only you see this page.", that no site reads them, that
 every setting stays here for good), *History* on Activity's secrets, the
-verdict. A person finds neither the entry nor the page, *Only the owner's*
-at its address, and the steward refuses them anyway.
+verdict.
 
 ```
 | Alerts                         Changes apply within a minute. Nothing restarts. |
@@ -1076,7 +975,7 @@ Advanced: the server's files, in the Secrets of the dashboard site.
 - **Three panels, always in this order**, every setting shown, done or
   not (`SERVER_GROUPS` in `lib/server-setup.ts`): *Alerts*, the heartbeat
   and the alert webhook, its message format folded into its guide;
-  *Sign-in*, the two passwords and company sign-in; *Backups*, the offsite
+  *Sign-in*, the two passwords; *Backups*, the offsite
   copy as one row. Each panel's head says when a change applies, in plain
   words.
 - **One row component**, `SettingRow`, the same as the guide's on Sites:
@@ -1155,9 +1054,6 @@ holding the whole line, and *Check again*.
   key, region and folder; the encryption passphrase, typed or *Generate*d
   in the browser, *Copy*, a note that without it the copy can't be read,
   and *I saved it* before *Save*.
-- *Company sign-in*: register the app; its issuer, client ID, client
-  secret, allowed domains, admin emails and provider name; then that the
-  portal applies them when it restarts, the row saying *Restart pending*.
 
 **A site's Overview.** The site's hub: is it working, and which of its
 sections needs me. Under the title, what the project is, its kind's icon and
@@ -1173,7 +1069,7 @@ banners of one line each. Then two panels side by side, a single column below
 ```
 | Service             cms.service [Restart] |  | Site                                  |
 | State     Running  up 20h                 |  | Address   cms.example.com â           |
-| Memory    (o) 131 of 256 MB              |  | Access    [Lock] Restricted  4 people >|
+| Memory    (o) 131 of 256 MB              |  | Access    [Lock] Restricted  4 guests >|
 | CPU       5%                              |  | Secrets   3 variables  1 not set     > |
 | Restarts  0                               |  | Backups   Last snapshot 45m ago     > |
 | Port      3043                            |  | Disk      48 MB                       |
@@ -1200,18 +1096,18 @@ anchor of a project whose every service is scheduled, shown only when it is
 not fine or carries *Restart*: an anchor that keeps its timers armed has
 nothing to say the Services table does not. A static site and a folder with
 no manifest run no service: no Service panel, the kind under the title says
-it, and the Site panel stands alone. A Developer or an Admin finds *Restart*
-in its header, which confirms, waits for the steward's verdict and says it in
+it, and the Site panel stands alone. The owner finds *Restart* in its
+header, which confirms, waits for the steward's verdict and says it in
 plain words, or shows the steward's refusal as it stands.
 
 **Site** is one line per section, its headline and a chevron, the whole line
 the link (`FactRow` with `href`), shown for whoever may open that section:
-*Access*, the Access section's icon and word (`accessEntry`) and who is on the
-list, "4 people", "3 people, 1 domain", "Nobody on the list" said only of a
-restricted site; *Secrets*, from Developer up, what the store keeps counted,
+*Access*, the Access section's icon and word (`accessEntry`) and its guests,
+"4 guests", "No guests" said only of a restricted site; *Secrets*, what the
+store keeps counted,
 "3 variables, 1 file", then the Secrets section's first problem in its tone
 and "+N" for the others (`secretsHeadline`, the same problems as the
-sidebar's badge); *Backups*, for the owner and an Admin, the last snapshot's
+sidebar's badge); *Backups*, the last snapshot's
 age in the Backups section's words, in attention when the last run failed.
 Around them, the facts that are no section: *Address*, the address that
 answers, a domain not answering as asked in its state's word ("Pending:
@@ -1338,9 +1234,7 @@ behind the (i): when a change applies, and that only the owner reveals a
 value, for thirty seconds. Every write asks for the unlock when pressed (5,
 *Writes and the unlock*), titled after what waits, "Unlock to set
 CMS_TOKEN", "Unlock to reveal CMS_TOKEN"; the owner's dialog says "Enter the
-dashboard password to make changes for 10 minutes.", a person's "Sign in
-again with Google to make changes for 10 minutes. Only what your roles
-allow." Above the panel, a banner while the service is down or keeps
+dashboard password to make changes for 10 minutes." Above the panel, a banner while the service is down or keeps
 restarting, while its unit does not read its store yet, while the server
 refuses every change to the store.
 
@@ -1369,7 +1263,7 @@ site or section changed; no row ever shows dots. A value is typed into
 and size chosen, never shown. The panel's header holds one *Add* menu,
 *Variable* (a name and the value you type), *Generated value* (drawn on the
 server, never shown) and *File*, then a "..." with *Restart service* and,
-for the owner and an Admin, *Restore previous version*. While a restart is
+*Restore previous version*. While a restart is
 pending, and only then, the attention pill *Restart pending*, its tooltip
 naming what changed, and *Restart service* as the primary button beside it.
 Under the rows, a closed disclosure with its count, *Build and public names
@@ -1407,23 +1301,19 @@ unlock again. The Overview's **Secrets** sums a store up in rows, its
 variables counted set and not set, its files by name, never a variable's
 name.
 
-**A site's Access.** Who can open the site, and what each person can do with
-it, in one place, laid out like a "Share" dialog, in one column. Behind the
-title's (i), one sentence, "Who can open cms, and what each person can do
-with it here. Changes apply from each person's next visit."; the header's
-*History* opens the log narrowed to the site's access changes
-(`/activity/?target=cms&type=access`). Banners: an unlock
-that failed; the portal on the server still reading its own lists, or unable
-to read who has access (`sitesolide upgrade`); for the owner, company sign-in
-not set up, so that everyone added gets password access, with where to set
-it, the portal's `portal.env`.
+**A site's Access.** Who can open the site, in one place, laid out like a
+"Share" dialog, in one column. Behind the title's (i), one sentence, "Who
+can open cms: everyone, whoever has its preview code, or only you and the
+guests you give a password."; the header's *History* opens the log narrowed
+to the site's access changes (`/activity/?target=cms&type=access`). Banners:
+an unlock that failed; the portal on the server unable to read who has
+access (`sitesolide upgrade`).
 
 **General access** first, one row, the share dialog's: the way the site
 opens on its 32 px tile, its name and its sentence, the code and its link
 under them for *Anyone with the code*, to copy or open, with *New code*
 beside them, the paths "Open to anyone, guarded by the app alone" under
-*Restricted*. At the row's end, for the owner and the project's Admins,
-*Change*, a menu of the three ways, Public, Restricted and Anyone with the
+*Restricted*. At the row's end, *Change*, a menu of the three ways, Public, Restricted and Anyone with the
 code, each with its icon and its sentence, the current one ticked, a way that
 lets more people in carrying the lock glyph while changes are locked; a way
 the steward refuses here is greyed with its reason in place of its sentence,
@@ -1439,10 +1329,7 @@ three ways laid out as rows, each side marked *On the server* or *In
 sitesolide.json*, *Keep Public* and *Apply Restricted*, or *Apply Public* and
 *Keep Restricted*, the third a plain choice; a code on the server that
 sitesolide.json no longer asks for reads *Apply Public* and *Keep Anyone with
-the code*. A Viewer or a Developer reads the same row without *Change*, and
-"Only an Admin of cms, or the owner, changes it." under the sentence; for a
-site that opens with a code, "An Admin of cms, or the owner, has the code.":
-the code itself is the owner's and the Admins'.
+the code*.
 
 Restricting waits for no unlock; making public, using a code and a new code
 do, then open their confirmation once unlocked. Making public and using a
@@ -1453,8 +1340,8 @@ then what they keep, and retype the slug; a new code says "The current code
 stops working at once, and the link that carries it." and asks no typing;
 leaving a code says "Its code stops working." first. A site already as asked
 is left as it is, "already restricted: nothing to change". Restricting a site
-nobody is on the list of warns "Nobody is on the list yet: after this, only
-the owner and the admin emails can open blog." All say "Takes up to a
+with no guest warns "blog has no guest yet: after this, only you can open
+it." All say "Takes up to a
 minute. If anything fails, nothing changes."; the wait neither closes nor
 cancels and shows the time elapsed on a minute and a half's scale; the result
 says what the site now does, "blog.example.com now asks visitors to sign
@@ -1463,74 +1350,28 @@ without signing in." or "cms.example.com now asks for its code.", with the
 code and its link when there is one, then "Your next sitesolide deploy writes
 this into sitesolide.json."
 
-Then **People with access**, its count the number of rows, and while the site
-is not restricted a note, "blog is public, so anyone can open it. Viewer,
-Developer and Admin still apply; Can open matters once you restrict it." For
-the owner and the project's Admins, *Add people* at the top: an email or a
-`@domain`, the domain only once company sign-in is set up, a role among those
-the viewer may give, a plain *Can open* in place of the menu when it is the
-only one possible, and for password access how long it lasts, 24 hours, 7
-days, 30 days or no expiry. The line under the field says, before anything is
-sent, what adding gives, or why not: someone who signs in with their company
-account; everyone with an account at a domain; "acme.com isn't one of the
-company's domains: they get password access, to open the site only.", with
-its end; "Nobody at acme.com can sign in here: only example.com accounts can.
-Add people from acme.com by email: they get password access.", with no *Add*;
-"Already covered by @example.com."; "owner@example.com already opens every
-site, as admin: it's set on the server."; "erin@example.com is already on the
-list, as Viewer." *Add* carries the lock glyph when the role or the
-password waits for the unlock, said under the field: "Giving Developer asks
-to unlock changes first.", "Password access asks to unlock changes first." The
-owner, once unlocked, finds the addition made; a person, back from signing in
-again at their provider, finds the field and the role as they left them, and
-"Unlocked. Press Add to finish." After adding, "dana@example.com can now open
-cms." or "dana@example.com is now Viewer on cms.", with the line to send and
-*Copy*, since no email is sent; raising someone from their row to Viewer or
-above shows the same, and any other change of that row clears it; from Viewer up
-it names the dashboard too, "calendar is at https://calendar.example.com/,
-and in the dashboard at https://dashboard.example.com. Sign in with your
-Google account.", and from Developer up adds "To deploy, create a token on
-the Tokens page, then run sitesolide login --url
-https://dashboard.example.com.";
-for password access, a dialog with the address, the password and its end, and
-*Copy message*. Under the field, *What each role can do*, a closed
-disclosure, reference read once, since each role's menu says the same beside
-each choice: Can open to Admin, each including the ones below it, the
-reader's own marked *(your role)*. A Viewer or a Developer finds, in place of the field, whom to ask:
-"To add someone, ask an Admin: bruno@example.com.", or "To add someone, ask
-the owner."
+Then **Guests**, its count the number of rows, and while the site is not
+restricted a note, "blog is public: guests' passwords only matter once it's
+restricted." At the top, the field: an *Address*, how long *Access lasts*,
+24 hours, 7 days, 30 days or *Until removed*, and *Give access*, which
+carries the lock glyph while changes are locked. The line under the field
+says, before anything is sent, why not: "A whole domain can't be given
+access. Add one email at a time.", "dana@example.com is already a guest."
+Given, a dialog shows the address, the password and its end once, with
+*Copy password* and *Copy message*, since no email is sent; closing it
+before copying asks again, "You haven't copied the password. It can't be
+shown again.", *Close without copying*.
 
-Then one list, the same for every reader, controls only for those who manage
-it, one 44 px line each: higher roles first, then people, domains and
-password access, what expired last. Each row says who, *(you)* on one's own,
-and beside it, muted, what it is (everyone at a domain, password access and
-its expiry, in attention within a day, "Can't sign in until company sign-in
-is set up.", for a person or a domain, "Can't sign in: acme.com isn't one of
-the company's domains."), on a second line when the list is narrower than 36
-rem (`@container/people`); who added it and when sits in the name's tooltip,
-except on what was carried over. On the right its role, the Google Docs way:
-a quiet button, the role's bars and its word, that opens a menu of the roles
-the viewer may give, each with what it can do, the current one ticked, a
-raise that waits for the unlock carrying the glyph; then, under a separator,
-*Remove access*, destructive, which confirms. A row whose role cannot change
-but which may be removed, a domain or a password access, opens the same menu,
-its one role greyed. A word otherwise, greyed for someone who can't sign in,
-*Expired* greyed for a password access that ended. No cross in the row. A
-role raised once unlocked is given at once. An Admin lowering or removing
-themselves is asked first: "You'll no longer manage cms. Only another Admin
-or the owner can give it back." Lowering someone to Can open, or removing
-them, when they keep no role above Can open nor the create right, is asked
-first too, naming what goes with it: "chloe@example.com will no longer sign
-in to the dashboard. Also revokes 2 tokens: alice-ci (made by them), Alice's
-laptop (made by you)." An empty list is one line, "Nobody else has access to
-cms yet." Under the list, one quiet line: "Also open it without being
-listed: the owner, and owner@example.com, set on the server to open every
-site.", or "The owner also opens it."
+Then one list, one 44 px line each, what expired last: who, then muted who
+gave it and when, "Given by you, 3d ago", and its end, "Expires in 5d", in
+attention when it is near, "No expiry", "Expired 2d ago" muted; *Remove* at
+the row's end, which confirms and waits for no unlock. An empty list is one
+line.
 
 A project of the platform (portal, dashboard, api, landing, www,
 and the landing named after the zone) shows one panel: how it opens, the same
-row without *Change*, then "portal is part of the platform. Only the owner
-opens it when restricted; no one can be given a role on it."
+row without *Change*, then "portal is part of the platform. Only you open it
+when restricted; it takes no guest."
 
 **A site's Backups.** One status row, then the snapshots; the runs and the
 restores are in Activity, behind *History* (`type=backups`), the intro behind
@@ -1604,9 +1445,8 @@ and no table.
     with a password, who signs in with their company account and who does
     what on it in the dashboard lived in four sections of a site, and two
     more pages at the machine level, each answering part of it in its own
-    words. One *Access* section per site, read like a "Share" dialog, *People*
-    across projects and *Tokens* answer it once each, in the words of one
-    ladder of roles.
+    words. One *Access* section per site, read like a "Share" dialog, and
+    *Tokens* answer it once each.
 13. **Graphite**, the look before Ledger: neutral greys, white panels ruled by
     a pixel and no shadow on a page surface, Geist, the logo a petrol block
     with a hard offset shadow. Beside the landing page in Ledger it read as
@@ -1675,14 +1515,6 @@ and no table.
     disagreement: three ways of equal weight where one is in force. One row
     says the way in force, and *Change* holds the three with their sentence;
     the three rows stay for a disagreement, an error that earns the room.
-31. **A cross on every person's row, and a well around every role**: eleven
-    destructive controls one slip away and a column of fields. The role is a
-    quiet button, its menu ends with *Remove access* under a separator, still
-    confirmed.
-32. **What each role can do, open by default**: reference read once, 100 px
-    above the list every time. Closed, and said again beside each choice of
-    a role's menu.
-
 33. **Activity's strip of sources**, five green *Read* on every visit: a
     source read is not news, one that could not be read keeps its banner.
 34. **Five filter fields**, Actor, Action, Site or host, From and To, on a
@@ -1700,13 +1532,6 @@ and no table.
     events was never folded, and the log stayed full of routine. The same
     event folds within its day, at its newest.
 
-39. **A *May create projects* checkbox on every person's row**: a right
-    given by a click while scrolling, in a column empty for nearly everyone,
-    and a form for it under the list. The row's menu gives and takes it, a
-    quiet tag says who holds it, and the form is the header's *Let someone
-    create projects*.
-40. **Domains in a panel of their own** under People: the same question,
-    who gets in, answered twice. One list, its *Type* facet to narrow it.
 41. **Created, used and until in a token's row, its made-by line**: the row
     keeps what a decision needs, Last used and Expires; the rest is in the
     sheet and the dialog.
@@ -1714,9 +1539,6 @@ and no table.
     868 px dialog, every project in two columns and four permissions always
     open. Six rows of projects with a filter, the permissions closed until
     one is on or needed, and a summary line in view of *Create token*.
-43. **Who added a person, and when, in People's sheet**: the People route
-    carries each person's roles, not who gave them. It is on the person's
-    row in each project's Access section.
 44. **A status line and an activity panel in Secrets**, "Running, up 20h,
     cms" under the panel's title and a log of the site's operations below
     it: the Overview says the service, Activity the history. A restart
@@ -1743,7 +1565,7 @@ and no table.
 51. **The server's own settings in the dashboard site's Secrets alone**, as
     variables of files named by their file: point 8 keeps everything about
     a site in that site, and these are about no site. The heartbeat, the
-    alert webhook, the passwords, company sign-in and the offsite copy are
+    alert webhook, the passwords and the offsite copy are
     read by the monitor, the portal and the backup run, no site reads them,
     and the dashboard's Secrets showed them as `HEARTBEAT_URL` in
     `dashboard-monitor.env` under a site that does not use them, with a
@@ -1768,19 +1590,12 @@ bun run page-bench       # http://localhost:4322, password demo
 
 The bench runs the real `server.ts` on fictional data, a fake steward with
 the real access and sign-in routes, a fake portal, and plays Caddy in front
-of them. *Sign in with Google* leads to a page of the bench's that signs in
-one of its people: alice@example.com, a Developer on `cms`, an Admin on
-`calendar` and a Viewer on `brand`; bruno@example.com, an Admin on `cms`;
-chloe@example.com, a Viewer on `calendar`; editor@example.com, Can open on
-`cms`, whom the dashboard refuses with `can-open-only`; stranger@example.com,
-on no list, refused with `no-role`. It seeds an expired password access on
-`inventory`, and alice's token `alice-ci`, paused on `brand`, where she is a
-Viewer now. Two projects serve no page: `mailer`, a worker beside two
-scheduled services, the hourly one's last run failed outside the showcase,
+of them. It seeds five guests with password access across `brand`,
+`calendar`, `cms` and `inventory`, one of them expired. Two projects serve
+no page: `mailer`, a worker beside two scheduled services, the hourly one's last run failed outside the showcase,
 and `reports`, whose every service is scheduled. The platform's own two,
 `dashboard` and `portal`, sit under Platform. Variants:
 `BENCH_PORT`, `BENCH_STALE=1`, `BENCH_NO_STEWARD=1`, `BENCH_NO_PORTAL=1`,
-`BENCH_NO_SSO=1` (no provider: everyone added gets password access),
 `BENCH_NO_EGRESS=1`, `BENCH_NO_BACKUPS=1`, `BENCH_OLD_STEWARD=1`,
 `BENCH_EMPTY=1`, `BENCH_FRESH=1` (the platform's own projects alone, all
 well), `BENCH_PLATFORM_DOWN=1` (the portal's unit failed, alone or with
@@ -1814,7 +1629,7 @@ screenshots of the bench, in light and in dark:
   bench's next state write), `BENCH_ALERTING=failed` and `BENCH_FRESH=1`
   (the step that asks for the file first), the guide hidden and an item
   skipped;
-- the home page, Activity, People and Tokens; the home page under Platform,
+- the home page, Activity and Tokens; the home page under Platform,
   on a fresh machine (`BENCH_FRESH=1`) and with the portal down
   (`BENCH_PLATFORM_DOWN=1`); the six sections of a site, the Services
   canvas of `playground`, its sheet, a card dragged, of `mailer` and of
@@ -1825,18 +1640,13 @@ screenshots of the bench, in light and in dark:
 - at 1440 px, at 1024 px with the sidebar expanded, and at 390 px;
 - the collapsed sidebar, the switcher open, sign-in, an expired session, Secrets
   unlocked, the new token dialog;
-- Access as the owner, as an Admin and as a Viewer; *Add people* with a
-  company account, a domain and someone who gets password access, locked and
-  unlocked; the password dialog; making a site public, its confirmation, the
-  wait and the success, the restored failure; a site that opens with a code,
-  as the owner, an Admin and a Viewer; *Use a code* and *New code*, their
-  confirmation, the wait and the code shown;
-  a platform project;
-- a person's shell, signed in through the bench's provider page, as a
-  Viewer, a Developer and an Admin; the sign-in refusals, as
-  editor@example.com and stranger@example.com;
+- Access as the owner; *Give access*, locked and unlocked; the password
+  dialog; making a site public, its confirmation, the wait and the success,
+  the restored failure; a site that opens with a code; *Use a code* and *New
+  code*, their confirmation, the wait and the code shown; a platform
+  project;
 - the outages, on a second bench with `BENCH_NO_STEWARD=1
-  BENCH_NO_PORTAL=1`, and company sign-in not set up with `BENCH_NO_SSO=1`.
+  BENCH_NO_PORTAL=1`.
 
 Compare them from page to page: same header, same content width, same panel
 titles, same words for the same states.

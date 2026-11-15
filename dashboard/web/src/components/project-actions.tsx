@@ -39,12 +39,12 @@ export function ProjectActions({ slug, zone, disabled }: { slug: string; zone: s
     <>
       {!disabled && <RenameButton slug={slug} zone={zone} />}
       <RowMenu label={`More actions for ${slug}`}>
-        <WriteMenuItem onPress={() => open(disabled ? "enable" : "disable")} purpose={disabled ? "turn the project on" : "turn the project off"} resume={disabled ? "Turn on" : "Turn off"}>
+        <WriteMenuItem onPress={() => open(disabled ? "enable" : "disable")} purpose={disabled ? "turn the project on" : "turn the project off"}>
           {disabled ? <Power /> : <PowerOff />}
           {disabled ? "Turn on" : "Turn off"}
         </WriteMenuItem>
         <DropdownMenuSeparator />
-        <WriteMenuItem variant="destructive" onPress={() => open("remove")} purpose="delete the project" resume="Delete project">
+        <WriteMenuItem variant="destructive" onPress={() => open("remove")} purpose="delete the project">
           <Trash2 />
           Delete project
         </WriteMenuItem>

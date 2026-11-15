@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type SyntheticEvent } from "react"
-import { CircleCheck, CircleX, Dices, Eye, EyeOff, KeyRound, LoaderCircle, LockOpen } from "lucide-react"
+import { CircleCheck, CircleX, Dices, Eye, EyeOff, KeyRound, LoaderCircle } from "lucide-react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -10,7 +10,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Button, buttonVariants } from "@/components/ui/button"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogClose,
@@ -88,8 +88,8 @@ export function useOrigin(): { remember: () => void; focusReturn: FocusReturn } 
 // --- Unlocking -----------------------------------------------------------------
 
 /**
- * How long an unlock lasts, the same sentence for the owner's password and a
- * person's provider. What it opens is the button's to say: the unlock is
+ * How long an unlock lasts, the same sentence for a passkey and the
+ * password. What it opens is the button's to say: the unlock is
  * asked for when a write is pressed, and its title names what waits.
  */
 const UNLOCK_SCOPE = (how: string) => `${how} to make changes for 10 minutes.`
@@ -203,53 +203,6 @@ function PasskeyUnlockForm({
         </Button>
       </DialogFooter>
     </div>
-  )
-}
-
-/**
- * A person's unlock: no password, which they do not have, but a forced
- * sign-in at the provider, which the page leaves for and comes back from. The
- * steward opens ten minutes for that person's session alone.
- */
-export function PersonUnlockDialog({
-  open,
-  purpose = null,
-  providerName,
-  href,
-  onLeave,
-  onClose,
-  focusReturn,
-}: {
-  open: boolean
-  /** What waits for the unlock, for the title: "create a token". */
-  purpose?: string | null
-  providerName: string | null
-  href: string
-  /** Just before leaving for the provider: what the page keeps for the way back. */
-  onLeave?: () => void
-  onClose: () => void
-  focusReturn: FocusReturn
-}) {
-  const provider = providerName ?? "your identity provider"
-  const action = useRef<HTMLAnchorElement>(null)
-  return (
-    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent initialFocus={action} finalFocus={focusReturn} className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>{unlockTitle(purpose)}</DialogTitle>
-          <DialogDescription>{UNLOCK_SCOPE(`Sign in again with ${provider}`)} Only what your roles allow.</DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            Cancel
-          </Button>
-          <a ref={action} href={href} onClick={() => onLeave?.()} className={buttonVariants({ variant: "default" })}>
-            <LockOpen />
-            Sign in again
-          </a>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }
 

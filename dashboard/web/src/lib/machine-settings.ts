@@ -4,7 +4,7 @@
  * They are variables of the platform's flat files in /etc/sitesolide, which
  * the steward lists under the dashboard's and the portal's sites
  * (`PLATFORM_FILES` in src/secrets/scope.ts): how the monitor tells the owner
- * the server is down, who signs in, where the backups go. This module is the
+ * the server is down, the sign-in passwords, where the backups go. This module is the
  * one place that says which file and variables make up each setting, who
  * reads them and when a change applies, so that every page that offers one
  * says the same thing.
@@ -70,7 +70,6 @@ export type SettingId =
   | "format"
   | "dashboard-password"
   | "portal-password"
-  | "company-signin"
   | "offsite"
 
 /** How the page groups them: a panel each. */
@@ -183,25 +182,6 @@ export const SETTINGS: readonly MachineSetting[] = [
     applies: passwordTexts("portal", PASSWORD_HASH).warning,
     hint: "applies when the portal restarts",
     expected: true,
-  },
-  {
-    id: "company-signin",
-    group: "sign-in",
-    label: "Company sign-in",
-    slug: "portal",
-    file: "portal.env",
-    variables: [
-      { name: "OIDC_ISSUER", label: "Issuer", required: true },
-      { name: "OIDC_CLIENT_ID", label: "Client ID", required: true },
-      { name: "OIDC_CLIENT_SECRET", label: "Client secret", required: true },
-      { name: "OIDC_ALLOWED_DOMAINS", label: "Allowed domains", required: false },
-      { name: "OIDC_ADMIN_EMAILS", label: "Admin emails", required: false },
-      { name: "OIDC_PROVIDER_NAME", label: "Provider name", required: false },
-    ],
-    reader: "the portal",
-    applies: "The portal reads these when it starts: restart it to apply a change.",
-    hint: "applies when the portal restarts",
-    expected: false,
   },
   {
     id: "offsite",
@@ -470,8 +450,7 @@ function wordsOf(setting: MachineSetting, presence: Presence, restartPending: bo
  * and the webhook what the monitor says of them. `projects` is the steward's
  * listing (null while it loads), `discrepancies` the snapshot's, which stand in
  * for `alerting` on a server from before that field existed, and `alerting` the
- * snapshot's field (null when the monitor says nothing now). The owner's only:
- * a person's listing holds no platform project, so all of it reads `unknown`.
+ * snapshot's field (null when the monitor says nothing now).
  */
 export function settingState(
   projects: readonly ProjectView[] | null,

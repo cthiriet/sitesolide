@@ -28,8 +28,6 @@ import type {
   EntryResponse,
   GeneralAccess,
   GeneralResponse,
-  PeoplePageResponse,
-  PersonResponse,
   GenerateFormat,
   StoreChangeResponse,
   StoreRestoreResponse,
@@ -84,16 +82,16 @@ type Failure = { error?: string; message?: string }
 
 // --- Access -------------------------------------------------------------------
 //
-// The routes of `src/access/routes.ts`: a project's general access and people
-// with access, and the machine's People. The steward judges every change.
+// The routes of `src/access/routes.ts`: a project's general access and its
+// guests. The steward judges every change.
 
 export function readAccess(slug: string) {
   return callApi<AccessPageResponse & Failure>(`/api/access?slug=${encodeURIComponent(slug)}`)
 }
 
-/** Someone given access, or their role changed; for password access, the password comes back once. */
-export function putAccess(slug: string, who: string, role: string, expiresInS?: number | null) {
-  return send<EntryResponse & Failure>("PUT", "/api/access/entry", { slug, who, role, ...(expiresInS === undefined ? {} : { expiresInS }) })
+/** A guest given password access: the password comes back once. */
+export function putAccess(slug: string, who: string, expiresInS: number | null) {
+  return send<EntryResponse & Failure>("PUT", "/api/access/entry", { slug, who, expiresInS })
 }
 
 export function removeAccess(slug: string, who: string) {
@@ -108,18 +106,6 @@ export function removeAccess(slug: string, who: string) {
  */
 export function setGeneralAccess(slug: string, access: GeneralAccess, confirmation: string, renew = false) {
   return send<GeneralResponse & SecretsRefusal>("PUT", "/api/access/general", { slug, access, ...(renew ? { renew } : {}), confirmation })
-}
-
-export function readPeople() {
-  return callApi<PeoplePageResponse & Failure>("/api/people")
-}
-
-export function setCreate(email: string, create: boolean) {
-  return send<PersonResponse & Failure>("PUT", "/api/people/person", { email, create })
-}
-
-export function removePerson(email: string) {
-  return send<PersonResponse & Failure>("DELETE", "/api/people/person", { email })
 }
 
 // --- The secrets ---------------------------------------------------------------
@@ -197,9 +183,9 @@ export function changePassword(requested: WithoutToken<PasswordRequest>) {
 // --- A project's store ------------------------------------------------------------
 //
 // The routes `/api/secrets/store/*`, relayed to the steward with the owner's
-// token or a person's unlock. A value and a file's content travel in the body
+// token. A value and a file's content travel in the body
 // alone. None of these answers carries a value, but the reveal's, which only
-// the owner's unlocked dashboard receives: a person has no such route.
+// the owner's unlocked dashboard receives.
 
 /** Sets one variable in the store, created on the way if the project had none. */
 export function setStoreVariable({ slug, name, value }: { slug: string; name: string; value: string }) {
@@ -247,7 +233,7 @@ export function restoreStore({ slug, dryRun }: { slug: string; dryRun: boolean }
   return sendSecrets<StoreRestoreResponse>("POST", "/store/restore", { slug, ...(dryRun ? { dryRun: true } : {}) })
 }
 
-/** The owner's alone: a person's dashboard has no such route, and the steward refuses anyone else. */
+/** The owner's alone, unlocked: the steward refuses anyone else. */
 export function revealStoreValue({ slug, name }: { slug: string; name: string }) {
   return sendSecrets<StoreRevealResponse>("POST", "/store/value", { slug, name })
 }
@@ -271,11 +257,9 @@ export function readTokens() {
   return callApi<TeamPageResponse & SecretsRefusal>("/api/tokens")
 }
 
-/** `holder`: whose token the owner makes, `owner` or a person's email; a person's own carries none, it is theirs. */
-export function createToken(request: { label: string; holder?: string; expiresAt: number | null; scope: Scope }) {
+export function createToken(request: { label: string; expiresAt: number | null; scope: Scope }) {
   return send<CreatedTokenResponse & SecretsRefusal>("POST", "/api/tokens", {
     label: request.label,
-    ...(request.holder === undefined ? {} : { holder: request.holder }),
     expiresAt: request.expiresAt,
     scope: request.scope,
   })

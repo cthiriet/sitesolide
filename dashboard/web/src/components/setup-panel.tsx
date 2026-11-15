@@ -3,6 +3,7 @@ import { Ellipsis, EyeOff, SlidersHorizontal } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { RowMenuLink } from "@/components/data-table"
+import { InternalLink } from "@/components/navigation"
 import { InfoButton, Panel } from "@/components/page"
 import { SettingRow, useServerSetup } from "@/components/server-setup"
 import { pageUrl } from "@/lib/pages"
@@ -10,11 +11,12 @@ import { BREAK_GLASS } from "@/lib/password"
 import { sitesRows } from "@/lib/server-setup"
 
 /**
- * "Set up this server", under the strip of the home page: the owner's
- * alone, the same rows as the Server page but only what the server still
- * lacks, the optional ones skippable, the passwords as two links at its
- * foot, or the line that says a passkey replaced them. It goes once everything is set or skipped, or when the viewer hides
- * it; every setting stays on the Server page.
+ * "Set up this server", under the strip of the home page: the same rows as
+ * the Server page but only what the server still lacks, the optional ones
+ * skippable. At its foot, sign-in: the two passwords and a way to add a
+ * passkey, or, once one exists, the passwords as recovery only. It goes
+ * once everything is set or skipped, or when the viewer hides it; every
+ * setting stays on the Server page.
  */
 export function SetupPanel() {
   const setup = useServerSetup()
@@ -42,9 +44,8 @@ export function SetupPanel() {
         <InfoButton label="Why these are here">
           <p className="font-semibold text-strong">Why these are here</p>
           <p className="text-muted-foreground">
-            These settings belong to the server, not to a site: how it tells you it is down, where its backups go and who signs in. Only you
-            see this guide. It goes away once everything is set up or skipped, and the menu can hide it. Every setting stays on the Server
-            page.
+            These settings belong to the server, not to a site: how it tells you it is down, where its backups go and how you sign in. The
+            guide goes once everything is set up or skipped, and the menu can hide it. Every setting stays on the Server page.
           </p>
         </InfoButton>
       }
@@ -82,17 +83,20 @@ export function SetupPanel() {
         ))}
       </div>
       <div className="flex min-h-11 flex-wrap items-center gap-x-5 gap-y-1 border-t border-divider bg-cell px-4 py-2 text-[0.8125rem]">
-        <span className="mono-label">Passwords</span>
+        <span className="mono-label">{setup.inputs.passkeys === true ? "Passwords" : "Sign-in"}</span>
         {/* Once the owner holds a passkey, both passwords are refused: nothing to change, only what they are now. */}
         {setup.inputs.passkeys === true ? (
           <span className="text-pretty text-muted-foreground">{BREAK_GLASS}</span>
         ) : (
           <>
+            <InternalLink href={pageUrl({ name: "server" })} className="rounded-sm font-medium text-link underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-8 max-md:content-center">
+              Add a passkey
+            </InternalLink>
             <Button variant="link" onClick={() => setup.changePassword("dashboard-password")} className="h-auto p-0 text-[0.8125rem] max-md:min-h-8">
-              Change the dashboard password
+              Dashboard password
             </Button>
             <Button variant="link" onClick={() => setup.changePassword("portal-password")} className="h-auto p-0 text-[0.8125rem] max-md:min-h-8">
-              Change the portal password
+              Portal password
             </Button>
           </>
         )}

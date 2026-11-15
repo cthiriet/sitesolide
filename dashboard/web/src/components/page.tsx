@@ -1,6 +1,5 @@
 import { useEffect, useId, useRef, useState, type ComponentProps, type ReactNode } from "react"
 import {
-  CircleCheck,
   CircleX,
   CloudOff,
   Ellipsis,
@@ -614,29 +613,18 @@ function MobileMenu() {
 
 /**
  * The whole page's problems, under the header: data unreachable or stale;
- * and what became of an unlock, which every page may ask for: a person's
- * that came back refused, a lock refused, or what to press again once a
- * person's came back unlocked.
+ * and a lock the server refused.
  */
 function ShellBanners() {
   const { reading, failure, inProgress, age, refresh } = useData()
   const actions = useOptionalSecretsActions()
   const stale = reading !== null && reading.present && reading.stale
   const unreachable = failure && reading !== null
-  const unlockNotice = actions?.unlockNotice ?? null
   const lockError = actions?.lockError ?? ""
-  const resumeNote = actions?.resumeNote ?? null
-  if (!stale && !unreachable && unlockNotice === null && lockError === "" && resumeNote === null) return null
+  if (!stale && !unreachable && lockError === "") return null
   return (
     <div className={cn(CONTAINER, "grid gap-2 pt-4")}>
-      {unlockNotice !== null && <Banner tone="error">{unlockNotice}</Banner>}
       {lockError !== "" && <Banner tone="error">Couldn't lock changes. {lockError}</Banner>}
-      {resumeNote !== null && (
-        <p role="status" className="flex items-center gap-2 text-sm">
-          <CircleCheck aria-hidden="true" className="size-4 shrink-0 text-ok-text" />
-          {resumeNote}
-        </p>
-      )}
       {unreachable && (
         <Banner
           tone="attention"

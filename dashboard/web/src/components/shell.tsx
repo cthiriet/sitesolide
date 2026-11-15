@@ -1,16 +1,14 @@
 import { useEffect, useRef, useState, type ComponentType, type CSSProperties } from "react"
-import { ShieldOff } from "lucide-react"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { AppSidebar, MobileTabs } from "@/components/sidebar"
 import { useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
 import { Logo } from "@/components/logo"
 import { useNavigation } from "@/components/navigation"
-import { CONTAINER, EmptyState, HeaderSkeleton, PageBody, PageHeader, Panel, PanelSkeleton } from "@/components/page"
+import { CONTAINER, HeaderSkeleton, PanelSkeleton } from "@/components/page"
 import { HomePage } from "@/components/pages/home"
 import { ActivityPage } from "@/components/pages/activity"
 import { TokensPage } from "@/components/pages/tokens"
-import { PeoplePage } from "@/components/pages/people"
 import { ServerPage } from "@/components/pages/server"
 import { AccessSection } from "@/components/pages/site-access"
 import { BackupsSection } from "@/components/pages/site-backups"
@@ -19,7 +17,7 @@ import { ServicesSection } from "@/components/pages/site-services"
 import { SecretsSection } from "@/components/pages/site-secrets"
 import { SecretsActionsProvider } from "@/components/secrets-actions"
 import { SIDEBAR_WIDTH, readCollapsed, storeCollapsed } from "@/lib/sidebar"
-import { PAGE_TITLE_ID, mayOpen, pendingTitle, documentTitle, pageTitle, pageUrl, type MachinePage, type Page, type Section } from "@/lib/pages"
+import { PAGE_TITLE_ID, pendingTitle, documentTitle, pageTitle, pageUrl, type MachinePage, type Page, type Section } from "@/lib/pages"
 import { cn } from "@/lib/utils"
 
 const SITE_SECTIONS: Record<Section, ComponentType<{ slug: string }>> = {
@@ -33,39 +31,8 @@ const SITE_SECTIONS: Record<Section, ComponentType<{ slug: string }>> = {
 const MACHINE_PAGES: Record<MachinePage, ComponentType> = {
   home: HomePage,
   activity: ActivityPage,
-  people: PeoplePage,
   tokens: TokensPage,
   server: ServerPage,
-}
-
-/**
- * What someone reads where the page is not theirs: a person on the owner's
- * pages, or on a section their role there does not open. The service refuses
- * it too, this only says so instead of showing an error.
- */
-function NotYours({ page }: { page: Page }) {
-  return (
-    <>
-      <PageHeader title={pageTitle(page)} />
-      <PageBody>
-        <Panel>
-          {page.name === "site" ? (
-            <EmptyState icon={ShieldOff} title="Not part of your role">
-              Your role on {page.slug} doesn't open this section. Ask an Admin of {page.slug}, or the owner, for another role.
-            </EmptyState>
-          ) : page.name === "tokens" ? (
-            <EmptyState icon={ShieldOff} title="Tokens are for Developers and Admins">
-              You're a Viewer on every project.
-            </EmptyState>
-          ) : (
-            <EmptyState icon={ShieldOff} title="Only the owner's">
-              This part of the dashboard is the owner's. You see the projects you have a role on, from Sites.
-            </EmptyState>
-          )}
-        </Panel>
-      </PageBody>
-    </>
-  )
 }
 
 /**
@@ -75,8 +42,6 @@ function NotYours({ page }: { page: Page }) {
  * and with it any revealed value.
  */
 function CurrentPage({ page }: { page: Page }) {
-  const { identity } = useData()
-  if (!mayOpen(page, identity)) return <NotYours page={page} />
   if (page.name === "site") {
     const SectionPage = SITE_SECTIONS[page.section]
     return (

@@ -19,7 +19,6 @@ import {
   OFFSITE_FIELDS,
   PASSPHRASE_MIN,
   PASSPHRASE_VARIABLE,
-  SIGNIN_FIELDS,
   WEBHOOK_SERVICES,
   NOTHING_TO_SAVE,
   drawPassphrase,
@@ -44,11 +43,9 @@ import {
   previousStep,
   proofPhase,
   serviceName,
-  signinReady,
   stepPosition,
   wantedFormat,
   webhookCheck,
-  writesOf,
   MONITOR_PASS_MS,
   type FieldSpec,
   type FormatChoice,
@@ -239,9 +236,6 @@ function HintLines({ id, hints }: { id: string; hints: readonly Hint[] }) {
   )
 }
 
-/** The words of a person, not of a machine: an email, a provider's name. */
-const WORDS = new Set(["OIDC_ADMIN_EMAILS", "OIDC_PROVIDER_NAME"])
-
 /**
  * One field: its plain label, "Optional" beside it when it is, masked with
  * Show when it holds a secret, and nothing a password manager would offer.
@@ -289,7 +283,7 @@ function GuideField({
           data-guide-focus={focus || undefined}
           aria-invalid={error !== "" || undefined}
           aria-describedby={describedBy(hints.length > 0 && `${id}-hints`, spec.help !== undefined && `${id}-help`, error !== "" && `${id}-error`)}
-          className={cn("h-10 sm:h-9", WORDS.has(spec.variable) ? "" : "font-mono", spec.secret && "pr-11")}
+          className={cn("h-10 sm:h-9", "font-mono", spec.secret && "pr-11")}
         />
         {spec.secret && <ShowToggle visible={visible} onToggle={onToggle} what={spec.label.toLowerCase()} />}
       </div>
@@ -373,9 +367,6 @@ const TITLES: Readonly<Record<StepId, string>> = {
   "bucket-details": "Enter its details",
   passphrase: "Choose the encryption passphrase",
   "offsite-saved": "Offsite copy set",
-  "register-app": "Register the app",
-  "signin-details": "Enter its details",
-  "signin-saved": "Company sign-in set",
 }
 
 /** The same steps on a Change, which keeps what is not typed again. */
@@ -384,8 +375,6 @@ const CHANGE_TITLES: Readonly<Partial<Record<StepId, string>>> = {
   "bucket-details": "Change its details",
   passphrase: "The encryption passphrase",
   "offsite-saved": "Offsite copy changed",
-  "signin-details": "Change its details",
-  "signin-saved": "Company sign-in changed",
 }
 
 /** What the unlock is asked for, in its title: "Unlock to set the heartbeat URL". */
@@ -393,7 +382,6 @@ const PURPOSES: Readonly<Record<GuideId, string>> = {
   heartbeat: "set the heartbeat URL",
   webhook: "set the alert webhook",
   offsite: "set up the offsite copy",
-  "company-signin": "set up company sign-in",
 }
 
 /** What the file the gate asks for holds, in its help. */
@@ -401,7 +389,6 @@ const HOLDS: Readonly<Record<GuideId, string>> = {
   heartbeat: "the heartbeat and the alert webhook",
   webhook: "the heartbeat and the alert webhook",
   offsite: "the offsite copy's settings",
-  "company-signin": "company sign-in",
 }
 
 /** A step as the frame draws it: its title, what Enter and the primary button do, its buttons and its body. */
@@ -445,7 +432,7 @@ function GuideFlow({
   const body = useRef<HTMLDivElement>(null)
 
   const file = missingFile(id, state.presence)
-  const wide = file === null && (step === "bucket-details" || step === "signin-details")
+  const wide = file === null && step === "bucket-details"
 
   useEffect(() => {
     shape.current = { busy, wide }
@@ -1020,99 +1007,6 @@ function GuideFlow({
               <p className="text-xs text-muted-foreground">
                 Keep the passphrase where you saved it. Changing it later without adding the new one to the backup repository first cuts the
                 offsite copy off.
-              </p>
-            </>
-          ),
-        }
-
-      // --- Company sign-in
-      case "register-app":
-        return {
-          title: TITLES[step],
-          onSubmit: () => go(nextStep(id, step)),
-          foot: (
-            <>
-              {back()}
-              <Grow />
-              {submit("Next")}
-            </>
-          ),
-          body: (
-            <>
-              <p>At your identity provider (Google Workspace, Microsoft Entra, Okta or any OpenID Connect one), create an application for the portal.</p>
-              <p>Set its redirect address to the portal's, then copy its issuer address, client ID and client secret.</p>
-              <p className="text-xs text-muted-foreground">People then sign in with their company account.</p>
-            </>
-          ),
-        }
-      case "signin-details": {
-        const writes = writesOf(fields, SIGNIN_FIELDS)
-        const nothing = writes.length === 0
-        const ready = signinReady(fields, state.present) && !nothing
-        const [issuer, client, secret, domains, admins, provider] = SIGNIN_FIELDS
-        const one = (spec: FieldSpec, extra: { hints?: Hint[]; focus?: boolean; error?: string } = {}) => (
-          <GuideField
-            spec={spec}
-            value={value(spec.variable)}
-            onChange={set(spec.variable)}
-            keep={keep(spec.variable)}
-            visible={visible[spec.variable] === true}
-            onToggle={toggle(spec.variable)}
-            {...extra}
-          />
-        )
-        const issuerProblem = httpsProblem(value(issuer!.variable))
-        return {
-          title: (change && CHANGE_TITLES[step]) || TITLES[step],
-          onSubmit: () => {
-            if (!ready) return
-            save(writes, () => {
-              setFields({})
-              announce("Company sign-in saved. The portal uses it when it restarts.")
-              go("signin-saved")
-            })
-          },
-          foot: (
-            <>
-              {back()}
-              <Grow />
-              {submit("Save and continue", { ready, write: true })}
-            </>
-          ),
-          body: (
-            <div className="grid gap-3.5">
-              {change && <p>Change what you need. A field you leave empty stays as it is.</p>}
-              {one(issuer!, { focus: true, hints: issuerProblem === null ? [] : [{ text: issuerProblem, tone: "attention" }] })}
-              <div className="grid gap-3.5 sm:grid-cols-2 sm:gap-x-3">
-                {one(client!)}
-                {one(secret!)}
-              </div>
-              {one(domains!)}
-              <div className="grid gap-3.5 sm:grid-cols-2 sm:gap-x-3">
-                {one(admins!)}
-                {one(provider!)}
-              </div>
-              {nothing && change && <p className="text-xs text-muted-foreground">{NOTHING_TO_SAVE}</p>}
-            </div>
-          ),
-        }
-      }
-      case "signin-saved":
-        return {
-          title: (change && CHANGE_TITLES[step]) || TITLES[step],
-          onSubmit: onClose,
-          foot: (
-            <>
-              <Grow />
-              {submit("Done")}
-            </>
-          ),
-          body: (
-            <>
-              <Saved>Company sign-in saved.</Saved>
-              <p>
-                The portal reads these when it starts: restart it to apply a change. Until then, nothing changes for visitors, and the row on the
-                Server page says Restart pending.
               </p>
             </>
           ),

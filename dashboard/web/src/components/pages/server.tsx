@@ -4,19 +4,20 @@ import { useData } from "@/components/data"
 import { InternalLink } from "@/components/navigation"
 import { Banner, ErrorState, PageBody, PageHeader, Panel, PanelSkeleton, useRetry } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
-import { PasskeysRow, ServerSetupProvider, SettingRow, useServerSetup } from "@/components/server-setup"
+import { PasskeysRow, RecoveryRow, ServerSetupProvider, SettingRow, useServerSetup } from "@/components/server-setup"
 import { PasskeysPanel } from "@/components/passkeys"
 import { siteUrl } from "@/lib/pages"
 import { UNREACHABLE } from "@/lib/secrets"
 import { SERVER_GROUPS, serverRow, sitesRowIds } from "@/lib/server-setup"
 
 /**
- * The server's own settings, the owner's alone: how it tells you it is
- * down, who signs in, where its backups go. Every setting, done or not,
- * always in the same order, in three panels each saying when a change
- * applies; the same rows as the setup guide on Sites, which lists only
- * what is missing. The files they live in stay one link away, in the
- * Secrets of the dashboard site, for repairs.
+ * The server's own settings: how it tells you it is down, how you sign
+ * in, where its backups go. Every setting, done or not, always in the same
+ * order, in three panels; the same rows as the setup guide on Sites, which
+ * lists only what is missing. Sign-in leads with the passkeys: once one
+ * exists, the two passwords are one muted row, for recovery only. The
+ * files they live in stay one link away, in the Secrets of the dashboard
+ * site, for repairs.
  */
 function Content() {
   const setup = useServerSetup()
@@ -78,13 +79,15 @@ function Content() {
         </p>
       )}
       {SERVER_GROUPS.map((group) => (
-        <Panel key={group.id} full title={group.title} actions={<span className="text-xs text-muted-foreground">{group.note}</span>}>
+        <Panel key={group.id} full title={group.title} actions={group.note === null ? undefined : <span className="text-xs text-muted-foreground">{group.note}</span>}>
           <div role="list" aria-label={group.title} className="@container/settings">
-            {/* The owner's passkeys first once they hold one: the two passwords below are then the break-glass alone. */}
-            {group.id === "sign-in" && passkeys.registered && <PasskeysRow count={passkeys.count} />}
-            {group.rows.map((id) => (
-              <SettingRow key={id} view={serverRow(id, setup.inputs)} place="server" />
-            ))}
+            {/* Sign-in leads with the passkeys: with one, the two passwords are one recovery row; without, a call to add one. */}
+            {group.id === "sign-in" && <PasskeysRow count={passkeys.registered ? passkeys.count : 0} />}
+            {group.id === "sign-in" && passkeys.registered ? (
+              <RecoveryRow />
+            ) : (
+              group.rows.map((id) => <SettingRow key={id} view={serverRow(id, setup.inputs)} place="server" />)
+            )}
           </div>
         </Panel>
       ))}
@@ -107,7 +110,7 @@ export function ServerPage() {
         title="Server"
         intro={
           <>
-            <p>The server's own settings: how it tells you it is down, who signs in, where its backups go. Only you see this page.</p>
+            <p>The server's own settings: how it tells you it is down, how you sign in, where its backups go.</p>
             <p className="text-muted-foreground">They belong to the server, not to a site: no site reads them.</p>
             <p className="text-muted-foreground">
               Every setting stays here for good. When the setup guide is shown on Sites, it walks through the ones still missing.

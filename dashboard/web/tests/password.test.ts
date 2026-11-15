@@ -7,7 +7,6 @@ import {
   passwordTexts,
   checkEntry,
   BREAK_GLASS,
-  breakGlassLine,
   isOwnerPassword,
   offersPasswordChange,
 } from "../src/lib/password"
@@ -22,15 +21,15 @@ describe("what the change says", () => {
   test("the dashboard: unlocking changes at once, sign-in on the restart, which closes the sessions", () => {
     const texts = passwordTexts("dashboard", "PASSWORD_HASH")
     expect(texts.title).toBe("Change the dashboard password")
-    expect(texts.warning).toContain("right away")
+    expect(texts.warning).toContain("at once")
     expect(texts.warning).toContain("until the dashboard restarts")
     expect(texts.warning).toContain("signs everyone out")
   })
 
-  test("the portal: every personal site asks for it after its restart", () => {
+  test("the portal: restricted sites take it after its restart", () => {
     const texts = passwordTexts("portal", "PASSWORD_HASH")
     expect(texts.title).toBe("Change the portal password")
-    expect(texts.warning).toContain("Every personal site")
+    expect(texts.warning).toContain("Restricted sites")
     expect(texts.warning).toContain("once the portal restarts")
   })
 
@@ -92,10 +91,8 @@ describe("once the owner holds a passkey", () => {
     expect([dashboard, portal, other, monitor].map((target) => offersPasswordChange(target, false))).toEqual([true, true, true, true])
   })
 
-  test("what the page says in their place names the way back", () => {
-    expect(BREAK_GLASS).toContain("passkey")
-    expect(BREAK_GLASS).toContain("sitesolide passkey remove")
-    expect(breakGlassLine("portal")).toContain("The portal password works again")
+  test("what the page says in their place: recovery only", () => {
+    expect(BREAK_GLASS).toBe("Recovery only while a passkey exists.")
   })
 })
 

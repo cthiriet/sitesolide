@@ -13,14 +13,14 @@ import { cn } from "@/lib/utils"
 
 /**
  * The one detail pattern, for a list whose rows are not pages: Tokens,
- * People, Activity, a snapshot, a ranking's *Show all*. The
+ * Activity, a snapshot, a ranking's *Show all*. The
  * shadcn sheet, from the right at 440 px on a computer, from the bottom at
  * up to 90 % of the height on a phone. Its head: the object's name, its
  * state, its actions; its body: every field as keys and values
  * (`SheetFacts`), then *Recent*, the object's last ten lines of Activity,
  * and *All activity*.
  *
- * Its address is the page's: `?token=<id>`, `?person=`, `?event=`
+ * Its address is the page's: `?token=<id>`, `?event=`
  * (`useSheet`), so that Back closes it and a link opens it.
  */
 

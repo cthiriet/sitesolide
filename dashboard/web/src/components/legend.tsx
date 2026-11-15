@@ -76,9 +76,9 @@ export function KindIcon({ kind, detail, className }: { kind: Kind; detail?: str
  * section's words in its tooltip, the exempt paths of a restricted site, the
  * code of one that opens with it, both sides of a disagreement.
  */
-export function AccessIcon({ access, slug, className }: { access: Access; slug?: string; className?: string }) {
+export function AccessIcon({ access, className }: { access: Access; className?: string }) {
   const key = accessKey(access)
-  return <LegendIcon icon={ACCESS_ICON[key]} lines={accessLines(access, slug)} className={cn(ACCESS_COLOUR[key], className)} />
+  return <LegendIcon icon={ACCESS_ICON[key]} lines={accessLines(access)} className={cn(ACCESS_COLOUR[key], className)} />
 }
 
 /** An icon and its word, as a facet menu or a sheet lists it: the legend itself. */

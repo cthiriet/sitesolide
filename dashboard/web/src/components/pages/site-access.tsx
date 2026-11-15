@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { GeneralAccessLine, GeneralAccessPanel } from "@/components/access-general"
-import { PeopleWithAccess } from "@/components/access-people"
+import { Guests } from "@/components/access-guests"
 import { useData } from "@/components/data"
-import { TEXT_LINK } from "@/components/link"
-import { InternalLink } from "@/components/navigation"
 import { Banner, ErrorState, Panel, PanelSkeleton } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { SitePage } from "@/components/site"
@@ -21,22 +19,15 @@ import {
   sharedReason,
   siteAddresses,
   stewardChoices,
-  type GeneralReader,
 } from "@/lib/access"
-import { isPerson, roleOn } from "@/lib/identity"
-import { siteUrl } from "@/lib/pages"
 import type { AccessPageResponse, Site } from "@/lib/types"
-
-/** The portal's own project, whose Secrets hold portal.env, where company sign-in is set up. */
-const PORTAL_SLUG = "portal"
 
 type Loaded = { state: "loading" } | { state: "failed"; message: string } | { state: "ready"; page: AccessPageResponse }
 
 /**
- * Who has access, read when the section opens and again with every snapshot:
- * a change made from another tab, or a password access that just expired,
- * must not stay shown as it was. The owner and everyone with a role from
- * Viewer up read it; only the owner and the project's Admins change it.
+ * The guests, read when the section opens and again with every snapshot: a
+ * change made from another tab, or a password access that just expired, must
+ * not stay shown as it was.
  */
 function useAccess(slug: string, enabled: boolean) {
   const { generation, sessionExpired } = useData()
@@ -63,9 +54,9 @@ function useAccess(slug: string, enabled: boolean) {
 }
 
 /**
- * A project of the platform, the portal, the dashboard, the landing: nobody
- * is given a role on it, so its Access says how it opens, and why there is
- * nobody to add.
+ * A project of the platform, the portal, the dashboard, the landing: it
+ * takes no guest, so its Access says how it opens, and why there is nobody
+ * to add.
  */
 function PlatformContent({ site }: { site: Site }) {
   return (
@@ -76,14 +67,10 @@ function PlatformContent({ site }: { site: Site }) {
 }
 
 function Content({ site }: { site: Site }) {
-  const { now, offset, identity, snapshot } = useData()
+  const { now, offset, snapshot } = useData()
   const actions = useSecretsActions()
   const serverNow = now + offset
   const slug = site.slug
-  const person = isPerson(identity)
-  const role = roleOn(identity, slug)
-  const admin = !person || role === "admin"
-  const reader: GeneralReader = !person ? "owner" : admin ? "admin" : "reader"
   const platform = isPlatform(slug, snapshot?.zone ?? null)
   const { loaded, reload } = useAccess(slug, !platform)
   const page = loaded.state === "ready" ? loaded.page : null
@@ -93,35 +80,21 @@ function Content({ site }: { site: Site }) {
   const state = generalState(site)
   const addresses = siteAddresses(site)
   const steward = stewardChoices(page?.general ?? null)
-  const options = generalOptions(state, steward, admin)
-  const stewardReason = admin ? sharedReason(state, steward) : null
+  const options = generalOptions(state, steward)
+  const stewardReason = sharedReason(state, steward)
   const problem = page === null ? null : readingProblem(page.portal)
 
   return (
     <>
       {problem !== null && <Banner tone={problem.tone}>{problem.text}</Banner>}
 
-      {page !== null && !person && !page.signIn.configured && (
-        <Banner tone="attention">
-          Company sign-in isn't set up on this server, so everyone you add gets password access, and nobody but you signs
-          in to the dashboard. Set <code className="font-mono text-xs">OIDC_ISSUER</code>,{" "}
-          <code className="font-mono text-xs">OIDC_CLIENT_ID</code> and <code className="font-mono text-xs">OIDC_CLIENT_SECRET</code>{" "}
-          in the portal's{" "}
-          <InternalLink href={siteUrl(PORTAL_SLUG, "secrets")} className={TEXT_LINK}>
-            portal.env
-          </InternalLink>
-          , then restart it.
-        </Banner>
-      )}
-
       <GeneralAccessPanel
         slug={slug}
         state={state}
         options={options}
-        reader={reader}
-        renewable={mayRenew(state, steward, admin)}
+        renewable={mayRenew(state, steward)}
         stewardReason={stewardReason}
-        failedNote={admin && loaded.state === "failed" ? "Shown as last read: it can't change until the server answers." : null}
+        failedNote={loaded.state === "failed" ? "Shown as last read: it can't change until the server answers." : null}
         addresses={addresses}
         locked={!actions.state.open}
         onChoose={(target) =>
@@ -129,7 +102,7 @@ function Content({ site }: { site: Site }) {
             slug,
             target,
             state.current,
-            target === "restricted" && page !== null ? emptyListWarning(slug, page.entries.length, page.signIn.admins) : null,
+            target === "restricted" && page !== null ? emptyListWarning(slug, page.entries.length) : null,
             addresses,
           )
         }
@@ -138,13 +111,13 @@ function Content({ site }: { site: Site }) {
       {loaded.state === "loading" ? (
         <PanelSkeleton lines={5} />
       ) : page === null ? (
-        <Panel title="People with access">
-          <ErrorState title="Can't read who has access" onRetry={() => void reload(true)}>
+        <Panel title="Guests">
+          <ErrorState title="Can't read the guests" onRetry={() => void reload(true)}>
             {loaded.state === "failed" ? loaded.message : null}
           </ErrorState>
         </Panel>
       ) : (
-        <PeopleWithAccess page={page} general={state.current} now={serverNow} onChanged={() => void reload()} />
+        <Guests page={page} general={state.current} now={serverNow} onChanged={() => void reload()} />
       )}
     </>
   )
@@ -152,11 +125,10 @@ function Content({ site }: { site: Site }) {
 
 /**
  * A site's Access, under `/site/access/?s=<slug>`: its general access, how
- * anyone may open it; then its people with access, each with a role, and the
- * field that adds someone. The owner and the project's Admins change them,
- * under their unlock for what lets more in, asked for when pressed; a Viewer
- * or a Developer reads both, and whom to ask. Its changes are in Activity,
- * behind the header's History.
+ * anyone may open it; then its guests, each with a password of their own,
+ * and the field that gives one. What lets more in waits for the unlock,
+ * asked for when pressed. Its changes are in Activity, behind the header's
+ * History.
  */
 export function AccessSection({ slug }: { slug: string }) {
   const { snapshot } = useData()
@@ -165,7 +137,7 @@ export function AccessSection({ slug }: { slug: string }) {
     <SitePage
       slug={slug}
       section="access"
-      intro={<p>Who can open {slug}, and what each person can do with it here. Changes apply from each person's next visit.</p>}
+      intro={<p>Who can open {slug}: everyone, whoever has its preview code, or only you and the guests you give a password.</p>}
       history={platform ? undefined : { target: slug, type: "access" }}
       skeleton={<PanelSkeleton lines={5} />}
     >

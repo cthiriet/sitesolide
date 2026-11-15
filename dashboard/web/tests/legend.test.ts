@@ -36,7 +36,6 @@ describe("a general access as an icon", () => {
     const exempt = siteAccess(site({ portal: { wanted: true, installed: true, exemptions: ["/api/webhooks/*", "/health"] } }))
     expect(accessLines(exempt)).toEqual(["Restricted", ACCESS_WORDS.restricted.description, `${EXEMPT_LINE}: /api/webhooks/*, /health`])
     expect(accessLines(siteAccess(site({ lock: { closed: true, code: "K7Q2", url: null } })))).toEqual(["Anyone with the code", "Code: K7Q2"])
-    expect(accessLines({ kind: "code", code: null, url: null }, "cms")).toEqual(["Anyone with the code", "An Admin of cms, or the owner, has the code."])
     expect(accessLines(siteAccess(site({ portal: { wanted: true, installed: false, exemptions: [] } })))).toEqual([
       "Access mismatch",
       "Restricted in sitesolide.json, public on the server",

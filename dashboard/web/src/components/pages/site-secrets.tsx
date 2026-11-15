@@ -7,7 +7,6 @@ import { Code, StoreSection } from "@/components/secrets-store"
 import { SitePage, useSite } from "@/components/site"
 import { readingSentence } from "@/lib/machine-settings"
 import { UNREACHABLE } from "@/lib/secrets"
-import { isPerson, roleOn } from "@/lib/identity"
 
 /*
  * Nothing here knows any site in particular. The platform deploys sites whose
@@ -21,17 +20,10 @@ import { isPerson, roleOn } from "@/lib/identity"
  * where its history is. The unlock is asked for when a write is pressed.
  */
 function Intro({ slug }: { slug: string }) {
-  const { identity } = useData()
   const { project } = useSite(slug)
   // The dashboard and the portal, which have no store, list files: the monitor's and the backups' are read at their own pace.
   const files = project !== null && project.store === null ? project.files.map((file) => file.name) : []
-  const role = roleOn(identity, slug)
-  const reads =
-    role === "developer" || role === "admin"
-      ? "Only the owner of the server reads a value back."
-      : isPerson(identity)
-        ? ""
-        : "Only you reveal a value, for 30 seconds, and every reveal is journaled."
+  const reads = "Only you reveal a value, for 30 seconds, and every reveal is journaled."
   return (
     <>
       <p>
@@ -43,8 +35,7 @@ function Intro({ slug }: { slug: string }) {
 }
 
 function Content({ slug }: { slug: string }) {
-  const { secrets, identity } = useData()
-  const person = isPerson(identity)
+  const { secrets } = useData()
   const { project, site } = useSite(slug)
   const store = project?.store ?? null
   const shown = store !== null || (project !== null && project.files.length > 0)
@@ -87,14 +78,10 @@ function Content({ slug }: { slug: string }) {
             inProgress={retrying}
           >
             {problem === UNREACHABLE ? (
-              person ? (
-                "The rest of the dashboard works, but no secret can be read or changed until it answers. If it lasts, tell the owner of the server."
-              ) : (
-                <>
-                  The rest of the dashboard works, but no secret can be read or changed until it answers. Check{" "}
-                  <code className="font-mono text-xs">systemctl status sitesolide-steward</code> on the server.
-                </>
-              )
+              <>
+                The rest of the dashboard works, but no secret can be read or changed until it answers. Check{" "}
+                <code className="font-mono text-xs">systemctl status sitesolide-steward</code> on the server.
+              </>
             ) : (
               problem
             )}

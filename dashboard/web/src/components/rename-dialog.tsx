@@ -37,7 +37,7 @@ export function RenameButton({ slug, zone }: { slug: string; zone: string | null
         variant="outline"
         size="sm"
         purpose="rename the project"
-        resume="Rename"
+       
         onPress={() => {
           setOpening((count) => count + 1)
           setOpen(true)
@@ -162,7 +162,7 @@ function RenameFlow({ slug, zone, busy, onClose }: { slug: string; zone: string 
       <DialogHeader>
         <DialogTitle>{inProgress ? `Renaming ${slug}` : `Rename ${slug}`}</DialogTitle>
         <DialogDescription className="text-pretty">
-          The name is also its address. Its files, data, secrets, people with access and tokens follow; its service stops for a few seconds. The old address stops answering.
+          The name is also its address. Its files, data, secrets, guests and tokens follow; its service stops for a few seconds. The old address stops answering.
         </DialogDescription>
       </DialogHeader>
 

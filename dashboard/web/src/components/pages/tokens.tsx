@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react"
-import { ChevronDown, ChevronUp, History, KeySquare, Pause, Plus, SearchX, Trash2 } from "lucide-react"
+import { ChevronDown, ChevronUp, History, KeySquare, Plus, SearchX, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { CHIP } from "@/components/access-word"
 import { useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
-import { CellText, DataTable, RowButton, RowMenu, RowMenuLink, type Column } from "@/components/data-table"
+import { DataTable, RowButton, RowMenu, RowMenuLink, type Column } from "@/components/data-table"
 import { DetailSheet, SheetFacts, SheetRecent, SheetSection, useSheet, type Fact } from "@/components/detail-sheet"
 import { FilterBar, useListState } from "@/components/filter-bar"
 import { ProjectLink } from "@/components/project-link"
@@ -13,10 +13,9 @@ import { Banner, Count, ErrorState, InlineEmpty, PageBody, PageHeader, Panel, Pa
 import { WriteButton, WriteMenuItem } from "@/components/unlock"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { CreateTokenDialog, RevokeTokenDialog } from "@/components/token-dialogs"
-import { readPeople, readTokens, revokeToken } from "@/lib/api"
+import { readTokens, revokeToken } from "@/lib/api"
 import { ago, dateTime, fromNow } from "@/lib/format"
 import { historyUrl } from "@/lib/history"
-import { isPerson } from "@/lib/identity"
 import { FILTER_BAR_FROM, type ListSpec } from "@/lib/list-state"
 import {
   PERMISSION_WORDS,
@@ -25,35 +24,31 @@ import {
   isLive,
   lastUsed,
   liveReach,
-  ownerLabel,
+  madeFor,
   permissionChips,
   projectChips,
   splitTokens,
-  tokenHolders,
   tokenMatches,
   tokenPermissions,
   tokenProjects,
   tokenStatus,
-  type Permission,
+  type PermissionKey,
   type Reach,
-  type Rights,
 } from "@/lib/tokens"
-import type { Roles, TeamPageResponse, TokenView } from "@/lib/types"
+import type { TeamPageResponse, TokenView } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /**
  * The tokens that deploy without SSH: one line each, OpenRouter's keys
- * table, its details in a sheet. Machine level, beside People.
+ * table, its details in a sheet. Machine level.
  *
  * The page reads `/api/tokens` itself: the tokens are the steward's, and change
  * only through this page. Creating one asks for the unlock when *New token*
  * is pressed; revoking does not, so that a stolen token is closed without
  * looking for a password first.
  *
- * The owner sees every token, each with whose it is, and makes one for
- * themselves or for a person of People. A person sees theirs alone, those the
- * owner made for them included, mints them under their own unlock, a forced
- * sign-in at their provider, and never beyond their roles.
+ * Every token is the owner's, for themselves and their agents. A token
+ * deploys; it never gives anyone access to a site.
  *
  * What tokens did is in Activity: the header's *History*, and each token's
  * sheet, its last ten actions. Revoked and expired tokens fold under the
@@ -65,23 +60,12 @@ type Loaded = { state: "loading" } | { state: "failed" } | { state: "ready"; lis
 /** The list's address: a search, from ten tokens. */
 const SPEC: ListSpec = {}
 
-/** The pause glyph of a project or a permission a person's token holds but may not use now. */
-function PauseGlyph({ className }: { className?: string }) {
-  return <Pause aria-hidden="true" className={cn("size-3 shrink-0", className)} strokeWidth={2.25} />
-}
-
-/** A permission's chip: its short word, its sentence on hover; paused, muted with the glyph and why. */
-function PermissionChip({ permission, ended }: { permission: Permission; ended: boolean }) {
-  const words = PERMISSION_WORDS[permission.key]
-  const paused = permission.pause !== null
+/** A permission's chip: its short word, its sentence on hover. */
+function PermissionChip({ permission, ended }: { permission: PermissionKey; ended: boolean }) {
+  const words = PERMISSION_WORDS[permission]
   return (
-    <span
-      title={paused ? `${words.title} (paused: ${permission.pause})` : words.title}
-      className={cn(CHIP, "font-normal", paused ? "border-dashed text-muted-foreground" : ended ? "text-muted-foreground" : "text-secondary-foreground")}
-    >
-      {paused && <PauseGlyph />}
+    <span title={words.title} className={cn(CHIP, "font-normal", ended ? "text-muted-foreground" : "text-secondary-foreground")}>
       {words.chip}
-      {paused && <span className="sr-only"> (paused: {permission.pause})</span>}
     </span>
   )
 }
@@ -97,8 +81,7 @@ function More({ count, title }: { count: number; title: string }) {
   )
 }
 
-const reachText = (reach: readonly Reach[]) =>
-  reach.map(({ slug, detail, paused }) => (detail === null ? slug : `${slug} (${paused ? `paused: ${detail}` : detail})`)).join(", ")
+const reachText = (reach: readonly Reach[]) => reach.map(({ slug, detail }) => (detail === null ? slug : `${slug} (${detail})`)).join(", ")
 
 /** A revoked or expired token's cells are history: muted, whatever they say. */
 function ProjectsCell({ reach, ended }: { reach: readonly Reach[]; ended: boolean }) {
@@ -108,11 +91,9 @@ function ProjectsCell({ reach, ended }: { reach: readonly Reach[]; ended: boolea
     <span title={reachText(reach)} className={cn("flex min-w-0 items-center gap-1.5", ended && "text-muted-foreground")}>
       <span className="flex min-w-0 items-center truncate">
         {shown.map((one, index) => (
-          <span key={one.slug} className={cn("inline-flex min-w-0 items-center gap-1", one.paused && "text-muted-foreground")}>
+          <span key={one.slug} className="inline-flex min-w-0 items-center gap-1">
             {index > 0 && <span className="text-muted-foreground">,&nbsp;</span>}
-            {one.paused && <PauseGlyph />}
             <ProjectLink slug={one.slug} />
-            {one.paused && <span className="sr-only"> (paused: {one.detail})</span>}
           </span>
         ))}
       </span>
@@ -121,15 +102,15 @@ function ProjectsCell({ reach, ended }: { reach: readonly Reach[]; ended: boolea
   )
 }
 
-function PermissionsCell({ permissions, ended }: { permissions: readonly Permission[]; ended: boolean }) {
+function PermissionsCell({ permissions, ended }: { permissions: readonly PermissionKey[]; ended: boolean }) {
   // Nothing beyond deploying is every token's default: quiet.
   if (permissions.length === 0) return <span className="sr-only">None</span>
   const { shown, more } = permissionChips(permissions)
-  const all = permissions.map((one) => (one.pause === null ? PERMISSION_WORDS[one.key].title : `${PERMISSION_WORDS[one.key].title} (paused: ${one.pause})`)).join(", ")
+  const all = permissions.map((key) => PERMISSION_WORDS[key].title).join(", ")
   return (
     <span className="flex min-w-0 items-center gap-1.5">
       {shown.map((one) => (
-        <PermissionChip key={one.key} permission={one} ended={ended} />
+        <PermissionChip key={one} permission={one} ended={ended} />
       ))}
       <More count={more} title={all} />
     </span>
@@ -138,23 +119,7 @@ function PermissionsCell({ permissions, ended }: { permissions: readonly Permiss
 
 const EXPIRY_TONE = { plain: "text-foreground", muted: "text-muted-foreground", attention: "font-medium text-attention-text" } as const
 
-/** Every live permission and project paused, nothing left to deploy now: said once beside the name. */
-function fullyPaused(reach: readonly Reach[], permissions: readonly Permission[]): boolean {
-  const creates = permissions.some((one) => one.key === "create" && one.pause === null)
-  return reach.length > 0 && reach.every((one) => one.paused) && !creates
-}
-
-function columns({
-  owner,
-  now,
-  rightsOf,
-  open,
-}: {
-  owner: boolean
-  now: number
-  rightsOf: (token: TokenView) => Rights | null
-  open: (token: TokenView) => void
-}): Column<TokenView>[] {
+function columns({ now, open }: { now: number; open: (token: TokenView) => void }): Column<TokenView>[] {
   return [
     {
       key: "name",
@@ -163,50 +128,26 @@ function columns({
       slot: "primary",
       cell: (token) => {
         const live = isLive(token, now)
-        const rights = rightsOf(token)
-        const paused = live && fullyPaused(liveReach(token, rights?.roles ?? null), tokenPermissions(token, rights))
         return (
-          <>
-            <RowButton onClick={() => open(token)} className={cn(!live && "font-normal text-muted-foreground")}>
-              {token.label}
-            </RowButton>
-            {paused && (
-              <StateLabel tone="neutral" title="Every project it deploys is paused: its owner's role there is below Developer now.">
-                Paused
-              </StateLabel>
-            )}
-          </>
+          <RowButton onClick={() => open(token)} className={cn(!live && "font-normal text-muted-foreground")}>
+            {token.label}
+          </RowButton>
         )
       },
     },
-    ...(owner
-      ? [
-          {
-            key: "owner",
-            head: "Owner",
-            width: "minmax(140px,0.9fr)",
-            slot: "meta" as const,
-            cell: (token: TokenView) => (
-              <CellText title={ownerLabel(token)} className={isLive(token, now) ? "text-secondary-foreground" : "text-muted-foreground"}>
-                {ownerLabel(token)}
-              </CellText>
-            ),
-          },
-        ]
-      : []),
     {
       key: "projects",
       head: "Projects",
       width: "minmax(130px,1fr)",
       slot: "meta",
-      cell: (token) => <ProjectsCell reach={liveReach(token, rightsOf(token)?.roles ?? null)} ended={!isLive(token, now)} />,
+      cell: (token) => <ProjectsCell reach={liveReach(token)} ended={!isLive(token, now)} />,
     },
     {
       key: "permissions",
       head: "Permissions",
       width: "minmax(190px,1.1fr)",
       slot: "hide",
-      cell: (token) => <PermissionsCell permissions={tokenPermissions(token, rightsOf(token))} ended={!isLive(token, now)} />,
+      cell: (token) => <PermissionsCell permissions={tokenPermissions(token)} ended={!isLive(token, now)} />,
     },
     {
       key: "used",
@@ -238,20 +179,15 @@ function columns({
   ]
 }
 
-/** A token's sheet: whose it is and who made it, its dates, each project and permission explained, its last actions. */
+/** A token's sheet: its dates, each project and permission explained, its last actions. */
 function TokenSheet({
   token,
   now,
-  owner,
-  rights,
   onClose,
   onRevoke,
 }: {
   token: TokenView | null
   now: number
-  /** The owner reads it; a person reads their own. */
-  owner: boolean
-  rights: Rights | null
   onClose: () => void
   onRevoke: (token: TokenView) => void
 }) {
@@ -263,37 +199,23 @@ function TokenSheet({
       title={token?.label ?? ""}
       state={status === null ? undefined : <StateLabel tone={status.tone}>{status.label}</StateLabel>}
     >
-      {token !== null && <TokenDetails token={token} now={now} owner={owner} rights={rights} onRevoke={onRevoke} />}
+      {token !== null && <TokenDetails token={token} now={now} onRevoke={onRevoke} />}
     </DetailSheet>
   )
 }
 
-function TokenDetails({
-  token,
-  now,
-  owner,
-  rights,
-  onRevoke,
-}: {
-  token: TokenView
-  now: number
-  owner: boolean
-  rights: Rights | null
-  onRevoke: (token: TokenView) => void
-}) {
-  const reach = liveReach(token, rights?.roles ?? null)
-  const permissions = tokenPermissions(token, rights)
+function TokenDetails({ token, now, onRevoke }: { token: TokenView; now: number; onRevoke: (token: TokenView) => void }) {
+  const reach = liveReach(token)
+  const permissions = tokenPermissions(token)
+  const made = madeFor(token)
   const live = isLive(token, now)
   const when = (at: number) => (
     <>
       {dateTime(at)} <span className="text-muted-foreground">({at > now ? fromNow(at - now) : ago(now - at)})</span>
     </>
   )
-  // Who made it, said only when it is not whose it is: the owner's for a person, or the other way round.
-  const madeByOther = token.member !== null && token.by !== token.member
   const facts: Fact[] = [
-    ...(owner ? [{ label: "Owner", value: token.member === null && token.email !== "owner" ? `You, for ${token.email}` : ownerLabel(token) }] : []),
-    ...(madeByOther ? [{ label: "Made by", value: owner ? "You" : "The owner" }] : []),
+    ...(made === null ? [] : [{ label: "Made for", value: made }]),
     { label: "Created", value: when(token.createdAt) },
     { label: "Last used", value: token.lastUsedAt === null ? "Never" : when(token.lastUsedAt) },
     token.revokedAt !== null
@@ -309,15 +231,10 @@ function TokenDetails({
           <p className="text-muted-foreground">No project yet.</p>
         ) : (
           <ul className="divide-y divide-divider">
-            {reach.map(({ slug, detail, paused }) => (
+            {reach.map(({ slug, detail }) => (
               <li key={slug} className="flex min-h-9 items-center justify-between gap-3 py-1.5">
                 <ProjectLink slug={slug} />
-                {detail !== null && (
-                  <span className={cn("inline-flex shrink-0 items-center gap-1 text-xs", paused ? "text-muted-foreground" : "text-secondary-foreground")}>
-                    {paused && <PauseGlyph />}
-                    {paused ? `Paused: ${detail}` : detail === "created" ? "Created by it" : detail}
-                  </span>
-                )}
+                {detail === "created" && <span className="shrink-0 text-xs text-secondary-foreground">Created by it</span>}
               </li>
             ))}
           </ul>
@@ -329,18 +246,12 @@ function TokenDetails({
           <p className="text-muted-foreground">None beyond deploying its projects.</p>
         ) : (
           <ul className="grid gap-3">
-            {permissions.map((one) => {
-              const words = PERMISSION_WORDS[one.key]
+            {permissions.map((key) => {
+              const words = PERMISSION_WORDS[key]
               return (
-                <li key={one.key} className="grid gap-0.5">
-                  <span className={cn("inline-flex items-center gap-1.5 font-medium", one.pause !== null && "text-muted-foreground")}>
-                    {one.pause !== null && <PauseGlyph />}
-                    {words.title}
-                  </span>
-                  <span className="text-xs text-pretty text-muted-foreground">
-                    {one.pause !== null ? `Paused: ${one.pause}. ` : ""}
-                    {words.sentence}
-                  </span>
+                <li key={key} className="grid gap-0.5">
+                  <span className="font-medium">{words.title}</span>
+                  <span className="text-xs text-pretty text-muted-foreground">{words.sentence}</span>
                 </li>
               )
             })}
@@ -365,17 +276,13 @@ function TokenDetails({
 }
 
 export function TokensPage() {
-  const { now, offset, snapshot, sessionExpired, identity } = useData()
-  const signedPerson = isPerson(identity)
+  const { now, offset, snapshot, sessionExpired } = useData()
   const actions = useSecretsActions()
   const announce = useAnnounce()
   const serverNow = now + offset
   const sheet = useSheet("token")
   const search = useListState(SPEC)
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" })
-  const [holders, setHolders] = useState<{ email: string; roles: Roles; create: boolean }[]>([])
-  // Every person's rights now, for the owner: where each person's token deploys today, and what it may still do.
-  const [people, setPeople] = useState<ReadonlyMap<string, Rights>>(new Map())
   const [creating, setCreating] = useState<{ open: boolean; opening: number }>({ open: false, opening: 0 })
   const [showEnded, setShowEnded] = useState(false)
   const [revoking, setRevoking] = useState<{ token: TokenView | null; open: boolean; inProgress: boolean; error: string }>({
@@ -385,15 +292,6 @@ export function TokensPage() {
     error: "",
   })
 
-  /** The owner's People: whom a token may be made for, and everyone's roles now. */
-  const readHolders = useCallback(async () => {
-    const { status, body } = await readPeople()
-    if (status === 401) return sessionExpired()
-    if (status !== 200 || body === null || !Array.isArray(body.people)) return
-    setHolders(tokenHolders(body.people))
-    setPeople(new Map(body.people.map((one) => [one.who, { roles: one.roles, create: one.create }])))
-  }, [sessionExpired])
-
   const reload = useCallback(async () => {
     const { status, body } = await readTokens()
     if (status === 401) return sessionExpired()
@@ -402,17 +300,14 @@ export function TokensPage() {
       return
     }
     setLoaded({ state: "ready", list: body })
-    if (body.member === null) void readHolders()
-  }, [sessionExpired, readHolders])
+  }, [sessionExpired])
 
   useEffect(() => {
     void reload()
   }, [reload])
 
   /** Unlocked by then: `WriteButton` asked first, the dialog would only end in a 423. */
-  async function openCreation() {
-    // The owner may make a token for a person of People: who they are, and their roles now.
-    if (!signedPerson) await readHolders()
+  function openCreation() {
     setCreating((previous) => ({ open: true, opening: previous.opening + 1 }))
   }
 
@@ -438,10 +333,6 @@ export function TokensPage() {
 
   const projects = tokenProjects(snapshot?.sites ?? [], snapshot?.zone ?? null)
   const list = loaded.state === "ready" ? loaded.list : null
-  const person = list?.member ?? null
-  const owner = person === null
-  const rightsOf = (token: TokenView): Rights | null =>
-    token.member === null ? null : person !== null ? { roles: person.roles, create: person.create } : (people.get(token.member) ?? null)
 
   const tokens = list?.tokens ?? []
   const { live, ended } = splitTokens(tokens, serverNow)
@@ -456,9 +347,9 @@ export function TokensPage() {
   const newToken = (props: { variant?: "default" | "link"; className?: string; children: ReactNode }) => (
     <WriteButton
       variant={props.variant}
-      onPress={() => void openCreation()}
+      onPress={openCreation}
       purpose="create a token"
-      resume="New token"
+     
       className={props.className}
     >
       {props.children}
@@ -479,7 +370,7 @@ export function TokensPage() {
       </InlineEmpty>
     ) : (
       <InlineEmpty icon={KeySquare} action={newToken({ variant: "link", className: "h-auto p-0", children: "New token" })}>
-        {ended.length > 0 ? "No token can deploy right now." : owner ? "No token yet. Create one per person or agent." : "No token yet. Create one per workstation or agent."}
+        {ended.length > 0 ? "No token can deploy right now." : "No token yet. Create one per workstation or agent."}
       </InlineEmpty>
     )
 
@@ -491,9 +382,8 @@ export function TokensPage() {
         intro={
           <>
             <p>
-              {signedPerson
-                ? "Your tokens let your CLI or an agent deploy with sitesolide deploy, without SSH. A token never does more than your roles do now: below Developer on a project, it is paused there."
-                : "A token lets your agents, or a person, deploy with sitesolide deploy, without SSH. Every token is someone's: yours deploys what you allow it; a person's never does more than their roles, and goes with them."}
+              A token lets your CLI or an agent run sitesolide deploy without SSH, on every project or the ones you choose. It never
+              gives anyone access to a site.
             </p>
             <p className="text-muted-foreground">What tokens did is in Activity, under History; each token's sheet holds its last actions.</p>
           </>
@@ -542,8 +432,8 @@ export function TokensPage() {
                 caption={showEnded ? "Newest first, then the revoked and expired" : "Newest first; revoked and expired folded below"}
                 rows={rows}
                 rowKey={(token) => token.id}
-                columns={columns({ owner, now: serverNow, rightsOf, open: (token) => sheet.open(token.id) })}
-                narrowBelow={owner ? "56rem" : "48rem"}
+                columns={columns({ now: serverNow, open: (token) => sheet.open(token.id) })}
+                narrowBelow="48rem"
                 onRowClick={(token) => sheet.open(token.id)}
                 selected={sheet.id}
                 menu={(token) => (
@@ -587,8 +477,6 @@ export function TokensPage() {
       <TokenSheet
         token={opened}
         now={serverNow}
-        owner={owner}
-        rights={opened === null ? null : rightsOf(opened)}
         onClose={sheet.close}
         onRevoke={askRevoke}
       />
@@ -597,8 +485,6 @@ export function TokensPage() {
         open={creating.open}
         origin={window.location.origin}
         projects={projects}
-        person={person === null ? null : { roles: person.roles, create: person.create }}
-        holders={holders}
         now={serverNow}
         onClose={() => setCreating((previous) => ({ ...previous, open: false }))}
         onCreated={() => void reload()}

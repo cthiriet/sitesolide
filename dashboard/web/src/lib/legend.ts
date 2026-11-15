@@ -99,7 +99,7 @@ export const EXEMPT_LINE = "Open to anyone, guarded by the app alone"
  * paths of a restricted site, the code of one that opens with it, or both
  * sides of a disagreement.
  */
-export function accessLines(access: Access, slug?: string): string[] {
+export function accessLines(access: Access): string[] {
   switch (access.kind) {
     case "open":
       return ["Public", ACCESS_WORDS.public.description]
@@ -108,9 +108,7 @@ export function accessLines(access: Access, slug?: string): string[] {
         ? ["Restricted", ACCESS_WORDS.restricted.description]
         : ["Restricted", ACCESS_WORDS.restricted.description, `${EXEMPT_LINE}: ${access.exemptions.join(", ")}`]
     case "code":
-      return access.code === null
-        ? ["Anyone with the code", slug === undefined ? "An Admin, or the owner, has the code." : `An Admin of ${slug}, or the owner, has the code.`]
-        : ["Anyone with the code", `Code: ${access.code}`]
+      return ["Anyone with the code", `Code: ${access.code}`]
     case "mismatch":
       return ["Access mismatch", access.label]
   }

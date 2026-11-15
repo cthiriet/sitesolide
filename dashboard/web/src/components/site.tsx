@@ -14,7 +14,6 @@ import { useData } from "@/components/data"
 import { InternalLink } from "@/components/navigation"
 import { WithSnapshot, PageBody, EmptyState, PageHeader, Panel } from "@/components/page"
 import type { HistoryFilter } from "@/lib/history"
-import { isPerson } from "@/lib/identity"
 import { pageTitle, siteUrl, type Section } from "@/lib/pages"
 import { headerState, kindLine, siteDiscrepancies } from "@/lib/site-card"
 import type { ServiceState } from "@/lib/sites"
@@ -231,7 +230,6 @@ export function SitePage({
   wide?: boolean
   children: (site: Site) => ReactNode
 }) {
-  const { identity } = useData()
   return (
     <>
       <PageHeader
@@ -250,22 +248,18 @@ export function SitePage({
           {(snapshot) => {
             const site = snapshot.sites.find((candidate) => candidate.slug === slug)
             if (site === undefined) {
-              // A person sees their projects alone: one they hold no role on reads as absent, and whom to ask.
-              const person = isPerson(identity)
               return (
                 <Panel>
                   <EmptyState
                     icon={SearchX}
-                    title={person ? `No project named ${slug} that you have a role on` : `No site named "${slug}"`}
+                    title={`No site named "${slug}"`}
                     action={
                       <InternalLink href="/" className={cn(buttonVariants({ variant: "outline" }), "max-md:h-10")}>
-                        {person ? "Show your projects" : "Show all sites"}
+                        Show all sites
                       </InternalLink>
                     }
                   >
-                    {person
-                      ? `If someone sent you this link, ask the owner or an Admin of ${slug} to add you.`
-                      : "The server doesn't serve a folder by that name. It may have been removed, or the link is mistyped."}
+                    The server doesn't serve a folder by that name. It may have been removed, or the link is mistyped.
                   </EmptyState>
                 </Panel>
               )

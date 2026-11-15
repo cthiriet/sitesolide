@@ -4,35 +4,8 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { CopyFallback, useCopy } from "@/components/copy"
 import { Status } from "@/components/page"
 import { siteAccess } from "@/lib/sites"
-import type { AccessRole, Site } from "@/lib/types"
+import type { Site } from "@/lib/types"
 import { cn } from "@/lib/utils"
-
-/** How far up the ladder each role stands, from Can open to Admin. */
-const RUNG: Record<AccessRole, number> = { visitor: 1, viewer: 2, developer: 3, admin: 4 }
-
-/**
- * A role as the landing page draws it: four bars rising, as many lit in the
- * share feature's ink as the role has rungs, the rest faint. It says the
- * height of the role at a glance; the word beside it says which.
- */
-export function RoleBars({ role, muted = false, className }: { role: AccessRole; muted?: boolean; className?: string }) {
-  const lit = RUNG[role]
-  return (
-    <svg aria-hidden="true" viewBox="0 0 15 11" className={cn("h-[11px] w-[15px] shrink-0", className)}>
-      {[5, 7, 9, 11].map((height, index) => (
-        <rect
-          key={height}
-          x={index * 4}
-          y={11 - height}
-          width="3"
-          height={height}
-          rx="0.5"
-          className={index < lit && !muted ? "fill-share-ink" : "fill-share-ink/22"}
-        />
-      ))}
-    </svg>
-  )
-}
 
 /** The landing page's chip: 20 px, the hairline, the cell's surface, a 12 px word. */
 export const CHIP = "inline-flex h-5 shrink-0 items-center gap-1.5 rounded-md border bg-cell px-1.5 text-xs font-medium whitespace-nowrap"
@@ -48,8 +21,8 @@ function AccessChip({ icon: Icon, title, className, children }: { icon: LucideIc
 }
 
 /**
- * An email, or a `@domain`, that breaks right after its @ when the line is
- * too narrow, rather than at any letter: `alice@` then `example.com`.
+ * An email that breaks right after its @ when the line is too narrow,
+ * rather than at any letter: `alice@` then `example.com`.
  */
 export function Who({ value }: { value: string }) {
   const at = value.indexOf("@")

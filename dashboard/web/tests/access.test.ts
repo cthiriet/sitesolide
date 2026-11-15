@@ -9,112 +9,45 @@ import {
   GENERAL_CHOICES,
   PASSWORD_DURATIONS,
   PLATFORM_SLUGS,
-  ROLE_TEXTS,
-  accountWords,
-  alsoOpens,
-  askAnAdmin,
+  addressesLine,
   byText,
   changeProgress,
   changeResult,
   changeTexts,
-  addressesLine,
-  siteAddresses,
   closeOutcome,
-  codeWithheld,
   confirmationValid,
   emptyListWarning,
-  entryRow,
-  listCount,
-  whoChanges,
   generalOptions,
   generalState,
-  mayRenew,
-  sharedReason,
-  stewardChoices,
-  grantSentence,
+  givenText,
+  guestCount,
+  guestExpiry,
   inertNote,
+  isExpired,
   isPlatform,
-  leavingWarning,
-  unlockLine,
-  lowers,
-  needsUnlock,
-  passwordExpiry,
+  mayRenew,
   passwordMessage,
+  planGuest,
+  plannedEnd,
   platformText,
-  planAddition,
-  raiseNeedsUnlock,
-  sendsLine,
-  readWho,
   readingProblem,
   refusalText,
   removalConfirmation,
-  roleLabel,
-  selfChangeWarning,
-  sendLine,
-  signsInWithAccount,
-  sortEntries,
-  type SignIn,
-  type Viewer,
+  sharedReason,
+  siteAddresses,
+  sortGuests,
+  stewardChoices,
 } from "../src/lib/access"
-import type { AccessRole, EntryView } from "../src/lib/types"
+import type { EntryView } from "../src/lib/types"
 import { site } from "./factory"
 
 const NOW = 1_791_000_000_000
 const HOUR = 3600_000
 const DAY = 24 * HOUR
 
-const SIGN_IN: SignIn = { configured: true, allowedDomains: ["acme.test"], admins: ["root@else.test"], providerName: "Google" }
-const NO_SIGN_IN: SignIn = { configured: false, allowedDomains: [], admins: [], providerName: null }
-const OWNER: Viewer = { kind: "owner" }
-const ADMIN: Viewer = { kind: "person", email: "ann@acme.test", role: "admin" }
-const ALL: AccessRole[] = ["visitor", "viewer", "developer", "admin"]
-
-function entry(who: string, role: AccessRole = "visitor", fields: Partial<EntryView> = {}): EntryView {
-  return { who, kind: who.startsWith("@") ? "domain" : "person", role, by: "owner", createdAt: NOW - DAY, updatedAt: NOW - DAY, password: null, ...fields }
+function guest(who: string, fields: Partial<EntryView> = {}): EntryView {
+  return { who, by: "owner", createdAt: NOW - 3 * DAY, updatedAt: NOW - 3 * DAY, expiresAt: NOW + 5 * DAY, expired: false, ...fields }
 }
-
-function password(who: string, expiresAt: number | null): EntryView {
-  return entry(who, "visitor", { kind: "password", password: { expiresAt, expired: expiresAt !== null && expiresAt <= NOW } })
-}
-
-const page = (fields: Partial<{ entries: EntryView[]; signIn: SignIn; grantable: AccessRole[]; you: Viewer }> = {}) => ({
-  entries: [],
-  signIn: SIGN_IN,
-  grantable: ALL,
-  you: OWNER,
-  ...fields,
-})
-
-describe("the roles", () => {
-  test("one ladder, from Can open to Admin, each in the spec's words, each including the ones below", () => {
-    expect(ALL.map(roleLabel)).toEqual(["Can open", "Viewer", "Developer", "Admin"])
-    // The owner is no rung: they are above every project, on no list.
-    expect(Object.keys(ROLE_TEXTS)).toEqual(ALL)
-    // Each rung says what it adds to the one below.
-    for (const role of ["viewer", "developer", "admin"] as const) expect(ROLE_TEXTS[role].can.startsWith("Also ")).toBe(true)
-  })
-
-  test("raising above Can open, or drawing a password, waits for the unlock; lowering and Can open never do", () => {
-    expect(needsUnlock("visitor", false)).toBe(false)
-    expect(needsUnlock("visitor", true)).toBe(true)
-    expect(needsUnlock("viewer", false)).toBe(true)
-    expect(raiseNeedsUnlock("visitor", "developer")).toBe(true)
-    expect(raiseNeedsUnlock("viewer", "admin")).toBe(true)
-    expect(raiseNeedsUnlock("admin", "viewer")).toBe(false)
-    expect(raiseNeedsUnlock("developer", "visitor")).toBe(false)
-    expect(lowers("admin", "developer")).toBe(true)
-    expect(lowers("viewer", "admin")).toBe(false)
-  })
-
-  test("raised from their row to Viewer or above, someone gets the line to send, as when added; never when lowered or left at Can open", () => {
-    expect(sendsLine("visitor", "viewer")).toBe(true)
-    expect(sendsLine("viewer", "developer")).toBe(true)
-    expect(sendsLine("developer", "admin")).toBe(true)
-    expect(sendsLine("admin", "viewer")).toBe(false)
-    expect(sendsLine("developer", "visitor")).toBe(false)
-    expect(sendsLine("viewer", "viewer")).toBe(false)
-  })
-})
 
 describe("general access", () => {
   test("three ways a site opens, each with one plain sentence", () => {
@@ -129,12 +62,6 @@ describe("general access", () => {
       code: { code: "K7PX3M", url: "https://x.test-zone.invalid/?code=K7PX3M" },
     })
     expect(generalState(site())).toEqual({ current: "public", requested: "public", problem: null, exemptions: [], code: null })
-  })
-
-  test("a code withheld from whoever reads: the site opens with one, nobody is told it is in disagreement", () => {
-    const withheld = generalState(site({ lock: { closed: true, code: null, url: null, withheld: true } }))
-    expect(withheld).toMatchObject({ current: "code", problem: null, code: null })
-    expect(codeWithheld("cms")).toBe("An Admin of cms, or the owner, has the code.")
   })
 
   test("a disagreement with sitesolide.json comes first, and says how the server serves the site and what it asks", () => {
@@ -152,84 +79,83 @@ describe("general access", () => {
 
   const allowed = stewardChoices({ access: "public", modifiable: true, reason: null, choices: { public: null, restricted: null, code: null } })
 
-  test("an Admin or the owner chooses any of the three, the button naming the change", () => {
-    const options = generalOptions(generalState(site()), allowed, true)
+  test("any of the three may be chosen, the button naming the change", () => {
+    const options = generalOptions(generalState(site()), allowed)
     expect(options.map((option) => [option.access, option.current, option.available, option.action])).toEqual([
       ["public", true, false, null],
       ["restricted", false, true, "Restrict"],
       ["code", false, true, "Use a code"],
     ])
     expect(options.every((option) => option.side === null && option.reason === null)).toBe(true)
-    expect(generalOptions(generalState(site({ portal: { wanted: true, installed: true, exemptions: [] } })), allowed, true)[0]).toMatchObject({ available: true, action: "Make public" })
+    expect(generalOptions(generalState(site({ portal: { wanted: true, installed: true, exemptions: [] } })), allowed)[0]).toMatchObject({ available: true, action: "Make public" })
   })
 
   test("a site that opens with a code: Public and Restricted chosen from it, and a new code beside it", () => {
     const coded = generalState(site({ lock: { closed: true, code: "K7PX3M", url: null } }))
-    const options = generalOptions(coded, allowed, true)
+    const options = generalOptions(coded, allowed)
     expect(options.map((option) => option.action)).toEqual(["Make public", "Restrict", null])
-    expect(mayRenew(coded, allowed, true)).toBe(true)
-    expect(mayRenew(coded, allowed, false)).toBe(false)
-    expect(mayRenew(generalState(site()), allowed, true)).toBe(false)
+    expect(mayRenew(coded, allowed)).toBe(true)
+    expect(mayRenew(coded, null)).toBe(false)
+    expect(mayRenew(generalState(site()), allowed)).toBe(false)
   })
 
   test("a choice the steward refuses says why under it; a reason for every choice is said once", () => {
     const staticSite = stewardChoices({ access: "public", modifiable: true, reason: null, choices: { public: null, restricted: "a static site cannot be restricted yet", code: null } })
-    const options = generalOptions(generalState(site()), staticSite, true)
+    const options = generalOptions(generalState(site()), staticSite)
     expect(options[1]).toMatchObject({ available: false, reason: "a static site cannot be restricted yet" })
     expect(options[2]).toMatchObject({ available: true, action: "Use a code", reason: null })
     expect(sharedReason(generalState(site()), staticSite)).toBeNull()
     const busy = "a portal change is in progress for this site"
     const blocked = stewardChoices({ access: "public", modifiable: false, reason: busy, choices: { public: busy, restricted: busy, code: busy } })
     expect(sharedReason(generalState(site()), blocked)).toBe(busy)
-    expect(generalOptions(generalState(site()), blocked, true).every((option) => !option.available && option.reason === null)).toBe(true)
-    expect(mayRenew(generalState(site({ lock: { closed: true, code: "K7PX3M", url: null } })), blocked, true)).toBe(false)
+    expect(generalOptions(generalState(site()), blocked).every((option) => !option.available && option.reason === null)).toBe(true)
+    expect(mayRenew(generalState(site({ lock: { closed: true, code: "K7PX3M", url: null } })), blocked)).toBe(false)
   })
 
   test("a steward from before the code chosen here: Public and Restricted as it said, the code pointed to the upgrade", () => {
     const older = stewardChoices({ access: "public", modifiable: true, reason: null })
-    const options = generalOptions(generalState(site()), older, true)
+    const options = generalOptions(generalState(site()), older)
     expect(options.map((option) => option.available)).toEqual([false, true, false])
     expect(options[2]!.reason).toContain("run sitesolide upgrade")
   })
 
   test("in disagreement, each side is marked and either may be chosen; the third stays a plain choice", () => {
-    const absent = generalOptions(generalState(site({ portal: { wanted: true, installed: false, exemptions: [] } })), allowed, true)
+    const absent = generalOptions(generalState(site({ portal: { wanted: true, installed: false, exemptions: [] } })), allowed)
     expect(absent.map((option) => [option.access, option.side, option.action])).toEqual([
       ["public", "On the server", "Keep Public"],
       ["restricted", "In sitesolide.json", "Apply Restricted"],
       ["code", null, "Use a code"],
     ])
-    const extra = generalOptions(generalState(site({ portal: { wanted: false, installed: true, exemptions: [] } })), allowed, true)
+    const extra = generalOptions(generalState(site({ portal: { wanted: false, installed: true, exemptions: [] } })), allowed)
     expect(extra.map((option) => option.action)).toEqual(["Apply Public", "Keep Restricted", "Use a code"])
     // A code in force that sitesolide.json no longer asks for: keep it, or apply Public.
-    const stale = generalOptions(generalState(site({ lock: { closed: false, code: "AB12CD", url: null } })), allowed, true)
+    const stale = generalOptions(generalState(site({ lock: { closed: false, code: "AB12CD", url: null } })), allowed)
     expect(stale.map((option) => option.action)).toEqual(["Apply Public", "Restrict", "Keep Anyone with the code"])
     // Asked for, and no code on the server: apply it, which draws one.
-    const missing = generalOptions(generalState(site({ lock: { closed: true, code: null, url: null } })), allowed, true)
+    const missing = generalOptions(generalState(site({ lock: { closed: true, code: null, url: null } })), allowed)
     expect(missing.map((option) => option.action)).toEqual(["Keep Public", "Restrict", "Apply Anyone with the code"])
   })
 
-  test("nothing to choose for a Viewer or a Developer, nor before the steward answers", () => {
+  test("nothing to choose before the steward answers", () => {
     const state = generalState(site())
-    expect(generalOptions(state, allowed, false).some((option) => option.available)).toBe(false)
-    expect(generalOptions(state, null, true).some((option) => option.available)).toBe(false)
+    expect(generalOptions(state, null).some((option) => option.available)).toBe(false)
     expect(stewardChoices(null)).toBeNull()
   })
 
-  test("whoever only reads it is told who changes it; a platform project, why nobody is on it", () => {
-    expect(whoChanges("cms")).toBe("Only an Admin of cms, or the owner, changes it.")
-    expect(platformText("portal")).toBe("portal is part of the platform. Only the owner opens it when restricted; no one can be given a role on it.")
+  test("a platform project says why it takes no guest", () => {
+    expect(platformText("portal")).toBe("portal is part of the platform. Only you open it when restricted; it takes no guest.")
   })
 
   test("the change says what it does in plain words; making a site public or opening it with a code retypes its slug", () => {
     expect(changeTexts("cms", "restricted")).toMatchObject({ title: "Restrict cms?", action: "Restrict", succeeded: "cms is restricted", typed: false })
     expect(changeTexts("cms", "public")).toMatchObject({ title: "Make cms public?", action: "Make public", failure: "Couldn't make cms public", typed: true })
-    expect(changeTexts("cms", "public").consequence).toBe("People with access keep their dashboard roles; Can open and password access stop mattering.")
+    expect(changeTexts("cms", "public").consequence).toBe("Guests' passwords stop mattering until it is restricted again.")
+    expect(changeTexts("cms", "restricted").consequence).toBe("Only you and its guests will open cms. Anyone else is asked to sign in, and refused.")
     // What it opens is said first, in red; restricting says none.
     expect(changeTexts("cms", "public").warning).toBe("Anyone with its address can open it without signing in.")
     expect(changeTexts("cms", "code")).toMatchObject({ title: "Use a code for cms?", action: "Use a code", succeeded: "cms opens with a code", typed: true })
     expect(changeTexts("cms", "code").warning).toBe("Anyone who has the code can open it, without signing in.")
-    expect(changeTexts("cms", "code").consequence).toContain("shown here to the owner and cms's Admins")
+    expect(changeTexts("cms", "code").consequence).toContain("shown here with a link that carries it")
     expect(changeTexts("cms", "restricted").warning).toBeNull()
     // A new code: no typing, the old one stopping said first.
     expect(changeTexts("cms", "renew")).toMatchObject({ title: "New code for cms?", action: "New code", warning: null, typed: false })
@@ -261,10 +187,9 @@ describe("general access", () => {
     expect(changeTexts("cms", "code", "public", siteAddresses(preview)).consequence).toBe(changeTexts("cms", "code").consequence)
   })
 
-  test("restricting a site nobody is on the list of says who will still open it", () => {
-    expect(emptyListWarning("wheels", 0, ["owner@acme.test"])).toBe("Nobody is on the list yet: after this, only the owner and the admin emails can open wheels.")
-    expect(emptyListWarning("wheels", 0, [])).toBe("Nobody is on the list yet: after this, only the owner can open wheels.")
-    expect(emptyListWarning("wheels", 2, [])).toBeNull()
+  test("restricting a site with no guest says who will still open it", () => {
+    expect(emptyListWarning("wheels", 0)).toBe("wheels has no guest yet: after this, only you can open it.")
+    expect(emptyListWarning("wheels", 2)).toBeNull()
   })
 
   test("the gatekeeper's verdict, in plain words; anything else as it stands", () => {
@@ -319,11 +244,10 @@ describe("general access", () => {
     expect(CHANGE_SCALE_MS).toBeGreaterThanOrEqual(Number((found?.[1] ?? "").replaceAll("_", "")))
   })
 
-  test("Can open changes nothing while the site is public or opened by its code", () => {
-    expect(inertNote("cms", "restricted", true)).toBeNull()
-    expect(inertNote("wheels", "public", true)).toBe("wheels is public, so anyone can open it. Viewer, Developer and Admin still apply; Can open matters once you restrict it.")
-    expect(inertNote("wheels", "public", false)).toEndWith("once it's restricted.")
-    expect(inertNote("cms", "code", true)).toContain("preview code")
+  test("guests change nothing while the site is public or opened by its code", () => {
+    expect(inertNote("cms", "restricted")).toBeNull()
+    expect(inertNote("wheels", "public")).toBe("wheels is public: guests' passwords only matter once it's restricted.")
+    expect(inertNote("cms", "code")).toBe("cms opens with its preview code: guests' passwords only matter once it's restricted.")
   })
 
   test("the platform's own projects are the steward's list, the landing included", async () => {
@@ -336,199 +260,49 @@ describe("general access", () => {
   })
 })
 
-describe("adding someone, said before it is sent", () => {
-  test("the field reads an email or a domain with its @, the steward's way", () => {
-    expect(readWho("  ")).toEqual({ kind: "empty" })
-    expect(readWho(" Bob@Acme.TEST ")).toEqual({ kind: "person", who: "bob@acme.test", email: "bob@acme.test" })
-    expect(readWho("@acme.test")).toEqual({ kind: "domain", who: "@acme.test", domain: "acme.test" })
-    expect(readWho("acme.test")).toMatchObject({ kind: "invalid", message: "For everyone at acme.test, write @acme.test." })
-    expect(readWho("@com")).toMatchObject({ kind: "invalid" })
-    expect(readWho("bob")).toMatchObject({ kind: "invalid" })
+describe("guests", () => {
+  test("the field reads an email the steward's way; a domain is refused, and a guest already there is said", () => {
+    const entries = [guest("ann@acme.test")]
+    expect(planGuest("  ", entries)).toMatchObject({ state: "empty", who: null })
+    expect(planGuest(" Bob@Acme.Test ", entries)).toMatchObject({ state: "ready", who: "bob@acme.test" })
+    expect(planGuest("@acme.test", entries)).toMatchObject({ state: "invalid", who: null, hint: expect.stringContaining("whole domain") })
+    expect(planGuest("bob", entries)).toMatchObject({ state: "invalid", who: null })
+    expect(planGuest("ANN@acme.test", entries)).toEqual({ state: "existing", who: "ann@acme.test", hint: "ann@acme.test is already a guest." })
   })
 
-  test("someone inside the company's domains signs in with their account and may get any role the viewer gives", () => {
-    const plan = planAddition("bob@acme.test", page())
-    expect(plan).toMatchObject({ state: "ready", who: "bob@acme.test", kind: "person", password: false, roles: ALL, covered: null })
-    expect(plan.hint).toContain("company account")
-    expect(signsInWithAccount("bob@acme.test", SIGN_IN)).toBe(true)
-    // The server's own admin emails sign in wherever their domain is.
-    expect(signsInWithAccount("root@else.test", SIGN_IN)).toBe(true)
+  test("who gave it, quietly: you, a token, an email; nothing for what was carried over", () => {
+    expect(byText("owner")).toBe("you")
+    expect(byText("token:abc")).toBe("a token")
+    expect(byText("ann@acme.test")).toBe("ann@acme.test")
+    expect(byText("migration")).toBeNull()
+    expect(givenText(guest("a@acme.test"), NOW)).toBe("Given by you, 3d ago")
+    expect(givenText(guest("a@acme.test", { by: "migration" }), NOW)).toBe("Given 3d ago")
   })
 
-  test("someone outside them gets password access, Can open alone, said in one short sentence before Add", () => {
-    const plan = planAddition("eve@gmail.test", page())
-    expect(plan).toMatchObject({ state: "ready", password: true, roles: ["visitor"] })
-    expect(plan.hint).toBe("gmail.test isn't one of the company's domains: they get password access, to open the site only.")
+  test("an expiry in words, worth a look within a day; one that ended says Expired", () => {
+    expect(guestExpiry(guest("a@acme.test"), NOW)).toEqual({ text: "Expires in 5d", tone: "neutral" })
+    expect(guestExpiry(guest("a@acme.test", { expiresAt: NOW + 2 * HOUR }), NOW)).toEqual({ text: "Expires in 2h", tone: "attention" })
+    expect(guestExpiry(guest("a@acme.test", { expiresAt: NOW - 2 * DAY, expired: true }), NOW)).toEqual({ text: "Expired 2d ago", tone: "neutral" })
+    expect(guestExpiry(guest("a@acme.test", { expiresAt: null }), NOW)).toEqual({ text: "No expiry", tone: "neutral" })
+    // Past its time, an access has ended even before the steward says so.
+    expect(isExpired(guest("a@acme.test", { expiresAt: NOW - 1 }), NOW)).toBe(true)
+    expect(isExpired(guest("a@acme.test", { expiresAt: null }), NOW)).toBe(false)
   })
 
-  test("without company sign-in, everyone gets password access, and no domain can be added", () => {
-    expect(planAddition("bob@acme.test", page({ signIn: NO_SIGN_IN }))).toMatchObject({ state: "ready", password: true, roles: ["visitor"] })
-    const domain = planAddition("@acme.test", page({ signIn: NO_SIGN_IN }))
-    expect(domain.state).toBe("blocked")
-    expect(domain.hint).toContain("Company sign-in isn't set up")
+  test("in reading order: those who still open the site first, then by name", () => {
+    const ended = guest("aaron@acme.test", { expiresAt: NOW - DAY, expired: true })
+    const list = [guest("zoe@acme.test"), ended, guest("bob@acme.test", { expiresAt: null })]
+    expect(sortGuests(list, NOW).map((one) => one.who)).toEqual(["bob@acme.test", "zoe@acme.test", "aaron@acme.test"])
+    expect(list[0]!.who).toBe("zoe@acme.test")
   })
 
-  test("a domain can only open the site, and is one of the company's for everyone, the owner included; with none listed, any", () => {
-    expect(planAddition("@acme.test", page())).toMatchObject({ state: "ready", kind: "domain", roles: ["visitor"] })
-    for (const you of [undefined, ADMIN]) {
-      const refused = planAddition("@partner.test", page(you === undefined ? {} : { you }))
-      expect(refused).toMatchObject({ state: "blocked" })
-      expect(refused.hint).toBe("Nobody at partner.test can sign in here: only acme.test accounts can. Add people from partner.test by email: they get password access.")
-    }
-    const two = planAddition("@partner.test", page({ signIn: { ...SIGN_IN, allowedDomains: ["acme.test", "acme.example"] } }))
-    expect(two.hint).toContain("only acme.test or acme.example accounts can")
-    expect(planAddition("@acme.test", page({ you: ADMIN })).state).toBe("ready")
-    expect(planAddition("@partner.test", page({ signIn: { ...page().signIn, allowedDomains: [] } })).state).toBe("ready")
+  test("the Overview counts guests in a few words", () => {
+    expect(guestCount(0)).toBe("No guests")
+    expect(guestCount(1)).toBe("1 guest")
+    expect(guestCount(4)).toBe("4 guests")
   })
 
-  test("someone a domain on the list already covers, or an admin email, is said to open the site already", () => {
-    expect(planAddition("bob@acme.test", page({ entries: [entry("@acme.test")] })).covered).toBe("Already covered by @acme.test.")
-    expect(planAddition("root@else.test", page()).covered).toBe("root@else.test already opens every site, as admin: it's set on the server.")
-    expect(planAddition("eve@gmail.test", page({ entries: [entry("@acme.test")] })).covered).toBeNull()
-  })
-
-  test("someone already on the list is changed there, not added again", () => {
-    const plan = planAddition("BOB@acme.test", page({ entries: [entry("bob@acme.test", "viewer")] }))
-    expect(plan).toMatchObject({ state: "existing" })
-    expect(plan.hint).toContain("already on the list, as Viewer")
-  })
-
-  test("what an empty or unfinished field says", () => {
-    expect(planAddition("", page())).toMatchObject({ state: "empty", hint: "An email, or @company.com for everyone with an account there." })
-    expect(planAddition("", page({ signIn: NO_SIGN_IN })).hint).toContain("password access")
-    expect(planAddition("bob@", page()).state).toBe("invalid")
-  })
-})
-
-describe("the people with access", () => {
-  test("in reading order: the higher roles first, people before domains before password access, then by name; what expired last", () => {
-    const sorted = sortEntries(
-      [password("old@out.test", NOW - DAY), password("zed@out.test", null), entry("@acme.test"), entry("carl@acme.test"), entry("ann@acme.test", "admin"), entry("bob@acme.test", "viewer")],
-      NOW,
-    )
-    expect(sorted.map((one) => one.who)).toEqual(["ann@acme.test", "bob@acme.test", "carl@acme.test", "@acme.test", "zed@out.test", "old@out.test"])
-  })
-
-  test("a person's row offers the roles the viewer may give, and removal when the viewer could have given theirs", () => {
-    const row = entryRow(entry("bob@acme.test", "developer"), page(), NOW)
-    expect(row).toMatchObject({ roles: ALL, removable: true, what: null, self: false, word: "Developer", muted: false })
-    expect(row.added).toBe("Added by you, 24h ago")
-  })
-
-  test("a Viewer or a Developer reads every row as words, with nothing to change", () => {
-    const reader = { you: { kind: "person", email: "dev@acme.test", role: "developer" } as Viewer, grantable: [] as AccessRole[] }
-    for (const one of [entry("ann@acme.test", "admin"), entry("bob@acme.test"), entry("@acme.test"), password("eve@out.test", null)]) {
-      expect(entryRow(one, page(reader), NOW)).toMatchObject({ roles: null, removable: false })
-    }
-    expect(askAnAdmin([entry("ann@acme.test", "admin"), entry("bo@acme.test", "admin"), entry("cy@acme.test", "viewer")])).toBe("To add someone, ask an Admin: ann@acme.test, bo@acme.test.")
-    expect(askAnAdmin([entry("cy@acme.test", "viewer")])).toBe("To add someone, ask the owner.")
-  })
-
-  test("a domain and password access are words, not menus; an expiry near is worth a look; one that ended says Expired, greyed", () => {
-    expect(entryRow(entry("@acme.test"), page(), NOW)).toMatchObject({ roles: null, removable: true, what: "Everyone with a company account at acme.test", word: "Can open" })
-    expect(entryRow(password("eve@out.test", NOW + 5 * HOUR), page(), NOW)).toMatchObject({ roles: null, what: "Password access, expires in 5h", whatTone: "attention", word: "Can open" })
-    expect(entryRow(password("eve@out.test", NOW + 6 * DAY), page(), NOW)).toMatchObject({ whatTone: "neutral" })
-    expect(entryRow(password("eve@out.test", NOW - 2 * DAY), page(), NOW)).toMatchObject({ word: "Expired", muted: true, removable: true, what: "Password access, expired 2d ago" })
-    expect(passwordExpiry({ expiresAt: NOW - 2 * DAY, expired: true }, NOW).text).toBe("expired 2d ago")
-    expect(passwordExpiry({ expiresAt: null, expired: false }, NOW).text).toBe("no expiry")
-  })
-
-  test("who gave it, quietly: you, the owner, a token, an Admin by email; nothing for what was carried over", () => {
-    expect(byText("owner", OWNER)).toBe("you")
-    expect(byText("owner", ADMIN)).toBe("the owner")
-    expect(byText("ann@acme.test", ADMIN)).toBe("you")
-    expect(byText("token:abc", OWNER)).toBe("a token")
-    expect(byText("bob@acme.test", OWNER)).toBe("bob@acme.test")
-    expect(entryRow(entry("bob@acme.test", "viewer", { by: "migration" }), page(), NOW).added).toBeNull()
-    expect(entryRow(entry("ann@acme.test", "admin"), page({ you: ADMIN }), NOW).self).toBe(true)
-  })
-
-  test("someone who can't sign in keeps their role, greyed, and says why", () => {
-    expect(entryRow(entry("eve@out.test"), page(), NOW)).toMatchObject({ roles: null, muted: true, what: "Can't sign in: out.test isn't one of the company's domains." })
-    expect(entryRow(entry("bob@acme.test", "developer"), page({ signIn: NO_SIGN_IN }), NOW)).toMatchObject({
-      roles: null,
-      word: "Developer",
-      muted: true,
-      removable: true,
-      what: "Can't sign in until company sign-in is set up.",
-    })
-    expect(entryRow(entry("@acme.test"), page({ signIn: NO_SIGN_IN }), NOW)).toMatchObject({ word: "Can open", muted: true, what: "Can't sign in until company sign-in is set up." })
-  })
-
-  test("who opens the site without being on its list, said once under it", () => {
-    expect(alsoOpens(["owner@acme.test"])).toBe("Also open it without being listed: the owner, and owner@acme.test, set on the server to open every site.")
-    expect(alsoOpens(["a@acme.test", "b@acme.test"])).toBe("Also open it without being listed: the owner, and a@acme.test, b@acme.test, set on the server to open every site.")
-    expect(alsoOpens([])).toBe("The owner also opens it.")
-  })
-
-  test("what someone has now, in one sentence; an Admin giving up their own role is told first", () => {
-    expect(grantSentence("dana@acme.test", "visitor", "cms")).toBe("dana@acme.test can now open cms.")
-    expect(grantSentence("dana@acme.test", "viewer", "cms")).toBe("dana@acme.test is now Viewer on cms.")
-    expect(selfChangeWarning("cms")).toBe("You'll no longer manage cms. Only another Admin or the owner can give it back.")
-  })
-
-  test("the Overview counts people and domains in a few words", () => {
-    expect(listCount([entry("a@acme.test"), entry("b@acme.test", "admin"), password("c@out.test", null), entry("@acme.test")])).toBe("3 people, 1 domain")
-    expect(listCount([entry("a@acme.test")])).toBe("1 person")
-    expect(listCount([entry("@acme.test"), entry("@acme.example")])).toBe("2 domains")
-    expect(listCount([])).toBe("Nobody on the list")
-  })
-})
-
-describe("a lowering or a removal that takes someone out of the dashboard", () => {
-  const tokens = [
-    { id: "aaaaaaaaaaaa", label: "alice-ci", madeBy: "them" as const },
-    { id: "bbbbbbbbbbbb", label: "Alice's laptop", madeBy: "owner" as const },
-  ]
-  const owner = { you: { kind: "owner" as const }, leaving: { "chloe@example.com": tokens, "dan@example.com": [] } }
-
-  test("said before it is done, with the tokens it revokes and who made each", () => {
-    expect(leavingWarning("chloe@example.com", "visitor", owner)).toBe(
-      "chloe@example.com will no longer sign in to the dashboard. Also revokes 2 tokens: alice-ci (made by them), Alice's laptop (made by you).",
-    )
-    expect(leavingWarning("chloe@example.com", null, owner)).toStartWith("chloe@example.com will no longer sign in")
-    expect(leavingWarning("dan@example.com", null, owner)).toBe("dan@example.com will no longer sign in to the dashboard.")
-    // An Admin reads the owner's tokens as the owner's.
-    const admin = { ...owner, you: { kind: "person" as const, email: "ann@example.com", role: "admin" as const } }
-    expect(leavingWarning("chloe@example.com", "visitor", admin)).toContain("Alice's laptop (made by the owner)")
-    // Oneself, in the second person.
-    const self = { leaving: { "ann@example.com": [tokens[0]!] }, you: { kind: "person" as const, email: "ann@example.com", role: "admin" as const } }
-    expect(leavingWarning("ann@example.com", null, self)).toBe("You will no longer sign in to the dashboard. Also revokes 1 token: alice-ci (made by you).")
-  })
-
-  test("nothing said when they keep a role above Can open, or the steward names nobody", () => {
-    expect(leavingWarning("chloe@example.com", "viewer", owner)).toBeNull()
-    expect(leavingWarning("bob@example.com", "visitor", owner)).toBeNull()
-    expect(leavingWarning("chloe@example.com", "visitor", { ...owner, leaving: {} })).toBeNull()
-  })
-
-  test("what waits for the unlock, in the button's words", () => {
-    expect(unlockLine("developer", false)).toBe("Giving Developer asks to unlock changes first.")
-    expect(unlockLine("visitor", true)).toBe("Password access asks to unlock changes first.")
-  })
-})
-
-describe("what is sent and shown after a change", () => {
-  const where = { slug: "cms", url: "https://cms.test-zone.invalid/", dashboardUrl: "https://dashboard.test-zone.invalid", providerName: "Google" }
-
-  test("the line to send: the site for Can open and a domain, the dashboard too for a role; none for password access", () => {
-    expect(sendLine({ who: "bob@acme.test", kind: "person", role: "visitor" }, where)).toBe("Open https://cms.test-zone.invalid/ and sign in with your Google account.")
-    expect(sendLine({ who: "@acme.test", kind: "domain", role: "visitor" }, where)).toBe("Open https://cms.test-zone.invalid/ and sign in with your Google account.")
-    expect(sendLine({ who: "bob@acme.test", kind: "person", role: "viewer" }, where)).toBe(
-      "cms is at https://cms.test-zone.invalid/, and in the dashboard at https://dashboard.test-zone.invalid. Sign in with your Google account.",
-    )
-    // Developer and Admin deploy: how, said with the rest.
-    for (const role of ["developer", "admin"] as const) {
-      expect(sendLine({ who: "bob@acme.test", kind: "person", role }, where)).toBe(
-        "cms is at https://cms.test-zone.invalid/, and in the dashboard at https://dashboard.test-zone.invalid. Sign in with your Google account. To deploy, create a token on the Tokens page, then run sitesolide login --url https://dashboard.test-zone.invalid.",
-      )
-    }
-    expect(sendLine({ who: "eve@out.test", kind: "password", role: "visitor" }, where)).toBeNull()
-    expect(accountWords(null)).toBe("your company account")
-    expect(accountWords("your company account")).toBe("your company account")
-  })
-
-  test("password access: the address, the password and the expiry, one per line; closing uncopied takes two gestures", () => {
+  test("the message: the address, the password and the expiry, one per line; closing uncopied takes two gestures", () => {
     expect(passwordMessage("https://cms.test-zone.invalid/", "four-word-pass-phrase", Date.UTC(2026, 9, 9, 21, 3), "UTC")).toBe(
       "https://cms.test-zone.invalid/\nPassword: four-word-pass-phrase\nValid until Oct 9, 21:03 UTC",
     )
@@ -536,6 +310,11 @@ describe("what is sent and shown after a change", () => {
     expect(closeOutcome(false, false)).toBe("warn")
     expect(closeOutcome(false, true)).toBe("close")
     expect(closeOutcome(true, false)).toBe("close")
+  })
+
+  test("the chosen duration's end, said before giving access", () => {
+    expect(plannedEnd(null, NOW)).toBe("Valid until you remove it.")
+    expect(plannedEnd(3600, Date.UTC(2026, 9, 9, 20, 3), "UTC")).toBe("Valid until Oct 9, 21:03 UTC.")
   })
 
   test("the four durations are the steward's, seven days by default", async () => {
@@ -550,7 +329,7 @@ describe("what is sent and shown after a change", () => {
   test("a refusal is the steward's words as they stand; a portal that reads no list is said", () => {
     expect(refusalText(0, null)).toContain("Can't reach the dashboard")
     expect(ACCESS_UNREACHABLE).not.toContain("steward")
-    expect(refusalText(403, { error: "out-of-scope", message: "ann@acme.test may give at most Admin on cms" })).toBe("ann@acme.test may give at most Admin on cms")
+    expect(refusalText(403, { error: "out-of-scope", message: "a reason from the steward" })).toBe("a reason from the steward")
     expect(refusalText(400, null)).toBe("Refused (400).")
     expect(readingProblem({ reading: "steward", writtenAt: NOW })).toBeNull()
     expect(readingProblem({ reading: "unknown", writtenAt: null })).toBeNull()

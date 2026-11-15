@@ -34,7 +34,6 @@ import {
   type WebhookFormat,
 } from "./machine-settings"
 import { plural } from "./format"
-import { breakGlassLine } from "./password"
 import type { Tone } from "./tones"
 import type { Alerting, LogEntry } from "./types"
 
@@ -44,9 +43,9 @@ import type { Alerting, LogEntry } from "./types"
 export type RowId = Exclude<SettingId, "format">
 
 /** The rows a guide sets up, in the order the Sites panel lists them. */
-export type GuideId = "heartbeat" | "webhook" | "offsite" | "company-signin"
+export type GuideId = "heartbeat" | "webhook" | "offsite"
 
-export const GUIDE_ROWS: readonly GuideId[] = ["heartbeat", "webhook", "offsite", "company-signin"]
+export const GUIDE_ROWS: readonly GuideId[] = ["heartbeat", "webhook", "offsite"]
 
 export function isGuide(id: RowId): id is GuideId {
   return (GUIDE_ROWS as readonly string[]).includes(id)
@@ -92,12 +91,6 @@ const SPECS: Readonly<Record<RowId, Omit<RowSpec, "id" | "name">>> = {
     sitesLine: null,
     skippable: false,
   },
-  "company-signin": {
-    noun: "company sign-in",
-    serverLine: "Lets people sign in with their company account.",
-    sitesLine: "Optional. People sign in with their company account.",
-    skippable: true,
-  },
   offsite: {
     noun: "offsite copy",
     serverLine: "Copies the encrypted backups outside the server, every hour.",
@@ -110,12 +103,15 @@ export function rowSpec(id: RowId): RowSpec {
   return { id, name: settingById(id).label, ...SPECS[id] }
 }
 
-/** The Server page's panels, always in this order, each with when a change applies in plain words. */
-export type ServerGroup = { id: SettingGroup; title: string; note: string; rows: readonly RowId[] }
+/**
+ * The Server page's panels, always in this order, each with when a change
+ * applies in plain words; null for Sign-in, whose rows each say it.
+ */
+export type ServerGroup = { id: SettingGroup; title: string; note: string | null; rows: readonly RowId[] }
 
-const GROUP_NOTES: Readonly<Record<SettingGroup, string>> = {
+const GROUP_NOTES: Readonly<Record<SettingGroup, string | null>> = {
   monitoring: "Changes apply within a minute. Nothing restarts.",
-  "sign-in": "The portal applies changes when it restarts.",
+  "sign-in": null,
   offsite: "The next hourly backup uses the change.",
 }
 
@@ -286,7 +282,8 @@ export type RowInputs = {
   skipped: ReadonlySet<RowId>
   /**
    * The owner holds a passkey (lib/webauthn.ts, `ownerPasskeys`): the two
-   * passwords are then the break-glass alone. Absent: none, as before passkeys.
+   * passwords are then for recovery alone, and the Sign-in panel shows them
+   * as one row (`RECOVERY_ROW`). Absent: none.
    */
   passkeys?: boolean
 }
@@ -330,10 +327,7 @@ function deliveredShown(proof: Proof | null, phase: ProofPhase | null, serverNow
 const RESTART_TIPS: Readonly<Partial<Record<RowId, string>>> = {
   "dashboard-password": "Sign-in uses the new password after the dashboard restarts.",
   "portal-password": "The portal uses the new password when it restarts.",
-  "company-signin": "The portal uses the new settings when it restarts.",
 }
-
-const BREAK_GLASS_TIP = "Refused while a passkey exists. Root gives it back over SSH by removing every passkey."
 
 /** A row of the Server page: every setting, done or not, its state, its one action and its menu. */
 export function serverRow(id: RowId, inputs: RowInputs): RowView {
@@ -349,13 +343,9 @@ export function serverRow(id: RowId, inputs: RowInputs): RowView {
   if (state.presence === "unmanaged") {
     return { ...row, word: "Unmanaged", tone: "attention", extra: "can't be changed from here", action: { kind: "secrets", label: "See why", slug: setting.slug } }
   }
-  // The project's own file missing (the portal's holds its password and company sign-in): red, and where the reason is.
-  if ((password || id === "company-signin") && state.presence === "no-file") {
+  // The project's own file missing (the portal's holds its password): red, and where the reason is.
+  if (password && state.presence === "no-file") {
     return { ...row, word: "Missing", tone: "error", error: true, action: { kind: "secrets", label: "See why", slug: setting.slug } }
-  }
-  // Once the owner holds a passkey, the steward refuses both passwords: no Change, only what they are now.
-  if (password && inputs.passkeys === true) {
-    return { ...row, line: breakGlassLine(id === "dashboard-password" ? "dashboard" : "portal"), word: state.presence === "set" ? "Break-glass" : "Not set", tip: BREAK_GLASS_TIP }
   }
   if (password && state.presence === "not-set") return { ...row, word: "Not set", tone: "attention", action: { kind: "password" } }
 
@@ -443,30 +433,40 @@ export function serverRow(id: RowId, inputs: RowInputs): RowView {
       if (offsite !== null && offsite.target !== null) return { ...row, word: "On", tone: "ok", extra: offsite.target, action: change, menu }
       return { ...row, word: setWord(when, serverNow), action: change, menu }
     }
-    case "company-signin": {
-      if (state.restartPending) {
-        return { ...row, word: "Restart pending", tone: "attention", extra: when === null ? null : `changed ${changedWords(serverNow - when)}`, tip: RESTART_TIPS[id] ?? null, action: change, menu }
-      }
-      return { ...row, word: setWord(when, serverNow), action: change, menu }
-    }
   }
 }
 
 /**
- * The Sign-in panel's row for the owner's passkeys, shown once they hold
- * one, above the two passwords it replaces: how many, as the steward lists
- * them, or a plain word while the listing is not known.
+ * The Sign-in panel's row for the owner's passkeys, first in the panel:
+ * how many, and Manage, which goes to the Passkeys panel lower on the page;
+ * without one, a call to add one.
  */
 export const PASSKEYS_ROW = {
   name: "Passkeys",
-  line: "Sign you in to this dashboard and to every restricted site, and unlock changes.",
+  line: "Sign in to the dashboard and private sites.",
+  /** Without a passkey: what adding one changes. */
+  none: "Sign in with this device instead of a password.",
 }
 
 /** Where the Passkeys row leads: the panel that lists them, lower on the Server page. */
 export const PASSKEYS_PANEL_ID = "passkeys"
 
+/** "1 passkey", "2 passkeys", "None"; "Registered" while the listing is not known. */
 export function passkeysWord(count: number | null): string {
-  return count === null ? "Registered" : plural(count, "passkey")
+  if (count === null) return "Registered"
+  return count === 0 ? "None" : plural(count, "passkey")
+}
+
+/**
+ * Once the owner holds a passkey, the steward refuses both passwords
+ * (src/passkeys/): the Sign-in panel shows them as this one muted row, and
+ * its (i) says how they come back.
+ */
+export const RECOVERY_ROW = {
+  name: "Passwords",
+  line: "Off while a passkey exists.",
+  word: "Recovery only",
+  tip: "The dashboard and portal passwords work again once root removes every passkey over SSH, with sitesolide passkey remove.",
 }
 
 // --- The Sites panel -------------------------------------------------------------
@@ -503,8 +503,6 @@ export function sitesRowIds(inputs: SitesInputs): GuideId[] {
   return GUIDE_ROWS.filter((id) => {
     const state = inputs.states[id]
     if (state.presence === "unknown" || state.presence === "unmanaged") return false
-    // The portal's own file missing is the Server page's to say, in red, with where the reason is: no guide writes into it.
-    if (id === "company-signin" && state.presence === "no-file") return false
     if (inputs.guideOpen === id) return true
     if (id === "heartbeat") {
       const phase = inputs.proof === null ? null : proofPhase(inputs.proof, inputs.alerting)
@@ -519,7 +517,6 @@ const SAVED_LINES: Readonly<Record<GuideId, string>> = {
   heartbeat: "The monitor pings it at its next pass, within a minute.",
   webhook: "The monitor sends a message the next time a site goes down or recovers.",
   offsite: "The next hourly backup copies the snapshots offsite.",
-  "company-signin": "The portal reads these when it starts: restart it to apply.",
 }
 
 /**
@@ -625,15 +622,11 @@ export type StepId =
   | "bucket-details"
   | "passphrase"
   | "offsite-saved"
-  | "register-app"
-  | "signin-details"
-  | "signin-saved"
 
 export const GUIDE_STEPS: Readonly<Record<GuideId, readonly StepId[]>> = {
   heartbeat: ["create-check", "paste-ping", "wait-ping"],
   webhook: ["choose-service", "paste-webhook", "webhook-saved"],
   offsite: ["create-bucket", "bucket-details", "passphrase", "offsite-saved"],
-  "company-signin": ["register-app", "signin-details", "signin-saved"],
 }
 
 /** The step that takes the value, where Change opens. */
@@ -641,7 +634,6 @@ export const VALUE_STEP: Readonly<Record<GuideId, StepId>> = {
   heartbeat: "paste-ping",
   webhook: "paste-webhook",
   offsite: "bucket-details",
-  "company-signin": "signin-details",
 }
 
 export function openingStep(id: GuideId, start: GuideStart): StepId {
@@ -678,7 +670,7 @@ export function nextStep(id: GuideId, step: StepId): StepId | null {
  * step says how.
  */
 export function missingFile(id: GuideId, presence: Presence): string | null {
-  if (id === "company-signin" || presence !== "no-file") return null
+  if (presence !== "no-file") return null
   return settingById(id).file
 }
 
@@ -888,20 +880,6 @@ export const PASSPHRASE_VARIABLE = "BACKUP_ENCRYPTION_PASSPHRASE"
 /** The backup run's minimum (dashboard/src/backup/offsite.ts), said before sending; the run judges. */
 export const PASSPHRASE_MIN = 16
 
-export const SIGNIN_FIELDS: readonly FieldSpec[] = [
-  field("company-signin", "OIDC_ISSUER", { secret: false, optional: false, placeholder: "https://accounts.example.com" }),
-  field("company-signin", "OIDC_CLIENT_ID", { secret: false, optional: false, placeholder: "xxxxxxxx.apps.example.com" }),
-  field("company-signin", "OIDC_CLIENT_SECRET", { secret: true, optional: false, placeholder: "xxxxxxxxxxxxxxxx" }),
-  field("company-signin", "OIDC_ALLOWED_DOMAINS", {
-    secret: false,
-    optional: false,
-    placeholder: "example.com",
-    help: "Anyone with an email at these domains can sign in. Separate several with commas.",
-  }),
-  field("company-signin", "OIDC_ADMIN_EMAILS", { secret: false, optional: true, placeholder: "owner@example.com" }),
-  field("company-signin", "OIDC_PROVIDER_NAME", { secret: false, optional: true, placeholder: "Your company account", help: "Shown on the sign-in button." }),
-]
-
 const typed = (fields: Fields, variable: string): string => (fields[variable] ?? "").trim()
 
 /** Typed, or kept on the server on a Change. */
@@ -929,12 +907,6 @@ export function passphraseHint(passphrase: string): Hint | null {
 export function passphraseReady(passphrase: string, saved: boolean, present: boolean): boolean {
   if (passphrase === "") return present
   return passphrase.length >= PASSPHRASE_MIN && saved
-}
-
-/** The company sign-in's details: issuer, client, secret and domains typed or kept, the issuer in https. */
-export function signinReady(fields: Fields, present: readonly string[]): boolean {
-  if (httpsProblem(typed(fields, "OIDC_ISSUER")) !== null) return false
-  return SIGNIN_FIELDS.filter((one) => !one.optional).every((one) => given(fields, one.variable, present))
 }
 
 /** What a form sends: every field typed, trimmed; a passphrase as typed. The rest stays as it is on the server. */

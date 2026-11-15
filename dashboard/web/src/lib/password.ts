@@ -32,16 +32,15 @@ export function passwordTexts(slug: string, variable: string): PasswordTexts {
     case "dashboard":
       return {
         title: "Change the dashboard password",
-        warning:
-          "Unlocking secrets asks for the new password right away. Signing in to the dashboard keeps the old one until the dashboard restarts, and that restart signs everyone out.",
-        nextStep: "Restart the dashboard to sign in with the new password. The restart signs everyone out, you included.",
+        warning: "Unlocking takes the new password at once. Sign-in keeps the old one until the dashboard restarts, which signs everyone out.",
+        nextStep: "Restart the dashboard to sign in with it. The restart signs everyone out, you too.",
         generatedTitle: "New dashboard password",
       }
     case "portal":
       return {
         title: "Change the portal password",
-        warning: "Every personal site asks for the new password once the portal restarts.",
-        nextStep: "Restart the portal to apply it: every personal site then asks for the new password.",
+        warning: "Restricted sites take the new password once the portal restarts.",
+        nextStep: "Restart the portal to apply it.",
         generatedTitle: "New portal password",
       }
     case "other":
@@ -72,14 +71,8 @@ export function offersPasswordChange(target: { slug: string; file: string; varia
   return !passkeys || !isOwnerPassword(target)
 }
 
-/** What the page says in place of changing them. */
-export const BREAK_GLASS =
-  "You sign in with a passkey. The dashboard and portal passwords are only the break-glass: they work again once root removes every passkey with sitesolide passkey remove."
-
-/** The same, for one of the two, on its row. */
-export function breakGlassLine(which: "dashboard" | "portal"): string {
-  return `Break-glass only: you sign in with a passkey. The ${which} password works again once root removes every passkey with sitesolide passkey remove.`
-}
+/** What the page says of the two passwords in place of changing them, once a passkey exists. */
+export const BREAK_GLASS = "Recovery only while a passkey exists."
 
 /** `draw`: the steward draws it and returns it once. `choose`: typed twice here. */
 export type PasswordMode = "draw" | "choose"

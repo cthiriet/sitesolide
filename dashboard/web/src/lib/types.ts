@@ -83,28 +83,16 @@ export type { GenerateFormat } from "../../../borrowed/store"
 export type { Scope, TokenView, DeploymentState, AuditEntry, TeamPageResponse, CreatedTokenResponse } from "../../../src/control/protocol"
 
 /**
- * Who is signed in, from the contract of the people who sign in
- * (src/people/protocol.ts). Types only: what a person may do is the
- * steward's to decide.
+ * The session and the owner's passkey offer, from the passkeys' contract
+ * (src/passkeys/protocol.ts).
  */
-export type { IdentityView, PasskeyOffer, Roles, SessionResponse, SsoOffer, DashboardRole as Role } from "../../../src/people/protocol"
+export type { PasskeyOffer, SessionResponse } from "../../../src/passkeys/protocol"
 
 /**
  * Access, from its contract (src/access/protocol.ts): a project's general
- * access and people with access, and the machine's People.
+ * access and its guests.
  */
-export type {
-  AccessPageResponse,
-  EntryResponse,
-  EntryView,
-  GeneralAccess,
-  GeneralResponse,
-  GeneralView,
-  PeoplePageResponse,
-  PersonResponse,
-  PersonView,
-  Role as AccessRole,
-} from "../../../src/access/protocol"
+export type { AccessPageResponse, EntryResponse, EntryView, GeneralAccess, GeneralResponse, GeneralView } from "../../../src/access/protocol"
 
 /**
  * The machine's audit, every component's in one shape (src/audit/protocol.ts).

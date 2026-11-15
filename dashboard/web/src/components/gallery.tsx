@@ -209,7 +209,7 @@ function columns(open: (slug: string) => void): Column<Specimen>[] {
       width: "76px",
       align: "center",
       slot: "state",
-      cell: (row) => <AccessIcon access={row.access} slug={row.slug} />,
+      cell: (row) => <AccessIcon access={row.access} />,
     },
     {
       key: "deployed",
@@ -283,7 +283,7 @@ function GalleryPage() {
               <ThemeIcon />
               <span className="max-md:sr-only">{themeLabel}</span>
             </Button>
-            <WriteButton onPress={() => perform("New token")} purpose="create a token" resume="New token" className="max-md:h-10">
+            <WriteButton onPress={() => perform("New token")} purpose="create a token" className="max-md:h-10">
               <Plus />
               New token
             </WriteButton>
@@ -386,7 +386,7 @@ function GalleryPage() {
                   align: "end",
                   slot: "state",
                   cell: (index) => (
-                    <WriteButton variant="outline" size="sm" onPress={() => perform(`Restore snapshot ${index + 1}`)} purpose="restore cms" resume="Restore">
+                    <WriteButton variant="outline" size="sm" onPress={() => perform(`Restore snapshot ${index + 1}`)} purpose="restore cms">
                       <ArchiveRestore />
                       Restore
                     </WriteButton>
@@ -465,7 +465,7 @@ function GalleryPage() {
                   const entry = accessEntry(accessKey(row.access))
                   return (
                     <li key={row.slug} className="flex h-11 items-center gap-3 px-4">
-                      <AccessIcon access={row.access} slug={row.slug} />
+                      <AccessIcon access={row.access} />
                       <span className="min-w-0 flex-1">
                         <LegendEntry icon={entry.icon} tone={entry.tone}>
                           {entry.label}
@@ -486,14 +486,14 @@ function GalleryPage() {
           note={
             <>
               No Unlock button anywhere. A write says what it does and carries the lock glyph <LockGlyph /> while locked;
-              pressed, it asks for the password (a person signs in again), then performs. useWrite() for a form or a
+              pressed, it asks for the passkey or the password, then performs. useWrite() for a form or a
               checkbox; WriteMenuItem in a row menu; unlock={"{false}"} for what needs none, Restrict and Revoke.
             </>
           }
         >
           <Panel>
             <div className="flex flex-wrap items-center gap-2">
-              <WriteButton onPress={() => perform("Add")} purpose="add someone" resume="Add">
+              <WriteButton onPress={() => perform("Add")} purpose="add someone">
                 Add
               </WriteButton>
               <WriteButton variant="outline" onPress={() => perform("Make public")} purpose="make cms public">

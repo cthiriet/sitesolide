@@ -81,7 +81,6 @@ export function machineIndicators(
   return {
     home: discrepancyIndicator(discrepancies),
     activity: null,
-    people: null,
     tokens: null,
     server: server === null ? null : { count: 1, tone: server.tone, label: server.label, dot: true },
   }

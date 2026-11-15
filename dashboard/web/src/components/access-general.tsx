@@ -24,14 +24,11 @@ import {
   changeProgress,
   changeResult,
   changeTexts,
-  codeWithheld,
   confirmationValid,
   GENERAL_CHOICES,
   removalConfirmation,
-  whoChanges,
   type ChangeTarget,
   type ChoiceOption,
-  type GeneralReader,
   type GeneralState,
 } from "@/lib/access"
 import { refusalOf, succeeded } from "@/lib/secrets"
@@ -65,9 +62,9 @@ function Exemptions({ paths }: { paths: readonly string[] }) {
   )
 }
 
-/** The code in force, to copy or open; or, for whoever may not see it, whom to ask. */
+/** The code in force, to copy or open. */
 function Code({ slug, state }: { slug: string; state: GeneralState }) {
-  if (state.code === null) return <p className="text-xs text-pretty text-muted-foreground">{codeWithheld(slug)}</p>
+  if (state.code === null) return null
   return <CodeChip slug={slug} code={state.code.code} url={state.code.url} large />
 }
 
@@ -88,8 +85,8 @@ function Note({ icon: Icon, label, children }: { icon?: LucideIcon; label?: stri
  * How the site opens, in one row, the share dialog's: the way's icon on its
  * tile, its name and its sentence, then what it carries, the code and its
  * link for a site that opens with one, the exempt paths of a restricted one.
- * `action`, at the row's end: *Change* for whoever may change it. `note`,
- * under the sentence: who changes it, for whoever only reads it.
+ * `action`, at the row's end: *Change*. `note`, under the sentence: why
+ * nobody changes it, for a project of the platform.
  */
 export function GeneralAccessLine({
   slug,
@@ -265,19 +262,16 @@ function Chooser({
 
 /**
  * General access, the first thing a site's Access section says: how the site
- * opens, in one row, with *Change* for the owner and the project's Admins,
- * a menu of the three ways, each with its sentence; the code in force has
- * *New code* beside it. A disagreement with sitesolide.json is said above in
- * red and lays the three ways out with Keep and Apply. What the steward
- * refuses for one way is said in the menu, for all of them once under the
- * row. Whoever only reads it gets the row and who changes it. Nothing changes
- * until the confirmation.
+ * opens, in one row, with *Change*, a menu of the three ways, each with its
+ * sentence; the code in force has *New code* beside it. A disagreement with
+ * sitesolide.json is said above in red and lays the three ways out with Keep
+ * and Apply. What the steward refuses for one way is said in the menu, for
+ * all of them once under the row. Nothing changes until the confirmation.
  */
 export function GeneralAccessPanel({
   slug,
   state,
   options,
-  reader,
   renewable,
   stewardReason,
   failedNote,
@@ -288,14 +282,13 @@ export function GeneralAccessPanel({
   slug: string
   state: GeneralState
   options: ChoiceOption[]
-  reader: GeneralReader
   /** Every address the site answers on: named when there is more than the preview. */
   addresses: string[]
   /** *New code* is offered beside the code in force. */
   renewable: boolean
   /** The steward's reason when no other choice may be taken from here, said once under the row. */
   stewardReason: string | null
-  /** When who has access could not be read: the choices wait for the server. */
+  /** When the guests could not be read: the choices wait for the server. */
   failedNote: string | null
   /** Changes are locked: a way that lets more people in carries the lock glyph, and asks for the unlock when pressed. */
   locked?: boolean
@@ -310,8 +303,7 @@ export function GeneralAccessPanel({
       </div>
     )
   const addressLine = addressesLine(addresses)
-  const reads = reader === "reader"
-  const choosing = !reads && state.problem !== null
+  const choosing = state.problem !== null
 
   return (
     <Panel title="General access" full>
@@ -322,9 +314,8 @@ export function GeneralAccessPanel({
         <GeneralAccessLine
           slug={slug}
           state={state}
-          note={reads ? whoChanges(slug) : undefined}
           action={
-            !reads && options.some((option) => option.available) ? (
+            options.some((option) => option.available) ? (
               <ChangeMenu slug={slug} options={options} current={state.current} locked={locked} onChoose={onChoose} />
             ) : undefined
           }
@@ -341,12 +332,12 @@ export function GeneralAccessPanel({
       )}
       {/* Link2, not Globe: Globe says Public, and this line stands under every way. */}
       {addressLine !== null && <Note icon={Link2}>{addressLine}</Note>}
-      {!reads && stewardReason !== null && (
+      {stewardReason !== null && (
         <Note icon={Info} label="Why it can't change here: ">
           {stewardReason}
         </Note>
       )}
-      {!reads && failedNote !== null && <Note>{failedNote}</Note>}
+      {failedNote !== null && <Note>{failedNote}</Note>}
     </Panel>
   )
 }
@@ -358,7 +349,7 @@ export type ChangeState = {
   target: ChangeTarget
   /** How the site opens before the change: leaving a code says the code stops working. */
   from: GeneralAccess
-  /** Said before restricting a site nobody is on the list of: who will still open it. */
+  /** Said before restricting a site with no guest: who will still open it. */
   warning: string | null
   /** Every address the site answers on, which the change applies to together. */
   addresses: string[]

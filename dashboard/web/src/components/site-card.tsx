@@ -144,30 +144,22 @@ function MemoryLine({ service }: { service: Service }) {
  * The project's main unit, as facts: its state and how long it has been up,
  * its memory against its ceiling, its CPU, its restarts, its port. Nothing
  * for a static site or a folder with no manifest, which run no service: the
- * kind under the title says so. `action` is the Restart a Developer or an
- * Admin may ask for.
+ * kind under the title says so.
  */
-export function ServicePanel({ site, now, action }: { site: Site; now: number; action?: ReactNode }) {
+export function ServicePanel({ site, now }: { site: Site; now: number }) {
   const { snapshot } = useData()
   const card = serviceCard(site, now, snapshot?.machine?.cores ?? null)
   if (card.kind !== "app") return null
   const { state } = card
   const marked = state.tone === "error" || state.tone === "attention"
   // The anchor of a project whose every service is scheduled runs nothing: while it keeps their timers armed, the Services table says it all.
-  if (isAnchoredSite(site) && !marked && action === undefined) return null
+  if (isAnchoredSite(site) && !marked) return null
   const stateDetail = [card.uptime?.since ?? null, card.systemd].filter((piece): piece is string => piece !== null).join(", ")
   return (
     <Panel
       title={card.title}
       full
-      actions={
-        card.unit === null && action === undefined ? undefined : (
-          <>
-            {card.unit !== null && <code className="font-mono text-xs text-muted-foreground">{card.unit}</code>}
-            {action}
-          </>
-        )
-      }
+      actions={card.unit === null ? undefined : <code className="font-mono text-xs text-muted-foreground">{card.unit}</code>}
     >
       <ul className={FACTS}>
         <FactRow label="State" tone={state.tone}>
@@ -395,8 +387,8 @@ function AddressLine({ site }: { site: Site }) {
  * its list. A disagreement between sitesolide.json and the server is an
  * error: the row says it in red, and under it each setting from both sides.
  */
-function AccessLine({ site, href, people, plain }: { site: Site; href: string; people: string | null; plain: boolean }) {
-  const reading = readAccess(site, plain)
+function AccessLine({ site, href, guests }: { site: Site; href: string; guests: string | null }) {
+  const reading = readAccess(site)
   const key = accessKey(reading.access)
   const { icon: Icon, tone } = accessEntry(key)
   const error = reading.tone === "error"
@@ -408,7 +400,7 @@ function AccessLine({ site, href, people, plain }: { site: Site; href: string; p
           {error && <span className="sr-only">Error: </span>}
           {reading.title}
         </span>
-        {people !== null && !error && <span className="text-muted-foreground">{people}</span>}
+        {guests !== null && !error && <span className="text-muted-foreground">{guests}</span>}
       </FactRow>
       {error && reading.checks.length > 0 && (
         <li className="bg-cell/60">
@@ -462,8 +454,7 @@ export function SitePanel({
   site,
   now,
   links,
-  people,
-  plainAccess,
+  guests,
   secrets,
   backups,
   deployedBy = null,
@@ -472,10 +463,8 @@ export function SitePanel({
   now: number
   /** The address of each section the reader may open. */
   links: { access: string; secrets: string | null; backups: string | null }
-  /** Who is on the list, in a few words, once read. */
-  people: string | null
-  /** A Viewer or a Developer reads Applied rather than the Caddy block. */
-  plainAccess: boolean
+  /** How many guests, in a few words, once read. */
+  guests: string | null
   secrets: Headline | null
   backups: Headline | null
   /** Who made the last deployment, when Activity knows it. */
@@ -485,7 +474,7 @@ export function SitePanel({
     <Panel title="Site" full>
       <ul className={FACTS}>
         <AddressLine site={site} />
-        <AccessLine site={site} href={links.access} people={people} plain={plainAccess} />
+        <AccessLine site={site} href={links.access} guests={guests} />
         {secrets !== null && links.secrets !== null && (
           <FactRow label="Secrets" href={links.secrets}>
             <Head headline={secrets} />

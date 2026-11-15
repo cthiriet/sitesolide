@@ -21,7 +21,7 @@ export function lifecycleTexts(slug: string, action: LifecycleAction): Lifecycle
   if (action === "disable") {
     return {
       title: `Turn off ${slug}?`,
-      consequence: "Its services stop and every address it has says it is turned off. Nothing is deleted: its code, data, secrets, people with access and tokens stay, and turning it on brings it back as it was.",
+      consequence: "Its services stop and every address it has says it is turned off. Nothing is deleted: its code, data, secrets, guests and tokens stay, and turning it on brings it back as it was.",
       action: "Turn off",
       actionRunning: "Turning off...",
       running: `Turning off ${slug}`,
@@ -45,7 +45,7 @@ export function lifecycleTexts(slug: string, action: LifecycleAction): Lifecycle
   return {
     title: `Delete ${slug}?`,
     consequence:
-      "Its services, files and data, secrets and system account are deleted from the server, for good. Its people with access lose it. Backup snapshots already taken stay. The repository's folder is not touched.",
+      "Its services, files and data, secrets and system account are deleted from the server, for good. Its guests lose their access. Backup snapshots already taken stay. The repository's folder is not touched.",
     action: "Delete project",
     actionRunning: "Deleting...",
     running: `Deleting ${slug}`,

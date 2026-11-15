@@ -75,9 +75,7 @@ describe("a site's door", () => {
     })
   })
 
-  test("a code withheld from a Viewer or a Developer: the site opens with one, no code shown, no disagreement", () => {
-    expect(siteAccess(site({ lock: { closed: true, code: null, url: null, withheld: true } }))).toEqual({ kind: "code", code: null, url: null })
-    // Without the mark, a code asked for and none on the server stays a disagreement.
+  test("a code asked for and none on the server is a disagreement", () => {
     expect(siteAccess(site({ lock: lock(true, null) }))).toMatchObject({ kind: "mismatch", key: "lock-without-code" })
   })
 

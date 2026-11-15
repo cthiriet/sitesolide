@@ -2,7 +2,7 @@ import type { ReactNode } from "react"
 import { ArrowUpRight, Copy, Link2 } from "lucide-react"
 import { DropdownMenuGroup, DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { CHIP, RoleBars } from "@/components/access-word"
+import { CHIP } from "@/components/access-word"
 import { useCopy } from "@/components/copy"
 import { useData } from "@/components/data"
 import { CellText, DataTable, RowLink, RowMenu, RowMenuLink, type Column } from "@/components/data-table"
@@ -10,9 +10,7 @@ import { MemoryUsage } from "@/components/gauge"
 import { AccessIcon, KindIcon } from "@/components/legend"
 import { StateLabel, When } from "@/components/page"
 import { SECTION_ICONS } from "@/components/sidebar"
-import { roleLabel } from "@/lib/access"
 import { ABSENT, size } from "@/lib/format"
-import { roleOn } from "@/lib/identity"
 import { siteKind } from "@/lib/legend"
 import { sectionsFor, siteUrl } from "@/lib/pages"
 import { siteFolder } from "@/lib/site-card"
@@ -39,23 +37,9 @@ import { cn } from "@/lib/utils"
 const WIDE_ONLY = "hidden @2xl/table:inline-flex"
 const NARROW_ONLY = "@2xl/table:hidden"
 
-/** A person's role on the site, beside its name: what they may do there, read at a glance. The owner sees none. */
-function RoleTag({ slug }: { slug: string }) {
-  const { identity } = useData()
-  const role = roleOn(identity, slug)
-  if (role === null) return null
-  return (
-    <span title="Your role" className={cn(CHIP, "text-secondary-foreground")}>
-      <RoleBars role={role} />
-      <span className="sr-only">Your role: </span>
-      {roleLabel(role)}
-    </span>
-  )
-}
-
 /**
  * One of the platform's own projects, which the list shows outside Platform
- * only while it needs the owner. Quieter than a role: it says what the
+ * only while it needs the owner. A quiet tag: it says what the
  * project is, not what to do with it.
  */
 function PlatformTag({ site }: { site: Pick<ListedSite, "platform"> }) {
@@ -161,12 +145,11 @@ function FigureCell({ site, which, cores }: { site: ListedSite; which: "cpu" | "
 
 /** The row menu: where to go first, then what to copy, then the site's sections. */
 function SiteMenu({ site }: { site: ListedSite }) {
-  const { identity } = useData()
   const { copy } = useCopy("Copied")
   const address = siteAddress(site)
   const access = siteAccess(site)
   const headless = site.headless && site.domain === null
-  const sections = sectionsFor(identity, site.slug, site).filter((entry) => entry.section !== "overview")
+  const sections = sectionsFor(site).filter((entry) => entry.section !== "overview")
   return (
     <RowMenu label={`Actions for ${site.slug}`}>
       <DropdownMenuGroup>
@@ -237,7 +220,6 @@ function siteColumns(
             <span title={row.description ?? undefined}>{row.slug}</span>
           </RowLink>
           <PlatformTag site={row} />
-          <RoleTag slug={row.slug} />
           {/* Sorted by CPU, the column says it on every row. */}
           {which !== "cpu" && <CpuTag site={row} cores={cores} />}
           {state !== null && <RowStateLabel state={state} className={WIDE_ONLY} />}
@@ -271,7 +253,7 @@ function siteColumns(
     align: "center",
     slot: "state",
     // A project that serves no page has no visitor to let in: its cell stays empty.
-    cell: (row) => (listedAccess(row) === null ? null : <AccessIcon access={siteAccess(row)} slug={row.slug} />),
+    cell: (row) => (listedAccess(row) === null ? null : <AccessIcon access={siteAccess(row)} />),
   }
   const memory: Column<ListedSite> = {
     key: "memory",

@@ -6,12 +6,10 @@ import { useData } from "@/components/data"
 import { FilterBar, useListState, type Facet, type ListControls } from "@/components/filter-bar"
 import { MachineStrip, StripSkeleton } from "@/components/gauge"
 import { accessEntry, kindEntry } from "@/components/legend"
-import { Banner, EmptyState, InlineEmpty, PageBody, PageHeader, Panel, PanelSkeleton, WithSnapshot } from "@/components/page"
+import { Banner, InlineEmpty, PageBody, PageHeader, Panel, PanelSkeleton, WithSnapshot } from "@/components/page"
 import { ServerSetupProvider } from "@/components/server-setup"
 import { SetupPanel } from "@/components/setup-panel"
 import { SiteList } from "@/components/sites"
-import { isPerson } from "@/lib/identity"
-import { mayOpen } from "@/lib/pages"
 import { FRESH_TITLE } from "@/lib/search"
 import { withSecrets } from "@/lib/secrets"
 import {
@@ -143,8 +141,6 @@ function EmptyRows({ list, narrowed }: { list: ListControls; narrowed: Narrowed<
 
 /** The strip, what has no row, the filter row and the list: what the snapshot lets the page say. */
 function Sites({ snapshot, list, narrowed }: { snapshot: Snapshot; list: ListControls; narrowed: Narrowed<ListedSite> }) {
-  const { identity } = useData()
-  const person = isPerson(identity)
   const worst = useMemo(() => worstSeverities(snapshot.discrepancies), [snapshot.discrepancies])
   const rows = useMemo(() => sortSites(narrowed.rows, list.sort, worst), [narrowed.rows, list.sort, worst])
   const states = useMemo(() => {
@@ -159,18 +155,6 @@ function Sites({ snapshot, list, narrowed }: { snapshot: Snapshot; list: ListCon
   const which = figureOf(list.sort)
 
   if (snapshot.sites.length === 0) {
-    // A person sees their projects alone: none yet is no word about the server.
-    if (person) {
-      return (
-        <Panel>
-          <EmptyState icon={Layers} title="No project of yours yet">
-            {identity.create
-              ? "You may create projects: create a token on the Tokens page, then run sitesolide deploy in the project's folder. You become its Admin."
-              : "A project appears here once an Admin of it, or the owner, gives you a role on it."}
-          </EmptyState>
-        </Panel>
-      )
-    }
     return (
       <>
         <MachineStrip snapshot={snapshot} sort={list.sort} onSort={(sort) => list.setSort(list.sort === sort ? SITE_SORTS[0]!.value : sort)} />
@@ -185,11 +169,9 @@ function Sites({ snapshot, list, narrowed }: { snapshot: Snapshot; list: ListCon
 
   return (
     <>
-      {!person && (
-        <MachineStrip snapshot={snapshot} sort={list.sort} onSort={(sort) => list.setSort(list.sort === sort ? SITE_SORTS[0]!.value : sort)} />
-      )}
+      <MachineStrip snapshot={snapshot} sort={list.sort} onSort={(sort) => list.setSort(list.sort === sort ? SITE_SORTS[0]!.value : sort)} />
       <RowlessIssues issues={rowless} />
-      {!person && <SetupPanel />}
+      <SetupPanel />
       <section aria-label="Sites" className="grid gap-3">
         <FilterBar
           list={{ ...list, narrowed: narrowedSites(list) }}
@@ -238,7 +220,7 @@ function HomeSkeleton() {
  * Kind: Platform, and elsewhere only while they need the owner.
  */
 export function HomePage() {
-  const { snapshot, identity, secretsBySite } = useData()
+  const { snapshot, secretsBySite } = useData()
   const list = useListState(SITES_LIST)
   // Enriched once per read: the search, the facets and the rows read the same objects.
   const sites = useMemo(() => (snapshot === null ? null : withSecrets(snapshot.sites, secretsBySite)), [snapshot, secretsBySite])
@@ -262,12 +244,10 @@ export function HomePage() {
             <p className="text-muted-foreground">
               Load, memory and disk are ticked at 70 and 90 %. Press Memory or Disk to sort the sites by what each one holds.
             </p>
-            {!isPerson(identity) && (
-              <p className="text-muted-foreground">When the server itself lacks a setting, a setup guide sits under the strip. Only you see it.</p>
-            )}
+            <p className="text-muted-foreground">When the server itself lacks a setting, a setup guide sits under the strip.</p>
           </>
         }
-        history={mayOpen({ name: "activity" }, identity) ? { type: "deployments" } : undefined}
+        history={{ type: "deployments" }}
       />
       <PageBody>
         <WithSnapshot skeleton={<HomeSkeleton />}>

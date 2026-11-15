@@ -8,11 +8,11 @@
  * see is empty or malformed, so that the owner does not wait for a round trip
  * to learn a field is missing.
  */
-import { isPlatform, roleLabel } from "./access"
+import { isPlatform } from "./access"
 import { ago, dateTime, duration, fromNow } from "./format"
 import { normalize } from "./search"
 import type { Tone } from "./tones"
-import type { Role, Roles, Scope, Site, TokenView } from "./types"
+import type { Scope, Site, TokenView } from "./types"
 
 const DAY = 24 * 60 * 60 * 1000
 
@@ -94,13 +94,11 @@ export function lastUsed(token: Pick<TokenView, "lastUsedAt">, now: number): str
 }
 
 /**
- * Whose a token is, in the Owner column: "You" for the owner's own, the
- * person's email for theirs; a token from before every token belonged to
- * someone keeps the address it was made for.
+ * The address a token from before every token was the owner's was made for,
+ * kept as a label; null for the owner's own.
  */
-export function ownerLabel(token: Pick<TokenView, "member" | "email">): string {
-  if (token.member !== null) return token.member
-  return token.email === "owner" ? "You" : token.email
+export function madeFor(token: Pick<TokenView, "email">): string | null {
+  return token.email === "owner" ? null : token.email
 }
 
 // --- What a token may do --------------------------------------------------------------
@@ -141,40 +139,15 @@ export const PERMISSION_WORDS: Readonly<Record<PermissionKey, PermissionWords>> 
 /** The order of the chips and the sheet's lines: what opens a site to anyone first. */
 export const PERMISSION_ORDER: readonly PermissionKey[] = ["all", "public", "secrets", "domain", "outbound", "create"]
 
-/** A permission a token holds, and why it is paused, when it is: "no longer allowed". */
-export type Permission = { key: PermissionKey; pause: string | null }
-
-/** A scope's permissions, what is on alone: nothing is said of what is off, which is every token's default. */
-function heldPermissions(scope: Scope): PermissionKey[] {
+/**
+ * What a token may do beyond deploying, what is on alone: nothing is said of
+ * what is off, which is every token's default.
+ */
+export function tokenPermissions(token: Pick<TokenView, "scope">): PermissionKey[] {
+  const { scope } = token
   // `secrets` absent from a scope minted before the permission: none.
   const on: Record<PermissionKey, boolean> = { all: scope.all === true, public: scope.public, secrets: scope.secrets === true, domain: scope.domain, outbound: scope.outbound, create: scope.create }
   return PERMISSION_ORDER.filter((key) => on[key])
-}
-
-/** What a person holds now: their role on each project, and the right to create projects. */
-export type Rights = { roles: Readonly<Record<string, Role | "visitor">>; create: boolean }
-
-/**
- * What a token may do beyond deploying, what is on alone, a person's paused
- * while they no longer hold it, as the steward narrows it at every use
- * (src/people/tokens.ts, `narrowIdentity`): the create right while they hold
- * it, "no longer allowed"; each option while they are Admin of every project
- * the token still deploys, "not Admin of cms now"; managing secrets while it
- * still deploys a project or may create one, the steward judging the role on
- * each project at every request, "no project to deploy now". `rights` null:
- * the owner's own, or rights not known.
- */
-export function tokenPermissions(token: Pick<TokenView, "owned" | "scope" | "member">, rights: Rights | null): Permission[] {
-  const held = heldPermissions(token.scope)
-  if (token.member === null || rights === null) return held.map((key) => ({ key, pause: null }))
-  const roleOf = (slug: string) => (Object.hasOwn(rights.roles, slug) ? rights.roles[slug]! : null)
-  const deploys = (slug: string) => roleOf(slug) === "developer" || roleOf(slug) === "admin"
-  const reached = [...new Set([...token.scope.slugs, ...token.owned])].filter(deploys).sort()
-  const create = token.scope.create && rights.create
-  const notAdmin = reached.filter((slug) => roleOf(slug) !== "admin")
-  const nothing = reached.length === 0 && !create ? "no project to deploy now" : null
-  const optionPause = nothing ?? (notAdmin.length > 0 ? `not Admin of ${notAdmin.join(", ")} now` : null)
-  return held.map((key) => ({ key, pause: key === "create" ? (rights.create ? null : "no longer allowed") : key === "secrets" ? nothing : optionPause }))
 }
 
 /**
@@ -199,28 +172,23 @@ export function fitChips<T>(items: readonly T[], width: (item: T) => number, { m
 const MORE_WIDTH = 3
 const CHIP_GAP = 1
 
-/** A paused chip carries its glyph, two characters' worth. */
-const PAUSE_WIDTH = 2
-
 /** The characters a Permissions or Projects cell holds at the table's narrowest one-line width. */
 export const CELL_BUDGET = 24
 
-/** The Permissions cell: the live first, in their order, the paused after. */
-export function permissionChips(permissions: readonly Permission[]): { shown: Permission[]; more: number } {
-  const ordered = [...permissions.filter((one) => one.pause === null), ...permissions.filter((one) => one.pause !== null)]
-  return fitChips(ordered, (one) => PERMISSION_WORDS[one.key].chip.length + (one.pause === null ? 0 : PAUSE_WIDTH), { budget: CELL_BUDGET })
+/** The Permissions cell, in their order. */
+export function permissionChips(permissions: readonly PermissionKey[]): { shown: PermissionKey[]; more: number } {
+  return fitChips(permissions, (key) => PERMISSION_WORDS[key].chip.length, { budget: CELL_BUDGET })
 }
 
-/** The Projects cell: where it deploys first, then where it is paused. */
+/** The Projects cell. */
 export function projectChips(reach: readonly Reach[]): { shown: Reach[]; more: number } {
-  const ordered = [...reach.filter((one) => !one.paused), ...reach.filter((one) => one.paused)]
-  return fitChips(ordered, (one) => one.slug.length + (one.paused ? PAUSE_WIDTH : 0), { budget: CELL_BUDGET })
+  return fitChips(reach, (one) => one.slug.length, { budget: CELL_BUDGET })
 }
 
-/** Does a token answer the list's search: its name, its owner, a project it reaches. */
-export function tokenMatches(token: Pick<TokenView, "label" | "member" | "email" | "owned" | "scope">, query: string): boolean {
+/** Does a token answer the list's search: its name, the address it was made for, a project it reaches. */
+export function tokenMatches(token: Pick<TokenView, "label" | "email" | "owned" | "scope">, query: string): boolean {
   const words = normalize(query).split(/\s+/).filter((word) => word !== "")
-  const haystack = normalize([token.label, ownerLabel(token), ...token.owned, ...token.scope.slugs].join(" "))
+  const haystack = normalize([token.label, madeFor(token) ?? "", ...token.owned, ...token.scope.slugs].join(" "))
   return words.every((word) => haystack.includes(word))
 }
 
@@ -260,15 +228,14 @@ export function tokenProjects(sites: readonly Pick<Site, "slug" | "portal" | "do
 /**
  * The options the projects chosen cannot be deployed without, each with the
  * projects that ask for it. The steward refuses the rest (src/control/policy.ts):
- * an owner's token deploys a project that is not Restricted only with public
- * sites, a person's deploys it as it stands (`decideDoor`); exempted paths
- * take public sites and a declared domain takes its option from both
- * (`scopeRefusals`). `member`: a person's token.
+ * a token deploys a project that is not Restricted only with public sites
+ * (`decideDoor`); exempted paths take public sites and a declared domain
+ * takes its option (`scopeRefusals`).
  */
-export function neededOptions(projects: readonly TokenProject[], chosen: readonly string[], member: boolean): { public: string[]; domain: string[] } {
+export function neededOptions(projects: readonly TokenProject[], chosen: readonly string[]): { public: string[]; domain: string[] } {
   const picked = projects.filter((project) => chosen.includes(project.slug))
   return {
-    public: picked.filter((project) => project.exempt || (!member && project.open)).map((project) => project.slug),
+    public: picked.filter((project) => project.exempt || project.open).map((project) => project.slug),
     domain: picked.filter((project) => project.domain).map((project) => project.slug),
   }
 }
@@ -285,56 +252,12 @@ export function firstTokenField(errors: TokenErrors): TokenField | null {
   return null
 }
 
-/**
- * Who a token may be made for by the owner: the people who deploy somewhere,
- * a Developer or an Admin, or may create projects. A Viewer everywhere signs
- * in, but the steward mints them no token, so the dialog does not offer them.
- */
-export function tokenHolders(people: readonly (Rights & { who: string })[]): { email: string; roles: Roles; create: boolean }[] {
-  return people
-    .map((person) => ({
-      email: person.who,
-      roles: Object.fromEntries(Object.entries(person.roles).filter((entry): entry is [string, Role] => entry[1] !== "visitor")) as Roles,
-      create: person.create,
-    }))
-    .filter((person) => person.create || mintableProjects(person.roles).length > 0)
-    .sort((a, b) => a.email.localeCompare(b.email))
-}
+/** A project a token reaches, and what the sheet says beside it: "created" for those it created. */
+export type Reach = { slug: string; detail: string | null }
 
-/**
- * Who made a token, and for whom, as a row says it: "Made by you", "Made by
- * you for alice@example.com", "Made by alice@example.com". `viewer`: who
- * reads the row, the owner or the person it belongs to.
- */
-export function madeByLine(token: Pick<TokenView, "member" | "by" | "email">, viewer: "owner" | "person"): string {
-  if (token.member === null) return token.email === "owner" ? "Made by you" : `Made by you for ${token.email}`
-  if (viewer === "person") return token.by === "owner" ? "Made by the owner for you" : "Made by you"
-  return token.by === "owner" ? `Made by you for ${token.member}` : `Made by ${token.member}`
-}
-
-/**
- * A project a token reaches, and what the sheet says beside it: a person's
- * role there today, "Admin", or why it is paused, "Viewer now", "no role
- * now"; for the owner's own, "created" for those it created.
- */
-export type Reach = { slug: string; detail: string | null; paused: boolean }
-
-/**
- * Where a token deploys now: each project it was given or created. A
- * person's, with that person's role there today; below Developer, it is
- * paused there until the role comes back. The owner's own says which
- * projects it created.
- */
-export function liveReach(token: Pick<TokenView, "owned" | "scope" | "member">, roles: Rights["roles"] | null): Reach[] {
-  const projects = reachedProjects(token)
-  if (token.member === null || roles === null) {
-    return projects.map(({ slug, how }) => ({ slug, detail: how === "created" ? "created" : null, paused: false }))
-  }
-  return projects.map(({ slug }) => {
-    const role = Object.hasOwn(roles, slug) ? roles[slug]! : null
-    if (role === "developer" || role === "admin") return { slug, detail: roleLabel(role), paused: false }
-    return { slug, detail: `${role === null ? "no role" : roleLabel(role)} now`, paused: true }
-  })
+/** Where a token deploys: each project it created or was given. */
+export function liveReach(token: Pick<TokenView, "owned" | "scope">): Reach[] {
+  return reachedProjects(token).map(({ slug, how }) => ({ slug, detail: how === "created" ? "created" : null }))
 }
 
 /** The command the holder runs, without the token: typed at its prompt, it never lands in a shell history. */
@@ -370,7 +293,7 @@ export function tokenRefusal(status: number, body: { error?: string; message?: s
     if (message.startsWith("label")) return { field: "label", message: "One line of text, 64 characters at most." }
     if (message.startsWith("scope.slugs")) return { field: "slugs", message: message.replace(/^scope\.slugs: /, "") }
   }
-  // A person's token above their roles: the steward's words, each reason without its field's prefix.
+  // A scope the steward refuses: its words, each reason without its field's prefix.
   if (status === 403 && /^scope\.[a-z]+: /.test(message)) {
     return { field: message.startsWith("scope.slugs") ? "slugs" : null, message: message.replace(/scope\.[a-z]+: /g, "") }
   }
@@ -404,56 +327,4 @@ export function tokenSummary({
   const phrases = ordered.map((key) => PERMISSION_WORDS[key].phrase)
   const extra = phrases.length === 0 ? "no extra permission" : `with ${phrases.length === 1 ? phrases[0] : `${phrases.slice(0, -1).join(", ")} and ${phrases.at(-1)}`}`
   return `${deploys}, ${expires}, ${extra}.`
-}
-
-// --- a person's own tokens ----------------------------------------------------------
-
-/**
- * The projects a person's token may deploy: those where they are a Developer
- * or an Admin, sorted. The steward judges again; the page offers only
- * these.
- */
-export function mintableProjects(roles: Roles): { slug: string; role: Exclude<Role, "viewer"> }[] {
-  return Object.entries(roles)
-    .filter((entry): entry is [string, Exclude<Role, "viewer">] => entry[1] === "developer" || entry[1] === "admin")
-    .map(([slug, role]) => ({ slug, role }))
-    .sort((a, b) => a.slug.localeCompare(b.slug))
-}
-
-/**
- * What the token dialog says when the person it is for has no project it
- * may deploy: no project at all yet, or a Viewer on each. *New projects*,
- * right below, says whether it may still create some. `holder`: the person,
- * when the owner makes it for them; null for one's own.
- */
-export function noProjectText(roles: Roles, holder: string | null): string {
-  if (Object.keys(roles).length === 0) return holder === null ? "No project yet." : `${holder} has no project yet.`
-  return holder === null ? "None of your projects: you are a Viewer on each." : `None of ${holder}'s projects: a Viewer on each.`
-}
-
-/**
- * A person the owner may make a token for, in one line under their email:
- * where they deploy, then whether they may create projects. "Admin on
- * calendar, Developer on cms", "Developer or Admin on 4 projects · May create
- * projects", "Viewer only".
- */
-export function holderLine(holder: { roles: Roles; create: boolean }): string {
-  const deploys = mintableProjects(holder.roles)
-  const parts: string[] = []
-  if (deploys.length > 0 && deploys.length <= 2) parts.push(deploys.map(({ slug, role }) => `${roleLabel(role)} on ${slug}`).join(", "))
-  if (deploys.length > 2) parts.push(`Developer or Admin on ${deploys.length} projects`)
-  if (holder.create) parts.push("May create projects")
-  if (parts.length === 0) return "Viewer only"
-  return parts.join(" · ")
-}
-
-/**
- * May a person's token carry the options, public sites, a domain, outbound
- * network: only when they are Admin of every project chosen; with
- * none chosen, only for a token that creates, whose projects make them
- * their Admin.
- */
-export function optionsAllowed(roles: Roles, slugs: readonly string[], create: boolean): boolean {
-  if (slugs.length === 0) return create
-  return slugs.every((slug) => Object.hasOwn(roles, slug) && roles[slug] === "admin")
 }

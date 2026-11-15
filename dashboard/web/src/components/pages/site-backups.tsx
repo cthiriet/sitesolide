@@ -318,7 +318,7 @@ function SnapshotsPanel({
             size="sm"
             onPress={() => onRestore(line.snapshot)}
             purpose={`restore ${slug}`}
-            resume="Restore"
+           
             aria-label={`Restore ${slug} from ${dateTime(line.snapshot.takenAt)}`}
             className={ON_HOVER}
           >
@@ -358,7 +358,7 @@ function SnapshotsPanel({
               {view.restorable && (
                 <>
                   <DropdownMenuSeparator />
-                  <WriteMenuItem onPress={() => onRestore(line.snapshot)} purpose={`restore ${slug}`} resume="Restore">
+                  <WriteMenuItem onPress={() => onRestore(line.snapshot)} purpose={`restore ${slug}`}>
                     <ArchiveRestore />
                     Restore this snapshot
                   </WriteMenuItem>
@@ -755,11 +755,7 @@ export function BackupsSection({ slug }: { slug: string }) {
             <p>
               The server saves {slug}'s data folder every hour. Restoring puts a snapshot in place of the current data, which is
               saved first, so a restore can be undone.{" "}
-              {actions.person
-                ? "It asks you to sign in again with your provider."
-                : actions.passkeys.registered
-                  ? "It asks for your passkey."
-                  : "It asks for the dashboard password."}
+              {actions.passkeys.registered ? "It asks for your passkey." : "It asks for the dashboard password."}
             </p>
           ) : undefined
         }

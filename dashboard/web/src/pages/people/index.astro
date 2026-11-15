@@ -3,11 +3,11 @@ import Layout from "@/layouts/main.astro"
 import { Application } from "@/components/application"
 ---
 
-<Layout title="People · sitesolide">
+<Layout title="sitesolide">
   <!--
-    The same island on every page, with the path of the served file. The
-    people arrive through /api/people, behind the owner's session; nothing is
-    rendered at build time.
+    The People page's address, removed with company sign-in, kept so that
+    bookmarks keep working: the island opens the home page, then replaces
+    the address (lib/pages.ts, redirect).
   -->
   <Application client:load path="/people/" />
 </Layout>

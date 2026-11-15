@@ -3,7 +3,6 @@ import { SignIn } from "@/components/signin"
 import { UnreachableScreen } from "@/components/page"
 import { signOut as postSignOut, readState, readSecrets, readSession } from "@/lib/api"
 import { currentAge } from "@/lib/format"
-import { isPerson } from "@/lib/identity"
 import {
   UNREACHABLE,
   clockOffset,
@@ -12,7 +11,7 @@ import {
   sortProjects,
   type SiteSecretsPanel,
 } from "@/lib/secrets"
-import type { IdentityView, PasskeyOffer, Snapshot, Reading, ProjectView, SsoOffer } from "@/lib/types"
+import type { PasskeyOffer, Snapshot, Reading, ProjectView } from "@/lib/types"
 import { NO_DATA, verdict as judge, type Verdict } from "@/lib/verdict"
 
 /**
@@ -61,7 +60,7 @@ export type SecretsData = {
  * asked for while another is in flight follows it instead of being lost: an
  * action that has just written must see its effect.
  */
-function useSecrets(generation: number, onSessionExpired: () => void, enabled = true): SecretsData {
+function useSecrets(generation: number, onSessionExpired: () => void): SecretsData {
   const [projects, setProjects] = useState<ProjectView[] | null>(null)
   const [until, setUnlockedUntil] = useState<number | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
@@ -100,10 +99,9 @@ function useSecrets(generation: number, onSessionExpired: () => void, enabled = 
     return task
   }, [onSessionExpired])
 
-  // Read only by whom it concerns: a person who is a Viewer everywhere has none.
   useEffect(() => {
-    if (enabled) void reload()
-  }, [reload, generation, enabled])
+    void reload()
+  }, [reload, generation])
 
   const reportUnreachable = useCallback(() => setProblem(UNREACHABLE), [])
 
@@ -139,10 +137,6 @@ export type Data = {
   /** To be called on a 401: the sign-in comes over the top of the page, losing nothing. */
   sessionExpired: () => void
   signOut: () => void
-  /** Who is signed in: the owner, or a person and their roles. */
-  identity: IdentityView | null
-  /** Whether the portal offers its provider, and under which name: a person unlocks through it. */
-  sso: SsoOffer
 }
 
 const DataContext = createContext<Data | null>(null)
@@ -160,26 +154,12 @@ type Received = { reading: Reading; receivedAt: number }
  * An open session: the snapshot, its cadence and the secrets.
  * Unmounted on sign-out, and everything it held with it.
  */
-function OpenSession({
-  configured,
-  identity,
-  sso,
-  onClosed,
-  children,
-}: {
-  configured: boolean
-  identity: IdentityView | null
-  sso: SsoOffer
-  onClosed: () => void
-  children: ReactNode
-}) {
+function OpenSession({ configured, onClosed, children }: { configured: boolean; onClosed: () => void; children: ReactNode }) {
   const [received, setReceived] = useState<Received | null>(null)
   const [failure, setFailed] = useState(false)
   const [inProgress, setInProgress] = useState(false)
   const [expired, setExpired] = useState(false)
   const [currentConfigured, setConfigured] = useState(configured)
-  const [currentIdentity, setIdentity] = useState(identity)
-  const [currentSso, setSso] = useState(sso)
   const [generation, setGeneration] = useState(0)
   const [now, setNow] = useState(() => Date.now())
   const inFlight = useRef(false)
@@ -246,11 +226,7 @@ function OpenSession({
     void readSession().then(({ body }) => {
       if (body === null) return
       setConfigured(body.configured)
-      setSso(body.sso)
-      if (body.open) {
-        setIdentity(body.identity)
-        setExpired(false)
-      }
+      if (body.open) setExpired(false)
     })
   }, [expired])
 
@@ -260,10 +236,7 @@ function OpenSession({
     void postSignOut().then(() => onClosed())
   }, [onClosed])
 
-  // A person reads the secrets of the projects where they are a Developer or
-  // an Admin; the steward and the service decide what comes back.
-  const readsSecrets = !isPerson(currentIdentity) || Object.values(currentIdentity.roles).some((role) => role !== "viewer")
-  const secrets = useSecrets(generation, sessionExpired, readsSecrets)
+  const secrets = useSecrets(generation, sessionExpired)
   const bySite = useMemo(() => secretsBySite(secrets.projects), [secrets.projects])
 
   const reading = received?.reading ?? null
@@ -286,22 +259,14 @@ function OpenSession({
       secretsBySite: bySite,
       sessionExpired,
       signOut,
-      identity: currentIdentity,
-      sso: currentSso,
     }
-  }, [reading, receivedAt, now, failure, inProgress, generation, refresh, secrets, bySite, sessionExpired, signOut, currentIdentity, currentSso])
+  }, [reading, receivedAt, now, failure, inProgress, generation, refresh, secrets, bySite, sessionExpired, signOut])
 
-  // Signed in again: who it is may have changed, a person in the owner's place.
-  const open = useCallback(() => {
-    void readSession().then(({ body }) => {
-      if (body !== null && body.open) setIdentity(body.identity)
-      setExpired(false)
-    })
-  }, [])
+  const open = useCallback(() => setExpired(false), [])
 
   // With nothing to preserve, the sign-in takes the whole page.
   if (received === null && expired) {
-    return <SignIn configured={currentConfigured} sso={currentSso} message="Your session expired. Sign in again." onOpened={open} />
+    return <SignIn configured={currentConfigured} message="Your session expired. Sign in again." onOpened={open} />
   }
 
   return (
@@ -312,7 +277,6 @@ function OpenSession({
         <SignIn
           overlay
           configured={currentConfigured}
-          sso={currentSso}
           zone={value.snapshot?.zone ?? null}
           message="Your session expired. Sign in again to pick up where you left off."
           onOpened={open}
@@ -322,13 +286,11 @@ function OpenSession({
   )
 }
 
-const NO_SSO: SsoOffer = { offered: false, providerName: null }
-
 type Session =
   | { state: "verification" }
   | { state: "unreachable" }
-  | { state: "closed"; configured: boolean; sso: SsoOffer; zone: string | null; passkeys: PasskeyOffer | undefined }
-  | { state: "open"; configured: boolean; sso: SsoOffer; identity: IdentityView | null }
+  | { state: "closed"; configured: boolean; zone: string | null; passkeys: PasskeyOffer | undefined }
+  | { state: "open"; configured: boolean }
 
 /**
  * The gate to the data: the session is checked, the sign-in is asked for, then
@@ -342,13 +304,12 @@ export function DataProvider({ wait, children }: { wait: ReactNode; children: Re
     if (!quiet) setSession({ state: "verification" })
     const { status, body } = await readSession()
     if (status !== 200 || body === null) return setSession({ state: "unreachable" })
-    const sso = body.sso ?? NO_SSO
     // A service from before the zone was named says none: the sign-in then reads "Server dashboard".
     const zone = typeof body.zone === "string" && body.zone !== "" ? body.zone : null
     setSession(
       body.open
-        ? { state: "open", configured: body.configured, sso, identity: body.identity ?? null }
-        : { state: "closed", configured: body.configured, sso, zone, passkeys: body.passkeys },
+        ? { state: "open", configured: body.configured }
+        : { state: "closed", configured: body.configured, zone, passkeys: body.passkeys },
     )
   }, [])
 
@@ -367,7 +328,7 @@ export function DataProvider({ wait, children }: { wait: ReactNode; children: Re
     return () => window.clearInterval(timer)
   }, [unreachable, check])
 
-  // Signed out: the session is asked again, for the sign-in page's provider.
+  // Signed out: the session is asked again, for the sign-in page's offer.
   const closed = useCallback(() => void check(true), [check])
 
   switch (session.state) {
@@ -376,10 +337,10 @@ export function DataProvider({ wait, children }: { wait: ReactNode; children: Re
     case "unreachable":
       return <UnreachableScreen onRetry={() => void check()} />
     case "closed":
-      return <SignIn configured={session.configured} sso={session.sso} zone={session.zone} {...(session.passkeys === undefined ? {} : { passkeys: session.passkeys })} onOpened={() => void check(true)} />
+      return <SignIn configured={session.configured} zone={session.zone} {...(session.passkeys === undefined ? {} : { passkeys: session.passkeys })} onOpened={() => void check(true)} />
     case "open":
       return (
-        <OpenSession configured={session.configured} identity={session.identity} sso={session.sso} onClosed={closed}>
+        <OpenSession configured={session.configured} onClosed={closed}>
           {children}
         </OpenSession>
       )

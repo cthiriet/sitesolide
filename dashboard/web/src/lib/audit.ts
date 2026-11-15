@@ -7,7 +7,6 @@
  * reads every component's own audit, and shows what comes back. A row's
  * detail is data from a component, rendered as text and never as markup.
  */
-import { ROLE_TEXTS } from "./access"
 import { callApi } from "./api"
 import { historyUrl, readHistory, serverAction, sinceStart, type HistoryFilter } from "./history"
 import { capitalise, dateTime, plural } from "./format"
@@ -15,7 +14,7 @@ import { QUERY_PARAM } from "./list-state"
 import { normalize, queryWords } from "./search"
 import { operationOutcome, operationParts } from "./secrets"
 import type { Tone } from "./tones"
-import type { AccessRole, AuditResponse, AuditRow, AuditSource, LogEntry, Operation, SourceStatus } from "./types"
+import type { AuditResponse, AuditRow, AuditSource, LogEntry, Operation, SourceStatus } from "./types"
 
 // --- The sources -----------------------------------------------------------------
 
@@ -397,9 +396,15 @@ function stewardWords(row: AuditRow, operation: StewardOperation): AuditWords {
   return { summary: `${ok ? DONE[operation] : TRIED[operation]}${named}`, note: outcome.text, tone }
 }
 
-/** A rung of the ladder as the page says it, `admin` included for an admin email's sign-in; null for any other word. */
+/**
+ * The roles that company sign-in gave, as older journal lines name them:
+ * they are still read back, though nothing gives a role any more.
+ */
+const LEGACY_ROLES: Readonly<Record<string, string>> = { visitor: "Can open", viewer: "Viewer", developer: "Developer", admin: "Admin" }
+
+/** A legacy role as the page says it; null for any other word. */
 function roleWord(role: string | null): string | null {
-  return role !== null && Object.hasOwn(ROLE_TEXTS, role) ? ROLE_TEXTS[role as AccessRole].label : null
+  return role !== null && Object.hasOwn(LEGACY_ROLES, role) ? LEGACY_ROLES[role]! : null
 }
 
 /**

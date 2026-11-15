@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
-  mintableProjects,
-  noProjectText,
-  optionsAllowed,
   neededLine,
-  holderLine,
   neededOptions,
   expiryCell,
   expiryFrom,
@@ -15,7 +11,7 @@ import {
   messageText,
   isLive,
   loginCommand,
-  ownerLabel,
+  madeFor,
   permissionChips,
   projectChips,
   reachedProjects,
@@ -23,7 +19,6 @@ import {
   splitTokens,
   tokenPermissions,
   liveReach,
-  madeByLine,
   requestScope,
   STEWARD_PREDATES_SECRETS,
   tokenMatches,
@@ -31,7 +26,6 @@ import {
   tokenStatus,
   tokenSummary,
   validateTokenForm,
-  tokenHolders,
   tokenProjects,
 } from "../src/lib/tokens"
 import { site } from "./factory"
@@ -52,11 +46,12 @@ describe("a token's state", () => {
   })
 
   test("its permissions, only what is on, what opens a site to anyone first", () => {
-    const keys = (scope: typeof SCOPE & { secrets?: boolean }) => tokenPermissions({ owned: [], member: null, scope }, null).map((one) => one.key)
+    const keys = (scope: typeof SCOPE & { secrets?: boolean; all?: boolean }) => tokenPermissions({ scope })
     expect(keys(SCOPE)).toEqual([])
     expect(keys({ ...SCOPE, public: true, create: true, outbound: true, domain: true, secrets: true })).toEqual(["public", "secrets", "domain", "outbound", "create"])
     // A token minted before the permission carries no `secrets`: it manages none.
     expect(keys({ ...SCOPE, secrets: false })).toEqual([])
+    expect(keys({ ...SCOPE, all: true, create: true })).toEqual(["all", "create"])
   })
 
   test("the projects it reaches, created first, each once", () => {
@@ -87,7 +82,7 @@ describe("the form", () => {
       field: "slugs",
       message: "dashboard is reserved for the platform: pick another slug",
     })
-    expect(tokenRefusal(400, { error: "invalid", message: "holder: owner, for a token of your own, or the email of a person of People" }).field).toBeNull()
+    expect(tokenRefusal(400, { error: "invalid", message: "expiresAt: a date in the future" }).field).toBeNull()
     expect(tokenRefusal(503, { error: "not-available", message: "run sitesolide upgrade" })).toEqual({ field: null, message: "run sitesolide upgrade" })
     expect(tokenRefusal(0, null).message).toBe("Can't reach the dashboard.")
   })
@@ -139,10 +134,8 @@ describe("the projects offered", () => {
 
   test("an option a project chosen cannot be deployed without, with the projects that need it", () => {
     const projects = tokenProjects(sites, "test-zone.invalid")
-    expect(neededOptions(projects, ["cms"], false)).toEqual({ public: [], domain: [] })
-    expect(neededOptions(projects, ["shop", "calendar"], false)).toEqual({ public: ["calendar", "shop"], domain: ["shop"] })
-    // A person's token deploys a public project as it stands: exempted paths and a domain still take the option.
-    expect(neededOptions(projects, ["shop", "calendar"], true)).toEqual({ public: ["calendar"], domain: ["shop"] })
+    expect(neededOptions(projects, ["cms"])).toEqual({ public: [], domain: [] })
+    expect(neededOptions(projects, ["shop", "calendar"])).toEqual({ public: ["calendar", "shop"], domain: ["shop"] })
   })
 
   test("which projects need it, in a few words", () => {
@@ -153,117 +146,19 @@ describe("the projects offered", () => {
   })
 })
 
-describe("a person's own token", () => {
-  const roles = { alpha: "developer", beta: "admin", gamma: "viewer" } as const
+describe("whom a token was made for", () => {
+  test("the owner's own says nothing; one from before every token was the owner's names its address", () => {
+    expect(madeFor({ email: "owner" })).toBeNull()
+    expect(madeFor({ email: "bob@elsewhere.test" })).toBe("bob@elsewhere.test")
+  })
 
-  test("the projects offered: where they are a Developer or an Admin, sorted", () => {
-    expect(mintableProjects(roles)).toEqual([
-      { slug: "alpha", role: "developer" },
-      { slug: "beta", role: "admin" },
+  test("where it deploys: what it created first, then what it was given", () => {
+    const token = { owned: ["notes"], scope: { ...SCOPE, slugs: ["calendar", "notes", "cms"] } }
+    expect(liveReach(token)).toEqual([
+      { slug: "notes", detail: "created" },
+      { slug: "calendar", detail: null },
+      { slug: "cms", detail: null },
     ])
-    expect(mintableProjects({ gamma: "viewer" })).toEqual([])
-  })
-
-  test("nothing to offer: no project yet, or a Viewer on each", () => {
-    expect(noProjectText({}, null)).toBe("No project yet.")
-    expect(noProjectText({}, "maya@example.com")).toBe("maya@example.com has no project yet.")
-    expect(noProjectText({ gamma: "viewer" }, null)).toBe("None of your projects: you are a Viewer on each.")
-    expect(noProjectText({ gamma: "viewer" }, "maya@example.com")).toBe("None of maya@example.com's projects: a Viewer on each.")
-  })
-
-  test("a person the owner may make a token for, in one line: where they deploy, then the create right", () => {
-    expect(holderLine({ roles, create: false })).toBe("Developer on alpha, Admin on beta")
-    expect(holderLine({ roles: {}, create: true })).toBe("May create projects")
-    expect(holderLine({ roles: { a: "admin", b: "developer", c: "developer" }, create: true })).toBe("Developer or Admin on 3 projects · May create projects")
-    expect(holderLine({ roles: { gamma: "viewer" }, create: false })).toBe("Viewer only")
-  })
-
-  test("the options: an Admin of every project chosen, or a token that only creates", () => {
-    expect(optionsAllowed(roles, ["beta"], false)).toBe(true)
-    expect(optionsAllowed(roles, ["alpha", "beta"], false)).toBe(false)
-    expect(optionsAllowed(roles, [], true)).toBe(true)
-    expect(optionsAllowed(roles, [], false)).toBe(false)
-  })
-
-  test("the steward's refusal above their roles, without the fields' prefixes, under the projects when it is about them", () => {
-    const message = "scope.slugs: a@acme.test is a Viewer on gamma: deploying it takes a Developer or an Admin"
-    expect(tokenRefusal(403, { error: "out-of-scope", message })).toEqual({ field: "slugs", message: "a@acme.test is a Viewer on gamma: deploying it takes a Developer or an Admin" })
-    const options = "scope.public: a@acme.test is a Developer on alpha: deploying it in the open, its general access public, takes an Admin"
-    expect(tokenRefusal(403, { error: "out-of-scope", message: options }).field).toBeNull()
-  })
-})
-
-describe("whose a token is", () => {
-  test("the owner makes one for the people who deploy or create, never for a Viewer nor someone who can only open sites", () => {
-    expect(
-      tokenHolders([
-        { who: "zed@acme.test", roles: { blog: "developer", shop: "visitor" }, create: false },
-        { who: "ann@acme.test", roles: {}, create: true },
-        { who: "guest@example.org", roles: { blog: "visitor" }, create: false },
-        { who: "Client Bob", roles: { blog: "visitor" }, create: false },
-        { who: "vera@acme.test", roles: { blog: "viewer" }, create: false },
-      ]),
-    ).toEqual([
-      { email: "ann@acme.test", roles: {}, create: true },
-      { email: "zed@acme.test", roles: { blog: "developer" }, create: false },
-    ])
-  })
-
-  test("each row says who made it, and for whom, to the owner and to the person", () => {
-    expect(madeByLine({ member: null, by: "owner", email: "owner" }, "owner")).toBe("Made by you")
-    expect(madeByLine({ member: null, by: "owner", email: "bob@elsewhere.test" }, "owner")).toBe("Made by you for bob@elsewhere.test")
-    expect(madeByLine({ member: "alice@acme.test", by: "owner", email: "alice@acme.test" }, "owner")).toBe("Made by you for alice@acme.test")
-    expect(madeByLine({ member: "alice@acme.test", by: "alice@acme.test", email: "alice@acme.test" }, "owner")).toBe("Made by alice@acme.test")
-    expect(madeByLine({ member: "alice@acme.test", by: "owner", email: "alice@acme.test" }, "person")).toBe("Made by the owner for you")
-    expect(madeByLine({ member: "alice@acme.test", by: "alice@acme.test", email: "alice@acme.test" }, "person")).toBe("Made by you")
-  })
-
-  test("a person's token deploys where their role is Developer or Admin today, and is paused elsewhere", () => {
-    const token = { owned: ["notes"], scope: { ...SCOPE, slugs: ["calendar", "cms", "photos"] }, member: "alice@acme.test" }
-    expect(liveReach(token, { calendar: "admin", cms: "viewer", notes: "admin" })).toEqual([
-      { slug: "notes", detail: "Admin", paused: false },
-      { slug: "calendar", detail: "Admin", paused: false },
-      { slug: "cms", detail: "Viewer now", paused: true },
-      { slug: "photos", detail: "no role now", paused: true },
-    ])
-    expect(liveReach(token, { cms: "visitor" }).find((one) => one.slug === "cms")).toEqual({ slug: "cms", detail: "Can open now", paused: true })
-    // The owner's own token: which projects it created.
-    expect(liveReach({ ...token, member: null }, null).map((one) => one.detail)).toEqual(["created", null, null, null])
-  })
-})
-
-describe("a person's token, what it may still do", () => {
-  const token = { owned: [] as string[], member: "alice@example.com", scope: { slugs: ["cms", "calendar"], create: true, outbound: true, domain: false, public: false } }
-
-  test("each option on, paused and said why while the person no longer holds it", () => {
-    expect(tokenPermissions(token, { roles: { cms: "admin", calendar: "admin" }, create: true })).toEqual([
-      { key: "outbound", pause: null },
-      { key: "create", pause: null },
-    ])
-    expect(tokenPermissions(token, { roles: { cms: "developer", calendar: "admin" }, create: false })).toEqual([
-      { key: "outbound", pause: "not Admin of cms now" },
-      { key: "create", pause: "no longer allowed" },
-    ])
-    // A project where it no longer deploys does not hold an option back: it is paused there already.
-    expect(tokenPermissions(token, { roles: { cms: "viewer", calendar: "admin" }, create: true })[0]).toEqual({ key: "outbound", pause: null })
-    expect(tokenPermissions({ ...token, scope: { ...token.scope, create: false } }, { roles: {}, create: false })).toEqual([{ key: "outbound", pause: "no project to deploy now" }])
-  })
-
-  test("the owner's own, or rights not known: as it was made", () => {
-    expect(tokenPermissions({ ...token, member: null }, null)).toEqual([
-      { key: "outbound", pause: null },
-      { key: "create", pause: null },
-    ])
-    expect(tokenPermissions({ ...token, member: null, scope: { ...token.scope, secrets: true } }, null)).toContainEqual({ key: "secrets", pause: null })
-  })
-
-  test("managing secrets, paused only while it deploys no project and may create none", () => {
-    const secrets = { ...token, scope: { ...token.scope, secrets: true } }
-    // A Developer manages a project's secrets already: not Admin of cms holds back the options, never this one.
-    expect(tokenPermissions(secrets, { roles: { cms: "developer", calendar: "admin" }, create: true })).toContainEqual({ key: "secrets", pause: null })
-    // A Viewer on both now, it still may create projects: the steward keeps it on.
-    expect(tokenPermissions(secrets, { roles: { cms: "viewer", calendar: "viewer" }, create: true })).toContainEqual({ key: "secrets", pause: null })
-    expect(tokenPermissions(secrets, { roles: { cms: "viewer" }, create: false })).toContainEqual({ key: "secrets", pause: "no project to deploy now" })
   })
 })
 
@@ -296,13 +191,9 @@ describe("the table, one line per token", () => {
     expect(shortDate(jan21, jan21, zone)).toBe("Jan 21")
   })
 
-  test("Last used, and whose a token is", () => {
+  test("Last used", () => {
     expect(lastUsed(token({ lastUsedAt: NOW - 5 * 3_600_000 }), NOW)).toBe("5h ago")
     expect(lastUsed(token({}), NOW)).toBe("Never")
-    expect(ownerLabel({ member: null, email: "owner" })).toBe("You")
-    expect(ownerLabel({ member: "alice@acme.test", email: "alice@acme.test" })).toBe("alice@acme.test")
-    // From before every token belonged to someone: the address it was made for.
-    expect(ownerLabel({ member: null, email: "bob@elsewhere.test" })).toBe("bob@elsewhere.test")
   })
 
   test("at most two chips, the second only when it fits beside a +N, the first always", () => {
@@ -314,26 +205,25 @@ describe("the table, one line per token", () => {
     expect(fitChips([], width, { budget: 24 })).toEqual({ shown: [], more: 0 })
   })
 
-  test("the live first, the paused after, in the Permissions and the Projects cells", () => {
-    const chips = permissionChips([
-      { key: "create", pause: "no longer allowed" },
-      { key: "outbound", pause: null },
-    ])
-    expect(chips.shown.map((one) => one.key)).toEqual(["outbound", "create"])
+  test("the Permissions and the Projects cells, in their order", () => {
+    expect(permissionChips(["outbound", "create"])).toEqual({ shown: ["outbound", "create"], more: 0 })
+    expect(permissionChips(["public", "secrets", "domain"])).toEqual({ shown: ["public", "secrets"], more: 1 })
     const projects = projectChips([
-      { slug: "photos", detail: "Viewer now", paused: true },
-      { slug: "cms", detail: "Developer", paused: false },
-      { slug: "calendar", detail: "Admin", paused: false },
+      { slug: "cms", detail: "created" },
+      { slug: "calendar", detail: null },
+      { slug: "photos", detail: null },
     ])
-    expect(projects).toEqual({ shown: [{ slug: "cms", detail: "Developer", paused: false }, { slug: "calendar", detail: "Admin", paused: false }], more: 1 })
+    expect(projects).toEqual({ shown: [{ slug: "cms", detail: "created" }, { slug: "calendar", detail: null }], more: 1 })
   })
 
-  test("the search finds a token by its name, its owner or a project, accents and case aside", () => {
-    const one = { label: "Release agent", member: "élise@acme.test", email: "élise@acme.test", owned: ["notes"], scope: { ...SCOPE, slugs: ["calendar"] } }
+  test("the search finds a token by its name, the address it was made for or a project, accents and case aside", () => {
+    const one = { label: "Release agent", email: "élise@acme.test", owned: ["notes"], scope: { ...SCOPE, slugs: ["calendar"] } }
     expect(tokenMatches(one, "release")).toBe(true)
     expect(tokenMatches(one, "ELISE")).toBe(true)
     expect(tokenMatches(one, "notes calendar")).toBe(true)
     expect(tokenMatches(one, "cms")).toBe(false)
+    // The owner's own: "owner" is no word of its own to find it by.
+    expect(tokenMatches({ ...one, email: "owner" }, "owner")).toBe(false)
   })
 })
 

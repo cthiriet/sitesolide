@@ -1,19 +1,18 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
 import { flushSync } from "react-dom"
-import { Asterisk, BellRing, Check, Cloud, Eye, EyeOff, HeartPulse, KeyRound, LogIn, RotateCw, UserKey, X, type LucideIcon } from "lucide-react"
+import { Asterisk, BellRing, Check, Cloud, Eye, EyeOff, HeartPulse, KeyRound, LifeBuoy, RotateCw, UserKey, X, type LucideIcon } from "lucide-react"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { useAnnounce } from "@/components/copy"
 import { useData } from "@/components/data"
 import { RowMenu } from "@/components/data-table"
 import { InternalLink } from "@/components/navigation"
-import { SeverityIcon } from "@/components/page"
+import { InfoButton, SeverityIcon } from "@/components/page"
 import { useSecretsActions } from "@/components/secrets-actions"
 import { ConfirmDialog, returnTo, type FocusReturn } from "@/components/secrets-dialogs"
 import { SetupGuide, type GuideOpening } from "@/components/setup-guide"
 import { LockGlyph, WriteMenuItem } from "@/components/unlock"
 import { readBackups, readSecretsLog, removeVariable } from "@/lib/api"
-import { isPerson } from "@/lib/identity"
 import { settingById, settingState, type SettingId, type SettingState } from "@/lib/machine-settings"
 import { PAGE_TITLE_ID, siteUrl } from "@/lib/pages"
 import { REVEAL_MS, hideCountdown, refusalOf, succeeded } from "@/lib/secrets"
@@ -23,6 +22,7 @@ import {
   NO_PREFS,
   PASSKEYS_PANEL_ID,
   PASSKEYS_ROW,
+  RECOVERY_ROW,
   changeDates,
   passkeysWord,
   proofPhase,
@@ -142,10 +142,8 @@ function Toast({ toast, onClose }: { toast: ToastSpec & { key: number }; onClose
 type Revealed = { id: RowId; values: { label: string; value: string }[]; at: number }
 
 export type ServerSetup = {
-  /** The owner, with the steward's listing read: the rows can be drawn. */
+  /** The steward's listing read: the rows can be drawn. */
   ready: boolean
-  /** The owner: a person sees none of this, and the steward refuses them anyway. */
-  owner: boolean
   inputs: RowInputs
   prefs: SetupPrefs
   hidden: boolean
@@ -199,10 +197,6 @@ const REMOVAL: Readonly<Partial<Record<RowId, { title: string; description: stri
     description:
       "Its settings are deleted. Snapshots stay on this server, and nothing is copied offsite until you set it up again. Keep the passphrase: the copy already in the bucket needs it.",
   },
-  "company-signin": {
-    title: "Remove company sign-in?",
-    description: "People can no longer sign in with their company account. The portal applies this when it restarts.",
-  },
 }
 
 /**
@@ -212,8 +206,7 @@ const REMOVAL: Readonly<Partial<Record<RowId, { title: string; description: stri
 export function ServerSetupProvider({ place, children }: { place: "sites" | "server"; children: ReactNode }) {
   const announce = useAnnounce()
   const actions = useSecretsActions()
-  const { secrets, snapshot, offset, identity, refresh } = useData()
-  const owner = !isPerson(identity)
+  const { secrets, snapshot, offset, refresh } = useData()
   const prefs = usePrefs()
   const proof = useProof()
   const [guide, setGuide] = useState<GuideOpening | null>(null)
@@ -229,7 +222,7 @@ export function ServerSetupProvider({ place, children }: { place: "sites" | "ser
   const origin = useRef<HTMLElement | null>(null)
   const toasts = useRef(0)
 
-  const projects = owner ? secrets.projects : null
+  const projects = secrets.projects
   const states = useMemo(
     () => settingState(projects, snapshot?.discrepancies ?? [], snapshot?.alerting ?? null),
     [projects, snapshot?.discrepancies, snapshot?.alerting],
@@ -241,7 +234,7 @@ export function ServerSetupProvider({ place, children }: { place: "sites" | "ser
 
   // The dates: the steward's log of the two platform sites, read again after every change.
   useEffect(() => {
-    if (!owner || projects === null) return
+    if (projects === null) return
     let current = true
     void Promise.all([readSecretsLog("dashboard"), readSecretsLog("portal")]).then((answers) => {
       if (!current) return
@@ -251,12 +244,12 @@ export function ServerSetupProvider({ place, children }: { place: "sites" | "ser
     return () => {
       current = false
     }
-  }, [owner, projects === null, actions.revision])
+  }, [projects === null, actions.revision])
 
   // The backups' word on the offsite copy, once it is set: where it goes, or why the last run could not use it.
   const offsiteSet = states.offsite.presence === "set"
   useEffect(() => {
-    if (!owner || !offsiteSet) return setOffsite(null)
+    if (!offsiteSet) return setOffsite(null)
     let current = true
     void readBackups("dashboard").then(({ status, body }) => {
       if (!current) return
@@ -265,7 +258,7 @@ export function ServerSetupProvider({ place, children }: { place: "sites" | "ser
     return () => {
       current = false
     }
-  }, [owner, offsiteSet, actions.revision])
+  }, [offsiteSet, actions.revision])
 
   // The first ping: the snapshot read more often while it is awaited, its arrival dated, the record let go once said.
   useEffect(() => {
@@ -396,7 +389,7 @@ export function ServerSetupProvider({ place, children }: { place: "sites" | "ser
       setRemovalError("")
       return setRemoval({ id, open: true })
     }
-    if (id === "offsite" || id === "company-signin") skip(id, entry === "skip")
+    if (id === "offsite") skip(id, entry === "skip")
   }
 
   function skip(id: GuideId, skipped: boolean) {
@@ -440,11 +433,10 @@ export function ServerSetupProvider({ place, children }: { place: "sites" | "ser
   const changed = useMemo(() => changeDates(states, log), [states, log])
   const skippedSet = useMemo(() => new Set<RowId>(prefs.skipped), [prefs.skipped])
   const inputs: RowInputs = { states, alerting, serverNow, changed, proof, offsite, skipped: skippedSet, passkeys: actions.passkeys.registered }
-  const ready = owner && projects !== null && states.heartbeat.presence !== "unknown"
+  const ready = projects !== null && states.heartbeat.presence !== "unknown"
 
   const value: ServerSetup = {
     ready,
-    owner,
     inputs,
     prefs,
     hidden: prefs.hidden,
@@ -496,10 +488,10 @@ export function ServerSetupProvider({ place, children }: { place: "sites" | "ser
   )
 }
 
-/** Every setting in the catalogue's state, for the sidebar: the owner's, null for a person or before the listing. */
+/** Every setting in the catalogue's state, for the sidebar: null before the listing. */
 export function useSettingStates(): Readonly<Record<SettingId, SettingState>> | null {
-  const { secrets, snapshot, identity } = useData()
-  const projects = isPerson(identity) ? null : secrets.projects
+  const { secrets, snapshot } = useData()
+  const projects = secrets.projects
   return useMemo(
     () => (projects === null ? null : settingState(projects, snapshot?.discrepancies ?? [], snapshot?.alerting ?? null)),
     [projects, snapshot?.discrepancies, snapshot?.alerting],
@@ -517,7 +509,6 @@ export const ROW_ICONS: Readonly<Record<RowId, LucideIcon>> = {
   heartbeat: HeartPulse,
   webhook: BellRing,
   offsite: Cloud,
-  "company-signin": LogIn,
   "dashboard-password": UserKey,
   "portal-password": Asterisk,
 }
@@ -607,7 +598,7 @@ function RowButton({ view, name }: { view: RowView; name: string }) {
     )
   }
   const id = view.id
-  if (id !== "heartbeat" && id !== "webhook" && id !== "offsite" && id !== "company-signin") return null
+  if (id !== "heartbeat" && id !== "webhook" && id !== "offsite") return null
   return (
     <Button
       variant={action.primary ? "default" : "outline"}
@@ -725,35 +716,80 @@ export function SettingRow({ view, place }: { view: RowView; place: "sites" | "s
   )
 }
 
+/** The Server page's row grid, shared by the setting rows and the two Sign-in rows below. */
+const SERVER_ROW =
+  "grid min-h-11 grid-cols-[1.75rem_minmax(0,1fr)_auto] items-center gap-x-2 py-2.5 pr-2 pl-4 @3xl/settings:min-h-13 @3xl/settings:grid-cols-[1.75rem_minmax(0,1fr)_12.5rem_10.5rem] @3xl/settings:py-1.5"
+
+/** Goes to the Passkeys panel lower on the Server page, and into its first field. */
+function toPasskeys() {
+  const panel = document.getElementById(PASSKEYS_PANEL_ID)
+  if (panel === null) return
+  panel.scrollIntoView({ block: "start" })
+  panel.querySelector<HTMLElement>("input, button")?.focus({ preventScroll: true })
+}
+
 /**
- * The Sign-in panel's row for the owner's passkeys, once they hold one, laid
- * out as a setting's row on the Server page: how many, and Manage, which
- * goes to the Passkeys panel below.
+ * The Sign-in panel's first row, the owner's passkeys, laid out as a
+ * setting's row: how many, and Manage, which goes to the Passkeys panel
+ * below. Without one (`count` 0), a call to add one, the panel's primary.
  */
 export function PasskeysRow({ count }: { count: number | null }) {
-  function manage() {
-    const panel = document.getElementById(PASSKEYS_PANEL_ID)
-    if (panel === null) return
-    panel.scrollIntoView({ block: "start" })
-    panel.querySelector<HTMLElement>("input, button")?.focus({ preventScroll: true })
-  }
+  const none = count === 0
   return (
     <div role="listitem" className="border-t border-divider first:border-t-0">
-      <div className="grid min-h-11 grid-cols-[1.75rem_minmax(0,1fr)_auto] items-center gap-x-2 py-2.5 pr-2 pl-4 @3xl/settings:min-h-13 @3xl/settings:grid-cols-[1.75rem_minmax(0,1fr)_12.5rem_10.5rem] @3xl/settings:py-1.5">
+      <div className={SERVER_ROW}>
         <span className="row-span-2 flex self-start pt-0.5 text-muted-foreground @3xl/settings:row-span-1 @3xl/settings:self-center @3xl/settings:pt-0">
           <KeyRound aria-hidden="true" className="size-4" />
         </span>
         <div className="col-start-2 row-start-1 flex min-w-0 flex-col @5xl/settings:flex-row @5xl/settings:items-baseline @5xl/settings:gap-3">
           <span className="shrink-0 font-medium text-strong @3xl/settings:w-34">{PASSKEYS_ROW.name}</span>
-          <span className="min-w-0 text-pretty text-muted-foreground">{PASSKEYS_ROW.line}</span>
+          <span className="min-w-0 text-pretty text-muted-foreground">{none ? PASSKEYS_ROW.none : PASSKEYS_ROW.line}</span>
         </div>
         <div className="col-start-2 row-start-2 min-w-0 pt-0.5 @3xl/settings:col-start-3 @3xl/settings:row-start-1 @3xl/settings:pt-0 @3xl/settings:pr-2">
-          <span className="text-[0.8125rem] leading-5 font-medium text-ok-text">{passkeysWord(count)}</span>
+          <span className={cn("text-[0.8125rem] leading-5", none ? "text-muted-foreground" : "font-medium text-ok-text")}>{passkeysWord(count)}</span>
+        </div>
+        <div
+          className={cn(
+            "flex items-center justify-end gap-1",
+            // Its call to action takes a line of its own on a phone, as the passwords' do.
+            none
+              ? "col-span-2 col-start-2 row-start-3 justify-self-start pt-2 @3xl/settings:col-span-1 @3xl/settings:col-start-4 @3xl/settings:row-start-1 @3xl/settings:justify-self-end @3xl/settings:pt-0"
+              : "col-start-3 row-span-2 row-start-1 @3xl/settings:col-start-4 @3xl/settings:row-span-1",
+          )}
+        >
+          <Button variant={none ? "default" : "outline"} size="sm" onClick={toPasskeys} aria-label={none ? undefined : "Manage passkeys"} className="max-md:h-9">
+            {none ? "Add a passkey" : "Manage"}
+          </Button>
+          <span aria-hidden="true" className="size-8 shrink-0 max-md:size-10" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The two passwords as one muted row, once the owner holds a passkey: the
+ * steward refuses both then, so there is nothing to change, and the (i)
+ * says how root brings them back.
+ */
+export function RecoveryRow() {
+  return (
+    <div role="listitem" className="border-t border-divider first:border-t-0">
+      <div className={SERVER_ROW}>
+        <span className="row-span-2 flex self-start pt-0.5 text-muted-foreground/70 @3xl/settings:row-span-1 @3xl/settings:self-center @3xl/settings:pt-0">
+          <LifeBuoy aria-hidden="true" className="size-4" />
+        </span>
+        <div className="col-start-2 row-start-1 flex min-w-0 flex-col @5xl/settings:flex-row @5xl/settings:items-baseline @5xl/settings:gap-3">
+          <span className="shrink-0 font-medium text-muted-foreground @3xl/settings:w-34">{RECOVERY_ROW.name}</span>
+          <span className="min-w-0 text-pretty text-muted-foreground">{RECOVERY_ROW.line}</span>
+        </div>
+        <div className="col-start-2 row-start-2 min-w-0 pt-0.5 @3xl/settings:col-start-3 @3xl/settings:row-start-1 @3xl/settings:pt-0 @3xl/settings:pr-2">
+          <span className="text-[0.8125rem] leading-5 text-muted-foreground">{RECOVERY_ROW.word}</span>
         </div>
         <div className="col-start-3 row-span-2 row-start-1 flex items-center justify-end gap-1 @3xl/settings:col-start-4 @3xl/settings:row-span-1">
-          <Button variant="outline" size="sm" onClick={manage} aria-label="Manage passkeys" className="max-md:h-9">
-            Manage
-          </Button>
+          <InfoButton label="How the passwords come back">
+            <p>{RECOVERY_ROW.tip}</p>
+          </InfoButton>
           <span aria-hidden="true" className="size-8 shrink-0 max-md:size-10" />
         </div>
       </div>

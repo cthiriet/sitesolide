@@ -7,7 +7,6 @@ import {
   OFFSITE_FIELDS,
   SERVER_GROUPS,
   SETUP_KEY,
-  SIGNIN_FIELDS,
   VALUE_STEP,
   changeDates,
   changedWords,
@@ -39,7 +38,7 @@ import {
   rowSpec,
   serverRow,
   serverSignal,
-  signinReady,
+  RECOVERY_ROW,
   sitesRowIds,
   sitesRows,
   stepPosition,
@@ -65,7 +64,6 @@ const DAY = 24 * 60 * MINUTE
 const MONITOR_FILE = "dashboard-monitor.env"
 const BACKUP_FILE = "dashboard-backup.env"
 const OFFSITE_FIVE = ["BACKUP_S3_ENDPOINT", "BACKUP_S3_BUCKET", "BACKUP_S3_ACCESS_KEY_ID", "BACKUP_S3_SECRET_ACCESS_KEY", "BACKUP_ENCRYPTION_PASSPHRASE"]
-const SIGNIN_THREE = ["OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"]
 
 // By code point, as tests/redaction.test.ts does: this file must not hold what it forbids.
 const DASHES = [String.fromCodePoint(0x2014), String.fromCodePoint(0x2013)]
@@ -134,10 +132,10 @@ const entry = (partial: Partial<LogEntry>): LogEntry => ({
 describe("the Server page", () => {
   test("three panels, every setting in the same order, each with when a change applies", () => {
     expect(SERVER_GROUPS.map((group) => group.title)).toEqual(["Alerts", "Sign-in", "Backups"])
-    expect(SERVER_GROUPS.map((group) => group.rows)).toEqual([["heartbeat", "webhook"], ["dashboard-password", "portal-password", "company-signin"], ["offsite"]])
+    expect(SERVER_GROUPS.map((group) => group.rows)).toEqual([["heartbeat", "webhook"], ["dashboard-password", "portal-password"], ["offsite"]])
     expect(SERVER_GROUPS.map((group) => group.note)).toEqual([
       "Changes apply within a minute. Nothing restarts.",
-      "The portal applies changes when it restarts.",
+      null,
       "The next hourly backup uses the change.",
     ])
   })
@@ -147,7 +145,6 @@ describe("the Server page", () => {
     expect(serverRow("heartbeat", row)).toMatchObject({ word: "Not set", tone: "attention", action: { kind: "guide", label: "Set up", start: "start" }, menu: [] })
     expect(serverRow("webhook", row)).toMatchObject({ word: "Not set", tone: "attention" })
     expect(serverRow("offsite", row)).toMatchObject({ word: "Off", tone: "neutral", menu: ["skip"] })
-    expect(serverRow("company-signin", row)).toMatchObject({ word: "Not set", tone: "neutral", menu: ["skip"] })
   })
 
   test("a file the owner has not made yet reads as not set: its guide says how to make it", () => {
@@ -167,7 +164,6 @@ describe("the Server page", () => {
 
   test("with no line of the log about it, a setting sharing its file says Set, and no date", () => {
     expect(serverRow("heartbeat", inputs(server(), { log: [] })).word).toBe("Set")
-    expect(serverRow("portal-password", inputs(server({ portal: SIGNIN_THREE }), { log: [] })).word).toBe("Set")
   })
 
   test("a restore of the whole file dates every setting in it", () => {
@@ -219,22 +215,9 @@ describe("the Server page", () => {
     expect(serverRow("dashboard-password", row).tip).toBe("Sign-in uses the new password after the dashboard restarts.")
   })
 
-  test("once the owner holds a passkey, both passwords are the break-glass: no Change, no restart, company sign-in as before", () => {
-    const row = inputs(server({ dashboard: { restartPending: true, modifiedAt: NOW - 4 * MINUTE } }), { passkeys: true })
-    for (const id of ["dashboard-password", "portal-password"] as const) {
-      const view = serverRow(id, row)
-      expect(view).toMatchObject({ word: "Break-glass", tone: "neutral", action: null, menu: [] })
-      expect(view.line).toContain("you sign in with a passkey")
-      expect(view.line).toContain("sitesolide passkey remove")
-      expect(view.tip).toContain("removing every passkey")
-    }
-    expect(serverRow("dashboard-password", row).line).toContain("The dashboard password")
-    expect(serverRow("portal-password", row).line).toContain("The portal password")
-    const signin = inputs(server({ portal: SIGNIN_THREE }))
-    expect(serverRow("company-signin", { ...signin, passkeys: true })).toEqual(serverRow("company-signin", signin))
-    // Never set: still no Change to offer, and no attention, since nothing signs in with it.
-    const unset = inputs(server({ dashboard: { variables: [], passwords: [] } }), { passkeys: true })
-    expect(serverRow("dashboard-password", unset)).toMatchObject({ word: "Not set", tone: "neutral", action: null })
+  test("once the owner holds a passkey, the two passwords are one recovery row whose tip names the way back", () => {
+    expect(RECOVERY_ROW).toMatchObject({ name: "Passwords", line: "Off while a passkey exists.", word: "Recovery only" })
+    expect(RECOVERY_ROW.tip).toContain("sitesolide passkey remove")
   })
 
   test("without a passkey, the passwords' rows are exactly as before", () => {
@@ -243,15 +226,15 @@ describe("the Server page", () => {
     expect(serverRow("dashboard-password", row).action).toEqual({ kind: "password" })
   })
 
-  test("the Passkeys row counts them, or says Registered while the listing is unknown", () => {
+  test("the Passkeys row counts them, says None without one, or Registered while the listing is unknown", () => {
     expect(passkeysWord(2)).toBe("2 passkeys")
     expect(passkeysWord(1)).toBe("1 passkey")
+    expect(passkeysWord(0)).toBe("None")
     expect(passkeysWord(null)).toBe("Registered")
   })
 
-  test("company sign-in waiting for the portal's restart carries the restart before Remove", () => {
-    const row = inputs(server({ portal: SIGNIN_THREE, files: { "portal.env": { restartPending: true } } }), { log: [entry({ slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", a: NOW - 4 * MINUTE })] })
-    expect(serverRow("company-signin", row)).toMatchObject({ word: "Restart pending", extra: "changed 4 minutes ago", menu: ["reveal", "restart", "remove"] })
+  test("the portal's password waiting for its restart carries the restart", () => {
+    const row = inputs(server({ files: { "portal.env": { restartPending: true } } }), { log: [entry({ slug: "portal", file: "portal.env", variable: "PASSWORD_HASH", operation: "password", a: NOW - 4 * MINUTE })] })
     expect(serverRow("portal-password", row)).toMatchObject({ word: "Restart pending", menu: ["restart"] })
   })
 
@@ -299,25 +282,24 @@ describe("the heartbeat's first ping", () => {
 describe("the setup guide on Sites", () => {
   test("only what is missing, in the guide's order, the optional ones skippable", () => {
     const base = inputs(server({ monitor: ["ALERT_WEBHOOK_URL"] }), { alerting: alerting({ heartbeat: "unconfigured" }) })
-    expect(sitesRowIds(sites(base))).toEqual(["heartbeat", "offsite", "company-signin"])
+    expect(sitesRowIds(sites(base))).toEqual(["heartbeat", "offsite"])
     const rows = sitesRows(sites(base))
     expect(rows.map((row) => [row.id, row.line, row.menu])).toEqual([
       ["heartbeat", "Nothing outside the server notices if it goes down.", []],
       ["offsite", "Snapshots stay on this server only.", ["skip"]],
-      ["company-signin", "Optional. People sign in with their company account.", ["skip"]],
     ])
   })
 
   test("the first row left to do carries the panel's one primary button", () => {
     const base = inputs(server({ monitor: [] }), { alerting: alerting({ heartbeat: "unconfigured", webhook: "unconfigured" }) })
     const primaries = sitesRows(sites(base)).map((row) => row.action?.kind === "guide" && row.action.primary)
-    expect(primaries).toEqual([true, false, false, false])
+    expect(primaries).toEqual([true, false, false])
   })
 
   test("everything set or skipped: nothing left, and the panel goes", () => {
-    const done = inputs(server({ backup: OFFSITE_FIVE, portal: SIGNIN_THREE }))
+    const done = inputs(server({ backup: OFFSITE_FIVE }))
     expect(sitesRowIds(sites(done))).toEqual([])
-    const skipped = inputs(server(), { skipped: new Set(["offsite", "company-signin"]) })
+    const skipped = inputs(server(), { skipped: new Set(["offsite"]) })
     expect(sitesRowIds(sites(skipped))).toEqual([])
   })
 
@@ -328,26 +310,26 @@ describe("the setup guide on Sites", () => {
   })
 
   test("a file the steward does not rewrite is not for the guide", () => {
-    const base = inputs(server({ files: { [BACKUP_FILE]: { state: "unmanaged", reason: "a reason" } } }), { skipped: new Set(["company-signin"]) })
+    const base = inputs(server({ files: { [BACKUP_FILE]: { state: "unmanaged", reason: "a reason" } } }))
     expect(sitesRowIds(sites(base))).toEqual([])
   })
 
   test("an incomplete setting says how much is there", () => {
-    const base = inputs(server({ backup: OFFSITE_FIVE.slice(0, 2) }), { skipped: new Set(["company-signin"]) })
+    const base = inputs(server({ backup: OFFSITE_FIVE.slice(0, 2) }))
     expect(sitesRows(sites(base))[0]).toMatchObject({ id: "offsite", line: "Incomplete: 2 of 5 needed settings are set.", action: { label: "Set up", start: "start" } })
   })
 
   test("the row of the guide open stays, saved, until the guide closes", () => {
-    const base = inputs(server({ portal: SIGNIN_THREE }), { skipped: new Set(["offsite"]), log: [entry({ slug: "portal", file: "portal.env", variable: "OIDC_ISSUER", a: NOW - 5 * SECOND })] })
+    const base = inputs(server({ backup: OFFSITE_FIVE }), { log: [entry({ slug: "dashboard", file: BACKUP_FILE, variable: "BACKUP_S3_BUCKET", a: NOW - 5 * SECOND })] })
     expect(sitesRowIds(sites(base))).toEqual([])
-    expect(sitesRows(sites(base, { guideOpen: "company-signin" }))).toMatchObject([
-      { id: "company-signin", word: "Set, changed just now", line: "The portal reads these when it starts: restart it to apply.", action: null },
+    expect(sitesRows(sites(base, { guideOpen: "offsite" }))).toMatchObject([
+      { id: "offsite", word: "Set, changed just now", line: "The next hourly backup copies the snapshots offsite.", action: null },
     ])
   })
 
   test("the heartbeat stays while its first ping is awaited, and goes a moment after it came", () => {
     const proof: Proof = { savedAt: NOW - 30 * SECOND, deliveredAt: null, seen: false }
-    const waiting = inputs(server({ backup: OFFSITE_FIVE, portal: SIGNIN_THREE }), { alerting: alerting({ at: NOW - 40 * SECOND, heartbeat: "unconfigured" }), proof })
+    const waiting = inputs(server({ backup: OFFSITE_FIVE }), { alerting: alerting({ at: NOW - 40 * SECOND, heartbeat: "unconfigured" }), proof })
     expect(sitesRows(sites(waiting))).toMatchObject([{ id: "heartbeat", word: "Set, changed 30 seconds ago", line: "Waiting for the monitor's next pass… 20s", action: { label: "See progress", start: "wait" } }])
     const came = { ...waiting, alerting: alerting({ at: NOW - 5 * SECOND }) }
     expect(sitesRows(sites(came))).toMatchObject([{ id: "heartbeat", word: "Delivered", tone: "ok", line: "The monitor's ping went through." }])
@@ -358,7 +340,7 @@ describe("the setup guide on Sites", () => {
   })
 
   test("a heartbeat the monitor fails to ping comes back to the guide, its fix the primary action", () => {
-    const base = inputs(server({ backup: OFFSITE_FIVE, portal: SIGNIN_THREE }), { alerting: alerting({ heartbeat: "failed" }) })
+    const base = inputs(server({ backup: OFFSITE_FIVE }), { alerting: alerting({ heartbeat: "failed" }) })
     expect(sitesRows(sites(base))).toMatchObject([
       { id: "heartbeat", word: "Failed", tone: "error", error: true, line: "The monitor couldn't reach it. Check the URL.", action: { label: "Change the URL", start: "value", primary: true } },
     ])
@@ -398,7 +380,7 @@ describe("the viewer's own choices", () => {
     expect(storeSetupPrefs(storage, { hidden: true, skipped: ["offsite", "heartbeat", "offsite"] })).toBe(true)
     expect(JSON.parse(items.get(SETUP_KEY)!)).toEqual({ hidden: true, skipped: ["offsite"] })
     expect(readSetupPrefs(storage)).toEqual({ hidden: true, skipped: ["offsite"] })
-    expect(readSetupPrefs(memory({ [SETUP_KEY]: JSON.stringify({ hidden: "yes", skipped: ["webhook", "company-signin", 3] }) }).storage)).toEqual({ hidden: false, skipped: ["company-signin"] })
+    expect(readSetupPrefs(memory({ [SETUP_KEY]: JSON.stringify({ hidden: "yes", skipped: ["webhook", "offsite", 3] }) }).storage)).toEqual({ hidden: false, skipped: ["offsite"] })
   })
 
   test("back to nothing, the key goes; a storage that refuses says so", () => {
@@ -411,7 +393,7 @@ describe("the viewer's own choices", () => {
   test("skipping and unskipping touch the one name", () => {
     const skipped = withSkipped(NO_PREFS, "offsite", true)
     expect(skipped.skipped).toEqual(["offsite"])
-    expect(withSkipped(skipped, "company-signin", true).skipped).toEqual(["offsite", "company-signin"])
+    expect(withSkipped(skipped, "offsite", true).skipped).toEqual(["offsite"])
     expect(withSkipped(skipped, "offsite", false).skipped).toEqual([])
     expect(withSkipped(NO_PREFS, "heartbeat", true).skipped).toEqual([])
   })
@@ -422,13 +404,11 @@ describe("the guides' steps", () => {
     expect(GUIDE_STEPS.heartbeat).toEqual(["create-check", "paste-ping", "wait-ping"])
     expect(GUIDE_STEPS.webhook).toEqual(["choose-service", "paste-webhook", "webhook-saved"])
     expect(GUIDE_STEPS.offsite).toEqual(["create-bucket", "bucket-details", "passphrase", "offsite-saved"])
-    expect(GUIDE_STEPS["company-signin"]).toEqual(["register-app", "signin-details", "signin-saved"])
     expect(openingStep("heartbeat", "start")).toBe("create-check")
     expect(openingStep("heartbeat", "value")).toBe("paste-ping")
     expect(openingStep("heartbeat", "wait")).toBe("wait-ping")
     expect(openingStep("webhook", "value")).toBe("paste-webhook")
     expect(openingStep("offsite", "value")).toBe("bucket-details")
-    expect(openingStep("company-signin", "value")).toBe("signin-details")
     for (const [id, step] of Object.entries(VALUE_STEP)) expect(GUIDE_STEPS[id as keyof typeof GUIDE_STEPS]).toContain(step)
   })
 
@@ -446,7 +426,6 @@ describe("the guides' steps", () => {
     expect(missingFile("webhook", "no-file")).toBe(MONITOR_FILE)
     expect(missingFile("offsite", "no-file")).toBe(BACKUP_FILE)
     expect(missingFile("heartbeat", "not-set")).toBeNull()
-    expect(missingFile("company-signin", "no-file")).toBeNull()
   })
 
   test("the command is shown cut before the file's name, the copy holding the whole line", () => {
@@ -536,25 +515,13 @@ describe("what a guide accepts", () => {
     expect(drawPassphrase()).not.toBe(drawPassphrase())
   })
 
-  test("company sign-in: issuer, client, secret and domains, typed or kept, the issuer in https", () => {
-    const all = { OIDC_ISSUER: "https://accounts.example.test", OIDC_CLIENT_ID: "c", OIDC_CLIENT_SECRET: "s", OIDC_ALLOWED_DOMAINS: "example.test" }
-    expect(signinReady(all, [])).toBe(true)
-    expect(signinReady({ ...all, OIDC_ALLOWED_DOMAINS: " " }, [])).toBe(false)
-    expect(signinReady({ ...all, OIDC_ISSUER: "http://accounts.example.test" }, [])).toBe(false)
-    expect(signinReady({}, [...SIGNIN_THREE, "OIDC_ALLOWED_DOMAINS"])).toBe(true)
-    expect(signinReady({}, SIGNIN_THREE)).toBe(false)
-  })
-
   test("a form sends what is typed, trimmed, and leaves the rest as it is", () => {
     expect(writesOf({ BACKUP_S3_BUCKET: "  b ", BACKUP_S3_REGION: "", BACKUP_S3_PREFIX: " " }, OFFSITE_FIELDS)).toEqual([{ variable: "BACKUP_S3_BUCKET", value: "b" }])
-    expect(writesOf({ OIDC_PROVIDER_NAME: "Example" }, SIGNIN_FIELDS)).toEqual([{ variable: "OIDC_PROVIDER_NAME", value: "Example" }])
   })
 
   test("the fields' plain labels; the secrets masked", () => {
     expect(OFFSITE_FIELDS.map((field) => field.label)).toEqual(["Endpoint", "Bucket", "Access key", "Secret key", "Region", "Folder"])
-    expect(SIGNIN_FIELDS.map((field) => field.label)).toEqual(["Issuer", "Client ID", "Client secret", "Allowed domains", "Admin emails", "Provider name"])
     expect(OFFSITE_FIELDS.filter((field) => field.secret).map((field) => field.label)).toEqual(["Access key", "Secret key"])
-    expect(SIGNIN_FIELDS.filter((field) => field.optional).map((field) => field.label)).toEqual(["Admin emails", "Provider name"])
   })
 })
 
@@ -590,7 +557,6 @@ describe("what the review found", () => {
       "The endpoint and the bucket were saved, the access key and the encryption passphrase weren't. Save again to finish.",
     )
     expect(partialSave(["ALERT_WEBHOOK_URL"], ["ALERT_WEBHOOK_FORMAT"])).toBe("The webhook address was saved, the message format wasn't. Save again to finish.")
-    expect(partialSave(["OIDC_ISSUER"], ["OIDC_CLIENT_ID"])).toBe("The issuer was saved, the client ID wasn't. Save again to finish.")
     // Nothing went through, or everything did: nothing partial to say.
     expect(partialSave([], ["HEARTBEAT_URL"])).toBeNull()
     expect(partialSave(["HEARTBEAT_URL"], [])).toBeNull()
@@ -605,7 +571,6 @@ describe("what the review found", () => {
   test("a Change with every field left as it is writes nothing", () => {
     expect(offsiteWrites({}, "")).toEqual([])
     expect(offsiteWrites({ BACKUP_S3_BUCKET: " " }, "")).toEqual([])
-    expect(writesOf({}, SIGNIN_FIELDS)).toEqual([])
     expect(offsiteWrites({ BACKUP_S3_REGION: "eu-west-1" }, "a passphrase of sixteen")).toEqual([
       { variable: "BACKUP_S3_REGION", value: "eu-west-1" },
       { variable: "BACKUP_ENCRYPTION_PASSPHRASE", value: "a passphrase of sixteen" },
@@ -633,11 +598,11 @@ describe("what the review found", () => {
     expect(serverSignal(waiting.states, waiting.alerting)).toBeNull()
   })
 
-  test("the portal's file missing: company sign-in says so in red and leads to the reason, and the guide leaves it out", () => {
+  test("the portal's file missing: its password says so in red and leads to the reason, and the guide leaves it out", () => {
     const projects = server()
     projects[1] = secretProject({ slug: "portal", files: [secretFile({ name: "portal.env", state: "absent", variables: [], passwords: [], modifiedAt: null })] })
     const row = inputs(projects, { skipped: new Set(["offsite"]) })
-    expect(serverRow("company-signin", row)).toMatchObject({ word: "Missing", tone: "error", error: true, action: { kind: "secrets", label: "See why", slug: "portal" }, menu: [] })
+    expect(serverRow("portal-password", row)).toMatchObject({ word: "Missing", tone: "error", error: true, action: { kind: "secrets", label: "See why", slug: "portal" }, menu: [] })
     expect(sitesRowIds(sites(row))).toEqual([])
   })
 

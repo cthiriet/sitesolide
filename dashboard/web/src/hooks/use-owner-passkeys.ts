@@ -5,13 +5,12 @@ import { NO_PASSKEYS, PASSKEYS_CHANGED, ownerPasskeys, readPasskeys, type OwnerP
 /**
  * The owner's passkeys as the steward keeps them: the session's word on
  * whether they hold one, and the listing for how many, read again whenever
- * one is added or removed on this page (`PASSKEYS_CHANGED`). Nothing is
- * asked for a person, who has no passkey of the owner's: `NO_PASSKEYS`.
+ * one is added or removed on this page (`PASSKEYS_CHANGED`). `NO_PASSKEYS`
+ * until both have answered.
  */
-export function useOwnerPasskeys(owner: boolean): OwnerPasskeys {
+export function useOwnerPasskeys(): OwnerPasskeys {
   const [state, setState] = useState<OwnerPasskeys>(NO_PASSKEYS)
   useEffect(() => {
-    if (!owner) return
     let live = true
     const load = async () => {
       const [session, listing] = await Promise.all([readSession(), readPasskeys()])
@@ -25,7 +24,7 @@ export function useOwnerPasskeys(owner: boolean): OwnerPasskeys {
       live = false
       window.removeEventListener(PASSKEYS_CHANGED, reload)
     }
-  }, [owner])
+  }, [])
   return state
 }
 

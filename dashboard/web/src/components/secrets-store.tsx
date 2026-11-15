@@ -227,15 +227,15 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
   }
 
   /** An action that writes: remembered where it started, asked for the unlock first when locked. */
-  function writing(open: () => void, purpose: string, resume: string) {
+  function writing(open: () => void, purpose: string) {
     remember()
-    actions.require(open, { purpose, resume })
+    actions.require(open, { purpose })
   }
 
   function openValue(name: string | null, mode: "type" | "generate") {
     const replaces = name !== null && (byName.get(name)?.source ?? "none") !== "none"
     const purpose = name === null ? (mode === "generate" ? "generate a value" : "add a variable") : `${mode === "generate" ? (replaces ? "replace" : "generate") : "set"} ${name}`
-    writing(() => setValue({ slug, name, mode, replaces, opening: next(), open: true }), purpose, mode === "generate" ? (replaces ? "Replace" : "Generate") : name === null ? "Add" : "Set")
+    writing(() => setValue({ slug, name, mode, replaces, opening: next(), open: true }), purpose)
   }
 
   function openFile(name: string | null) {
@@ -243,7 +243,6 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
     writing(
       () => setFile({ slug, name, replaces, opening: next(), open: true }),
       name === null ? "upload a file" : `${replaces ? "replace" : "upload"} ${name}`,
-      name === null ? "Add" : replaces ? "Replace" : "Upload",
     )
   }
 
@@ -254,7 +253,6 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
         setConfirm(target)
       },
       `remove ${target.name}`,
-      "Remove",
     )
   }
 
@@ -298,8 +296,7 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
 
   const unmanaged = store.state === "unmanaged" ? splitReason(store.reason ?? "The server does not manage this store.") : null
   const nothing = lines.length === 0 && store.files.length === 0
-  // The owner restarts from an unlock; a person with their session alone.
-  const restartLocked = locked && !actions.person
+  const restartLocked = locked
   const restorable = store.previous && store.may.restore
   const quietRestart = restartable && pending === null
 
@@ -613,7 +610,7 @@ export function StoreSection({ project, store }: { project: ProjectView; store: 
                   </WriteItem>
                 )}
                 {restorable && (
-                  <WriteItem onClick={() => writing(() => setRestore({ slug, opening: next(), open: true }), "restore the previous version", "Restore previous version")} locked={locked}>
+                  <WriteItem onClick={() => writing(() => setRestore({ slug, opening: next(), open: true }), "restore the previous version")} locked={locked}>
                     <Undo2 />
                     Restore previous version
                   </WriteItem>

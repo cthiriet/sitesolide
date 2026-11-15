@@ -3,17 +3,15 @@ import { useData } from "@/components/data"
 import { KindIcon } from "@/components/legend"
 import { ExternalLink } from "@/components/link"
 import { PanelSkeleton, StateLabel } from "@/components/page"
-import { RestartButton } from "@/components/restart-button"
 import { ProjectActions } from "@/components/project-actions"
 import { SitePage, useSite } from "@/components/site"
 import { SiteDiscrepancies, ServicePanel, ServicesPanel, SitePanel, type Headline } from "@/components/site-card"
 import { readAccess, readBackups } from "@/lib/api"
-import { isPlatform, listCount } from "@/lib/access"
+import { guestCount, isPlatform } from "@/lib/access"
 import { isAuditResponse, readAudit } from "@/lib/audit"
 import { freshness } from "@/lib/backups"
 import { historyRequest } from "@/lib/history"
-import { isPerson, mayRestart, roleOn } from "@/lib/identity"
-import { sectionsFor, siteUrl, type Section } from "@/lib/pages"
+import { siteUrl, type Section } from "@/lib/pages"
 import { deployedBy, headerState, kindLine, secretsHeadline } from "@/lib/site-card"
 import { siteAddress } from "@/lib/sites"
 import { TONE_TEXT } from "@/lib/tones"
@@ -48,26 +46,26 @@ function Summary({ site, discrepancies }: { site: Site; discrepancies: readonly 
 }
 
 /**
- * Who is on the list, in a few words, for the Access line: read with the
+ * How many guests, in a few words, for the Access line: read with the
  * snapshot, and nothing said until it answers or for the platform's own
- * projects, which nobody is given a role on.
+ * projects, which take no guest.
  */
-function usePeople(slug: string, enabled: boolean, restricted: boolean): string | null {
+function useGuests(slug: string, enabled: boolean, restricted: boolean): string | null {
   const { generation } = useData()
-  const [people, setPeople] = useState<string | null>(null)
+  const [guests, setGuests] = useState<string | null>(null)
   useEffect(() => {
     if (!enabled) return
     let current = true
     void readAccess(slug).then(({ status, body }) => {
       if (!current || status !== 200 || body === null || !Array.isArray(body.entries)) return
       // An empty list only says something of a restricted site: nobody but the owner opens it.
-      setPeople(body.entries.length === 0 && !restricted ? null : listCount(body.entries))
+      setGuests(body.entries.length === 0 && !restricted ? null : guestCount(body.entries.length))
     })
     return () => {
       current = false
     }
   }, [slug, enabled, restricted, generation])
-  return enabled ? people : null
+  return enabled ? guests : null
 }
 
 /**
@@ -75,11 +73,10 @@ function usePeople(slug: string, enabled: boolean, restricted: boolean): string 
  * with the snapshot, in the Backups section's own words; red when the last
  * run failed. Muted words when the steward can't say.
  */
-function useBackups(slug: string, enabled: boolean): Headline | null {
+function useBackups(slug: string): Headline | null {
   const { generation, now, offset } = useData()
   const [read, setRead] = useState<{ view: BackupsView } | { message: string } | null>(null)
   useEffect(() => {
-    if (!enabled) return
     let current = true
     void readBackups(slug).then(({ status, body }) => {
       if (!current) return
@@ -89,8 +86,7 @@ function useBackups(slug: string, enabled: boolean): Headline | null {
     return () => {
       current = false
     }
-  }, [slug, enabled, generation])
-  if (!enabled) return null
+  }, [slug, generation])
   if (read === null) return { state: "loading" }
   if ("message" in read) return { state: "ready", content: <Muted>{read.message}</Muted> }
   if (!read.view.installed) return { state: "ready", content: <Muted>Not set up on this server</Muted> }
@@ -149,20 +145,17 @@ function OverviewSkeleton() {
  * order. A static site runs no service: the Site panel is alone.
  */
 export function OverviewSection({ slug }: { slug: string }) {
-  const { now, offset, identity, snapshot: data, secrets } = useData()
+  const { now, offset, snapshot: data, secrets } = useData()
   const { site, discrepancies, project } = useSite(slug)
-  const allowed = new Set<Section>(sectionsFor(identity, slug).map((entry) => entry.section))
-  const link = (section: Section) => (allowed.has(section) ? siteUrl(slug, section) : null)
+  const link = (section: Section) => siteUrl(slug, section)
   const platform = isPlatform(slug, data?.zone ?? null)
-  const people = usePeople(slug, !platform, site !== null && site.portal.installed)
-  const backups = useBackups(slug, allowed.has("backups"))
-  const person = isPerson(identity)
+  const guests = useGuests(slug, !platform, site !== null && site.portal.installed)
+  const backups = useBackups(slug)
   const deployedBy = useDeployedBy(slug, site?.deployed ?? null)
 
   // The secrets line: what the store keeps, once the steward has said it; nothing to say for a site it does not list.
-  const secretsLine: Headline | null = !allowed.has("secrets")
-    ? null
-    : project !== null
+  const secretsLine: Headline | null =
+    project !== null
       ? (() => {
           const headline = secretsHeadline(project, now + offset)
           return {
@@ -188,17 +181,13 @@ export function OverviewSection({ slug }: { slug: string }) {
       slug={slug}
       section="overview"
       history={{ target: slug }}
-      actions={!person && !platform && site !== null ? <ProjectActions slug={slug} zone={data?.zone ?? null} disabled={site.disabled === true} /> : undefined}
+      actions={!platform && site !== null ? <ProjectActions slug={slug} zone={data?.zone ?? null} disabled={site.disabled === true} /> : undefined}
       description={site === null ? undefined : <Summary site={site} discrepancies={discrepancies} />}
       skeleton={<OverviewSkeleton />}
     >
       {(snapshot) => {
         const service = (
-          <ServicePanel
-            site={snapshot}
-            now={now}
-            action={mayRestart(identity, slug) && snapshot.type === "app" ? <RestartButton slug={slug} /> : undefined}
-          />
+          <ServicePanel site={snapshot} now={now} />
         )
         return (
           <>
@@ -209,14 +198,13 @@ export function OverviewSection({ slug }: { slug: string }) {
                 site={snapshot}
                 now={now}
                 links={{ access: siteUrl(slug, "access"), secrets: link("secrets"), backups: link("backups") }}
-                people={people}
-                plainAccess={person && roleOn(identity, slug) !== "admin"}
+                guests={guests}
                 secrets={secretsLine}
                 backups={backups}
                 deployedBy={deployedBy}
               />
               <div className="min-w-0 @4xl/body:col-span-2 empty:hidden">
-                <ServicesPanel site={snapshot} now={now} map={link("services") ?? undefined} />
+                <ServicesPanel site={snapshot} now={now} map={link("services")} />
               </div>
             </div>
           </>

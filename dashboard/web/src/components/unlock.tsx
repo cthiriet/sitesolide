@@ -15,11 +15,11 @@ import { cn } from "@/lib/utils"
  * *Unlocked, 9 min*, whose x locks again.
  *
  * The confirmations stay what they were: the unlock comes first, then the
- * action opens its own dialog as before. What a role does not allow is not
- * offered at all; the steward judges anyway.
+ * action opens its own dialog as before. The steward judges every write
+ * anyway.
  */
 
-/** The write's options: `purpose` names it in the unlock's title, `resume` is said again on a person's way back. */
+/** The write's options: `purpose` names it in the unlock's title. */
 export type WriteOptions = RequireOptions
 
 /**
@@ -58,17 +58,17 @@ type WriteButtonProps = Omit<ComponentProps<typeof Button>, "onClick"> &
  * locked it carries the lock glyph, and a press asks for the unlock first.
  * Any `Button` prop applies, `variant` and `size` included.
  *
- *   <WriteButton onPress={openCreation} purpose="create a token" resume="New token">
+ *   <WriteButton onPress={openCreation} purpose="create a token">
  *     <Plus />
  *     New token
  *   </WriteButton>
  */
-export function WriteButton({ onPress, unlock = true, beforeLeave, resume, purpose, children, ...props }: WriteButtonProps) {
+export function WriteButton({ onPress, unlock = true, purpose, children, ...props }: WriteButtonProps) {
   const { locked, run } = useWrite()
   return (
     <Button
       {...props}
-      onClick={() => (unlock ? run(onPress, { beforeLeave, resume, purpose }) : onPress())}
+      onClick={() => (unlock ? run(onPress, { purpose }) : onPress())}
     >
       {children}
       {unlock && locked && <LockGlyph />}
@@ -83,12 +83,12 @@ type WriteMenuItemProps = Omit<ComponentProps<typeof DropdownMenuItem>, "onClick
   }
 
 /** A row menu's item that writes: the same rule as `WriteButton`, the glyph at the item's end. */
-export function WriteMenuItem({ onPress, unlock = true, beforeLeave, resume, purpose, children, className, ...props }: WriteMenuItemProps) {
+export function WriteMenuItem({ onPress, unlock = true, purpose, children, className, ...props }: WriteMenuItemProps) {
   const { locked, run } = useWrite()
   return (
     <DropdownMenuItem
       {...props}
-      onClick={() => (unlock ? run(onPress, { beforeLeave, resume, purpose }) : onPress())}
+      onClick={() => (unlock ? run(onPress, { purpose }) : onPress())}
       className={cn("h-9", className)}
     >
       {children}

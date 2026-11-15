@@ -125,7 +125,7 @@ export function FilesPanel({ project }: { project: ProjectView }) {
   const service = problems.filter((problem) => problem.key === "service")
   const pending = problems.find((problem) => problem.key === "pending") ?? null
   const restartable = project.service !== null
-  const restartLocked = locked && !actions.person
+  const restartLocked = locked
   const values: ValueTable = useValueTable(
     actions.state.open,
     (key) => {
@@ -200,14 +200,10 @@ export function FilesPanel({ project }: { project: ProjectView }) {
           )
         }
         if (variableOffer(line.file, line.name) === "password") {
-          const breakGlass = !actions.person && !offersPasswordChange({ slug, file: line.file.name, variable: line.name }, actions.passkeys.registered)
+          const breakGlass = !offersPasswordChange({ slug, file: line.file.name, variable: line.name }, actions.passkeys.registered)
           return (
             <span className="text-xs text-pretty text-muted-foreground">
-              {actions.person
-                ? "A password hash. It never shows, and only the owner changes it."
-                : breakGlass
-                  ? `A password hash. It never shows. ${BREAK_GLASS}`
-                  : "A password hash. It never shows: change the password instead."}
+              {breakGlass ? `A password hash, never shown. ${BREAK_GLASS}` : "A password hash, never shown. Use Change password."}
             </span>
           )
         }
@@ -255,7 +251,7 @@ export function FilesPanel({ project }: { project: ProjectView }) {
         if (line.kind === "note") return null
         const variable = { ...target, variable: line.name }
         if (variableOffer(line.file, line.name) === "password") {
-          if (actions.person || !offersPasswordChange(variable, actions.passkeys.registered)) return null
+          if (!offersPasswordChange(variable, actions.passkeys.registered)) return null
           return (
             <Button variant="outline" size="sm" data-password-variable={line.name} onClick={() => actions.changePassword(variable)} className={cn("max-md:h-10", WIDE_ONLY)}>
               <RectangleEllipsis />
@@ -312,7 +308,7 @@ export function FilesPanel({ project }: { project: ProjectView }) {
     }
     const variable = { ...target, variable: line.name }
     if (variableOffer(line.file, line.name) === "password") {
-      if (actions.person || !offersPasswordChange(variable, actions.passkeys.registered)) return null
+      if (!offersPasswordChange(variable, actions.passkeys.registered)) return null
       return (
         <RowMenu label={`Actions for ${line.name}`}>
           <DropdownMenuItem onClick={() => actions.changePassword(variable)} className="h-9">

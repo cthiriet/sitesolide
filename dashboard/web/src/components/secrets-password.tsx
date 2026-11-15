@@ -173,8 +173,8 @@ function PasswordFlow({
       <DialogHeader>
         <DialogTitle className="pr-8">{texts.title}</DialogTitle>
         <DialogDescription className="text-pretty">
-          Only a hash of the new password is kept, in <span className="font-mono">{target.file}</span>. Nobody can
-          read it back, you included.
+          Only its hash is kept, in <span className="font-mono">{target.file}</span>: nobody can read it back, you
+          included.
         </DialogDescription>
       </DialogHeader>
       <Banner tone="attention">{texts.warning}</Banner>
@@ -352,12 +352,12 @@ function PasswordForm({
   return (
     <form noValidate onSubmit={submit} className="grid gap-5">
       {withPasskey ? (
-        <p className="text-xs text-pretty text-muted-foreground">Your passkey confirms it's you: the dashboard password no longer does.</p>
+        <p className="text-xs text-pretty text-muted-foreground">Your passkey confirms it's you.</p>
       ) : (
         <>
           {/* The same username as the sign-in: the password manager offers the dashboard's. */}
           <input type="text" name="username" autoComplete="username" value="sitesolide" readOnly hidden />
-          <Field id={dashboardPasswordId} labelText="Dashboard password" help="Entered again to confirm it's you." error={errors.dashboard}>
+          <Field id={dashboardPasswordId} labelText="Dashboard password" help="To confirm it's you." error={errors.dashboard}>
             <Input
               ref={fields.dashboard}
               id={dashboardPasswordId}
@@ -408,8 +408,8 @@ function PasswordForm({
         </div>
         <p className="text-xs text-pretty text-muted-foreground">
           {mode === "draw"
-            ? "A long random password is drawn and shown to you once."
-            : "Type it twice. The server says if it is too weak."}
+            ? "A long random password, shown once."
+            : "Type it twice. The server refuses a weak one."}
         </p>
       </fieldset>
 
@@ -506,7 +506,7 @@ function GeneratedPasswordScreen({
       <DialogHeader>
         <DialogTitle className="pr-8">{title}</DialogTitle>
         <DialogDescription className="text-pretty">
-          Copy it now and keep it in your password manager. It is shown only once: only its hash is kept.
+          Copy it into your password manager now. It is shown once, and only its hash is kept.
         </DialogDescription>
       </DialogHeader>
 

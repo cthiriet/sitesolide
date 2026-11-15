@@ -4,9 +4,8 @@
  * into an address, and the navigation component uses it both ways.
  *
  * Two levels. The machine's: the home page, where the machine, its
- * discrepancies and the list of sites live, the machine's audit, the People
- * with a role somewhere, the Tokens that deploy without SSH, and the server's
- * own settings. A site's: five sections, Overview, Services, Secrets, Access
+ * discrepancies and the list of sites live, the machine's audit, the Tokens
+ * that deploy without SSH, and the server's own settings. A site's: five sections, Overview, Services, Secrets, Access
  * and Backups, the site as a parameter; Services only for an app, the one
  * kind that runs any.
  *
@@ -20,22 +19,22 @@
  * `/site` to `/site/`, and a link without it would cost a round trip.
  *
  * Older addresses keep their file so bookmarks keep working: `/sites/`,
- * `/secrets/` and `/guests/` from before the per-site page, `/team/` and
- * `/members/` from before Tokens and People, a site's Guests, Sharing and
- * Members from before its one Access section, its Audience, removed, which
- * opens its Overview, and `/connectors/`, removed, which opens Activity,
- * where the egress proxy's refusals are read. They are read like their
+ * `/secrets/` and `/guests/` from before the per-site page, `/team/` from
+ * before Tokens, `/people/` and `/members/`, removed with company sign-in,
+ * which open the home page, a site's Guests, Sharing and Members from before
+ * its one Access section, its Audience, removed, which opens its Overview,
+ * and `/connectors/`, removed, which opens Activity, where the egress
+ * proxy's refusals are read. They are read like their
  * equivalent, and navigation replaces the address with the new one.
  */
-import { isPerson, roleOn, type Person } from "./identity"
-import type { IdentityView, Role, Site } from "./types"
+import type { Site } from "./types"
 import type { Verdict } from "./verdict"
 
 /** A site's sections, in the order of the sidebar and the tabs. */
 export type Section = "overview" | "services" | "secrets" | "access" | "backups"
 
 /** The pages of the machine level. */
-export type MachinePage = "home" | "activity" | "people" | "tokens" | "server"
+export type MachinePage = "home" | "activity" | "tokens" | "server"
 
 export type Page = { name: MachinePage } | { name: "site"; slug: string; section: Section }
 
@@ -46,67 +45,17 @@ export type SectionEntry = { section: Section; title: string; path: string }
 export const MACHINE_PAGES: readonly MachineEntry[] = [
   { name: "home", title: "Sites", path: "/" },
   { name: "activity", title: "Activity", path: "/activity/" },
-  { name: "people", title: "People", path: "/people/" },
   { name: "tokens", title: "Tokens", path: "/tokens/" },
   { name: "server", title: "Server", path: "/server/" },
 ]
 
 /**
- * What a person signed in with their company account sees: their projects on
- * the home page, the activity of their projects, Tokens for their own tokens
- * when a role or the create right lets them mint one, and in a site the
- * sections their role there opens, the steward's own table
- * (src/people/powers.ts): a Viewer its Overview, Services and Access, read
- * only; a Developer its Secrets too, values write-only; an Admin everything
- * of the site. The rest is the owner's, hidden here and refused by the
- * service.
+ * A site's sections, in the sidebar's order. Given the site, Services goes
+ * for one that runs no service, a static site or a folder with no manifest:
+ * a section with nothing in it disappears.
  */
-const PERSON_PAGES: readonly MachinePage[] = ["home", "activity"]
-
-/** May this person mint a token of their own: a Developer or an Admin somewhere, or the create right. A Viewer mints nothing. */
-function mayMint(identity: Person): boolean {
-  return identity.create || Object.values(identity.roles).some((role) => role === "developer" || role === "admin")
-}
-
-function personPages(identity: Person): readonly MachinePage[] {
-  return mayMint(identity) ? [...PERSON_PAGES, "tokens"] : PERSON_PAGES
-}
-
-const ROLE_SECTIONS: Readonly<Record<Role, readonly Section[]>> = {
-  viewer: ["overview", "services", "access"],
-  developer: ["overview", "services", "secrets", "access"],
-  admin: ["overview", "services", "secrets", "access", "backups"],
-}
-
-const OWNER_SECTIONS: readonly Section[] = ["overview", "services", "secrets", "access", "backups"]
-
-/** The machine's pages this person may open, in the sidebar's order. */
-export function machinePagesFor(identity: IdentityView | null): readonly MachineEntry[] {
-  if (!isPerson(identity)) return MACHINE_PAGES
-  const pages = personPages(identity)
-  return MACHINE_PAGES.filter((entry) => pages.includes(entry.name))
-}
-
-function allowedSections(identity: IdentityView | null, slug: string): readonly Section[] {
-  if (!isPerson(identity)) return OWNER_SECTIONS
-  const role = roleOn(identity, slug)
-  return role === null ? ROLE_SECTIONS.viewer : ROLE_SECTIONS[role]
-}
-
-/**
- * A site's sections this person may open, in the sidebar's order. Given the
- * site, Services goes for one that runs no service, a static site or a
- * folder with no manifest: a section with nothing in it disappears.
- */
-export function sectionsFor(identity: IdentityView | null, slug: string, site?: Pick<Site, "type"> | null): readonly SectionEntry[] {
-  const allowed = allowedSections(identity, slug)
-  return SECTIONS.filter((entry) => allowed.includes(entry.section) && (entry.section !== "services" || site == null || site.type === "app"))
-}
-
-/** May this person open this page? A person asking for one that is not theirs is told so. */
-export function mayOpen(page: Page, identity: IdentityView | null): boolean {
-  if (page.name === "site") return allowedSections(identity, page.slug).includes(page.section)
-  return !isPerson(identity) || personPages(identity).includes(page.name)
+export function sectionsFor(site?: Pick<Site, "type"> | null): readonly SectionEntry[] {
+  return SECTIONS.filter((entry) => entry.section !== "services" || site == null || site.type === "app")
 }
 
 /** The order of the sidebar and the tabs, inside a site. */
@@ -142,7 +91,8 @@ export const LEGACY_PATHS: Readonly<Record<string, Legacy>> = {
   "/secrets/": { kind: "section", section: "secrets", param: LEGACY_PARAM },
   "/guests/": { kind: "section", section: null, param: LEGACY_PARAM },
   "/team/": { kind: "machine", page: "tokens" },
-  "/members/": { kind: "machine", page: "people" },
+  "/people/": { kind: "machine", page: "home" },
+  "/members/": { kind: "machine", page: "home" },
   "/connectors/": { kind: "machine", page: "activity" },
   "/site/guests/": { kind: "section", section: "access", param: SITE_PARAM },
   "/site/sharing/": { kind: "section", section: "access", param: SITE_PARAM },

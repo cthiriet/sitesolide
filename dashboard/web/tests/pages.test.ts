@@ -84,9 +84,10 @@ describe("older addresses", () => {
     expect(pageFromUrl("/secrets/", "?site=cms")).toEqual({ name: "site", slug: "cms", section: "secrets" })
     expect(pageFromUrl("/guests/")).toEqual({ name: "home" })
     expect(pageFromUrl("/guests/", "?site=cms")).toEqual({ name: "home" })
-    // Tokens and People, and a site's one Access section, from before them.
+    // Tokens and a site's one Access section, from before them; People and Members, removed with company sign-in: home.
     expect(pageFromUrl("/team/")).toEqual({ name: "tokens" })
-    expect(pageFromUrl("/members/")).toEqual({ name: "people" })
+    expect(pageFromUrl("/members/")).toEqual({ name: "home" })
+    expect(pageFromUrl("/people/")).toEqual({ name: "home" })
     // Connectors, removed: Activity, where the egress proxy's refusals are read.
     expect(pageFromUrl("/connectors/")).toEqual({ name: "activity" })
     for (const old of ["/site/guests/", "/site/sharing/", "/site/members/"]) {
@@ -104,7 +105,8 @@ describe("older addresses", () => {
     expect(redirect("/secrets/", "?site=")).toBe("/")
     expect(redirect("/guests/")).toBe("/")
     expect(redirect("/team/")).toBe("/tokens/")
-    expect(redirect("/members/index.html")).toBe("/people/")
+    expect(redirect("/members/index.html")).toBe("/")
+    expect(redirect("/people/")).toBe("/")
     expect(redirect("/connectors/")).toBe("/activity/")
     expect(redirect("/site/guests/", "?s=cms")).toBe("/site/access/?s=cms")
     expect(redirect("/site/sharing/", "?s=cms")).toBe("/site/access/?s=cms")
@@ -200,7 +202,7 @@ describe("the address of a page", () => {
       ...SECTIONS.map((entry) => entry.path),
       ...Object.keys(LEGACY_PATHS),
     ]
-    expect(Object.keys(LEGACY_PATHS).sort()).toEqual(["/connectors/", "/guests/", "/members/", "/secrets/", "/site/audience/", "/site/guests/", "/site/members/", "/site/sharing/", "/sites/", "/team/"])
+    expect(Object.keys(LEGACY_PATHS).sort()).toEqual(["/connectors/", "/guests/", "/members/", "/people/", "/secrets/", "/site/audience/", "/site/guests/", "/site/members/", "/site/sharing/", "/sites/", "/team/"])
     expect(paths.sort()).toEqual(expected.sort())
   })
 })
@@ -239,7 +241,7 @@ describe("titles", () => {
     expect(documentTitle({ name: "site", slug: "cms", section: "access" }, bad)).toBe(
       "1 error · 1 warning · Access · cms · sitesolide",
     )
-    expect(documentTitle({ name: "people" }, bad)).toBe("1 error · 1 warning · People · sitesolide")
+    expect(documentTitle({ name: "tokens" }, bad)).toBe("1 error · 1 warning · Tokens · sitesolide")
     expect(documentTitle({ name: "activity" }, NO_DATA)).toBe("No data · Activity · sitesolide")
     expect(documentTitle({ name: "home" }, verdict([], true))).toBe("Stale data · sitesolide")
   })

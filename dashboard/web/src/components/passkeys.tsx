@@ -14,7 +14,7 @@ import { PASSKEYS_PANEL_ID } from "@/lib/server-setup"
 import { ceremonyMessage, passkeysSupported, readPasskeys, registerPasskey, removePasskey, type PasskeyView } from "@/lib/webauthn"
 
 /** What the owner is told while they hold one passkey: a lost device would leave root's link as the only way in. */
-const ONE_PASSKEY = "Register a second passkey, on another device or a security key: losing your only one leaves root's link over SSH as the way back in."
+const ONE_PASSKEY = "Add a second one on another device or a security key. Lose your only passkey and only root, over SSH, can let you back in."
 
 /**
  * The owner's passkeys, on the Server page: listed by name, one added from
@@ -38,7 +38,7 @@ export function PasskeysPanel() {
     const { status, body } = await readPasskeys()
     if (status === 200 && body !== null && Array.isArray(body.passkeys)) {
       setList(body.passkeys)
-      setProblem(body.readable === false ? "The server can't read its list of passkeys. Nobody signs in with one until root repairs it." : "")
+      setProblem(body.readable === false ? "The server can't read its passkey list. No passkey signs in until root repairs it." : "")
     } else setProblem(ceremonyMessage(status, body as never))
   }, [])
 
@@ -89,13 +89,13 @@ export function PasskeysPanel() {
   function submit(event: SyntheticEvent) {
     event.preventDefault()
     if (busy || !passkeysSupported()) return
-    whenUnlocked("register a passkey", register)
+    whenUnlocked("add a passkey", register)
   }
 
   return (
-    <Panel full id={PASSKEYS_PANEL_ID} title="Passkeys" count={list?.length} description="How you sign in as the owner. Once you have one, the dashboard password no longer signs in or unlocks.">
+    <Panel full id={PASSKEYS_PANEL_ID} title="Passkeys" count={list?.length} description="Sign in and unlock changes with your device. While one exists, the passwords are for recovery only.">
       <div className="grid gap-4 p-4">
-        {list !== null && list.length === 0 && <p className="text-sm text-pretty">No passkey yet. Register one here, then a second on another device.</p>}
+        {list !== null && list.length === 0 && <p className="text-sm text-pretty">No passkey yet. Add one here, then a second on another device.</p>}
         {list !== null && list.length > 0 && (
           <ul aria-label="Passkeys" className="grid gap-2">
             {list.map((one) => (
@@ -120,12 +120,12 @@ export function PasskeysPanel() {
         {list !== null && list.length === 1 && <p className="text-sm text-pretty text-muted-foreground">{ONE_PASSKEY}</p>}
         <form noValidate onSubmit={submit} className="flex flex-wrap items-end gap-3">
           <div className="grid gap-2">
-            <Label htmlFor={nameId}>Name the new passkey</Label>
+            <Label htmlFor={nameId}>Passkey name</Label>
             <Input id={nameId} value={name} maxLength={60} placeholder="Phone" onChange={(event) => setName(event.target.value)} className="h-10 sm:h-9" />
           </div>
           <Button ref={add} type="submit" disabled={busy || !passkeysSupported()} className="max-sm:h-11">
             <KeyRound />
-            {busy ? "Waiting for the passkey…" : "Register a passkey"}
+            {busy ? "Waiting for the passkey…" : "Add a passkey"}
           </Button>
         </form>
         {!passkeysSupported() && <p className="text-sm text-muted-foreground">This browser doesn't offer passkeys.</p>}

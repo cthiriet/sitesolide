@@ -139,22 +139,21 @@ describe("the catalogue", () => {
 
   test("a variable is found with its setting", () => {
     expect(settingOfVariable("dashboard", MONITOR_FILE, "HEARTBEAT_URL")?.id).toBe("heartbeat")
-    expect(settingOfVariable("portal", "portal.env", "OIDC_CLIENT_SECRET")?.id).toBe("company-signin")
+    expect(settingOfVariable("portal", "portal.env", "OIDC_CLIENT_SECRET")).toBeNull()
     expect(settingOfVariable("portal", "portal.env", "PASSWORD_HASH")?.id).toBe("portal-password")
     expect(settingOfVariable("dashboard", MONITOR_FILE, "HEARTBEAT_ULR")).toBeNull()
   })
 
   test("the groups hold the settings the page puts under them", () => {
     expect(settingsOf("monitoring").map((setting) => setting.id)).toEqual(["heartbeat", "webhook", "format"])
-    expect(settingsOf("sign-in").map((setting) => setting.id)).toEqual(["dashboard-password", "portal-password", "company-signin"])
+    expect(settingsOf("sign-in").map((setting) => setting.id)).toEqual(["dashboard-password", "portal-password"])
     expect(settingsOf("offsite").map((setting) => setting.id)).toEqual(["offsite"])
     expect(Object.values(GROUP_LABELS)).toEqual(["Alerts", "Sign-in", "Backups"])
   })
 
   test("the sentences the plan gives", () => {
     expect(settingById("heartbeat").applies).toBe("The monitor uses it at its next pass, within a minute. Nothing to restart.")
-    expect(settingById("company-signin").applies).toBe("The portal reads these when it starts: restart it to apply a change.")
-    expect(settingById("dashboard-password").applies).toContain("that restart signs everyone out")
+    expect(settingById("dashboard-password").applies).toContain("which signs everyone out")
     expect(settingById("portal-password").applies).toContain("once the portal restarts")
   })
 
@@ -323,15 +322,6 @@ describe("where a setting stands", () => {
     expect(state).toMatchObject({ presence: "not-set", present: [] })
   })
 
-  test("the company sign-in needs its issuer, client and secret; the rest refine it", () => {
-    const portal = (variables: string[]) => secretProject({ slug: "portal", files: [secretFile({ name: "portal.env", variables: ["PASSWORD_HASH", ...variables], passwords: ["PASSWORD_HASH"] })] })
-    const state = (variables: string[]) => all([portal(variables)])["company-signin"]
-    expect(state([])).toMatchObject({ presence: "not-set", tone: "neutral", label: "Not set" })
-    expect(state(["OIDC_ISSUER", "OIDC_CLIENT_ID"])).toMatchObject({ presence: "incomplete", missing: ["OIDC_CLIENT_SECRET"] })
-    expect(state(["OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"])).toMatchObject({ presence: "set", present: ["OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"] })
-    expect(state(["OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "OIDC_PROVIDER_NAME"]).present).toHaveLength(4)
-  })
-
   test("a password is a hash in its file; its own file missing is red", () => {
     const projects = [dashboard({ name: "dashboard.env", ...hash }), secretProject({ slug: "portal", files: [secretFile({ name: "portal.env", state: "absent", variables: [], passwords: [] })] })]
     const states = all(projects)
@@ -342,12 +332,11 @@ describe("where a setting stands", () => {
   test("a restart pending is the portal's and the dashboard's own file, never the monitor's", () => {
     const projects = [
       dashboard({ name: "dashboard.env", ...hash, restartPending: true }, monitoring(["HEARTBEAT_URL"], { restartPending: true })),
-      secretProject({ slug: "portal", files: [secretFile({ name: "portal.env", variables: ["PASSWORD_HASH", "OIDC_ISSUER"], passwords: ["PASSWORD_HASH"], restartPending: true })] }),
+      secretProject({ slug: "portal", files: [secretFile({ name: "portal.env", variables: ["PASSWORD_HASH"], passwords: ["PASSWORD_HASH"], restartPending: true })] }),
     ]
     const states = all(projects)
     expect(states["dashboard-password"]).toMatchObject({ restartPending: true, tone: "attention", label: PENDING_LABEL })
     expect(states["portal-password"]).toMatchObject({ restartPending: true, label: PENDING_LABEL })
-    expect(states["company-signin"]).toMatchObject({ restartPending: true, presence: "incomplete", label: "Incomplete" })
     // Even if a steward said so, no restart applies the monitor's file.
     expect(states["heartbeat"]).toMatchObject({ restartPending: false, label: "Set" })
   })
