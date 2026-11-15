@@ -215,9 +215,11 @@ first, so that the scripts know the machine.
 # certificate needs, which the standard build lacks
 ssh you@203.0.113.10 'curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg && curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt | sudo tee /etc/apt/sources.list.d/caddy-stable.list && sudo apt-get update && sudo apt-get install -y caddy && sudo caddy add-package github.com/caddy-dns/cloudflare'
 
-# Bun, at /usr/local/bin/bun, where every unit looks for it. Its installer
-# needs unzip, which a bare Debian image lacks
-ssh you@203.0.113.10 'sudo apt-get install -y unzip && curl -fsSL https://bun.com/install | sudo BUN_INSTALL=/usr/local bash'
+# Bun, at /usr/local/bin/bun, where every unit looks for it: the version and
+# the SHA-256 bin/cli/pins.ts pins (bun-linux-aarch64.zip on an ARM machine,
+# bun-linux-x64-baseline.zip on an x86-64 processor without AVX2), checked
+# before it is opened. unzip, which a bare Debian image lacks
+ssh you@203.0.113.10 'sudo apt-get install -y unzip && cd "$(mktemp -d)" && curl -fsSLO https://github.com/oven-sh/bun/releases/download/bun-v1.3.11/bun-linux-x64.zip && echo "8611ba935af886f05a6f38740a15160326c15e5d5d07adef966130b4493607ed  bun-linux-x64.zip" | sha256sum -c - && unzip -q bun-linux-x64.zip && sudo install -m 0755 bun-linux-x64/bun /usr/local/bin/bun && sudo ln -sfn bun /usr/local/bin/bunx'
 
 # The Cloudflare token Caddy reads for its certificates
 ssh you@203.0.113.10 'sudo install -m 0640 -o root -g caddy /dev/stdin /etc/caddy/cloudflare.env' <<< 'CLOUDFLARE_API_TOKEN=your-token'

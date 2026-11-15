@@ -113,6 +113,7 @@ skipped, and it resumes at the one that failed.
   or from the kit the binary unpacked into `~/.cache/sitesolide/<version>-<hash>/`.
   It changes what every service may reach, and keeps its own safety net.
 - **Caddy itself**, below.
+- **Bun itself**, below.
 
 ### Upgrading Caddy
 
@@ -159,6 +160,30 @@ for security fixes, and upgrade this way.
    ```bash
    ssh <server> 'sudo install -m 0755 /usr/bin/caddy.previous /usr/bin/caddy && sudo systemctl restart caddy'
    ```
+
+### Upgrading Bun
+
+Bun at `/usr/local/bin/bun` runs every component and every project. Setup
+installs the version `bin/cli/pins.ts` pins, from Bun's GitHub release, and
+refuses a zip whose SHA-256 is not the pinned one; the release workflow builds
+the binaries with the same version. Nothing upgrades it on its own.
+
+1. **Bump the pin**, from a checkout: `bun bin/update-pins.ts` says the pinned
+   version and the newest, and `bun bin/update-pins.ts bun <version>` pins
+   another one. It takes each zip's SHA-256 from two places, the release's
+   `SHASUMS256.txt` and the digest GitHub records for the asset, refuses when
+   they disagree, and rewrites `bin/cli/pins.ts` and `release.yml`. Read the
+   diff, run `bin/test.sh`, commit, and cut a release.
+2. **Bring the machine to it** with that release: `sitesolide setup` run
+   again finds Bun at another version and installs the pinned one, leaving
+   every other step as it finds it. The file is replaced by a rename: what
+   runs keeps its Bun until its next restart, and each component and project
+   takes the new one when it restarts or is deployed.
+3. **Check**: `ssh <server> '/usr/local/bin/bun --version'`.
+
+A machine set up before the pin runs whatever Bun's installer gave it then;
+its next `sitesolide setup` brings it to the pinned version, a downgrade when
+the installer had given a newer one.
 
 A machine upgrades one release at a time, reading the notes below for each.
 They begin at 0.14.0: a machine on an earlier release is brought to 0.16

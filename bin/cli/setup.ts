@@ -6,7 +6,8 @@
  *   dns                the zone and its wildcard at the machine, through
  *                      Cloudflare's API (bin/cli/dns/), or by hand under --dns manual
  *   packages ... fail2ban   the hardening, see bin/cli/harden.ts
- *   caddy, bun         from their own repositories, Caddy with Cloudflare's DNS module
+ *   caddy, bun         Caddy from its apt repository, with Cloudflare's DNS module;
+ *                      Bun at its pinned version, checked (bin/cli/pins.ts)
  *   dns-credentials    /etc/caddy/cloudflare.env, root:caddy 0640, Cloudflare's token
  *   tls-zone           /etc/caddy/tls-zone.caddy, the zone's tls block (bin/cli/tls.ts)
  *   tunnel             under --tunnel, the Cloudflare Tunnel's connector (bin/cli/tunnel.ts)
@@ -92,6 +93,7 @@ import {
   type Machine,
 } from "./harden";
 import { hintFor } from "./hints";
+import { BUN, BUN_CURRENT, BUN_PATH, bunInstallScript } from "./pins";
 import { isCompiled, kitEnv, kitRoot } from "./kit";
 import { eventFor, forEachLine, formatEvent, type OutputEvent } from "./output";
 import { runSteps, StepFailure, type Check, type Condition, type Step, type StepReport } from "./steps";
@@ -888,12 +890,13 @@ function caddyModuleScript(module: string, id: string): string {
 fi`;
 }
 
+/** Bun at its pinned version, its download checked against its pin: see bin/cli/pins.ts. */
 function bunRun(): string {
   return runScript(
     "setup:bun:run",
     `
 command -v unzip >/dev/null 2>&1 || ${APT} install -y -q unzip </dev/null
-curl -fsSL https://bun.com/install | BUN_INSTALL=/usr/local bash
+${bunInstallScript()}
 `,
   );
 }
@@ -1246,8 +1249,11 @@ export function installSteps(tunnel = false): Step<SetupContext>[] {
     },
     {
       id: "bun",
-      title: "Bun, at /usr/local/bin/bun",
-      check: installCheck("setup:bun:check", [{ label: "bun", test: "test -x /usr/local/bin/bun" }]),
+      title: `Bun ${BUN.version}, at ${BUN_PATH}`,
+      check: installCheck("setup:bun:check", [
+        { label: "bun", test: `test -x ${BUN_PATH}` },
+        { label: "bun-version", test: BUN_CURRENT },
+      ]),
       run: (context) => rootRun(context.machine, context.operator, "setup:bun:run", bunRun(), "Bun could not be installed"),
       inspect: (context) => `ssh ${context.server} '/usr/local/bin/bun --version'`,
     },

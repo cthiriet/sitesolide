@@ -108,8 +108,9 @@ proving them:
   token, the cloud provider and its console, the bucket's provider for
   availability (not for confidentiality: restic encrypts on the machine).
   Whoever controls one of them is not stopped here.
-- **What `setup` downloads**, as root, over HTTPS: Bun's installer, piped to
-  bash; Caddy's apt repository and its key; and, through `caddy add-package`,
+- **What `setup` downloads**, as root, over HTTPS: Bun's release zip, at the
+  version `bin/cli/pins.ts` pins and refused unless its SHA-256 is the
+  pinned one; Caddy's apt repository and its key; and, through `caddy add-package`,
   a build of Caddy with the Cloudflare module. sitesolide's own releases are
   checked against checksums from the same release, which catch a broken
   download, not a compromised release; they are not signed.
