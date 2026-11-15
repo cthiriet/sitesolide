@@ -35,6 +35,7 @@
  * certificate and every outbound request.
  */
 import { APT, machineCheck, runScript, shellQuote } from "./harden";
+import { APT_KEYS, aptKeyScript } from "./pins";
 
 /** A tag as Tailscale takes them: `tag:` and a name of letters, digits and dashes. */
 export const TAILSCALE_TAG = /^tag:[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?$/;
@@ -51,14 +52,10 @@ export const AUTH_KEY_VARIABLE = "TS_AUTHKEY";
 /** The interface tailscaled makes: what `--ssh-interface` names to keep ssh on the tailnet alone. */
 export const TAILSCALE_INTERFACE = "tailscale0";
 
-/**
- * The fingerprint of Tailscale's package signing key, as
- * https://pkgs.tailscale.com/stable/ publishes it. A key downloaded with
- * another is refused before apt is told to trust it.
- */
-export const TAILSCALE_KEY_FINGERPRINT = "2596A99EAAB33821893C0A79458CA832957F5868";
+/** Tailscale's package signing key, pinned by fingerprint in bin/cli/pins.ts with the other repositories'. */
+export const TAILSCALE_KEY_FINGERPRINT = APT_KEYS.tailscale.fingerprint;
 
-export const TAILSCALE_KEYRING = "/usr/share/keyrings/tailscale-archive-keyring.gpg";
+export const TAILSCALE_KEYRING = APT_KEYS.tailscale.keyring;
 export const TAILSCALE_LIST = "/etc/apt/sources.list.d/tailscale.list";
 
 /** What a run says it did, read back for the report. */
@@ -110,17 +107,7 @@ KEY
 if ! grep -qF 'signed-by=${TAILSCALE_KEYRING}' ${TAILSCALE_LIST} 2>/dev/null; then
   . /etc/os-release
   case "\${VERSION_CODENAME:-}" in ''|*[!a-z]*) echo "no Debian codename in /etc/os-release" >&2; exit 1;; esac
-  command -v gpg >/dev/null 2>&1 || ${APT} install -y -q gnupg </dev/null
-  downloaded=$(mktemp)
-  curl -fsSL --proto '=https' --tlsv1.2 "https://pkgs.tailscale.com/stable/debian/\${VERSION_CODENAME}.noarmor.gpg" -o "$downloaded"
-  fingerprints=$(gpg --batch --show-keys --with-colons "$downloaded" 2>/dev/null | awk -F: '$1 == "fpr" { print $10 }')
-  if ! printf '%s\\n' "$fingerprints" | grep -qx '${TAILSCALE_KEY_FINGERPRINT}'; then
-    rm -f "$downloaded"
-    echo "the key pkgs.tailscale.com served is not Tailscale's package signing key ${TAILSCALE_KEY_FINGERPRINT}: nothing was trusted" >&2
-    exit 1
-  fi
-  install -m 644 -o root -g root "$downloaded" ${TAILSCALE_KEYRING}
-  rm -f "$downloaded"
+${aptKeyScript(APT_KEYS.tailscale)}
   echo "deb [signed-by=${TAILSCALE_KEYRING}] https://pkgs.tailscale.com/stable/debian \${VERSION_CODENAME} main" > ${TAILSCALE_LIST}
 fi
 if ! command -v tailscale >/dev/null 2>&1; then

@@ -373,7 +373,7 @@ describe("setup --tailscale", () => {
     expect(tailscaleCheck("tag:server")).toContain(`! tailscale debug prefs 2>/dev/null | grep -Eq '"RunSSH": *true'`);
     expect(tailscaleRun("tag:server", null)).toContain("tailscale set --ssh=false");
     expect(tailscaleRun("tag:server", null)).not.toContain("tskey-");
-    expect(tailscaleRun("tag:server", null)).toContain("grep -qx '2596A99EAAB33821893C0A79458CA832957F5868'");
+    expect(tailscaleRun("tag:server", null)).toContain('if [ "$found" != 2596A99EAAB33821893C0A79458CA832957F5868 ]; then');
     expect(() => tailscaleRun("tag:server", "not a key")).toThrow();
     expect(() => tailscaleCheck("server")).toThrow();
   });

@@ -99,6 +99,12 @@ export const APT_KEYS = {
     fingerprint: "CC94B39C77AE7342A68B89628A682D308D4E5E73",
     keyring: "/usr/share/keyrings/cloudflare-main.gpg",
   },
+  /** https://pkgs.tailscale.com/stable/#debian-trixie: one key signs every Debian release's repository. */
+  tailscale: {
+    url: "https://pkgs.tailscale.com/stable/debian/trixie.noarmor.gpg",
+    fingerprint: "2596A99EAAB33821893C0A79458CA832957F5868",
+    keyring: "/usr/share/keyrings/tailscale-archive-keyring.gpg",
+  },
 } as const;
 
 /**
