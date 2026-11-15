@@ -279,8 +279,8 @@ on 20240, which the monitor reads, and cloudflared takes 20241 to 20245 by
 default. It ends below 32768, where Linux's ephemeral ports begin, so that no
 outgoing connection ever takes one of its ports as its source.
 
-**A port of the second block needs a machine that has opened it.** `deploy`
-and a token's deployment refuse one, before anything is pushed, until the
+**A port of the second block needs a machine that has opened it.** A
+deployment refuses one, before anything is pushed, until the
 machine's loopback rule refuses other accounts on that block, every
 project's unit there denies it as systemd has the unit loaded, the backups
 and the installer carry this release's bind lines, and the kernel hands
@@ -440,9 +440,9 @@ takes:
 The times are the machine's, UTC on most cloud images, unless the
 expression names a time zone. The manifest only checks that the expression is
 safe to write into the timer: one line, no `%`, no backslash. Whether it is a
-time is systemd's to say, so `deploy` asks `systemd-analyze calendar` on the
-machine before anything is written, a dry run included, and stops on a
-schedule systemd does not read, naming it. On a workstation that has systemd,
+time is systemd's to say, so the machine's installer asks `systemd-analyze
+calendar` before anything is written, and stops on a schedule systemd does
+not read, naming it. On a workstation that has systemd,
 `systemd-analyze calendar "Mon..Fri 08:00"` prints the next time it names.
 
 **`timeout`** is how long one run may take before systemd stops it: `90s`,

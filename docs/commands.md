@@ -9,7 +9,9 @@ owner's included: none goes over SSH.** `sitesolide deploy` builds here and
 uploads to `https://dashboard.<zone>`; the owner's SSH access carries
 `setup`, `upgrade`, `refresh` and the machine-wide commands below, and the
 deployments of the platform's own components, the dashboard and the portal,
-which setup and upgrade make from the kit. A workstation with a server and no
+which setup and upgrade make from the kit: in their folders alone, a manifest
+shaped as one of them, one service and no door, under its own slug and port.
+A workstation with a server and no
 token is told how to get one: `sitesolide login --owner` mints the owner's,
 for every project, over SSH, straight into the vault. See
 [Deploying with a token](#deploying-with-a-token).

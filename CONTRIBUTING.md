@@ -57,6 +57,15 @@ it recognises and refuses everything else, and a hostname that resolves nowhere.
 Two barriers, on purpose, a forgotten write is refused, and it would have been
 aimed at a name that does not exist.
 
+A project's deployment is tried on both sides of the API: the CLI in front
+of a local fake of the dashboard (`bin/tests/cli-remote.test.ts`), and the
+dashboard's installer in front of a fake host
+(`dashboard/tests/installer-*.test.ts`), which covers the ports it chooses,
+the units, the Caddy block put back when Caddy refuses it, and the secrets a
+store lacks. `deploy` over SSH lays the platform's components alone, and its
+end-to-end tests deploy `bin/tests/e2e/projects/component`, shaped as the
+dashboard: see [bin/tests/e2e/README.md](bin/tests/e2e/README.md).
+
 ## Building the binary
 
 `sitesolide` ships as one executable per platform, which needs neither Bun nor

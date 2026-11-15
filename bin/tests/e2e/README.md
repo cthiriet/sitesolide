@@ -1,10 +1,14 @@
 # End-to-end tests for the CLI
 
-They check that a project **living outside this repository** deploys as well as
-one inside it: that is the whole reason `bin/sitesolide.ts` exists, and nothing
-else covers it. The tests in `bin/tests/cli-*.test.ts` check the functions that
-decide; these run the CLI for real, from a directory that has nothing to do with
-the platform.
+They run the CLI for real, from a directory that has nothing to do with the
+platform; the tests in `bin/tests/cli-*.test.ts` check the functions that
+decide. A project deploys through the dashboard's API, whose installer is
+tried in `dashboard/tests/installer-*.test.ts` and whose client is tried in
+`bin/tests/cli-remote.test.ts`. What runs here over SSH is what the owner's
+access alone carries: `deploy` of a platform component, the dashboard or the
+portal, which setup and upgrade lay from the kit (`deploysOverSsh` in
+`bin/cli/remote.ts`), and the owner's commands, lock, domain, secrets,
+remove, status, logs.
 
 ```bash
 bun test bin/tests/e2e/deployment.test.ts    # everything, without touching a machine
@@ -17,13 +21,12 @@ own: there is no staging environment and no second machine.
 
 ## What only a machine can tell you
 
-`vm.test.ts` carries tests that dry-run mode cannot replace: an app never placed
-on the machine, deployed by the single `deploy` command, and that same
-deployment run again, which must place and reload nothing. Then a project with a
-runtime secret named in its manifest: `deploy` reads the store, finds the value
-set and pushes nothing, the machine being the source of truth. Dry-run reads
-nothing of the store, so nothing would say whether the unit or the secret were
-really missing.
+`vm.test.ts` carries tests that a fake machine cannot replace: an app never
+placed on the machine, deployed by the single `deploy` command through the
+API, with the token `sitesolide login` keeps, and that same deployment run
+again, which must install nothing. Then a project with a runtime secret named
+in its manifest: `deploy` lists the store, finds the value set and pushes
+nothing, the machine being the source of truth.
 
 ## What protects production
 
@@ -34,9 +37,9 @@ instead of letting it talk to the machine that serves the sites.
 
 ## The fake machine
 
-Even in dry-run, `deploy` reads the deployed manifest on the machine: the portal
-door of a deployed site is set from the dashboard, and the machine is the source
-of truth. A dry-run test therefore gets a fake machine (`fake-vm.ts`): a
+Even in dry-run, `deploy` of a platform component reads the deployed manifest
+on the machine, the source of truth, and refuses a door, a former name or a
+`disabled` it would contradict. A dry-run test therefore gets a fake machine (`fake-vm.ts`): a
 directory standing in for `/srv/sites` and `/etc/caddy/sites`, and a `PATH` in
 which `ssh` and `rsync` are fakes. The fake ssh (`fake-ssh.ts`) answers only the
 test host and only the reads it recognises word for word; it refuses everything
@@ -44,10 +47,12 @@ else, and logs every request into a journal the tests read back. Both barriers
 still hold: a forgotten write is refused, and it would be aimed at a name that
 does not resolve.
 
-`portal-vm.test.ts` uses it to run `deploy`, including outside dry-run up to the
-first refused write, which is how the block in service is compared for real,
-and `bin/deploy-caddy.sh` from a temporary test repository, with the blocks the
-test generates handed to it as a deployment would.
+`portal-vm.test.ts` uses it to run `deploy` of a component, including outside
+dry-run up to the first refused write, which is how the portal's block in
+service is compared for real, and `bin/deploy-caddy.sh` from a temporary test
+repository, with the blocks the test generates handed to it as a deployment
+would. The component those tests deploy is `projects/component`, shaped as the
+dashboard.
 
 The lock the CLI and the scripts share with the dashboard's gatekeeper,
 `/run/sitesolide-gatekeeper/caddy.lock`, is not faked either: its scripts run
@@ -58,13 +63,12 @@ anything), suspend a chosen command long enough to send a signal (`pause`), or
 make the gatekeeper act on the first write (`onFirstAccepted`). The CLI's zone
 then points at a `.invalid` name, so that the final verification reaches nobody.
 
-Two of the reads a deployment makes are answered from what the test lays,
-and otherwise as a healthy machine would: whether systemd reads each schedule
-a project declares (`refuseSchedules`), asked before anything is written, and
-how the services stand right after their restart (`setStandings`), every one
-active and never restarted by default. The second reading, ten seconds after
-the restart, comes after the verify, which a simulated machine never passes:
-the decisions it takes are tried in `bin/tests/cli-services.test.ts`.
+One of the reads a deployment makes is answered from what the test lays, and
+otherwise as a healthy machine would: how the services stand right after their
+restart (`setStandings`), every one active and never restarted by default. The
+second reading, ten seconds after the restart, comes after the verify, which a
+simulated machine never passes: the decisions it takes are tried in
+`bin/tests/cli-services.test.ts`.
 
 The fake machine also carries static accounts. `bin/deploy-monitor.sh` reads
 whether the account its unit runs as exists before making it, and the fake ssh
@@ -84,8 +88,8 @@ unless the test accepts writes, then applied by name and logged as
 standard input and is never recorded, which the tests check. The command
 that lays a store's folders is logged as `STORE-PREPARE <slug>` and lays them
 in the VM's tree, or answers as for a link in their place
-(`refuseStorePrepare`); the tests check it comes before the units, and the
-listing, made for real alone, before the Caddy lock.
+(`refuseStorePrepare`); `refresh.test.ts` checks it comes before the units.
+A deployment's store is the installer's.
 
 ## Setup
 
@@ -110,9 +114,10 @@ upgrade:<component>:check`, answered from what the test lays, nothing run.
 Its components measured from files alone, the Caddyfile and the shared
 service's tree, need no build. The whole sequence, runs and failures included,
 is `bin/tests/cli-upgrade.test.ts`'s, against the model machine of
-`setup-fakes.ts`. The same file runs `deploy --dry-run --compare`: the
-deployment's rsync in a dry run, the only command the fake accepts that is not
-a recognised read, and the deposited manifest read back.
+`setup-fakes.ts`. The same file runs `deploy --dry-run --compare` in the
+component's folder, as upgrade does: the deployment's two rsyncs in a dry run,
+of the code and of `public/`, the only commands the fake accepts that are not
+a recognised read, the deposited manifest, the units and the block read back.
 
 ## Refresh
 
@@ -132,13 +137,12 @@ summary a run that gets past it ends with, are `bin/tests/cli-refresh.test.ts`'s
 ## Agents
 
 `agents.test.ts` drives the CLI as an agent does: `--json`, whose standard
-output must hold nothing but events and end with one `result` or one `error`;
-a folder without a manifest, through `detect` and `deploy --yes`; an app
-without a port, which `deploy` gives one. A deployment run without --dry-run
-goes as far as the first write the fake ssh refuses, which is how the port
-written into `sitesolide.json` before anything leaves is checked for real. The
-folders it copies are the fixtures of `bin/tests/infer/`, which
-`cli-infer.test.ts` reads too.
+output must hold nothing but events and end with one `result` or one `error`,
+a component's deployment and the reading commands; a folder without a
+manifest, through `detect`. The folders it copies are the fixtures of
+`bin/tests/infer/`, which `cli-infer.test.ts` reads too. What `deploy` infers
+and the port the machine chooses, written back into `sitesolide.json`, are the
+API's, tried in `bin/tests/cli-remote.test.ts`.
 
 ## The binary
 
@@ -156,37 +160,24 @@ writable copy that leaves the kit untouched. `help.test.ts` holds `help` and
 
 | Directory | What it covers |
 |---|---|
+| `projects/component` | a platform component shaped as the dashboard, the one project `deploy` lays over SSH |
 | `projects/simple-site` | a folder of files, no build, no service |
 | `projects/static-docs` | a build on the workstation, of which only `dist/` is sent |
 | `projects/bun-mixed` | Caddy serves `public/`, the service gets the rest |
 | `projects/own-domain` | a site waiting to switch to its own domain |
 | `projects/fastapi-app` | Python, no static page, everything goes to the service |
 | `projects/api-with-secret` | one runtime secret named in the manifest, `"secrets": ["API_KEY"]`, read from the project's store and never pushed, and outbound network |
-| `projects/store-app` | secrets named in the manifest, two runtime variables and a file, kept in the project's store: its folders laid before the units, what it lacks read before the build and the Caddy lock, warned of and never a stop |
-| `projects/portal-mixed` | a project behind the portal, with an exempted path |
-| `projects/multi-service` | several services: a front, an API under `/v1`, an internal worker |
-| `projects/sourced` | a manifest alone, whose code lives in another folder, named by `source` |
-| `projects/background` | no page: a worker that listens on nothing, and a scheduled service with its timer |
-| `projects/nightly` | every service scheduled, the main unit an anchor that runs nothing |
+| `projects/multi-service` | several services: a front, an API under `/v1`, an internal worker, whose units `cli-unit.test.ts` fingerprints |
+| `projects/store-app` | secrets named in the manifest, two runtime variables and a file, kept in the project's store, which `sitesolide secrets` lists and sets over SSH |
+| `projects/nightly` | every service scheduled, the main unit an anchor that runs nothing, whose timers `remove` takes down first |
 
-## The rejections
-
-`rejects/` holds projects that **must** fail, and they matter as much as the
-others: a CLI that deploys what it should refuse breaks production, where a CLI
-that refuses wrongly costs a minute.
-
-| Directory | What has to be refused |
-|---|---|
-| `landing-slug` | the landing project, reserved for the site on the bare domain, which `deploy` does not handle |
-| `port-missing` | one of several services with no port, which Caddy could not reach: `deploy` picks a port only for a project with a single service, see `agents.test.ts` |
-| `path-escapes` | a `publicDir` of `../..`, which would send anything at all |
-| `public-empty` | an empty directory, whose `rsync --delete` would erase the site |
-| `deps-not-excluded` | a `node_modules` from the workstation, poured onto a Linux machine |
-| `source-missing` | a `source` pointing nowhere, which would send an empty folder over the site |
-
-Two of these directories are produced by the test itself, the empty `public/`
-and the fake `node_modules`: committed, the repository's `.gitignore` would
-swallow them and the tests would pass without checking anything.
+What a deployment must refuse, a `publicDir` that escapes the folder, an empty
+one, a `node_modules` from the workstation, a `source` pointing nowhere, is
+tried on copies of `projects/component` that `deployment.test.ts` changes, and
+for a project in front of the installer. The empty `public/` and the fake
+`node_modules` are made by the test itself: committed, the repository's
+`.gitignore` would swallow them and the tests would pass without checking
+anything.
 
 A manifest that no longer matches what runs is not a fixture any more: the
 comparison is made against the machine, see `decideBlock` in
