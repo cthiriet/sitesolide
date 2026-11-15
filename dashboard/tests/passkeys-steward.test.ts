@@ -99,6 +99,16 @@ describe("the owner's first passkey", () => {
   });
 });
 
+test("with no passkey, a password still changes with the dashboard's password, and no assertion stands in for it", async () => {
+  const bench = await mount();
+  const token = await tokenOf(await passwordUnlock(bench));
+  const names = { token, slug: "portal", file: "portal.env", variable: "PASSWORD_HASH", newPassword: null };
+  const forged = await bench.call("POST", "/password", { ...names, challengeId: "made-up", credential: { id: "x" } });
+  expect(forged.status).toBe(401);
+  expect((await bench.call("POST", "/password", { ...names, dashboardPassword: "wrong" })).status).toBe(401);
+  expect((await bench.call("POST", "/password", { ...names, dashboardPassword: PASSWORD })).status).toBe(200);
+});
+
 describe("once the owner holds a passkey", () => {
   async function withPasskey() {
     const bench = await mount();
@@ -128,6 +138,41 @@ describe("once the owner holds a passkey", () => {
     // Without the user verified: refused.
     const touched = await assertion(bench, key, "unlock", DASHBOARD, { uv: false });
     expect((await bench.call("POST", "/unlock", touched.body)).status).toBe(401);
+  });
+
+  test("a password changes with a fresh assertion, not with the dashboard's password", async () => {
+    const { bench, key, token } = await withPasskey();
+    const names = { token, slug: "portal", file: "portal.env", variable: "PASSWORD_HASH", newPassword: null };
+    const before = readFileSync(join(bench.secretsFolder, "portal.env"), "utf8");
+
+    // The password confirms nothing once a passkey exists, the right one included.
+    const refused = await bench.call("POST", "/password", { ...names, dashboardPassword: PASSWORD });
+    expect(refused.status).toBe(403);
+    expect(await json(refused)).toMatchObject({ error: "out-of-scope" });
+    expect(journal(bench).at(-1)).toMatchObject({ operation: "password", result: "rejects", detail: "password refused: the owner has a passkey" });
+
+    // An assertion without the user verified, or a sign-in's challenge: refused, nothing written.
+    const touched = await assertion(bench, key, "unlock", DASHBOARD, { uv: false });
+    expect((await bench.call("POST", "/password", { ...names, ...touched.body })).status).toBe(401);
+    expect(journal(bench).at(-1)).toMatchObject({ operation: "password", result: "rejects" });
+    const signIn = await assertion(bench, key, "signin");
+    expect((await bench.call("POST", "/password", { ...names, ...signIn.body })).status).toBe(401);
+    // Nor without the live unlock, even with a good assertion.
+    const unlocked = await assertion(bench, key, "unlock");
+    expect((await bench.call("POST", "/password", { ...names, token: "made-up", ...unlocked.body })).status).toBe(401);
+    expect(readFileSync(join(bench.secretsFolder, "portal.env"), "utf8")).toBe(before);
+
+    const good = await assertion(bench, key, "unlock");
+    const changed = await bench.call("POST", "/password", { ...names, ...good.body });
+    expect(changed.status).toBe(200);
+    const { password } = await json<{ password: string }>(changed);
+    const after = readFileSync(join(bench.secretsFolder, "portal.env"), "utf8");
+    expect(after).not.toBe(before);
+    const hash = /PASSWORD_HASH='?([^'\n]+)/.exec(after)![1]!;
+    expect(await Bun.password.verify(password, hash)).toBe(true);
+    expect(journal(bench).at(-1)).toMatchObject({ operation: "password", result: "ok" });
+    // The challenge is spent.
+    expect((await bench.call("POST", "/password", { ...names, ...good.body })).status).toBe(401);
   });
 
   test("signs in on the dashboard's origin alone: a hosted site's assertion is refused", async () => {

@@ -508,6 +508,27 @@ describe("unlocked", () => {
     }
   });
 
+  test("a password change confirmed with a passkey relays the assertion, and no password", async () => {
+    const open = await openSession();
+    const token = await unlock(open);
+    fake.calls.length = 0;
+    const names = { slug: "portal", file: "portal.env", variable: "PASSWORD_HASH", newPassword: null };
+    const credential = { id: "abc", response: { signature: "def" } };
+    const parsed = await read(
+      secrets.changePassword(requested("/password", { body: { ...names, challengeId: "challenge-1", credential, intruder: 1 }, cookie: open.cookie })),
+    );
+    expect(parsed.status).toBe(200);
+    expect(fake.calls).toEqual([{ method: "changePassword", requested: { ...names, challengeId: "challenge-1", credential, token } }]);
+
+    // An assertion with no readable challenge, or neither proof: 400, nothing goes off.
+    fake.calls.length = 0;
+    for (const body of [{ ...names, credential }, { ...names, challengeId: 7, credential }, names]) {
+      const refused = await read(secrets.changePassword(requested("/password", { body, cookie: open.cookie })));
+      expect(refused.status).toBe(400);
+    }
+    expect(fake.calls).toEqual([]);
+  });
+
   test("the dashboard's password changed closes the owner's other sessions, the portal's does not", async () => {
     const kept: string[] = [];
     store = createStore();

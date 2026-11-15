@@ -24,6 +24,7 @@ export type Bench = {
   clock: { t: number };
   state: string;
   portal: string;
+  secretsFolder: string;
   call: (method: string, path: string, body?: unknown) => Promise<Response>;
   owner: (method: string, path: string, body?: unknown) => Promise<Response>;
   handler: StewardHandler;
@@ -36,6 +37,11 @@ export async function mount(): Promise<Bench> {
   for (const folder of [sites, secrets, units, state, caddy, gatekeeper, portal]) mkdirSync(folder!, { recursive: true });
   const hash = await Bun.password.hash(PASSWORD, { algorithm: "bcrypt", cost: 4 });
   writeFileSync(join(secrets!, "dashboard.env"), `PASSWORD_HASH=${hash}\n`, { mode: 0o600 });
+  // The portal and its password hash, which Change password reaches.
+  mkdirSync(join(sites!, "portal"));
+  writeFileSync(join(sites!, "portal", "sitesolide.json"), JSON.stringify({ slug: "portal", start: "bun server.ts", port: 3050 }));
+  writeFileSync(join(units!, "portal.service"), `[Service]\nEnvironmentFile=-${secrets}/portal.env\nExecStart=/bin/true\n`);
+  writeFileSync(join(secrets!, "portal.env"), `PASSWORD_HASH=${hash}\n`, { mode: 0o600 });
   writeFileSync(join(root, "passwd"), "root:x:0:0:root:/root:/bin/sh\n");
   const clock = { t: 1_800_000_000_000 };
   const real = createSystem({
@@ -62,6 +68,7 @@ export async function mount(): Promise<Bench> {
     clock,
     state: state!,
     portal: portal!,
+    secretsFolder: secrets!,
     handler,
     call: (method, path, body) => handler(request(method, path, body)),
     owner: (method, path, body) => handler.owner(request(method, path, body)),

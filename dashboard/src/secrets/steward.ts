@@ -1395,21 +1395,35 @@ export function createSteward(system: System, options: StewardOptions): StewardH
   }
 
   /**
-   * Changes a password hash. In order: token, shape, target, then the
-   * dashboard's password in the one-at-a-time queue, which counts the attempt
-   * as an unlocking, then the new hash in the same queue, read back against its
-   * password before being written, then the write under the exclusion lock. The
-   * drawn password goes out only in the response, once.
+   * Changes a password hash. In order: token, shape, target, then the owner's
+   * proof: while the owner holds no passkey, the dashboard's password in the
+   * one-at-a-time queue, which counts the attempt as an unlocking; once they
+   * hold one, a fresh assertion of it, the password refused as it is for the
+   * unlock. Then the new hash in the same queue, read back against its
+   * password before being written, then the write under the exclusion lock.
+   * The drawn password goes out only in the response, once.
    */
   async function changePassword(req: Request): Promise<Response> {
     await rateLimitReread;
-    const body = await bodyWithToken(req, ["slug", "file", "variable", "dashboardPassword"], ["newPassword"]);
+    const body = await bodyWithToken(req, ["slug", "file", "variable"], ["dashboardPassword", "challengeId", "credential", "newPassword"]);
     if (body instanceof Response) return body;
 
-    const remaining = wait(state, system.now());
-    if (remaining > 0) return tooManyAttempts(remaining);
-    const submitted = body.dashboardPassword;
-    if (!isAcceptableSubmission(submitted)) return error("invalid", "dashboard password missing or too long");
+    const withPasskey = body.credential !== undefined;
+    if (withPasskey) {
+      if (passkeys === null) return error("not-found", "passkeys are not offered on this server");
+      if (typeof body.challengeId !== "string") return error("invalid", "challengeId must be a string");
+    } else {
+      // Once the owner holds a passkey, the password confirms nothing, as it
+      // unlocks nothing. A registry that cannot be read counts as one.
+      if (passkeys !== null && (await passkeys.count()) !== 0) {
+        await writeLog("password", "rejects", body, "password refused: the owner has a passkey", typeof body.variable === "string" ? body.variable : null);
+        return error("out-of-scope", "confirm with a passkey on this server, not with the password");
+      }
+      const remaining = wait(state, system.now());
+      if (remaining > 0) return tooManyAttempts(remaining);
+      if (!isAcceptableSubmission(body.dashboardPassword)) return error("invalid", "dashboard password missing or too long");
+    }
+    const submitted = body.dashboardPassword as string;
     const newPassword = body.newPassword;
     if (newPassword !== null && typeof newPassword !== "string") return error("invalid", "newPassword must be a string or null");
     if (typeof newPassword === "string") {
@@ -1429,12 +1443,21 @@ export function createSteward(system: System, options: StewardOptions): StewardH
     const present = await managedFile("password", body, before, variable);
     if (present instanceof Response) return present;
 
+    // The assertion, verified once and its challenge spent: the passkey
+    // routes bound the attempts and journal a refusal.
+    if (withPasskey) {
+      const checked = await passkeys!.unlock(body, "password");
+      if (!checked.ok) return checked.response;
+    }
+
     const taken = oneAtATime(async (): Promise<Response | { password: string; hash: string }> => {
       if (req.signal.aborted) return abandoned();
       // A token revoked during the wait does not cost one more argon2id.
       if (!(await isValidToken(state, body.token, system.now()))) return error("locked", "locked, unlock again");
-      const refusal = await tryDashboardPassword("password", submitted, body, variable);
-      if (refusal !== null) return refusal;
+      if (!withPasskey) {
+        const refusal = await tryDashboardPassword("password", submitted, body, variable);
+        if (refusal !== null) return refusal;
+      }
 
       const password = newPassword ?? drawPassword();
       const hash = await hashPassword(password);

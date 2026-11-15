@@ -215,16 +215,22 @@ export function fields<C extends string>(names: readonly C[]): Extraction<Record
 }
 
 /**
- * `/password`: three names, the dashboard's password in the form that a sign-in
- * accepts, and `newPassword`, a string or null. That the new password is long
- * enough is a rule, judged by the steward.
+ * `/password`: three names, the owner's proof, and `newPassword`, a string or
+ * null. The proof is a passkey's assertion, which the steward verifies
+ * against the owner's registry, or the dashboard's password in the form that
+ * a sign-in accepts, which the steward refuses once a passkey exists. That
+ * the new password is long enough is a rule, judged by the steward.
  */
 const extractPassword: Extraction<WithoutToken<PasswordRequest>> = (body) => {
   const names = fields(["slug", "file", "variable"] as const)(body);
   if (names instanceof Response) return names;
-  const { dashboardPassword, newPassword } = body!;
-  if (!isAcceptableSubmission(dashboardPassword)) return error(400, "invalid", "Dashboard password missing or too long.");
+  const { dashboardPassword, newPassword, challengeId, credential } = body!;
   if (newPassword !== null && typeof newPassword !== "string") return error(400, "invalid", "Missing or non-text field: newPassword.");
+  if (credential !== undefined) {
+    if (typeof challengeId !== "string") return error(400, "invalid", "Missing or non-text field: challengeId.");
+    return { ...names, challengeId, credential, newPassword };
+  }
+  if (!isAcceptableSubmission(dashboardPassword)) return error(400, "invalid", "Dashboard password missing or too long.");
   return { ...names, dashboardPassword, newPassword };
 };
 
@@ -542,7 +548,7 @@ export function createSecretsRoutes(dependencies: SecretsDependencies, clock: ()
     createFile: withToken(fields(FILE_FIELDS), (requested) => steward.createFile(requested)),
     restoreFile: withToken(fields(FILE_FIELDS), (requested) => steward.restoreFile(requested)),
     changePassword: withToken(extractPassword, (requested) => steward.changePassword(requested), {
-      secrets: (requested) => [requested.dashboardPassword, ...(requested.newPassword === null ? [] : [requested.newPassword])],
+      secrets: (requested) => [...("dashboardPassword" in requested ? [requested.dashboardPassword] : []), ...(requested.newPassword === null ? [] : [requested.newPassword])],
       // The portal's password closes nothing here: its sessions are the portal's.
       succeeded: (requested, sessionHash) => {
         if (requested.slug === "dashboard" && requested.file === DASHBOARD_HASH_FILE) dependencies.passwordChanged?.(sessionHash);

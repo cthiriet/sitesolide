@@ -322,11 +322,15 @@ export type VariableRequest = FileRequest & { variable: string };
 export type SetRequest = VariableRequest & { value: string };
 
 /**
- * Changing a password demands retyping the dashboard's own, checked by the
- * steward at that very moment: a stolen unlocking token is not enough.
- * `newPassword` null: the steward draws it itself and returns it only once.
+ * Changing a password demands proving it is the owner again, checked by the
+ * steward at that very moment: a stolen unlocking token is not enough. The
+ * proof is the dashboard's password retyped while the owner holds no
+ * passkey, a fresh assertion of one once they do, the password then being
+ * refused as it is for the unlock. `newPassword` null: the steward draws it
+ * itself and returns it only once.
  */
-export type PasswordRequest = VariableRequest & { dashboardPassword: string; newPassword: string | null };
+export type PasswordProof = { dashboardPassword: string } | { challengeId: string; credential: unknown };
+export type PasswordRequest = VariableRequest & PasswordProof & { newPassword: string | null };
 
 /**
  * `confirmation`: the slug, retyped. Required to take the portal away, which
@@ -357,14 +361,14 @@ export type RestartResponse = { verdict: Verdict };
 //
 //   GET    /api/secrets                -> DashboardResponse
 //   GET    /api/secrets/log[?slug=<s>] -> LogResponse
-//   POST   /api/secrets/unlock  { password } -> { until }
+//   POST   /api/secrets/unlock  { password } | { challengeId, credential } -> { until }
 //   POST   /api/secrets/lock    -> 204
 //   POST   /api/secrets/value         { slug, file, variable } -> ValueResponse
 //   PUT    /api/secrets/variable       { slug, file, variable, value } -> FileResponse
 //   DELETE /api/secrets/variable       { slug, file, variable } -> FileResponse
 //   POST   /api/secrets/file        { slug, file } -> FileResponse
 //   POST   /api/secrets/restore      { slug, file } -> FileResponse
-//   POST   /api/secrets/password     { slug, file, variable, dashboardPassword, newPassword } -> PasswordResponse
+//   POST   /api/secrets/password     { slug, file, variable, dashboardPassword | challengeId + credential, newPassword } -> PasswordResponse
 //   POST   /api/secrets/portal        { slug, active, confirmation } -> PortalResponse
 //   POST   /api/secrets/restart     { slug } -> RestartResponse
 //
@@ -372,7 +376,8 @@ export type RestartResponse = { verdict: Verdict };
 // not a GET (403). Locked: 423 and `Failure`. Steward unreachable: 502 and
 // `Failure` with code `failure`.
 
-export type WithoutToken<T> = Omit<T, "token">;
+/** Distributive, so that a union of requests (a password or a passkey) stays one. */
+export type WithoutToken<T> = T extends unknown ? Omit<T, "token"> : never;
 
 export type DashboardResponse = {
   projects: ProjectView[];

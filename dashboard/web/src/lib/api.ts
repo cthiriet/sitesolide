@@ -182,12 +182,16 @@ export function restoreSecretFile({ slug, file }: WithoutToken<FileRequest>) {
 }
 
 /**
- * The dashboard password, retyped, and the new one, or null so that the steward
- * draws it. Both in the body; the answer carries the drawn password, which the
- * page shows once.
+ * The owner's proof, the dashboard password retyped or a passkey's fresh
+ * assertion once the owner holds one (lib/webauthn.ts,
+ * `changePasswordWithPasskey`), and the new password, or null so that the
+ * steward draws it. All in the body; the answer carries the drawn password,
+ * which the page shows once.
  */
-export function changePassword({ slug, file, variable, dashboardPassword, newPassword }: WithoutToken<PasswordRequest>) {
-  return sendSecrets<PasswordResponse>("POST", "/password", { slug, file, variable, dashboardPassword, newPassword })
+export function changePassword(requested: WithoutToken<PasswordRequest>) {
+  const { slug, file, variable, newPassword } = requested
+  const proof = "dashboardPassword" in requested ? { dashboardPassword: requested.dashboardPassword } : { challengeId: requested.challengeId, credential: requested.credential }
+  return sendSecrets<PasswordResponse>("POST", "/password", { slug, file, variable, ...proof, newPassword })
 }
 
 // --- A project's store ------------------------------------------------------------

@@ -6,7 +6,8 @@
  *
  * Every binary field travels as base64url, the steward's encoding.
  */
-import { callApi, send } from "./api"
+import { callApi, changePassword, send } from "./api"
+import type { PasswordResponse } from "./types"
 
 /** Does this browser offer passkeys at all? */
 export function passkeysSupported(): boolean {
@@ -146,7 +147,18 @@ export function unlockWithPasskey() {
   return ceremony<{ until: number }>({ purpose: "unlock" }, get, assertionJson, (challengeId, credential) => send("POST", "/api/secrets/unlock", { challengeId, credential }))
 }
 
-export type RegisteredPasskey = { passkey: PasskeyView; viaLink: boolean; count: number }
+/**
+ * Changes a password, the owner confirming with a fresh assertion of their
+ * passkey rather than the dashboard password, which the steward refuses once
+ * a passkey exists. The answer is the password change's own.
+ */
+export function changePasswordWithPasskey(names: { slug: string; file: string; variable: string }, newPassword: string | null) {
+  return ceremony<PasswordResponse>({ purpose: "unlock" }, get, assertionJson, (challengeId, credential) =>
+    changePassword({ ...names, challengeId, credential, newPassword }),
+  )
+}
+
+export type RegisteredPasskey ={ passkey: PasskeyView; viaLink: boolean; count: number }
 
 /** A new passkey, from the unlocked dashboard, or with root's link, which signs the owner in. */
 export function registerPasskey(name: string, link: string | null = null) {

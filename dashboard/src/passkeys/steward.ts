@@ -104,8 +104,12 @@ export type PasskeySteward = {
   start: () => Promise<void>;
   /** How many passkeys the owner holds; `unreadable` counts as some, never as none. */
   count: () => Promise<number | "unreadable">;
-  /** A posted unlock assertion, verified: the challenge, the passkey, the user. */
-  unlock: (body: Body) => Promise<UnlockCheck>;
+  /**
+   * A posted unlock assertion, verified: the challenge, the passkey, the
+   * user. `operation`: what a refusal is journaled as, the unlock itself or
+   * what the assertion confirms, a password change.
+   */
+  unlock: (body: Body, operation?: Operation) => Promise<UnlockCheck>;
 };
 
 /** Per client and per minute. */
@@ -428,13 +432,15 @@ export function createPasskeySteward(options: PasskeyStewardOptions): PasskeySte
       const registry = await load();
       return registry === "unreadable" ? "unreadable" : registry.credentials.length;
     },
-    async unlock(body) {
+    async unlock(body, operation = "unlock") {
       if (!offered) return { ok: false, response: notOffered() };
+      // One bucket for the owner's unlocks and confirmations: the same
+      // challenges, the same passkeys, the same user.
       const wait = verifyRate.hit("unlock", system.now());
       if (wait > 0) return { ok: false, response: tooMany(wait) };
       const result = await verified("unlock", body);
       if ("reason" in result) {
-        await refusal("unlock", `passkey: ${result.reason}`);
+        await refusal(operation, `passkey: ${result.reason}`);
         return { ok: false, response: error("refused", REFUSED) };
       }
       return { ok: true };
