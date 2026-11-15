@@ -8,7 +8,7 @@
 const encoder = new TextEncoder();
 
 const b64url = (bytes: Uint8Array): string => Buffer.from(bytes).toString("base64url");
-const sha256 = async (data: Uint8Array): Promise<Uint8Array> => new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+const sha256 = async (data: Uint8Array): Promise<Uint8Array> => new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(data)));
 
 /* --- CBOR, the encoding half --------------------------------------------------- */
 
@@ -101,7 +101,7 @@ export class SoftAuthenticator {
       return new SoftAuthenticator(alg, keys, cose);
     }
     if (alg === -8) {
-      const keys = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"])) as CryptoKeyPair;
+      const keys = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"])) as unknown as CryptoKeyPair;
       const jwk = await crypto.subtle.exportKey("jwk", keys.publicKey);
       const cose = cbor(new Map<number, Item>([[1, 1], [3, -8], [-1, 6], [-2, Buffer.from(jwk.x!, "base64url")]]));
       return new SoftAuthenticator(alg, keys, cose);
@@ -155,9 +155,9 @@ export class SoftAuthenticator {
     const clientData = this.clientData(ceremony, "webauthn.get");
     const signed = concat(authData, await sha256(clientData));
     let signature: Uint8Array;
-    if (this.alg === -7) signature = toDer(new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, this.keys.privateKey, signed)));
-    else if (this.alg === -8) signature = new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, this.keys.privateKey, signed));
-    else signature = new Uint8Array(await crypto.subtle.sign({ name: "RSASSA-PKCS1-v1_5" }, this.keys.privateKey, signed));
+    if (this.alg === -7) signature = toDer(new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, this.keys.privateKey, new Uint8Array(signed))));
+    else if (this.alg === -8) signature = new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, this.keys.privateKey, new Uint8Array(signed)));
+    else signature = new Uint8Array(await crypto.subtle.sign({ name: "RSASSA-PKCS1-v1_5" }, this.keys.privateKey, new Uint8Array(signed)));
     return {
       id: this.credentialId,
       rawId: this.credentialId,

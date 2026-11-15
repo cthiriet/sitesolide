@@ -39,7 +39,7 @@ export function fromB64url(value: unknown): Uint8Array | null {
 }
 
 const sha256 = async (data: Uint8Array): Promise<Uint8Array> =>
-  new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+  new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(data)));
 
 const same = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.length && a.every((byte, i) => byte === b[i]);
 
@@ -188,9 +188,11 @@ function derToRaw(der: Uint8Array, size: number): Uint8Array {
 
 async function verifySignature(cose: Uint8Array, signature: Uint8Array, signed: Uint8Array): Promise<boolean> {
   const { alg, key } = await coseKey(cose);
-  if (alg === ES256) return crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, derToRaw(signature, 32), signed);
-  if (alg === EDDSA) return crypto.subtle.verify({ name: "Ed25519" }, key, signature, signed);
-  return crypto.subtle.verify({ name: "RSASSA-PKCS1-v1_5" }, key, signature, signed);
+  // Copied into fresh buffers: what WebCrypto takes, whichever lib a project types against.
+  const bytes = new Uint8Array(signed);
+  if (alg === ES256) return crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, new Uint8Array(derToRaw(signature, 32)), bytes);
+  if (alg === EDDSA) return crypto.subtle.verify({ name: "Ed25519" }, key, new Uint8Array(signature), bytes);
+  return crypto.subtle.verify({ name: "RSASSA-PKCS1-v1_5" }, key, new Uint8Array(signature), bytes);
 }
 
 /* --- what the authenticator and the browser sent ---------------------------------- */
