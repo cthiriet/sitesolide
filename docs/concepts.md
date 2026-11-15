@@ -114,9 +114,9 @@ more.
 | Caddy | `caddy` | serve, and ask the shared service whether a domain is allowed |
 | A project's service | `site-<slug>` | read its own directory, write its own data directory, receive its project's secrets from systemd at start |
 | The shared service (`api/`) | its own account | answer `ask` for on-demand TLS; its `src/locks.ts` decides the preview locks the gatekeeper writes |
-| The dashboard | `site-dashboard` | read a snapshot file, relay to the steward, ask the portal for sign-ins and its audit |
-| The portal | `site-portal` | answer Caddy's `forward_auth` from the projection the steward writes, sign people in with the identity provider or password access, sign the dashboard's identity assertions; keep no list of who may open a site |
-| The steward | root | write `/etc/sitesolide`, each project's store included, and read a value back to the owner alone, restart services, command the gatekeeper, keep the access registry and write its projection for the portal, judge what each person and each token does, ask the portal through its relay what it decides from |
+| The dashboard | `site-dashboard` | read a snapshot file, relay to the steward, ask the portal for its audit |
+| The portal | `site-portal` | answer Caddy's `forward_auth` from the projection the steward writes, sign in the owner, by passkey or password, and guests, by password access; keep no list of who may open a site |
+| The steward | root | write `/etc/sitesolide`, each project's store included, and read a value back to the owner alone, restart services, command the gatekeeper, keep the access registry and write its projection for the portal, judge what the owner's session and each token does, ask the portal through its relay what it decides from |
 | The portal relay | root, no capability, on demand | forward the steward's connections to the portal's admin API, and to nothing else; the steward asks it `GET /admin/access` alone |
 | The gatekeeper | root, one-shot | change one project's general access: its manifest, its block, the preview locks; reload Caddy, probe, roll back |
 | The installer | root, one-shot | deploy one project for a token, the archive read by the project's own account |
@@ -145,75 +145,40 @@ holds the one site you named it for. The dashboard reaches it through the
 steward, and so does `sitesolide lock`, over the owner's SSH: one path changes
 a site's general access, whoever asks.
 
-**People with access are judged as root.** Per project, each person or
-domain with access holds a role, each including the ones below it: *Can open*
-opens the site when its general access is restricted; *Viewer* also sees the
-project in the dashboard; *Developer* also deploys it, restarts it and writes
-its secrets without ever reading one back; *Admin* also restores its
-secrets' previous version, without reading them back either, chooses its
-general access, gives and takes away access to it, a role at
-most their own, and restores its backups. The steward keeps them in one
-registry, `/var/lib/sitesolide-steward/access.json`, root's alone, judges
-every change by its rules, and writes after each one the projection the portal
-decides from, `/etc/sitesolide-portal/access.json`, which root writes and only
-the portal's account reads: a removal holds at the next request. Someone
-inside the company's domains signs in with their company account and may hold
-any role; someone outside them gets password access, Can open alone, a
-password the steward draws and shows once; a domain is Can open alone. The
-owner, whoever holds the dashboard's passkeys, may do everything. See
-[dashboard/README.md](../dashboard/README.md#access).
-
-**The dashboard believes no name it is told.** Someone with a role above Can
-open signs in to it with their company account: the portal, the one authority
-on who someone is, signs an assertion of the email the provider verified, for
-the dashboard, for five minutes, once; the steward checks it with a public key
-it keeps itself before it opens the session, and judges every write the
-person asks for against its own registry, at that moment. The key pair is the
-steward's: it lays the private half where only the portal's account reads it,
-`/etc/sitesolide-portal/assertion.key`, beside the projection. A compromised
-dashboard acts only for the people whose sessions pass through it, within
-their roles, and raises nobody above Can open without an unlock. What a person
-sees, the dashboard filters from data it already holds.
+**Who may open a site is judged as root.** Per project, a general access,
+Public, Restricted or Anyone with the code, which the machine carries, and a
+list of guests, each a password access: an email, a password the steward
+draws and shows once, an expiry. A guest opens the site and nothing more. The
+steward keeps the guests in one registry,
+`/var/lib/sitesolide-steward/access.json`, root's alone, and writes after
+each change the projection the portal decides from,
+`/etc/sitesolide-portal/access.json`, which root writes and only the portal's
+account reads: a removal holds at the next request. Only the owner, whoever
+holds the dashboard's passkeys, gives or takes away access, from the
+dashboard or over SSH. See [access.md](access.md#who-may-open-a-site).
 
 **A secret written, a site made public, opened with a code or given a new
-code, a restore, a role above Can open given, password access given, a token
-minted, each waits for the person's own unlock**: a forced sign-in at the provider, which the portal asks for
-(`prompt=login`, `max_age=0`) and reads back in the provider's own ID token,
-and the steward checks again, for ten minutes and that person's session
-alone. The owner's unlock is a fresh passkey assertion, or the dashboard's password while no passkey is registered. Password
-access waits because it lets in someone from outside the company, whom no
-company account vouches for. Giving Can open to a company account or to one
-of the company's listed domains, restricting a site, and taking access away,
-never wait for either: closing someone out must not wait for a password. A
-whole domain waits while the company's domains are not listed, since anyone
-the provider vouches for would then come in.
+code, a restore, password access given, a token minted, each waits for the
+owner's unlock**: a fresh passkey assertion, or the dashboard's password while
+no passkey is registered, which the steward checks, for ten minutes and that
+session alone. Restricting a site and taking access away never wait for it:
+closing someone out must not wait for a password.
 **Reading a secret back is the owner's alone**, in the dashboard, unlocked:
-the steward never hands a value to a person, Admin included, to a token, to
-the build or to a command over SSH, whatever the dashboard relays.
+the steward never hands a value to a token, to the build or to a command over
+SSH, whatever the dashboard relays.
 **A token minted with *Manage secrets* writes without an unlock**, and that is
-the opt-in: minting it took its maker's unlock, and ticking the permission is
+the opt-in: minting it took the owner's unlock, and ticking the permission is
 the decision to let whoever holds the token set, generate and remove any
-variable and file of its project's store until it expires or is revoked. It never reads a value back, whoever made it,
-and the steward bounds it per hour, 120 changes, 30 restarts and 60 refused
-requests, its refused changes of access among them, every change and every
-refusal within the bound journaled under the token. What a token lets in
-stops once the access log, which keeps every change of access 180 days, is
-half full: the other half stays the people's.
+variable and file of its project's store until it expires or is revoked. It
+never reads a value back, and the steward bounds it per hour, 120 changes, 30
+restarts and 60 refused requests, every change and every refusal within the
+bound journaled under the token.
 
-**A person's own tokens are never stronger than the person.** A Developer
-mints a token that deploys their project, an Admin one that may also deploy
-public sites, declare a domain or reach outside hosts, and someone the owner
-granted the right to create projects one that creates them, which makes them
-Admin of what it creates. The steward reads the registry at every use of such
-a token, and again when the installer starts: a role lowered to Viewer stops
-that project's deployments at the next request, and someone who no longer
-signs in to the dashboard takes their tokens with them. A token gives Can open
-alone, to the company's people and domains, never password access. A
-Developer's token may also manage secrets, *Manage secrets* in the dialog: it
-lists secret names and sets, generates and removes the project's secrets, on
-each project while they are Developer or Admin there, and any token that
-deploys a project restarts it. See
-[dashboard/README.md](../dashboard/README.md#a-persons-own-tokens) and
+**Tokens are the owner's.** Only the owner mints one, for every project or
+for the projects picked, with the options ticked then: creating projects,
+deploying public sites, declaring a domain, outbound network, managing
+secrets. Any token that deploys a project restarts it. A token never gives
+anyone access. See [dashboard/README.md](../dashboard/README.md#tokens) and
 [access.md](access.md#secrets-with-a-token).
 
 **Everything that reloads Caddy shares one lock**, `/run/sitesolide-gatekeeper/caddy.lock`.
@@ -280,8 +245,7 @@ as critical, the heartbeat failing with it. See
 [upgrading.md](upgrading.md#a-second-block-of-service-ports).
 
 One exception, deliberate: the dashboard may reach the portal, where it has
-the sign-ins of people with a company account sealed and redeemed, reads how
-people sign in, and reads the portal's audit. Those routes have no other guard
+reads the portal's audit. Those routes have no other guard
 than this rule, and a test refuses any fragment that would expose them. Root
 reaches them too, with one question about access and nothing else: the steward
 asks `GET /admin/access`, whether the portal decides from its projection, through
@@ -502,9 +466,8 @@ to a client before launch: its general access is then *Anyone with the code*.
 The code is drawn on the machine by the gatekeeper and lives there, never in
 the repository, in a codes file and in the fragment Caddy compares it from,
 `/etc/caddy/locks/verrous.caddy`, which only root and Caddy's group read: a
-project's service sees `/etc/caddy`. The owner and the site's Admins read it
-in its *Access* section, with the link that carries it, and draw a new one
-there. Every URL of
+project's service sees `/etc/caddy`. The owner reads it in the site's
+*Access* section, with the link that carries it, and draws a new one there. Every URL of
 the locked host is rewritten to a code page that stands on its own, inline
 CSS, inline icon, no external request, because anything it asked for would
 come back as HTML.
@@ -520,100 +483,74 @@ so a domain switched to later closes with the site the moment it is served.
 
 **The portal** stands in front of every restricted site, and Caddy consults it
 with `forward_auth` before every request. A project's **general access** is
-one of three: **Public**, anyone opens it; **Restricted**, only its people
-with access, the portal in front; **Anyone with the code**, the preview lock
-above. Who opens a restricted site is its **people with access**: people
-signing in with their company account, Google Workspace, Microsoft Entra or
-any OpenID Connect provider, named by email or as a whole domain, each with a
-role; people outside the company with **password access**, one password per
-person and per site, drawn by the steward, shown once, until an expiry chosen
-when it is given; and everywhere, the owner with a passkey or the owner's password, and the
-admin emails. They are given from a site's *Access* in the dashboard, or with
-`sitesolide share` from a project's folder, over the owner's SSH, or with a
-token through the dashboard and the steward, which lets a token give Can open
-alone, to the company's people and domains. Every change goes to the steward's
-registry and its projection, never to Caddy, and holds from the next request;
-changing the general access, among the three, is what goes through the
-gatekeeper, a switch between Restricted and the code in one transaction.
+one of three: **Public**, anyone opens it; **Restricted**, only the owner
+and its guests, the portal in front; **Anyone with the code**, the preview
+lock above. A **guest** has password access: one password per person and per
+site, drawn by the steward, shown once, until an expiry chosen when it is
+given. The owner signs in with a passkey, or the owner's password as
+break-glass. Guests are given from a site's *Access* in the dashboard, or with
+`sitesolide share` from a project's folder, over the owner's SSH; a token
+gives none. Every change goes to the steward's registry and its projection,
+never to Caddy, and holds from the next request; changing the general access,
+among the three, is what goes through the gatekeeper, a switch between
+Restricted and the code in one transaction.
 
 A restricted project writes no sign-in of its own. It trusts Caddy,
 which is sound only because of the loopback rule. It also learns who came in,
-from three request headers, `X-Sitesolide-User`, `X-Sitesolide-User-Name` and
-`X-Sitesolide-Role`: the role on the project, from `visitor` (Can open) to
-`admin`, and `admin` for the owner's password and the admin emails; password
-access comes as `visitor` with no `X-Sitesolide-User`, the email having been
-typed by whoever gave it, not verified by a provider. Its block takes the
-visitor's own headers off every request before copying the portal's on, so a
-site can trust them once its block has been deployed with them. A public site
-has them taken off too, and learns nobody. See
-[portal/README.md](../portal/README.md).
+from one request header, `X-Sitesolide-Role`: `admin` for the owner, `visitor`
+for a guest, whose email was typed by the owner, not verified, and is no
+identity. Its block takes the visitor's own `X-Sitesolide-*` headers off every
+request before copying the portal's on, so a site can trust it once its block
+has been deployed with it. A public site has them taken off too, and learns
+nobody. See [portal/README.md](../portal/README.md).
 
 ## Audit
 
 Every component that acts records what it did in its own database, in one
 shape: an ISO date, an actor, a dotted action, a target, and a detail in JSON
-that never carries a secret value. An actor is an email, of someone with
-access to a project or of someone given password access, `owner` for whoever
-holds the dashboard's passkeys, `token:<id>` for a token, `password:<id>` for
-a password access given under a name rather than an email (`guest:<id>` on the
-rows written before the access registry), `anonymous` before anyone is known,
-or `system`. The steward writes a person's email as it verified it, never as
-a request names it. A deployment by a person's own token is recorded under
-`token:<id>`, the person's email in its detail's `member` field, a name
-the rows keep; so is a variable a token sets or removes, or a restart it
-makes, in the steward's journal, the `member` field empty for an owner's
-token. Nothing gathers
-these tables on the machine: the dashboard's *Activity* page reads each
-through the road it already takes to that component, and merges them, newest
-first. How long each keeps its rows is in
+that never carries a secret value. An actor is `owner` for whoever holds the
+dashboard's passkeys, `token:<id>` for a token, a guest's email, or
+`password:<id>` for a password access given under a name rather than an
+email (`guest:<id>` on the rows written before the access registry),
+`anonymous` before anyone is known, or `system`. Rows written while people
+signed in with a company account may also carry a person's email, and a
+`member` field; they read as they were written. Nothing gathers these tables
+on the machine: the dashboard's *Activity* page reads each through the road
+it already takes to that component, and merges them, newest first. How long
+each keeps its rows is in
 [dashboard/README.md](../dashboard/README.md#the-audit).
 
-Changes of access are the steward's to record: the portal, which no longer
-keeps a list of who may open a site, records sign-ins and sign-outs alone.
-The rows it wrote before the access registry, `sharing.update`,
-`guest.create` and `guest.revoke`, still read, as do the steward's `member.*`
-rows of before, which its `access.*`, `people.create` and `dashboard.*`
-events replace; their action names stay as they were written, and the
-*Activity* page says them in today's words. The steward keeps every accepted
-change of access 180 days, in a file of its own beside its journal, which
-rotates by line count: a refusal stays in the journal.
+Changes of access are the steward's to record: the portal, which keeps no
+list of who may open a site, records sign-ins and sign-outs alone. The
+steward keeps every accepted change of access 180 days, in a file of its own
+beside its journal, which rotates by line count: a refusal stays in the
+journal.
 
 | Event | Source | Actor | Target | What it records |
 |---|---|---|---|---|
-| `token.create`, `token.revoke` | dashboard | `owner` | none | a token created or revoked from the owner's *Tokens* page, its label, email and scope |
-| `token.create`, `token.revoke` | steward | a person's email, or who took their last role; `system` at the upgrade, and for the sweep | none | a person's own token created or revoked, its id and scope; one refused above their roles, with the steward's reason; the tokens of someone who no longer signs in, revoked under the owner or the Admin who took their last role above Can open; the live tokens of anyone the registry gives no rights, revoked by the sweep every 30 seconds; a token from before made a person's, once, at the upgrade |
-| `project.create` | steward | a person's email | slug | a project a person's own token created, which made them its Admin; the token in the detail |
+| `token.create`, `token.revoke` | dashboard | `owner` | none | a token created or revoked from the *Tokens* page, its label and scope |
 | `project.remove` | steward | `owner` | slug | a project `sitesolide remove` took off the machine: the name its token owned, free again for another token once the machine keeps none of its snapshots; that token in the detail |
-| `deploy.start` | dashboard | `token:<id>` | slug | a token's deployment handed to the installer; the person's email in the `member` field, for a person's own token |
-| `deploy.success`, `deploy.failure` | dashboard | `token:<id>` | slug | how it ended, the error's code for a failure; the `member` field for a person's own token |
-| `access.add`, `access.change`, `access.remove` | steward | `owner`, an Admin's email, or `token:<id>` | slug, the person's email in the detail; the email alone for someone taken off every project | someone given access, their role changed, or their access taken away, as "who: Role", with the expiry of password access; a change refused, with the steward's reason, a minute holding twenty refusals at most, a token's bounded instead by its own 60 an hour |
-| `access.migrate` | steward | `system`, or `owner` without the portal's database | none | the registry made, once, in 0.4.0, from the stores before it: the counts carried over and set aside; written by no release since, read where a machine's journal still holds it |
-| `people.create` | steward | `owner` | the person's email | the right to create projects given or taken back |
-| `dashboard.signin` | steward | the person's email | the person's email | a session opened, from an assertion it verified, with their roles and create right |
-| `dashboard.signin_failed` | steward | the email, or `anonymous` when the assertion did not verify | the email, or none | a sign-in refused: `can-open-only` for someone who only opens sites, `no-role` for someone on no list, an assertion replayed, signed by another key, expired, too old; a minute holds twenty refusals at most |
-| `dashboard.signout` | steward | the person's email | the person's email | a person signed out |
-| `portal.signin` | portal | `owner`, an email, or `password:<id>` | host | a sign-in with the owner's password or passkey (`method: "passkey"`), a company account, or password access (`method: "password-access"`, under the email it was given to, or `password:<id>` with its `name` in the detail), its role; `guest:<id>` on rows of before; repeats within a minute counted on one row |
-| `portal.signin_failed` | portal | `anonymous` or an email | host | a wrong password, or a company account refused and why |
+| `project.rename` | steward | `owner` | slug | a project renamed, the new slug in the detail |
+| `deploy.start` | dashboard | `token:<id>` | slug | a token's deployment handed to the installer |
+| `deploy.success`, `deploy.failure` | dashboard | `token:<id>` | slug | how it ended, the error's code for a failure |
+| `access.add`, `access.remove` | steward | `owner` | slug, the guest's email in the detail | a guest given password access, with its expiry, or taken off; a change refused, with the steward's reason, a minute holding twenty refusals at most |
+| `access.general` | steward | `owner` | slug | a site's general access chosen, Public, Restricted or Anyone with the code, `off`, `on` or `code` in the detail; listed as `door.update` before, the rows themselves unchanged |
+| `access.code` | steward | `owner` | slug | a site that opens with a code given a new one; never the code, which no row holds |
+| `portal.signin` | portal | `owner`, an email, or `password:<id>` | host | a sign-in with the owner's password or passkey (`method: "passkey"`), or password access (`method: "password-access"`, under the email it was given to, or `password:<id>` with its `name` in the detail); repeats within a minute counted on one row |
+| `portal.signin_failed` | portal | `anonymous` | host | a wrong password |
 | `portal.signout` | portal | as it signed in | host | a sign-out |
-| `sharing.update` | portal | `owner`, `token:<id>` or an email | host | written before the access registry only: who could open a site changed, the mode, the people and domains added and removed |
-| `guest.create`, `guest.revoke` | portal | `owner` or an email | host | written before the access registry only: a password access given or removed, its label and expiry, never the password |
-| `sharing.update`, `guest.create`, `guest.revoke` | steward | an email | slug | written before the access registry only: a change refused before it reached the portal |
 | `egress.denied` | egress | `system` | slug, or none | connections refused, by destination and reason, counted by the minute |
 | `backup.run` | backups | `system` | none | an hourly run: snapshots taken and pruned, the offsite copy, the sites that failed |
-| `backup.restore` | backups | `owner` or an Admin's email | slug | a restore, its snapshot and how it ended |
-| `backup.restore` | steward | a person's email | slug | a restore refused by role before it reached the backups |
-| `member.invite`, `member.role`, `member.remove`, `member.signin`, `member.signin_failed`, `member.signout` | steward | as they were written | as they were written | written before the access registry only: the dashboard's people of then, their roles and sign-ins |
-| `secrets.unlock`, `secrets.lock` | steward | `owner`, or a person's email | none, or the person's email | changes unlocked, or the passkey, the password or the forced sign-in refused, and locked again |
+| `backup.restore` | backups | `owner` | slug | a restore, its snapshot and how it ended |
+| `secrets.unlock`, `secrets.lock` | steward | `owner` | none | changes unlocked, or the passkey or the password refused, and locked again |
 | `passkey.add`, `passkey.remove`, `passkey.link`, `passkey.signin`, `passkey.signin_failed` | steward | `owner` | none | a passkey of the owner registered, removed, a registration link minted by root over SSH, a dashboard sign-in with a passkey or one refused, with its reason; an unlock by passkey is a `secrets.unlock` with `passkey` in its detail |
-| `secrets.read`, `secrets.set`, `secrets.remove` | steward | `owner`, a person's email, or `token:<id>` | slug | a variable read back, set or removed, by its name, or a file of the store removed; the place in `file`, a platform file's name, `store` for the project's store, `store/<name>` for one of its files; a read is the owner's alone, a person's refused by role, with that role; a token's set or removed through the API, the person in `member` for their own, its refusals with their reason, `no secrets permission` among them, 60 an hour at most |
-| `secrets.generate` | steward | `owner`, a person's email, or `token:<id>` | slug | a value drawn on the server for a name, in `store`, its format, `hex` or `base64url`, in the detail; never the value, nor its length |
+| `secrets.read`, `secrets.set`, `secrets.remove` | steward | `owner`, or `token:<id>` | slug | a variable read back, set or removed, by its name, or a file of the store removed; the place in `file`, a platform file's name, `store` for the project's store, `store/<name>` for one of its files; a read is the owner's alone; a token's set or removed through the API, its refusals with their reason, `no secrets permission` among them, 60 an hour at most |
+| `secrets.generate` | steward | `owner`, or `token:<id>` | slug | a value drawn on the server for a name, in `store`, its format, `hex` or `base64url`, in the detail; never the value, nor its length |
 | `secrets.list` | steward | `token:<id>` | slug | a token's listing of a project's names refused, with its reason; a listing reads no value, and one that goes through is not journaled |
-| `secrets.create`, `secrets.restore`, `secrets.replace` | steward | `owner`, a person's email, or `token:<id>` | slug | a platform file created, or a project's store made (`store`); a file or the store's variables put back to their previous version; a file of the store set (`store/<name>`) |
-| `secrets.migrate`, `secrets.retire` | steward | `owner` | slug | written by 0.8 only, as projects moved to their stores: read as they were written, never a value |
+| `secrets.create`, `secrets.restore`, `secrets.replace` | steward | `owner`, or `token:<id>` | slug | a platform file created, or a project's store made (`store`); a file or the store's variables put back to their previous version; a file of the store set (`store/<name>`) |
 | `secrets.password` | steward | `owner` | slug | a password hash changed |
-| `access.general` | steward | `owner`, or an Admin's email | slug | a site's general access chosen, Public, Restricted or Anyone with the code, `off`, `on` or `code` in the detail; listed as `door.update` before, the rows themselves unchanged |
-| `access.code` | steward | `owner`, or an Admin's email | slug | a site that opens with a code given a new one; never the code, which no row holds |
-| `service.restart` | steward | `owner`, a person's email, or `token:<id>` | slug | a service restarted from *Secrets*, by a Developer or an Admin, or by a token through the API, with its verdict; a person's refused restart, with their role |
+| `service.restart` | steward | `owner`, or `token:<id>` | slug | a service restarted from *Secrets*, or by a token through the API, with its verdict |
+| read, never written any more | steward, portal | as they were written | as they were written | rows of before: the steward's `access.change`, `access.migrate`, `people.create`, `dashboard.*`, `member.*`, `project.create`, its own `token.create`, `token.revoke` and `backup.restore`, `secrets.migrate` and `secrets.retire`; the portal's and the steward's `sharing.update`, `guest.create`, `guest.revoke`, and the portal's sign-ins with a company account. The *Activity* page says them in today's words |
 
 The steward's rows say how each operation ended, `ok`, `rejects` or `failure`,
 in their detail's `result`. Their source is the steward's journal, which has
@@ -621,10 +558,9 @@ no ids: the dashboard gives them the shared shape as it reads them. A line of
 the journal written before it named its actor reads as `owner`, the only one
 it acted for then.
 
-The *Activity* page shows the owner the whole machine; a person, the rows of
-their projects and their own. Each row reads as a sentence, "Gave
-dana@example.com Developer on cms", and *Access changes* narrows it to the
-changes of access.
+The *Activity* page shows the owner the whole machine. Each row reads as a
+sentence, "Gave dana@example.com password access to cms", and *Access
+changes* narrows it to the changes of access.
 
 ## What the deploy actually does
 
@@ -707,6 +643,6 @@ runs on the machine, in the installer, with the same decisions: see
 - [infra/README.md](../infra/README.md), the machine itself
 - [dashboard/README.md](../dashboard/README.md), the dashboard, the steward and the gatekeeper
 - [dashboard/src/backup/README.md](../dashboard/src/backup/README.md), the data snapshots and their restore
-- [portal/README.md](../portal/README.md), the owner's password, password access, signing in with a company account, the projection it decides from and the identity headers
+- [portal/README.md](../portal/README.md), the owner's password and passkey, password access, the projection it decides from and the identity headers
 - [monitor/README.md](../monitor/README.md), what is checked every minute, and who hears of it
 - [egress/README.md](../egress/README.md), the hosts a project may reach, and the credentials it is lent

@@ -95,8 +95,8 @@ The listing says where each name comes from and what is missing:
 
 A file's size is listed to the owner alone, over SSH as in the dashboard. Not a secret all the same from whoever may write the
 store: the size refusals, 64 KiB for a file, 512 KiB for all of them, 256 KiB
-for the variables, let a writer, a Developer, an Admin or a token with *Manage
-secrets*, narrow a size down by trying writes. That gives them nothing
+for the variables, let a writer, a token with *Manage secrets*, narrow a
+size down by trying writes. That gives them nothing
 more: a writer can deploy code that reads the values themselves.
 
 **A service reads its values when it starts**, and a running process never
@@ -207,28 +207,20 @@ empty file is listed *missing* too.
 |---|---|
 | The owner, in the dashboard, unlocked with its password | everything: lists the names, **reads a value back** (*Reveal*, thirty seconds on screen), sets, generates, removes, uploads and removes files, restores the previous version |
 | The owner over SSH, `sitesolide secrets` | lists the names, sets, generates, removes, sets and removes files, for a project not deployed yet too; never a value back |
-| An Admin of the project | lists the names; sets, generates, removes, uploads, removes files and restores the previous version after unlocking; never a value back |
-| A Developer of the project | lists the names; sets, generates, removes, uploads and removes files after unlocking; never a value back, no restore |
 | A token with *Manage secrets* | lists the names; sets, generates and removes any name of its project's store, and its files, with no unlock: ticking the box was that decision; for a project it may create, before its first deployment too, which makes the name its own. Never a value back, whoever holds it |
 | A token without it | nothing: `deploy` says it may not list secrets, and the machine's log names any that is missing |
-| A Viewer, or someone who can only open the site | nothing: the Secrets section is not theirs |
+| A guest with password access | nothing: they open the site, never the dashboard |
 
-**Only the owner reads a value back**, and only in the unlocked dashboard: a
-Developer's or an Admin's dashboard shows every value write-only. Nothing of
-the token API, the CLI or the build returns one. Even a
+**Only the owner reads a value back**, and only in the unlocked dashboard.
+Nothing of the token API, the CLI or the build returns one. Even a
 file's size is the owner's, in the dashboard and over SSH, which the listing
 shows the owner alone. A writer may still narrow a size down through the size
 refusals, by trying writes; that is no more than the code a writer may deploy
 already reads.
 
-The steward decides every one of these, as root, on its own access registry,
-and a compromised dashboard, which relays the requests, cannot make one pass.
-A Developer or an Admin unlocks by signing in again with the identity
-provider, for ten minutes: see
-[access.md](access.md#people-with-access-beside-tokens) and
-[dashboard/README.md](../dashboard/README.md#access). The platform's own
-projects, the dashboard, the portal and the shared service, are
-the owner's alone.
+The steward decides every one of these, as root, and a compromised
+dashboard, which relays the requests, cannot make one pass. The platform's own projects, the dashboard, the portal and
+the shared service, are the owner's alone.
 
 **The services of a project trust each other.** They run under one account
 and receive the same store, so one can read another's environment and files;
@@ -391,17 +383,14 @@ owner alone:
 | Rule | Files | Why |
 |---|---|---|
 | **Change password only**: never read, never set by hand, never restored, the old one erased | any `PASSWORD_HASH`, in any file | a hash is cracked offline, and restoring would revalidate the password you changed because it had leaked |
-| **hash only**: no other variable | `dashboard.env`, `portal.env` | one more variable there would change what the service does: a socket path would send the next password typed to another socket |
+| **hash only**: no other variable | `dashboard.env`, `portal.env` | one more variable there would change what the service does: a socket path would send the next password typed to another socket. The `OIDC_*` settings a `portal.env` may carry from company sign-in are tolerated and ignored, and can be removed, never set: see [upgrading.md](upgrading.md) |
 
 `PASSWORD_HASH` is never a store's name either: it is changed with *Change
 password*, in the dashboard's and the portal's files alone.
 
 **What belongs to no project is not the dashboard's**: `cloudflare.env`, the
 token Caddy reads for its certificates, lives in `/etc/caddy` and is changed on
-the machine. Nor is the key people sign in to the dashboard with: the steward
-draws it and lays its private half in `/etc/sitesolide-portal/`, where only
-the portal's account reads it and the Secrets section never shows it, see
-[dashboard/README.md](../dashboard/README.md#the-key-pair).
+the machine.
 
 No secret is shared, and that is the rule: the shared service `api/` sends no
 mail and makes no call. Each project has its own store, read under its own

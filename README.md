@@ -6,9 +6,9 @@
 server you own.**
 
 Internal tools, dashboards, prototypes: `sitesolide deploy` in a folder, typed
-by you or run by an agent, puts it live on HTTPS, behind your company's
-sign-in, open to exactly the people who need it. One machine, no
-containers, no per-seat pricing.
+by you or run by an agent, puts it live on HTTPS, public, behind a preview
+code, or restricted to you and the guests you give a password. One machine,
+no containers, no per-seat pricing.
 
 <img alt="The dashboard: every site on the machine, one line each, with its address, its access, its memory against its limit and when it was deployed" src="docs/assets/screenshots/dashboard.png">
 
@@ -60,15 +60,14 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
 - **Background work.** Workers that run for good and jobs on a schedule,
   beside a site or on their own, confined the same way and yielding the
   processor to the sites.
-- **Company sign-in, access given like a doc's.** Google Workspace, Microsoft
-  Entra, Okta or any OpenID Connect provider in front of private apps, opened
-  to people or a whole domain, each with a role, from opening the site to
-  looking after the project: `sitesolide share alice@example.com`. Someone
-  outside the company gets password access. See
+- **Access per site.** Public, *Anyone with the code* for a client's preview,
+  or Restricted: the owner signs in with a passkey, and a guest with a
+  password drawn for them, for that one site and nothing more:
+  `sitesolide share alice@example.com`. See
   [portal/README.md](portal/README.md).
 - **Every deploy through a token, never root SSH.** The owner deploys with
-  their own token for every project, colleagues and agents with a personal,
-  scoped, revocable one, never stronger than its holder's roles. The machine
+  their own token for every project, agents and CI with a scoped, revocable
+  one the owner mints, which never gives anyone access. The machine
   judges each, and installs it without the deployer ever holding root; only
   the owner holds SSH, to install and upgrade the machine. An agent needs
   [llms.txt](llms.txt) and two variables, `SITESOLIDE_API` and
@@ -111,7 +110,7 @@ redeploys what changed, see [docs/upgrading.md](docs/upgrading.md).
 - [How it works](docs/concepts.md): the parts, and who may touch what
 - [The manifest](docs/manifest.md): every key of `sitesolide.json`
 - [Commands](docs/commands.md): everything the CLI does
-- [People and tokens](docs/access.md): roles on a project, the owner's token, and deploying with a token
+- [Access and tokens](docs/access.md): who opens a site, the owner's token, and deploying with a token
 - [Secrets](docs/secrets.md): what goes in `env`, in the server's store, in a file, or with whoever deploys, and why never in git
 - [Agents](docs/agents.md): `--json` and the skill
 - [Upgrading](docs/upgrading.md): from one release to the next on a running machine

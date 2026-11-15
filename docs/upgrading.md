@@ -197,6 +197,87 @@ first, with that release's binary and [its
 notes](https://github.com/cthiriet/sitesolide/blob/v0.16.0/docs/upgrading.md),
 which go back to 0.1; this release converts nothing an earlier one left.
 
+## Company sign-in removed
+
+**What the release brings.** Nobody signs in with a company account any more.
+The portal's OpenID Connect sign-in goes, and with it everything that existed
+only for it: members and the *People* page, people's sessions and their own
+unlock, roles (Viewer, Developer, Admin), domain grants (`@acme.com`), the
+right to create projects, people's own tokens (`/tokens/person/*`) and their
+sweep, the company's domains and admin emails. What remains: the owner, with
+a passkey, the password as the break-glass, and SSH; guests with password
+access, who open one site and nothing more; general access per site; tokens
+the owner mints, for every project or scoped, none of which gives anyone
+access. The portal no longer sets `X-Sitesolide-User` or
+`X-Sitesolide-User-Name` (it still strips both); `X-Sitesolide-Role` is
+`admin` for the owner and `visitor` for a guest. The portal no longer needs
+outbound network. See [access.md](access.md).
+
+**The order.** `sitesolide upgrade` brings everything. By hand, the portal
+first, then the steward (`bin/deploy-steward.sh`), then the dashboard. Either
+order keeps guests in: the new portal reads the projection of before, and
+the new steward still writes an empty `people` and `domains` in each site of
+the projection, which the previous portal requires.
+
+**What a machine of before keeps, and how it is read.** No code deletes a
+file; each is tolerated:
+
+- `/var/lib/sitesolide-steward/access.json`, the steward's registry: people
+  and domains with a role, and `creators`, are left out as it is read, and
+  dropped from the file at the registry's next change, a guest given or
+  removed, a project renamed or removed. Password guests are kept as they
+  stand, those listed under a name rather than an email included. Until that
+  change, the steward's journal says it once per content of the file:
+  `access: access.json names <n> people, domains or creators from company
+  sign-in, which nothing reads any more: they go at its next change`.
+  Someone who opened a site by their address and still needs it is given
+  password access, `sitesolide share <email>`.
+- The dashboard's sessions of people read as no session, and are purged at
+  the owner's next sign-in.
+- A token a person held is refused, reason `person` ("this token belonged to
+  a person, and only the owner holds tokens now"), answered
+  `unauthenticated`; it is listed on the *Tokens* page, where the owner
+  revokes it. A project such a token created stays its name until the owner
+  takes it back, `sitesolide deploy --adopt` in its folder.
+- `portal.env`: leftover `OIDC_*` lines are ignored, and the portal says so
+  once in its journal at startup.
+
+**The CLI.** `sitesolide people` is gone, an unknown command now.
+`share --role`, `--domain`, `--only-admins`, `--api` and `@domain` addresses
+are refused with a pointer. `share` gives password access alone and
+runs over the owner's SSH only: with a token it is refused `needs-ssh`.
+
+**Then by hand, once everything is deployed.** Each step is optional, and
+removes what nothing reads any more:
+
+1. The `OIDC_*` lines of `/etc/sitesolide/portal.env`: `OIDC_ISSUER`,
+   `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_ALLOWED_DOMAINS`,
+   `OIDC_ADMIN_EMAILS` and `OIDC_PROVIDER_NAME`. The dashboard's *Secrets*
+   section, under the unlock, removes each of them from `portal.env`, the
+   only change it accepts there besides the password; or as root:
+
+   ```bash
+   ssh <server> "sudo sed -i '/^OIDC_/d' /etc/sitesolide/portal.env"
+   ssh <server> "sudo systemctl restart portal"
+   ```
+
+   The restart drops the variables from the running portal and its warning
+   from the journal. Then revoke the client at the identity provider, whose
+   secret was on the machine.
+2. The sign-in key pair, read by nothing now, and the files of people's
+   sessions and of creations, if present:
+
+   ```bash
+   ssh <server> 'sudo rm -f /etc/sitesolide-portal/assertion.key /var/lib/sitesolide-steward/assertion.pub /var/lib/sitesolide-steward/member-sessions.json /var/lib/sitesolide-steward/creations.json'
+   ```
+
+3. A token a person held, on the *Tokens* page: *Revoke*.
+
+**Going back.** The previous release's portal, steward and dashboard, in the
+reverse order. The registry keeps its guests whatever happened; people and
+domains it dropped at a change are not brought back, and are given again
+from the previous dashboard.
+
 ## SSH closes to the internet
 
 **What the release brings.** Port 22 can be restricted to networks

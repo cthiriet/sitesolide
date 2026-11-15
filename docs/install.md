@@ -184,15 +184,13 @@ What the monitor finds down also shows among the dashboard's Issues.
 ## 6. Let others in, without SSH
 
 Every deployment goes through a token, yours included: `sitesolide login
---owner` mints your own, for every project, once setup is done. Colleagues
-and agents deploy with a personal token instead of root SSH: create one on
-the dashboard's *Tokens* page, and send its holder to [access.md](access.md),
-"People and tokens". Once signing in with a company account is set up
-([portal/README.md](../portal/README.md#signing-in-with-a-company-account)), give
-colleagues a role on a project instead, from its *Access* section in the
-dashboard or with `sitesolide share <email> --role developer` in its folder:
-they sign in to the dashboard and mint their own tokens, never stronger than
-their roles.
+--owner` mints your own, for every project, once setup is done. An agent or
+a CI deploys with a token you mint on the dashboard's *Tokens* page, scoped to
+some projects or to all of them, instead of root SSH: send its holder to
+[access.md](access.md). A token never gives anyone access to a site. To let a
+guest open a restricted site, give them password access from the site's
+*Access* section in the dashboard, or with `sitesolide share <email>` in its
+folder: a password shown once, for that site alone.
 
 ## A zone elsewhere than Cloudflare
 

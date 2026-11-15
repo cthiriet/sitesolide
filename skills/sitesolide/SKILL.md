@@ -94,19 +94,17 @@ ports the machine chose, which you write into it.
    where nobody sees it; for a provider's key, ask the user to run
    `sitesolide secrets set NAME` in their own terminal. Then restart, with
    `--restart` on the last change or `sitesolide restart --json`.
-6. **Give access to the people who need it.** A restricted site opens to its
-   people with access alone. Read `sitesolide share --json` first, ask the
-   user who should get in and with which role, then give it to exactly those
-   addresses or that domain, and nobody else
-   (`sitesolide share alice@acme.com --json`, `@acme.com` for everyone at a
-   domain). The role is Can open (`can-open`) unless the user names `viewer`,
-   `developer` or `admin` (`--role`), which also let the person into the
-   project in the dashboard. Access lets real people into the app and its
-   data: tell the user who will get in, and wait for their yes. Give them the
-   `message` of the result to send. Someone outside the company's domains gets
-   password access: the password comes back once, in the result's `changes`,
-   for the user to send; never store or repeat it. `--remove <email|@domain>`
-   takes access away.
+6. **Give access to the people who need it.** A restricted site opens to the
+   owner and its guests alone. Over the owner's SSH, read
+   `sitesolide share --json` first, ask the user who should get in, then give
+   password access to exactly those addresses and nobody else
+   (`sitesolide share alice@example.com --json`, `--expires 24h|7d|30d|never`,
+   7d by default). A guest opens the site and nothing more. Access lets real
+   people into the app and its data: tell the user who will get in, and wait
+   for their yes. The password comes back once, in the result's `changes`,
+   for the user to send; never store or repeat it. `--remove <email>` takes
+   access away. With a token, `share` is refused `needs-ssh`: a token never
+   gives anyone access.
 
 ## When it fails
 
@@ -156,12 +154,11 @@ Every error carries a `hint`: follow it. The usual ones:
   one and writes it back.
 - **The name already exists on the server.** Another project uses it: pick
   another with `--slug`, never deploy over it.
-- **Access refused.** `out-of-scope`: whoever asks may not give that. A token
-  gives Can open alone, to people of the company's domains or one of those
-  domains, never password access; ask the user to give it from the dashboard,
-  or the owner. `not-found`: the project is not deployed, or the person has no
-  access to take away. `steward-outdated` or `not-available`: the machine
-  needs `sitesolide upgrade`, the owner's to run. A warning that the portal
+- **Access refused.** `needs-ssh`: `share` with a token; the owner gives the
+  access, from the dashboard or their workstation. `not-found`: the project
+  is not deployed, or nobody of that name has access to take away.
+  `steward-outdated`: the machine needs `sitesolide upgrade`, the owner's to
+  run. A warning that the portal
   cannot read who may open a site goes to the user.
 
 ## Never
@@ -177,8 +174,7 @@ Every error carries a `hint`: follow it. The usual ones:
   that: those are their commands, not yours.
 - Never retry `setup` in a loop on a refused connection: most likely fail2ban
   banned this workstation, for 10 minutes.
-- Never give access to anyone the user did not name, nor a role they did not
-  name, and never make a site Public: general access is theirs, from the
+- Never give access to anyone the user did not name, and never make a site Public: general access is theirs, from the
   dashboard.
 - Never run `sitesolide passkey link` or `sitesolide passkey remove`, and
   never unlock the dashboard: the link signs in as the owner, so the user
@@ -199,8 +195,8 @@ Every error carries a `hint`: follow it. The usual ones:
 service state and memory; a scheduled service shows its schedule, its last
 run and how it ended, and its next run, and is `inactive` between two runs,
 which is not an outage. Its runs are in the logs, beside the other services.
-`sitesolide share --json` says a project's general access and its people
-with access, with their roles. `sitesolide lock --status --json` says
+`sitesolide share --json` says a project's general access and its guests,
+with the expiry of their password access. `sitesolide lock --status --json` says
 whether a preview is closed behind an access code, without revealing the
 code.
 

@@ -20,8 +20,8 @@ A useful report says:
   shared service, the egress proxy, the backups, the monitor;
 - who the attacker is, in the terms of
   [docs/concepts.md](docs/concepts.md#who-may-touch-what): a visitor, a
-  person with a role on a project, a token, a project's own code, a
-  component already compromised;
+  guest with password access, a token, a project's own code, a component
+  already compromised;
 - what they reach that the table says they should not, and the steps to get
   there.
 
@@ -45,11 +45,12 @@ In particular:
   another project's service over the loopback, or listening on a port
   reserved to Caddy, the portal or the egress proxy;
 - getting past the portal, a preview lock or a site's general access, or
-  forging the identity headers a restricted site trusts;
-- a person, a token or a password access doing more than its role allows:
-  reading a secret's value back as anyone but the owner in the unlocked
-  dashboard, an Admin, a token, an agent or the build included, giving a
-  role above one's own, a token reaching a project it was not granted;
+  forging the `X-Sitesolide-Role` header a restricted site trusts;
+- a guest, a token or an agent doing more than it was given: a password
+  access opening another site or the dashboard, reading a secret's value
+  back as anyone but the owner in the unlocked dashboard, a token or the
+  build included, a token giving anyone access or reaching a project it was
+  not granted;
 - a compromised component, the dashboard, the portal, a project, reaching
   further than its section of the threat model says;
 - a project reaching a host its manifest does not list, see
@@ -125,7 +126,7 @@ proving them:
   passkey of its own**, as it can read every secret then. It shows on the
   *Server* page and in the steward's journal; root removes it with
   `sitesolide passkey remove`.
-- **What sitesolide trusts**: the identity provider, Cloudflare and its DNS
+- **What sitesolide trusts**: Cloudflare and its DNS
   token, the cloud provider and its console, the bucket's provider for
   availability (not for confidentiality: restic encrypts on the machine).
   Whoever controls one of them is not stopped here.

@@ -1,13 +1,11 @@
 # portal
 
-The sign-in in front of every restricted site. Three ways in: the owner,
-with a passkey or the owner's password; password access, one password per person and per site for someone
-outside the company; and, once an identity provider is configured, **the
-company's own accounts**, Google Workspace, Microsoft Entra, Okta or Keycloak.
-Who may open a site is not the portal's to keep: it is the steward's registry
-of people with access, each with a role, which the portal reads as a
-projection the steward writes for it. A restricted site also learns who came
-in, and with which role, through three request headers it can trust.
+The sign-in in front of every restricted site. Two ways in: the owner, with
+a passkey or the owner's password, and password access, one password per guest
+and per site. Who may open a site is not the portal's to keep: it is the
+steward's registry of guests, which the portal reads as a projection the
+steward writes for it. A restricted site also learns whether the owner or a
+guest came in, through a request header it can trust.
 
 A restricted project carries `"portal": true` in its `sitesolide.json`,
 which is what its general access *Restricted* means, set from the dashboard
@@ -33,67 +31,47 @@ browser --> Caddy, block for shop.<zone>
               |                      200 : the request continues, with X-Sitesolide-*
               |                      401 : the sign-in page
               |
-              +-- /_portal/* --> the portal itself: sign in, sign out, the provider's handoff
+              +-- /_portal/* --> the portal itself: sign in, sign out, the passkey's handoff
               +-- the rest   --> file_server, or the project's service
 
 browser --> Caddy, block for portal.<zone>
-              +-- /sante, /oidc/start, /oidc/callback, /oidc/signout --> the portal
+              +-- /sante, /passkey, /passkey/options, /passkey/verify --> the portal
 
 steward (root) --> /etc/sitesolide-portal/access.json, root:site-portal 0640
                    who may open each site, written after every change of access;
                    the portal reads it again whenever it changes
 
-dashboard (site-dashboard) --> portal 127.0.0.1:3026 /admin/sharing (how people sign in, its old name kept), /admin/audit,
-                               /admin/dashboard/flow, /admin/dashboard/redeem
-                               never through Caddy
+dashboard (site-dashboard) --> portal 127.0.0.1:3026 /admin/audit, never through Caddy
 root, the steward's relay   --> portal 127.0.0.1:3026 /admin/access, what the portal reads its access from
 ```
 
 Signing in happens on the site itself, at `/_portal/connexion` for a password,
 and sets a `__Host-portal` cookie **for that site alone**. You therefore sign in
 once per site and per device; a password manager fills the field across every
-subdomain of the zone, and the identity provider remembers you across sites.
+subdomain of the zone.
 
 **No site shows a sign-out button**: the cookie expires on its own. The
 `/_portal/deconnexion` route still exists, a `POST` from the site's own origin,
-and a site's app may offer it: it closes the cookie for that host. With a
-provider configured, it also ends the portal's own session: its answer is a
-page that sends the browser on to `portal.<zone>/oidc/signout`, with a ticket
-naming the site and who signs out, sealed for a minute, and the portal's host
-erases its session and sends the browser back to the site. Only someone who
-was in gets a ticket: a person signed in with a company account, whose
-ticket ends their own portal session and no other, or the owner, whose ticket
-ends whatever session that browser holds. A stranger, or password access,
-which has no portal session to end, is sent home with the cookie erased. The
-Origin alone proved nothing, since a script outside a browser writes it: a
-ticket minted for whoever posted was a link that signed out of the portal
-whoever opened it. Until the next sign-in succeeds, that
-browser counts as signed out, and a sign-in asks the provider which account
-(`prompt=select_account`): on a shared computer, the next person clicking *Sign
-in with ...* would otherwise come back as the previous one. A page and not a
-redirect, because a browser applies the site's own `form-action` to every
-redirect after a form; it carries `X-Portal`, so a front end that signs out with
-`fetch` reloads on it. The other sites' cookies are not touched: each lapses on
-its own, or closes with that site's sign-out.
+and a site's app may offer it: it erases the cookie for that host and sends the
+browser to `/`. It records a sign-out only for someone who was in. The other
+sites' cookies are not touched: each lapses on its own, or closes with that
+site's sign-out.
 
-The cookie has four forms, signed by an HMAC whose key mixes a draw kept in
+The cookie has three forms, signed by an HMAC whose key mixes a draw kept in
 `data/key` with the password hash:
 
 | Holder | Cookie | Signed over | Lives | Revocation |
 |---|---|---|---|---|
 | owner | `<expiry>.<signature>` | the host, the expiry | 30 days | change the password, or delete `data/key` and restart: everyone is signed out everywhere |
 | owner, by passkey | `<expiry>.pk.<passkey>.<signature>` | the host, the expiry, the passkey's reference | 30 days | remove the passkey on the dashboard: refused on the very next request |
-| password access | `<expiry>.<access>.<signature>` | the host, the expiry, the access's identifier | 30 days at most, never beyond the access | remove it from the site's people with access: refused on the very next request |
-| identity | `<expiry>.id.<identity>.<signature>` | the host, the expiry, the verified email and name | 24 hours at most, never beyond the portal session it came from | remove the person from the site's people with access: refused on the very next request |
+| password access | `<expiry>.<access>.<signature>` | the host, the expiry, the access's identifier | 30 days at most, never beyond the access | remove the guest from the site: refused on the very next request |
 
 The owner's cookie is self-sufficient, nothing is kept server-side. A password
 access's names its identifier, which the gate looks up in the steward's
-projection on every request, and an identity's names an email, which the gate
-judges against the site's people with access in that projection on every
-request: that is what makes removal immediate rather than waiting for the
-cookie to lapse. The first two forms are the ones from before identities,
-unchanged, and the registry carried every password access over with its
-identifier: the cookies in circulation stay valid across the upgrade.
+projection on every request: that is what makes removal immediate rather than
+waiting for the cookie to lapse. A cookie of the form a company account once
+received, `<expiry>.id.<identity>.<signature>`, opens nothing any more: its
+holder meets the sign-in page.
 
 ## Public or restricted: the portal on and off
 
@@ -117,12 +95,10 @@ asks you to commit it. Until then `bin/deploy-caddy.sh`, `domain` and
 `remove` refuse to contradict the machine, and say so; `sitesolide lock`
 changes it through the same gatekeeper.
 
-General access is chosen by the owner, or by an Admin of the project:
-making a site public or giving it a code waits for their unlock, restricting
-it never does (see
-[docs/access.md](../docs/access.md#people-with-access-beside-tokens)).
-A token never switches it: a deployment leaves an existing site's general
-access as it finds it.
+General access is the owner's to choose: making a site public or giving it a
+code waits for the dashboard's unlock, restricting it never does (see
+[docs/access.md](../docs/access.md)). A token never switches it: a deployment
+leaves an existing site's general access as it finds it.
 
 **What the gatekeeper refuses**, with the reason shown on the page:
 
@@ -141,8 +117,8 @@ access as it finds it.
 **`portalExempt` is kept in reserve** when the portal comes off: without
 `portal` it does nothing and `validate()` accepts it, but a portal put back
 reopens the same paths, signed webhooks included, instead of closing them
-silently. **People with access are kept too**: a Public site keeps its list,
-and opens to the same people once it is Restricted again.
+silently. **Guests are kept too**: a Public site keeps its list, and opens to
+the same guests once it is Restricted again.
 
 A first deployment, which the machine knows nothing about, takes the
 repository's: `"portal": true` in the manifest, then `sitesolide deploy`,
@@ -150,12 +126,10 @@ which puts the portal in front before the files.
 
 ## Password access
 
-For someone the portal cannot identify with a company account: a person
-outside the company's domains (`OIDC_ALLOWED_DOMAINS`), or anyone when no
-provider is configured. They are given Can open on one site, and a password
-for it. The owner or an Admin of the project gives it, from the site's
-*Access* section or with `sitesolide share <email>`, with an expiry chosen
-then: 24 hours, 7 days (the default), 30 days or none. A token never gives it.
+For a guest: one site, and a password for it, nothing more. The owner gives
+it, from the site's *Access* section in the dashboard or with `sitesolide
+share <email>` over SSH, with an expiry chosen then: 24 hours, 7 days (the
+default), 30 days or none. A token never gives it.
 
 - **The steward draws the password at random**, four groups of four
   (`Xith-G4r4-nRJs-uDMV`, about 92 bits), and **shows it once**, to whoever gave
@@ -179,9 +153,8 @@ then: 24 hours, 7 days (the default), 30 days or none. A token never gives it.
 - **Expiry closes like removal**: the access is refused as soon as it passes,
   cookie in hand, and the cookie set does not outlive it anyway. Removed, it
   leaves the projection, and its cookie is refused at the next request.
-- **The site learns `X-Sitesolide-Role: visitor`, and no `X-Sitesolide-User`**:
-  the email was typed by whoever gave the access, never verified by a
-  provider, so it is no identity.
+- **The site learns `X-Sitesolide-Role: visitor`, and no email**: the address
+  was typed by whoever gave the access, never verified, so it is no identity.
 - **Changing the owner's password** also signs password access out, without
   invalidating the passwords.
 - **Given before the registry**, when the portal kept these passwords in its
@@ -196,8 +169,8 @@ The sign-in page leads with **Sign in with a passkey** once the owner has
 registered one on the dashboard (see
 [dashboard/README.md](../dashboard/README.md#passkeys)), the password
 following under *Were you given a password?* for guests. It lets the owner
-in as the owner, `admin`, as the owner's password did; password access and
-company accounts are untouched.
+in as the owner, `admin`, as the owner's password did; password access is
+untouched.
 
 **Once a passkey signs in here, the owner's portal password opens
 nothing**, as the dashboard's password stops opening the dashboard. It is
@@ -216,7 +189,7 @@ passkey, `sitesolide passkey remove <id>` over SSH, gives the password back
 at the next sign-in, the dashboard's with it.
 
 **The ceremony runs on the portal's own host**, `portal.<zone>`, never on
-the site, the road a company account takes: the site's
+the site: the site's
 `/_portal/passkey` sets a binding cookie and sends the browser to the
 portal with a sealed flow naming the site's host; the portal's page runs the
 ceremony against `POST /passkey/options` and `POST /passkey/verify`, then
@@ -240,320 +213,49 @@ host is one.
 The audit records `portal.signin` with `method: passkey`, and a refused
 ceremony as `portal.signin_failed`.
 
-## Signing in with a company account
-
-Optional, and off until the portal's environment says otherwise: without the
-settings below the portal behaves exactly as it always has, and its sign-in page
-shows no button.
-
-Any provider that speaks OpenID Connect works: the portal reads its discovery
-document, sends the person there with the authorization code flow, PKCE
-(S256), a `state` and a `nonce`, and verifies the ID token it gets back against
-the provider's published keys, with WebCrypto and no dependency: RS256, ES256
-and their siblings, never `none` nor an HMAC. The token must name the
-configured issuer and this client, must not have expired (one minute of
-tolerance for clocks), must carry the flow's nonce, and must carry an email the
-provider verified (`email_verified`, or `xms_edov` for Microsoft Entra, which
-sends no `email_verified`; `xms_edov` counts only when the issuer is
-`login.microsoftonline.com`, the one provider that defines it). The address must
-arrive exactly as an address: a space or a character outside ASCII anywhere in
-it refuses the sign-in rather than being cleaned into someone else's.
-
-### One callback, on the portal's own host
-
-A provider redirects only to addresses registered in advance, and a site cannot
-be registered each time one is protected. Every sign-in therefore goes through
-**one fixed callback, on `portal.<zone>`**:
-
-```
-shop.<zone>/_portal/oidc            binding cookie on the site, the flow sealed for that host
-  -> portal.<zone>/oidc/start       known already? straight back with a code; otherwise:
-  -> the provider                   the person signs in
-  -> portal.<zone>/oidc/callback    token verified, portal session, one-time code minted
-  -> shop.<zone>/_portal/oidc/complete?code=...   code redeemed for that host, cookie set
-```
-
-The portal remembers who signed in on its own host for 24 hours, so the next
-site skips the provider and only bounces through the portal. A site's cookie
-never outlives that session: a site reached in its last minute gets a minute,
-not a day, so an account closed at the provider is out of every site 24 hours
-after it last signed in there. Nothing relies on a cookie shared across the
-zone, which is why a site's own domain works the same way: see *A site's own
-domain* below.
-
-What each step defends, tested in `tests/sso.test.ts` against a provider the
-tests run themselves, through real HTTP:
-
-- **No code for a host this machine does not serve as a restricted site.** The
-  flow is sealed when it begins, with the host Caddy announced through
-  `X-Portal-Hote`: only a protected site's fragment relays `/_portal/*`, so only
-  a protected host can begin one, and an altered flow is refused before the
-  provider.
-- **Login CSRF.** The callback needs the transaction cookie set on the portal's
-  host when that browser left for the provider, named after its `state`: a
-  callback address sent to someone else finds nothing.
-- **Session fixation.** The code is bound to a binding cookie drawn on the site
-  when the flow began, which the flow and the code only carry as a hash: a link
-  carrying someone's code, opened in another browser, signs nobody in, and burns
-  the code.
-- **Replay.** A code lives sixty seconds, in the portal's memory only, under its
-  hash, and is gone at the first attempt to redeem it, right or wrong, on the
-  right host or not. The transaction cookie is erased by the callback. A flow
-  mints one code, ever: replaying `/oidc/start` with the same flow and a portal
-  session mints no second one, and one email holds ten codes in flight at most,
-  so one account cannot fill the ten thousand the portal keeps.
-- **Code interception.** The provider's authorization code is worth nothing
-  without the PKCE verifier, held in the transaction cookie of the browser that
-  started, and the client secret. A provider that names itself in the callback
-  (`iss`, RFC 9207) must name the configured one.
-- **Open redirect.** The return path is the one the sign-in page carried,
-  judged by the same rule as the password's: a path of the same host, never
-  `//elsewhere`.
-
-On the portal's own host Caddy does not overwrite `X-Portal-Hote`, so the
-visitor chooses it there: `/oidc/start`, `/oidc/callback` and `/oidc/signout`
-never read it, the last one taking its site from the sealed ticket. The site's
-routes, `/_portal/oidc` and `/_portal/oidc/complete`, are only reachable
-through a protected site, which sets it.
-
-### The settings
-
-In `portal.env`, from the dashboard: the `portal` site's *Secrets*, then
-*Restart service*. The steward accepts these names in that file and still
-refuses any other, `DATA_DIR` or `PORT` for instance, which would change how the
-portal runs.
-
-| Variable | What it holds |
-|---|---|
-| `OIDC_ISSUER` | the provider's issuer, exactly as its discovery document writes it |
-| `OIDC_CLIENT_ID` | the client the provider registered for this portal |
-| `OIDC_CLIENT_SECRET` | its secret; read back only once changes are unlocked, like any secret |
-| `OIDC_ALLOWED_DOMAINS` | optional, comma separated: only emails at these domains may sign in at all, and with Google only accounts of their Workspace (`hd`), see below. They are the company's domains of the access rules: a person at one of them may be given any role, anyone else password access. Empty, anyone the provider vouches for may sign in, and still only opens the sites they have access to |
-| `OIDC_ADMIN_EMAILS` | optional, comma separated: always let in, on every restricted site, as `admin`, and shown as such in the dashboard's *People* |
-| `OIDC_PROVIDER_NAME` | optional, the button's label after "Sign in with". Defaults to Google or Microsoft from their issuer, "your company account" otherwise |
-
-The callback to register at the provider is the portal's own address followed
-by `/oidc/callback`: **`https://portal.<zone>/oidc/callback`**, with your zone in
-place of `<zone>`. The portal learns its address from `PUBLIC_URL`, which its
-manifest writes as `https://{slug}.{zone}`.
-
-Half configured, the portal offers nothing and prints at startup what is
-missing, never a value: `journalctl -u portal`. Removing the settings, then
-restarting the portal, closes every identity session at the next request, an
-admin's included.
-
-### Google Workspace
-
-1. In the Google Cloud console of your Workspace organization, create or pick a
-   project, then *APIs & Services*, *OAuth consent screen*: user type
-   **Internal**, so that only your organization's accounts can sign in. The
-   default scopes are enough: `openid`, `email`, `profile`.
-2. *Credentials*, *Create credentials*, *OAuth client ID*, application type
-   **Web application**. Under *Authorized redirect URIs*, add exactly
-   `https://portal.<zone>/oidc/callback`. Create, and copy the client ID and
-   the client secret.
-3. In the dashboard, `portal` site, *Secrets*, `portal.env`:
-   `OIDC_ISSUER` = `https://accounts.google.com`, `OIDC_CLIENT_ID`,
-   `OIDC_CLIENT_SECRET`, `OIDC_ALLOWED_DOMAINS` = your domain,
-   `OIDC_ADMIN_EMAILS` = your own address. *Restart service*.
-
-**Why Internal, and what `OIDC_ALLOWED_DOMAINS` adds with Google.** Google says
-`email_verified` of any account whose address was proved once, a personal
-Google account opened with a work address included, and that account outlives
-the mailbox: someone who left the company keeps a Google account that still
-carries `alice@acme.com`, verified. Google speaks for a company address only
-when the account belongs to the company's Workspace, which the token names in
-its `hd` claim. So, with Google:
-
-- with `OIDC_ALLOWED_DOMAINS` set, the portal also requires `hd` to be one of
-  those domains, which turns such a personal account away; list every domain of
-  your Workspace there, the primary one included. The admin emails are let in
-  by name, `hd` or not;
-- without it, `hd` is not checked, by design: anyone Google vouches for may sign
-  in, and only opens the sites they have access to by address or domain, which
-  such a personal account would match. Keep the consent screen **Internal**
-  then: only your Workspace's accounts reach the portal at all.
-
-Other providers vouch for their own directory and send no `hd`: nothing more
-is checked for them.
-
-### Microsoft Entra ID
-
-1. Entra admin center, *Identity*, *Applications*, *App registrations*, *New
-   registration*. Supported account types: **Accounts in this organizational
-   directory only** (single tenant). Redirect URI: platform **Web**,
-   `https://portal.<zone>/oidc/callback`. Register.
-2. On the overview, copy the *Application (client) ID* and the *Directory
-   (tenant) ID*.
-3. *Certificates & secrets*, *New client secret*: copy its **Value**, not its
-   ID. It expires, 24 months at most: note the date, and replace it in
-   `portal.env` before then, or nobody signs in with Microsoft that day.
-4. *Token configuration*, *Add optional claim*, token type **ID**: tick
-   `email` and `xms_edov`, and accept the Microsoft Graph permission it asks
-   for. Without `xms_edov` the portal cannot tell a verified address from one
-   the account's holder typed, and refuses every sign-in.
-5. In `portal.env`: `OIDC_ISSUER` =
-   `https://login.microsoftonline.com/<tenant ID>/v2.0`, `OIDC_CLIENT_ID`,
-   `OIDC_CLIENT_SECRET`, `OIDC_ALLOWED_DOMAINS`, `OIDC_ADMIN_EMAILS`. *Restart
-   service*. The multi-tenant `common` issuer is refused: its discovery document
-   names a template, not an issuer.
-
-An account without an email address in Entra cannot sign in: access is given
-by email.
-
-### Okta, Keycloak
-
-The same three values. Okta: a *Web Application* integration with the sign-in
-redirect URI above, issuer `https://<your org>.okta.com` or the authorization
-server's, `https://<your org>.okta.com/oauth2/default`. Keycloak: a confidential
-client with the standard flow, the redirect URI above, issuer
-`https://<host>/realms/<realm>`; `email_verified` follows the user's *Email
-verified* flag.
-
-### The portal needs the network
-
-A sign-in calls the provider: its discovery document, its keys, its token
-endpoint. The portal's manifest therefore declares `"network": "outbound"`,
-which lifts the loopback-only confinement of its unit, everything else holding.
-That is the price of the feature, and it is paid whether or not a provider is
-configured.
-
-## Signing in to the dashboard
-
-People with a role above Can open on a project, Viewer, Developer or Admin, or
-the right to create projects, sign in to the dashboard with the same provider,
-through this same portal ([dashboard/README.md](../dashboard/README.md#access)).
-Someone with Can open alone, by name or through a domain, does not: the
-steward refuses them with `can-open-only`, which the dashboard says as "This
-account can open some sites, but the dashboard starts at Viewer. Ask an Admin
-of the project if you need more." Someone on no list is refused
-with `no-role`: "This account has no access to any project here. Ask the
-owner, or an Admin of the project, to add you." The dashboard is never
-restricted and has no network: it cannot run a sign-in, and must not be believed when it
-names someone. So it asks the portal over the loopback, and the portal runs
-the flow it runs for a protected site, with the dashboard's host in the
-site's place:
-
-```
-dashboard.<zone>/api/sso/begin       binding cookie on the dashboard
-  -> POST /admin/dashboard/flow      loopback: a flow sealed for the dashboard's host, around that binding
-  -> portal.<zone>/oidc/start        as for a site; the portal's session spares the provider if younger than 12 hours
-  -> the provider, portal.<zone>/oidc/callback
-  -> dashboard.<zone>/api/sso/complete?code=...
-  -> POST /admin/dashboard/redeem    loopback: the code and the binding, for a signed assertion
-```
-
-**A code says what it was minted for.** A dashboard's flow mints a code for
-the dashboard, which `/admin/dashboard/redeem` alone redeems, for an
-assertion; a site's mints a code for that site, which its
-`/_portal/oidc/complete` alone redeems, for a cookie. Either carried to the
-other is refused, and burnt (`wrong-audience`). The binding, the transaction
-cookie, a code living a minute and burnt at the first attempt, one code per
-flow: everything above holds for the dashboard's too.
-
-**The assertion** (src/assertion.ts) is a compact JWT signed with Ed25519: the
-verified email and name, `auth_time`, when the person last signed in at the
-provider, `aud` the dashboard, five minutes of life, a nonce. The dashboard
-hands it to the steward, which checks it with a public key it keeps itself
-and opens the person's session, reading their roles in its registry; the
-portal judges the allowed domains once more before it signs.
-
-**The key** is the steward's: it draws the pair as root, keeps the public
-half, and lays the private half in `/etc/sitesolide-portal/assertion.key`,
-`root:site-portal 0640`, which this service reads at every redemption: a key
-laid or replaced needs no restart. Not in `portal.env`, which the dashboard's
-Secrets section reads after an unlock: a compromised dashboard would read the
-key there and forge assertions. Missing, a redemption answers `no-key` and
-nobody signs in to the dashboard; the sites are untouched.
-
-**A forced sign-in, for a person's unlock.** Someone signed in to the
-dashboard reads or writes their projects' secrets, makes a site public,
-restores its data, gives someone a role above Can open, or gives password
-access only unlocked, and they unlock by signing in again
-([dashboard/README.md](../dashboard/README.md#a-persons-unlock)). The
-dashboard then asks for a flow with `reauth`: the portal's session spares
-nothing, the provider is asked for `max_age=0`, and for `prompt=login` unless
-it is Google, which documents no such prompt. By the OpenID Connect
-specification a provider asked for `max_age` says in the ID token's
-`auth_time` when the person signed in; the callback reads it, and mints a
-code only when that time falls within the flow and five minutes
-(`freshReauth` in src/oidc.ts). An older sign-in coming back, a provider that
-ignored the request, or no `auth_time` at all, refuses it, recorded as
-`stale-authentication`. The assertion then says `reauth`, which the steward
-demands before it unlocks; a sign-in's never does.
-
-**The dashboard's address follows from this one's.** The manifest names the
-portal `https://{slug}.{zone}`; the dashboard is `https://dashboard.{zone}`.
-A portal whose address does not start with `portal.` offers no dashboard
-sign-in, and says so at startup. `DASHBOARD_URL` names it otherwise; it is not
-one of the names the steward accepts in `portal.env`, so a dashboard cannot
-send codes elsewhere by setting it. At startup the portal prints `dashboard
-sign-in offered, back to https://dashboard.<zone>`.
-
 ## Who may open a site
 
 The steward decides, the portal reads. A restricted site opens to:
 
-| Who | Signs in with | The role the site learns |
+| Who | Signs in with | `X-Sitesolide-Role` |
 |---|---|---|
-| the owner | the owner's password, or a passkey | `admin` |
-| an admin email, `OIDC_ADMIN_EMAILS` | their company account | `admin`, on every site |
-| a person among the site's people with access | their company account | their entry's role: `visitor` (Can open), `viewer`, `developer` or `admin` |
-| everyone at a domain among them, `@acme.com` | their company account at that domain, subdomains not included | `visitor`, or their own entry's role when it is higher |
-| a person with password access | the password drawn for them | `visitor` |
+| the owner | a passkey, or the owner's password | `admin`, on every site |
+| a guest of the site | the password drawn for them | `visitor` |
 
-**Every role opens the site.** Viewer, Developer and Admin are the project's
-roles in the dashboard, each including the ones below it, and Can open is
-the lowest rung: someone given Developer on a project opens its restricted site
-as someone given Can open does. [docs/access.md](../docs/access.md#people-with-access-beside-tokens)
-says what each role does in the dashboard. The portal only asks "may this
-person open the site", and passes the role on.
-
-**Public is not a role, nor an entry.** It is the portal turned off, general
-access *Public*, from the site's *Access* section through the steward and the
+**Public is not an entry.** It is the portal turned off, general access
+*Public*, from the site's *Access* section through the steward and the
 gatekeeper, see above.
 
-**Who may change it.** Every way ends at the steward, which judges each change
+**Who may change it.** The owner alone, from the dashboard's *Access* section
+or with `sitesolide share` in the project's folder, over SSH, root asking the
+steward's owner socket. Every way ends at the steward, which judges each change
 by one set of rules (`dashboard/src/access/rules.ts`), writes it, and records
-it in its journal, `access.add`, `access.change` or `access.remove`:
-
-| Who | How | What they may do |
-|---|---|---|
-| the owner | the dashboard's *Access* section; `sitesolide share` in the project's folder, over SSH, root asking the steward's owner socket | anything, but a domain only among `OIDC_ALLOWED_DOMAINS` when that list is set; recorded as `owner` |
-| an Admin of the project | its *Access* section, through their session | their project only, a role at most their own; a domain only among `OIDC_ALLOWED_DOMAINS` when that list is set, any domain under their unlock while it is empty; recorded under their email |
-| a token | `sitesolide share` with a token, or `/api/v1/projects/<slug>/access` | Can open alone, on the projects it reaches, and for a person's own token only where that person is Admin now; people who sign in with a company account, a domain only among `OIDC_ALLOWED_DOMAINS`, none when that list is empty; never password access; removes Can open entries alone; recorded as `token:<id>` |
-
-A domain is Can open only, and only once a provider is configured. A person
-outside the company's domains is Can open only, with password access. Giving
-someone a role above Can open, or password access, asks for the unlock of
-whoever gives it in the dashboard, and so does a whole domain while
-`OIDC_ALLOWED_DOMAINS` is empty; Can open for a company account or one of the
-listed domains, removing someone, lowering them and restricting a site never
-wait.
-[docs/access.md](../docs/access.md#giving-access-to-what-you-deployed) has the
-holder's side.
+it in its journal, `access.add` or `access.remove`, under `owner`. A token
+never gives anyone access. [docs/access.md](../docs/access.md) has the
+owner's side.
 
 **The projection.** After every change the steward writes
 `/etc/sitesolide-portal/access.json`, `root:site-portal 0640`, beside the
-assertion key and for the same reason: root writes it, the portal's account
-reads it, the dashboard's cannot. Per host, `<slug>.<zone>`: its people and
-their roles, its domains, and its password access, each an identifier, who it
-was given to, a SHA-256 and an expiry, never a password. The steward writes it
-before its own registry, so that a change the portal cannot be told of is no
-change, and writes it again from the registry at every start.
+passkeys' projection: root writes it, the portal's account reads it, the
+dashboard's cannot. Per host, `<slug>.<zone>`: its password accesses, each an
+identifier, who it was given to, a SHA-256 and an expiry, never a password.
+The steward writes it before its own registry, so that a change the portal
+cannot be told of is no change, and writes it again from the registry at
+every start. A projection written while people signed in with a company
+account also carries `people` and `domains`: they are ignored, and the
+steward's next write leaves them out.
 
 **Read again when it changes.** The portal keeps no list of its own. Before
 every decision it looks at the file's inode, size and modification time, one
 `stat` and nothing more when it has not moved; a file that moved is read whole
-and judged (`readProjection`, in `src/access.ts`). Someone removed is refused,
-and someone lowered seen in their new role, at their next request, cookie in
-hand. Caddy is never touched, and nothing restarts.
+and judged (`readProjection`, in `src/access.ts`). A guest removed is refused
+at their next request, cookie in hand. Caddy is never touched, and nothing
+restarts.
 
 **A projection that does not read opens nothing from it**: one that is not
 JSON or not of the expected shape, a link, a folder, more than 8 MiB. The
-owner's password and the admin emails, which need no list, still open every
-site. The journal says so once (`journalctl -u portal`), and the file is read
-again at its next change.
+owner, who needs no list, still opens every site. The journal says so once
+(`journalctl -u portal`), and the file is read again at its next change.
 
 **Before the steward writes it**, on a machine being set up, a missing
 projection opens nothing either. `GET /admin/access` says what the portal
@@ -562,37 +264,36 @@ warns while the portal cannot read it. The tables `sharing` and `invites`,
 where a portal up to 0.3 kept who could open a site, may still sit in
 `data/portal.db`: nothing reads them.
 
-The rules of an email and a domain live in `src/sharing.ts`, pure, which the
-dashboard and the steward borrow, the page included: the page refuses an
-address with the exact rule the portal applies. An address is compared
-exactly, in lowercase, and narrower than the RFC allows: no quoted local part,
-no space, no accent, every one of them a way to make two strings look like the
-same person. The ladder of roles and the projection's format live in
-`src/access.ts`, borrowed the same way, so that the steward writes exactly
-what the portal reads.
+The rule of an email lives in `src/email.ts`, pure, which the dashboard and
+the steward borrow, the page included: the page refuses an address with the
+exact rule the portal applies. An address is compared exactly, in lowercase,
+and narrower than the RFC allows: no quoted local part, no space, no accent,
+every one of them a way to make two strings look like the same person. The
+projection's format lives in `src/access.ts`, borrowed the same way, so that
+the steward writes exactly what the portal reads.
 
 ## Who came in: the identity headers
 
-On a `200`, the portal tells Caddy who the visitor is, and the site's block
-copies it onto the request the site receives:
+On a `200`, the portal tells Caddy who came in, and the site's block copies
+it onto the request the site receives:
 
 | Header | Value |
 |---|---|
-| `X-Sitesolide-User` | the verified email, lowercase. Absent for the owner's password and for password access |
-| `X-Sitesolide-User-Name` | the display name the provider gave, **percent-encoded UTF-8**: `decodeURIComponent` it. Absent when unknown |
-| `X-Sitesolide-Role` | `admin` for the owner's password and an admin email; for a company account, the role of their entry, the higher of their own and their domain's: `visitor` (Can open), `viewer`, `developer` or `admin`; `visitor` for password access |
+| `X-Sitesolide-Role` | `admin` for the owner, `visitor` for a guest with password access |
 
-**It changed with the access registry.** Before it, the role read `member` for
-anyone the site's list let in and `guest` for someone with a password. An app
-that compared it with either must be updated: `guest` is now `visitor` with no
-`X-Sitesolide-User`, and `member` is now the person's own role. Password access
-carries no `X-Sitesolide-User` because its email was typed by whoever gave the
-access, never verified by a provider.
+**It changed twice.** Before the access registry the role read `member` or
+`guest`; while people signed in with a company account, it could also read
+`viewer` or `developer`, and `X-Sitesolide-User` and `X-Sitesolide-User-Name`
+carried their verified email and name. The portal sets neither of those two
+any more. An app that compared the role with anything but `admin` and
+`visitor`, or read either header, must be updated.
 
 **The visitor cannot forge them.** The block takes every `X-Sitesolide-*` header
 the visitor sent off every request, the service's paths, the files and the
 exempted paths alike, before the portal is asked, then copies the portal's on.
-Caddy sorts `request_header` after `forward_auth` on its own, which would take
+`X-Sitesolide-User` and `X-Sitesolide-User-Name` are still taken off, so
+that no visitor sends them to a site that once read them. Caddy
+sorts `request_header` after `forward_auth` on its own, which would take
 off the portal's headers instead: the stanza holds both in a `route`, the only
 directive that keeps the written order. Measured in a real Caddy by
 `bin/tests/cli-portal-identity-caddy.test.ts`, which sends
@@ -612,25 +313,22 @@ same two `request_header` lines, at the block's level, where they need no
 and never a stranger's `X-Sitesolide-Role: admin`.
 
 **Trust them only once the site's block carries them.** A block deployed before
-this release, protected or not, takes nothing off, and its app receives
+identity headers existed, protected or not, takes nothing off, and its app receives
 whatever the visitor sends. A protected one keeps working with this portal: the
 dashboard says so for that site. The next `sitesolide deploy` of the site, or
 its general access switched from the dashboard, upgrades the block. An
 exempted path never carries them: it does not go through the portal.
 
-Reading them in a Bun service:
+Reading it in a Bun service:
 
 ```ts
 Bun.serve({
   port: Number(process.env.PORT),
   hostname: "127.0.0.1",
   fetch(req) {
-    const email = req.headers.get("x-sitesolide-user"); // verified, lowercase, or null
-    const encoded = req.headers.get("x-sitesolide-user-name");
-    const name = encoded === null ? null : decodeURIComponent(encoded);
-    const role = req.headers.get("x-sitesolide-role"); // "admin", "developer", "viewer" or "visitor"
-    if (role === "visitor" && email === null) return new Response("Read only with password access", { status: 403 });
-    return new Response(`Hello ${name ?? email ?? "owner"}`);
+    const role = req.headers.get("x-sitesolide-role"); // "admin" for the owner, "visitor" for a guest
+    if (role !== "admin") return new Response("Read only for guests", { status: 403 });
+    return new Response("Hello owner");
   },
 });
 ```
@@ -643,10 +341,7 @@ steward's relay:
 | Route | What it does |
 |---|---|
 | `GET /admin/access` | what the portal decides who may open a site from: `{ "reading", "writtenAt" }`, `reading` being `steward` (the projection) or `unreadable` (a projection that does not read, or none), and `writtenAt` the projection's date when it reads one, null otherwise. The steward asks it through its relay, and says it in every access answer |
-| `GET /admin/sharing` | how people sign in: configured or not, the provider's name, the portal's address, the admin emails and allowed domains, never the client secret nor its identifier |
 | `GET /admin/audit?limit=&before=` | the audit, most recent first, by pages |
-| `POST /admin/dashboard/flow` | `{ binding, returnTo, chooseAccount, reauth }`: a flow sealed for the dashboard's host, a forced sign-in with `reauth`, and the address to send the browser to; `not-offered` without a provider |
-| `POST /admin/dashboard/redeem` | `{ code, binding }`: the code burnt, and, minted for the dashboard on this binding, an assertion signed for it, the path to come back to, and `reauth` |
 
 They have no secret, and that is deliberate: the only accounts that can reach
 that port are root, Caddy and `site-dashboard`, through the exception
@@ -654,18 +349,20 @@ that port are root, Caddy and `site-dashboard`, through the exception
 protect nothing more. The steward, which keeps no network, comes as root
 through `sitesolide-portal-relay`, a socket only root opens, behind which
 systemd's proxy forwards to this port and nowhere else; it asks
-`GET /admin/access` alone now. None of these routes changes who may open a
+`GET /admin/access` alone. None of these routes changes who may open a
 site: the steward writes that, in the projection, and nothing here can.
 
 Caddy never relays them: a protected site forwards to the portal only
 `/_portal/*` and the `forward_auth` call to `/verifier`, and the portal's own
-host only `/sante`, `/oidc/start`, `/oidc/callback` and `/oidc/signout`.
+host only `/sante` and the passkey's `/passkey`, `/passkey/options` and
+`/passkey/verify`.
 `bin/tests/cli-portal.test.ts` checks that no fragment aims at anything else.
 The portal's own block refuses an ambiguous path with 400, as a protected
-block does: Caddy compared `/admin/sharing/..%2f..%2fsante` cleaned, as
-`/sante`, and relayed it raw, which Bun routed to the admin API. As one more
+block does: Caddy compares a path such as `/admin/access/..%2f..%2fsante`
+cleaned, as `/sante`, and would relay it raw, which Bun routes to the admin
+API. As one more
 net, any request carrying `X-Forwarded-For`, which Caddy puts on what it
-relays, is refused.
+relays, or `X-Portal-Hote`, is refused.
 
 To read them by hand on the machine:
 `sudo curl http://127.0.0.1:3026/admin/access`.
@@ -678,22 +375,21 @@ of the repository shares (`id`, `at` in ISO 8601 UTC, `actor`, `action`,
 
 | Action | Actor | Detail |
 |---|---|---|
-| `portal.signin` | `owner`, the email, or for password access the email it was given to, `password:<id>` for a name carried over from before the registry | `method`: `password`, `passkey`, `password-access` or `oidc`, and the `role` for an identity; `name` for a password access given under a name; `count` when repeated |
-| `portal.signin_failed` | `anonymous`, or the email when the provider named one | `method`, and for a provider the `reason`: `bad-signature`, `wrong-audience`, `expired`, `wrong-nonce`, `unverified-email`, `unusable-email`, `domain-not-allowed`, `unmanaged-account`, `not-shared`, `wrong-browser`, `expired-session`...; a dashboard's sign-in refused here names the dashboard's host, and a code carried to the wrong side reads `wrong-audience` too |
+| `portal.signin` | `owner`, or for password access the email it was given to, `password:<id>` for a name carried over from before the registry | `method`: `password`, `passkey` or `password-access`; `name` for a password access given under a name; `count` when repeated |
+| `portal.signin_failed` | `anonymous` | `method`, and for a passkey the `reason`, `removed-passkey` for instance |
 | `portal.signout` | who the cookie names, as for a sign-in | none, or `count` when repeated |
 | `sharing.update`, `guest.create`, `guest.revoke` | in rows written before the registry alone, as they were written | who could open a site changed, a password access given or removed; the portal writes none any more |
 
-Rows from before the registry also name a password access's sign-in
-`guest:<access>`, its `method` `guest`, and read as they were written. A change of who may open
-a site is the steward's to record now, in its journal, under the owner, an
-Admin's email or `token:<id>`: `access.add`, `access.change`, `access.remove`,
-and `access.migrate` once, actor `system`, on a machine whose registry was
-made in 0.4.0 from the stores before it. The dashboard's *Activity* reads both.
+Older rows read as they were written: a password access's sign-in as
+`guest:<access>` with `method` `guest`, a company account's under its email
+with `method` `oidc`. A change of who may open a site is the steward's to
+record, in its journal: `access.add` and `access.remove` under `owner`. The
+dashboard's *Activity* reads both.
 
 Never a password, a code or a token. What a stranger can cause is bounded where
 it happens: failed password attempts by the rate limiting, a row per attempt
-allowed; failed sign-ins with the provider, thirty per site and per minute, the
-rest of that minute unrecorded; a code that was never minted, and a sign-out by
+allowed; failed passkey sign-ins, thirty a minute, the rest of that minute
+unrecorded; a code that was never minted, and a sign-out by
 someone who was not in, never. What a holder of a cookie or a password access
 can repeat as fast as the network allows, a sign-in or a sign-out, makes one
 row per actor, site and minute: the row keeps the time of the first, and
@@ -738,24 +434,18 @@ The portal's own host shows the same card at its root, `public/index.html`,
 committed and written from the template by `bun run home-page`; a test fails
 when the two part.
 
-With a provider configured, the sign-in page offers *Sign in with ...* above the
-password: a link, not a form, since the flow leaves for the portal's own host
-and the CSP's `form-action 'self'` would refuse a form's redirect there. To
-someone signed in who has no access to the site, it says so, with *Use another
-account*, which asks the provider to choose.
-
 Once a passkey is offered (see [The owner's passkey](#the-owners-passkey)),
 the owner's password opens nothing here, and the page says so by its order:
 *Sign in with a passkey* is the primary button, with a key drawn inline;
-*Sign in with ...* follows in a quiet button when a provider is configured;
 then, below a divider, the password under *Were you given a password?*,
 beside a quiet *Enter*, for guests. The passkey's button is a link to the
-site's `/_portal/passkey`, for the same reason as the provider's: it
-redirects to the portal's own host, where the ceremony runs. The password
+site's `/_portal/passkey`, not a form: it redirects to the portal's own
+host, where the ceremony runs, and the CSP's `form-action 'self'` would refuse
+a form's redirect there. The password
 is not folded behind a disclosure, since a guest who finds no field reads
 the page as closed to them, and it is not focused, so as not to invite the
 owner's. A refused password answers under its field, focused again; every
-other message, the passkey's or the account's, leads the card. Without a
+other message, the passkey's, leads the card. Without a
 passkey offered the page is the one above, unchanged.
 
 ## What surprises people
@@ -791,19 +481,18 @@ passkey offered the page is the one above, unchanged.
   [the manifest's `headers`](../docs/manifest.md#headers).
 - **`X-Portal-Hote` comes from Caddy, never from the visitor.** `header_up`
   overwrites it, and it is the host the cookie signs. On the portal's own host,
-  where Caddy does not set it, only `/sante` and the provider's two steps reach
+  where Caddy does not set it, only `/sante` and the passkey's routes reach
   the service, which never read it: that is the manifest's `routes` allow list.
-- **A site's own domain is judged on the site's people.** Its block announces
+- **A site's own domain is judged on the site's guests.** Its block announces
   `X-Portal-Hote: <domain> <slug>.<zone>`: the host the browser is on, which
   signs the cookie, checks the Origin and is where a sign-in comes back to,
   then the site's address, under which the steward's projection files its
-  people and password access. Both in the one header every protected block
+  password access. Both in the one header every protected block
   overwrites: a second header would pass through a block deployed before it
   existed, untouched, and a visitor allowed on one site would have the portal
   judge them against it on any other. A cookie is the domain's alone, so the
-  preview and the domain each ask once, the portal's session sparing the
-  provider the second time; failed passwords count per site, the two
-  addresses together. `readAnnounced` in `src/gate.ts`, `announcedFor` in
+  preview and the domain each ask once; failed passwords count per site, the
+  two addresses together. `readAnnounced` in `src/gate.ts`, `announcedFor` in
   `bin/cli/portal.ts`, measured in `bin/tests/cli-domain-caddy.test.ts`.
 - **A protected site trusts Caddy**, and that trust only holds because of the
   loopback rule, `bin/deploy-loopback.sh`: without it, any service on the machine
@@ -814,7 +503,7 @@ passkey offered the page is the one above, unchanged.
   wildcard block until the fragment arrives. And it refuses to send anything
   while the portal does not answer with a hash in place.
 - **An exempted path is public.** It does not go through the portal, and the
-  site answers for it alone, a signed webhook, typically. It carries no identity.
+  site answers for it alone, a signed webhook, typically. It carries no role.
 - **An ambiguous path is refused with 400.** Caddy decodes `%2f` and cleans `..`
   before comparing against the exemptions, while the service routes on the raw
   path: `/api/x%2f..%2f..%2fhook/y` looked like an exemption to Caddy and reached
@@ -838,74 +527,42 @@ passkey offered the page is the one above, unchanged.
 ## What the portal does not protect
 
 - A password is typed on every site: an XSS flaw in one of them, or a hosted
-  site taken over serving a copy of the sign-in page, could capture it.
-  Signing in with the provider or a passkey types nothing on the site, and
-  once the owner holds a passkey the owner's password opens nothing (see
+  site taken over serving a copy of the sign-in page, could capture it. A
+  passkey types nothing on the site, and once the owner holds a passkey the
+  owner's password opens nothing (see
   [The owner's passkey](#the-owners-passkey)); a password access, one site's
   alone, stays exposed that way.
 - A compromised portal opens every restricted site; that is the price of one
   shared sign-in. It gives neither their data, each service staying confined to
-  its own directory, nor the customer sites, nor the certificates. Since the
-  provider, the portal can also reach the network. Since people sign in to the
-  dashboard through it, it can also sign an assertion for anyone, and act in
-  the dashboard as anyone who signs in there, within their roles. It cannot
+  its own directory, nor the customer sites, nor the certificates. It cannot
   change the registry, which is root's, nor the projection, which root writes
-  and it only reads; and it records no change of access any more, so it can
-  write none under anyone's name.
-- A compromised dashboard cannot give anyone a role above Can open, password
-  access, nor the right to create projects, without the owner's live unlock or
-  a person's forced sign-in, which it does not hold. It can give Can open to
-  people who sign in with a company account and to the company's listed
-  domains, under the owner's name or that of a person whose session passes
-  through it, as it could open a site to them before the registry: only
-  through the steward, which judges the change by its rules and records it.
-  It can take off anyone the owner, or that person, may take off, and restrict their
-  sites, since closing never waits. It never sees a password hash nor an access's
+  and it only reads; and it records no change of access, so it can write none
+  under anyone's name.
+- A compromised dashboard cannot give password access without the owner's live
+  unlock, which it does not hold. It can take a guest off and restrict a site,
+  since closing never waits, only through the steward, which judges the change
+  by its rules and records it. It never sees a password hash nor an access's
   identifier, the steward handing it views alone; a password it gives, it sees
-  once, as the person at the page would. During an unlock it can also make a site Public, retyping the slug
-  only guarding against a misclick; and it can rewrite the provider's settings
-  in `portal.env`, pointing the portal at a provider it controls and naming
-  itself admin, which opens every restricted site at the next restart.
-  Changing the owner's password also requires the dashboard's own, which the
-  steward checks, but which compromised code would capture as it is typed. It
-  never touches Caddy itself: the gatekeeper refuses everything its rules
-  refuse, and restores.
-- A compromised dashboard can also have the portal seal a dashboard flow of
-  its own making, over the loopback, which is how every dashboard sign-in
-  begins, and send a person's browser to it from a link anywhere. Someone
-  with a role above Can open whose portal session is younger than 12 hours
-  comes back to it signed in, asked nothing, and the dashboard holds their
-  session, within their roles. Their unlock still takes a forced sign-in at
-  the provider, which they see. The portal cannot tell such a flow from one
-  the person started.
-- A stolen token can give Can open on the projects it reaches, and for a
-  person's own token only where that person is Admin, to people who sign in
-  with a company account and to the company's domains, never password access
-  to an outsider, never a role above Can open, never Public; and it can remove
-  Can open entries. Its refused changes count against its 60 refusals an
-  hour, and what it lets in stops once the access log is half full, so that
-  it never fills the log the people need. Every change is in the steward's
-  journal under `token:<id>`; revoking the token on the *Tokens* page stops it, and the owner
-  or an Admin removes what it gave, from the dashboard or with `sitesolide
-  share --remove`.
-- An account closed at the provider keeps its site cookies until they lapse, 24
-  hours at most after it last signed in at the provider: a site's cookie never
-  outlives the portal session it came from. Removing the person from a site's
-  people with access, or from the admin emails, closes it at once.
+  once, as the owner at the page would. During an unlock it can also make a
+  site Public, retyping the slug only guarding against a misclick. Changing
+  the owner's password also requires the dashboard's own, which the steward
+  checks, but which compromised code would capture as it is typed. It never
+  touches Caddy itself: the gatekeeper refuses everything its rules refuse,
+  and restores.
+- A stolen token gives nobody access: no route takes a token to change who may
+  open a site. Revoking it on the dashboard's *Tokens* page stops whatever else
+  it carries.
 - Signing out of one site does not sign out of the others: each keeps its own
-  cookie until it lapses. It ends the portal's session, so no new site opens
-  without the provider, which then asks which account.
+  cookie until it lapses.
 - A site's own JavaScript reads none of the cookies, all `HttpOnly`, but its
   server receives them on every request, like any cookie of its host: a
   compromised site can replay its own visitors' cookies on itself, nowhere else.
-- Rate limiting is per site and in memory, and forgets a site's failures after
-  a quiet day: a stranger can block new password sign-ins to one site for an
-  hour, cookies already held keep working, and other
-  sites are untouched. Filling the handoff codes in flight, ten thousand, takes a
-  thousand accounts the provider accepts, ten codes each, every code a minute's
-  worth: new sign-ins wait that minute, nothing opens. With
-  `OIDC_ALLOWED_DOMAINS` empty and a provider open to anyone, those accounts
-  are anyone's.
+- Rate limiting is in memory, per site and per client within it, and forgets a
+  site's failures after a quiet day: whoever sends wrong passwords to one site
+  makes their own address wait, up to an hour, and nobody else; cookies
+  already held keep working. Filling the passkey's handoff codes in flight,
+  ten thousand, makes new passkey sign-ins wait for codes to lapse, a minute
+  each; nothing opens.
 
 ## Password
 
@@ -923,9 +580,11 @@ and nothing, *Change password* included, touches it until then.
 drawn and shown once, or chosen, sixteen characters minimum, then *Restart
 service* so the portal re-reads its environment. The old hash is not kept and
 does not come back: it may be the one that leaked. `portal.env` carries that
-hash and the provider's settings, and the steward refuses any other variable in
-it. Changing the password signs everyone out, password access and company
-accounts included.
+hash alone, and the steward refuses any other variable in it, but for the
+leftover `OIDC_*` settings of a portal that once signed people in with a
+company account: tolerated, ignored, and removable from the same page (see
+[docs/upgrading.md](../docs/upgrading.md)). Changing the password signs
+everyone out, password access included.
 
 Locally, the hash goes on the command line rather than through `bun --env-file`,
 which expands the `$` of an argon2id hash:
@@ -942,38 +601,28 @@ bun test ../bin/tests/cli-portal-caddy.test.ts           # the generated fragmen
 bun test ../bin/tests/cli-portal-identity-caddy.test.ts  # the identity headers, in a real Caddy
 ```
 
-`tests/sso.test.ts` runs this server and an identity provider of the tests'
-making, `tests/provider.ts`, through real HTTP: the whole flow, the second site
-that skips the provider, a dashboard's sign-in redeemed for an assertion the
-steward's key verifies, a dashboard's code refused on a site, a forced sign-in
-that skips the portal's session, asks the provider for `prompt=login` and
-`max_age=0` and signs an assertion saying `reauth`, one refused when the
-provider answers with an older `auth_time` or none, and every refusal, a token signed by another key, for
-another client, expired, with another nonce, an unverified email, a disallowed
-domain, a callback or a code opened in another browser, a code replayed or
-carried to another host, a flow altered on the way or replayed for a second
-code, more codes in flight than one email may hold; then a site cookie capped by
-a session about to expire, a sign-out that ends the portal's session and
-makes the next sign-in ask which account, a sign-out link that ends its own
-person's session and never another's, and no ticket for whoever posts a
-sign-out without being in.
+`tests/passkey-signin.test.ts` runs the owner's passkey sign-in through its
+routes: the owner let in on one host alone, a site on its own domain taking the
+same road, the code redeemed once by the browser that began on the host it was
+minted for, and every refusal, an assertion made on another origin, another
+Origin, an unknown passkey, a user not verified, a spent challenge, a forged
+flow. `tests/handoff.test.ts` holds the one-time codes to the same rules.
 
 `tests/routes.test.ts` and `tests/gate.test.ts` refuse a WebSocket handshake
 from another origin, a GET though it is, keep the site's failures when
 password access signs in, and forget them after a quiet day.
 
-`tests/admin.test.ts` has every moved route answer `410` whatever its body
-names, and reads what `GET /admin/access` says.
+`tests/admin.test.ts` reads what `GET /admin/access` says, pages the audit,
+and refuses a relayed request.
 
 `tests/projection.test.ts` reads the steward's projection from disk: a read
 that failed on the way, too many open files or an I/O error, tried again a few
 seconds later rather than at the next change; a rewrite
 seen at the very next call, a file that has not moved never read again, a
-malformed one, a link, a folder or a file beyond the bound opening nothing but
-the admin emails, the old tables read before the first projection only, and
-never again once the mark is left. `tests/access.test.ts` judges the
-projection's format, the role an email holds, and a password access's expiry
-and actor.
+malformed one, a link, a folder or a file beyond the bound opening nothing, and
+a projection of before read for its password accesses alone.
+`tests/access.test.ts` judges the projection's format, the people and domains
+of before ignored, and a password access's expiry and actor.
 
 The two `bin/tests` files run Caddy on your workstation, `admin off` on a free
 port, in front of this service and fake sites: what the portal promises hangs
@@ -984,7 +633,7 @@ refused at the door while the site's own goes through, `forward_auth`
 handing the portal the Origin, `Upgrade` and `Sec-WebSocket-Key` as the
 browser sent them. The second sends forged identity headers to every kind of
 path, the underscore spellings put on inside Caddy since they cannot
-arrive, to a protected site, an open one and its customer domain; signs in and
-out through the portal's own block with the provider; checks that this block
-refuses an ambiguous path; and that a block from before identities still works
-with this portal.
+arrive, to a protected site, an open one and its customer domain; checks that
+the portal's own block refuses an ambiguous path and serves nothing of the
+site side, the admin API nor a company sign-in; and that a block from before
+identities still works with this portal.

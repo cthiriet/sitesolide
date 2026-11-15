@@ -18,7 +18,7 @@ agent a token of the projects it works on rather than your own for every
 project: what that token may not do is refused `out-of-scope`. Leave `sitesolide deploy`, `sitesolide share` and
 `sitesolide secrets generate` among the commands your client asks you about,
 rather than allowing them once and for all, so that every real deploy, every
-person let in and every key drawn is yours to approve.
+guest let in and every key drawn is yours to approve.
 
 ## What an agent may do, and what stays yours
 
@@ -28,11 +28,10 @@ person let in and every key drawn is yours to approve.
 | dry-run a deploy, and deploy | lock or unlock a preview, switch a domain |
 | read the server's status, a project's logs, its lock state | `--force` over a file someone edited on the machine |
 | report a name another token holds, which `deploy` stops on, `out-of-scope` naming `--adopt` | take the name back with `deploy --adopt`, unless you asked for it: it drops that token's hold, and only your own token for every project carries it |
-| give the people you named access to a project, by email or `@domain`, with a role, and read who has access | give access to anyone you did not name, or make a site Public, which is its general access, the dashboard's |
+| over the owner's SSH, give the people you named password access to a site, and read who has it | give access to anyone you did not name, or make a site Public, which is its general access, the dashboard's |
 | list the machines sitesolide created at a cloud provider | destroy one, unless you asked for that machine to be destroyed |
 | check a machine with `setup --dry-run`, and install it when you asked | replace DNS records that point elsewhere (`setup --dns-replace`), unless you decided it |
 | list what a new release would change with `upgrade --dry-run` and `refresh --all --dry-run`, and run them when you asked | redeploy a component by hand, or force over a file edited on the machine |
-| list everyone with access, and who may create projects, with `people` | grant or take back the right to create projects, unless you asked for that person: it lets them into the dashboard |
 | list the owner's passkeys with `passkey` | mint a passkey link or remove a passkey: the link signs in as the owner, and unlocking the dashboard is yours alone |
 | with a token, restart a project's service | read or guess a secret, a provider's token included: no route hands a value back, to anyone but the owner in the dashboard |
 | list a project's secret names, what is missing, its files and its build's names, over the owner's SSH or with a token minted with *Manage secrets* | set a value read from the conversation, or put one on a command line |
@@ -65,73 +64,61 @@ starts like a provider's key.
 
 ## Giving access to what was deployed
 
-Building a small tool ends with "give it to the people who need it". One
-command does both:
+Building a small tool ends with "give it to the people who need it". Over the
+owner's SSH, `share` does it:
 
 - `sitesolide share --json` reads a project's general access (Public,
-  Restricted to the people with access, or Anyone with the code), its people
-  with access, each with their role, and the line to send them;
-- `sitesolide share <who>... --json` gives people access, by email or a whole
-  domain written `@acme.com`, with a role (`--role`): `can-open` (Can open, the
-  default), `viewer`, `developer` or `admin`, each including the ones below
-  it; or takes it away, with `--remove`. One direction per call.
+  Restricted, or Anyone with the code) and its guests, each with the expiry
+  of their password access;
+- `sitesolide share <email>... --json` gives each one **password access**,
+  which opens the site and nothing more, no dashboard and no token;
+  `--expires` sets how long it lasts, `24h`, `7d` (the default), `30d` or
+  `never`; `--remove <email>...` takes it away. One direction per call.
 
 **Giving access lets real people into the app and the data it holds**, from
-their next request, and from Viewer up into the project in the dashboard. An
-agent asks the user before every call, naming the exact addresses, domains
-and role, gives access to those and nobody else, and reads
+their next request. An agent asks the user before every call, naming the
+exact addresses, gives access to those and nobody else, and reads
 `sitesolide share --json` before and after to show the user who has it.
 
-**Password access is shown once.** Someone outside the company's domains, or
-anyone when signing in with a company account is not set up, is given Can open
-with a password the machine draws for them. It comes back once, in an `info`
-event and in the result's `changes`, for the user to send them: tell the user,
-and never store, log or repeat it anywhere else. `--expires` sets how long it
-lasts, `24h`, `7d` (the default), `30d` or `never`.
+**The password is shown once.** The machine draws it and keeps only its hash.
+It comes back once, in an `info` event and in the result's `changes`, for the
+user to send: tell the user, and never store, log or repeat it anywhere else.
 
 ```console
-$ sitesolide share alice@acme.com --json
+$ sitesolide share alice@example.com --json
 {"type":"step","message":"access to notes, https://notes.example.com/, over SSH, as the owner"}
-{"type":"step","message":"alice@acme.com: Can open on notes"}
-{"type":"info","message":"general access: Restricted: visitors are asked to sign in."}
+{"type":"step","message":"alice@example.com: password access until 2026-11-07 09:00 UTC on notes"}
+{"type":"info","message":"password for alice@example.com: Xith-G4r4-nRJs-uDMV"}
 ...
-{"type":"info","message":"send: Open https://notes.example.com/ and sign in with your Google account."}
-{"type":"result","ok":true,"command":"share","slug":"notes","url":"https://notes.example.com/","general":"restricted","entries":[{"who":"@acme.com","kind":"domain","role":"can-open","by":"owner","createdAt":1791450000000,"updatedAt":1791450000000,"password":null},{"who":"alice@acme.com","kind":"person","role":"can-open","by":"owner","createdAt":1791450000000,"updatedAt":1791450000000,"password":null}],"signIn":{"configured":true,"allowedDomains":["acme.com"]},"message":"Open https://notes.example.com/ and sign in with your Google account.","changed":true,"changes":[{"who":"alice@acme.com","change":"add","role":"can-open"}]}
+{"type":"result","ok":true,"command":"share","slug":"notes","url":"https://notes.example.com/","general":"restricted","entries":[{"who":"alice@example.com","by":"owner","createdAt":1791450000000,"updatedAt":1791450000000,"expiresAt":1792054800000,"expired":false}],"changed":true,"changes":[{"who":"alice@example.com","change":"add","password":"Xith-G4r4-nRJs-uDMV"}]}
 ```
 
-`entries` lists every entry as it stands after the change: `who`, `kind`
-(`person`, `domain`, or `password` for password access), `role`, `by`,
-`createdAt`, `updatedAt`, and `password`, `{ expiresAt, expired }` for
-password access, null otherwise. `changes` says what this call did, each
-`{ who, change, role }`, `change` being `add`, `role`, `none` or `remove`
-(`role` null then), with `password` for password access just given.
-`message` is the line to send people who sign in with a company account, null
-until that is set up; the `send:` event comes only after a change that gives
-someone access with an account. A `warning` that the portal cannot read who
-may open a site means nothing given opens it until it can: tell the user,
-whose owner reads the portal's journal; what was given is kept.
+`entries` lists every guest as it stands after the change: `who`, `by`,
+`createdAt`, `updatedAt`, `expiresAt` (null for no expiry) and `expired`.
+`changes` says what this call did, each `{ who, change }`, `change` being
+`add`, `none` or `remove`, with `password` for password access just given.
+A `warning` that the portal cannot read who may open a site means nothing
+given opens it until it can: tell the user, whose owner reads the portal's
+journal; what was given is kept.
 
 Never done this way: changing a site's general access, Public, Restricted or
 Anyone with the code, which is the dashboard's, or `sitesolide lock` for the
-owner to run; never on an agent's own initiative. With a token,
-`share` gives Can open alone, to people who sign in with a company account or
-to one of the company's domains, never password access, and takes Can open
-entries off: see [access.md](access.md#giving-access-to-what-you-deployed).
+owner to run; never on an agent's own initiative. With a token, `share` is
+refused `needs-ssh`: a token never gives anyone access, see
+[access.md](access.md#giving-access-to-what-you-deployed).
 
 The refusals, each carrying its `hint`:
 
 | Code | What it means | What to do |
 |---|---|---|
-| `usage`, `unknown-option` | the call itself is wrong | run what `details` lists |
-| `invalid` | neither an email nor a `@domain`, a domain given more than Can open, someone outside the company's domains given more than Can open | fix what the message names |
-| `out-of-scope` | whoever asks may not: a token giving more than Can open, password access or a domain outside the company's, or taking off an entry above Can open; a person's own token on a project they are not Admin of; a project of the platform | change what the message names, or ask the owner of the machine; never another slug, role or token |
-| `not-found` | no such project for this token, a project not deployed, or someone with no access to take off | check the slug in `sitesolide.json`; `sitesolide status` lists the projects |
-| `locked` | the change needs the dashboard's unlock | the user makes it from the dashboard, or the owner over SSH |
+| `usage`, `unknown-option` | the call itself is wrong, a removed option such as `--role` included | run what `details` lists |
+| `invalid` | not an email address, a whole domain (`@acme.com`), a duration other than the four | fix what the message names |
+| `out-of-scope` | a project of the platform | change what the message names; never another slug |
+| `not-found` | a project not deployed, or nobody of that name to take off | check the slug in `sitesolide.json`; `sitesolide status` lists the projects |
+| `needs-ssh` | run with a token: `share` is the owner's, over SSH | tell the user; the owner gives the access from the dashboard or their workstation |
 | `ssh-failed` | a command over SSH failed, nothing changed | run it again; if it fails twice, check that `ssh <server> true` connects without a prompt |
-| `steward-outdated` | over the owner's SSH, the steward does not keep people with access yet | the user runs `sitesolide upgrade` when they decide to, then the same command again |
-| `not-available` | with a token, the dashboard or its steward does not carry access yet; or the access log is half full, the half a token may fill, and the token lets nobody more in | tell the user: the owner runs `sitesolide upgrade`, or someone gives the access from the dashboard |
-| `too-many-attempts` | with a token, its hour of refused requests used up, 60, its refused changes of access among them | wait the seconds `details` names, and tell the user what was refused; never retry in a loop |
-| `unauthenticated` | the token is missing, expired or revoked; or the vault's token and an address other than the one `login` checked it against | ask the owner for one; never guess or borrow a token, nor point `SITESOLIDE_API` elsewhere |
+| `steward-outdated` | the steward on the server does not keep guests yet | the user runs `sitesolide upgrade` when they decide to, then the same command again |
+| `too-many-changes`, `log-full`, `not-ready` | the hour's changes of access used up, the access log full, or the registry being begun | wait, and tell the user what was refused; never retry in a loop |
 | `failure` | something broke on the machine | tell the owner of the machine, with the message; never retry in a loop |
 
 ## Secrets and restarts
@@ -155,7 +142,7 @@ sitesolide secrets set-file gcp.json --json < gcp.json            # a file the u
 `--restart` applies a change at once; `sitesolide restart --json`, for any
 token that deploys the project, restarts its service and ends in an `error`
 unless it holds. Every refusal the steward decides for a token is journaled
-under it, 60 an hour, its refused changes of access among them. See
+under it, 60 an hour. See
 [access.md](access.md#secrets-with-a-token) and [secrets.md](secrets.md).
 
 The refusals of their own, each carrying its `hint`:
@@ -169,7 +156,7 @@ The refusals of their own, each carrying its `hint`:
 | `already-present` | `generate` over a name already set in the store | leave it: rotating a live key is the user's decision, `sitesolide secrets generate NAME --replace` in their terminal |
 | `build-secret-missing` | a name under `secrets.build` is neither in the environment nor in the workstation's file: nothing was read on the server or sent | tell the user to export it, or to add it to `~/.config/sitesolide/secrets/<slug>.env`; never read that file, never ask for the value |
 | `build-secrets-unreadable` | the workstation's `~/.config/sitesolide/secrets/<slug>.env` has a line it cannot read, named by its number and reason, never its content: nothing was sent | tell the user to fix that line; never open the file |
-| `out-of-scope` | a token without *Manage secrets*, listing included, `PASSWORD_HASH`, a static site, a person's role below Developer; an owner's token without public sites on a project not Restricted or one it could not deploy as it stands | ask the user; never another token or project |
+| `out-of-scope` | a token without *Manage secrets*, listing included, `PASSWORD_HASH`, a static site; an owner's token without public sites on a project not Restricted or one it could not deploy as it stands | ask the user; never another token or project |
 | `invalid` | a name the machine keeps for itself or the unit sets, an empty value; a value on several lines, with a null byte, not valid Unicode, with a Unicode noncharacter or over 8 KiB, refused before it is sent; a file over its bounds; at the prompt, a control key or a pasted block of several lines | fix what the message names |
 | `unmanaged` | the store or a file of it is not in a form the steward rewrites: nothing changed | tell the owner of the machine |
 | `store-refused` | a deploy found the project's store on the machine not a folder root owns: it stopped before anything was laid | tell the owner of the machine, who looks at it; never retry with `--force` |
@@ -177,7 +164,7 @@ The refusals of their own, each carrying its `hint`:
 | `store-not-yours` | a token's first deployment found the project's store on the machine made by another's write, never its own: nothing was served | do not retry: tell the owner of the machine, with the message |
 | `taken-meanwhile` | the project was deployed on the machine after this token's creation of it was accepted: nothing was changed | pick another slug in `sitesolide.json`, or ask the owner |
 | `busy` | a deployment of the project runs, the token's previous restart is still under way, or the machine is busy with other changes | wait, then run the same command once |
-| `too-many-attempts` | the token's hour used up: 120 changes, 30 restarts, 60 refused requests, refused changes of access included | wait the seconds `details` names; never retry in a loop |
+| `too-many-attempts` | the token's hour used up: 120 changes, 30 restarts, 60 refused requests | wait the seconds `details` names; never retry in a loop |
 | `unconfirmed` | the change was sent and no answer came: it may be written | run `sitesolide secrets --json`, then the same command once; never in a loop |
 | `restart-failed` | the service did not hold after its restart; a change made with it is written | read `logs`, fix the cause, then `sitesolide restart` once |
 | `steward-outdated`, `not-available` | over SSH, the steward does not keep stores yet; with a token, the dashboard or its steward does not | tell the user: the owner runs `sitesolide upgrade` when they decide to |
@@ -364,8 +351,7 @@ What `result` carries:
 | `remove` | `slug`, `dryRun` |
 | `secrets` | listing: `slug`, `store`: `variables` (each `name`, `source`, `store` or `none`, `declared`), `missing`, `files` (each `name`, `state`, `declared`, `restartPending`), `build`, `public`, `unitReadsStore`, `restartPending`, `may`, never a value; a change: `action`, `slug`, `created`, `set`, `generated`, `removed`, `absent`, `files` (`set`, `removed`), `takenBack` when the owner's write first moved aside a store a token's write made (`slug`, `variables`, `files`, names only), `restart` (null, or the restart's verdict: `kind`, `state`, `subState`, `restarts`, and `reason` when the steward can say why it did not come back) |
 | `restart`, with a token | `slug`, `verdict` (`kind`, `state`, `subState`, `restarts`): a `kind` other than `active` ends in an `error` instead |
-| `share` | `slug`, `url`, `general` (`public`, `restricted`, `code`, or null for a project not deployed), `entries` (each `who`, `kind`, `role`, `by`, `createdAt`, `updatedAt`, `password`), `signIn` (`configured`, `allowedDomains`), `message` (null until signing in with a company account is set up), `changed`, and after a change `changes` (each `who`, `change`: `add`, `role`, `none` or `remove`, `role`, and `password` for password access just given) |
-| `people` | listing: `people` (each `who`, `roles` by project, `create`, `passwords`, `admin`), `domains` (each `slug`, `domain`), `signIn`, `changed: false`; `--may-create` and `--no-create`: `email`, `create`, `roles`, `change` (`create`, `none`), `changed` |
+| `share` | `slug`, `url`, `general` (`public`, `restricted`, `code`, or null for a project not deployed), `entries` (each `who`, `by`, `createdAt`, `updatedAt`, `expiresAt`, `expired`), `changed`, and after a change `changes` (each `who`, `change`: `add`, `none` or `remove`, and `password` for password access just given) |
 | `passkey` | listing and `remove`: `action`, `passkeys` (each `id`, `name`, `createdAt`, `lastUsedAt`), `readable`, `changed`; `link`: `action`, `url`, `expiresAt`. The owner's alone: an agent never runs `link` or `remove` |
 | `machine create` | `provider`, `created` (false when an earlier run had), `machine`, `resources` (each `kind`, `name`, `id`, `reused`), `next`, the `setup` command to run |
 | `machine list` | `provider`, `machines`, each with `name`, `type`, `location`, `status`, `ipv4`, `ipv6`, `ipv6Network`, `monthlyPrice` (`net`, `gross`, `currency`), `backups`, `managed`, `login` |

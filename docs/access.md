@@ -1,167 +1,71 @@
-# People and tokens
+# Access and tokens
 
-Each project has a general access, Public, Restricted or Anyone with the code,
-and a list of people with access, each with a role: Can open, Viewer,
-Developer or Admin. The owner can do everything; tokens let people and agents
-deploy, never beyond their person's roles.
+Each project has a general access, Public, Restricted or Anyone with the
+code, and a list of guests, each with a password for that one site. The
+owner does everything; a token deploys, never gives anyone access.
 
 Every deployment goes through the dashboard's API with a token, the owner's
 included: none goes over SSH. The owner keeps root SSH for installing and
 upgrading the machine and for its machine-wide commands; nobody else needs
-it, and nobody else should have it. Two things let others work on the
-machine, and neither is root:
+it, and nobody else should have it. Two things reach the machine beside the
+owner, and neither is root:
 
-- **people with access**: someone, by their email, holds a role on a project,
-  opens its site when it is restricted, and from Viewer up signs in to the
-  dashboard with their company account;
-- **tokens**: a key, personal and revocable, with which `sitesolide deploy`
-  sends a project to the dashboard over HTTPS. The machine installs it the way
-  it installs the owner's, and the holder never holds root. The same works for
-  an agent in a sandbox with no SSH key: a token in its environment is all it
-  needs. A token minted with *Manage secrets* also sets, generates and
-  removes its projects' secrets, never reading one back.
+- **guests**: someone, by their email, opens a restricted site with a
+  password the machine drew for them, and nothing more: no dashboard, no
+  token;
+- **tokens**: a key, revocable, minted by the owner, with which `sitesolide
+  deploy` sends a project to the dashboard over HTTPS. The machine installs
+  it the way it installs the owner's, and the holder never holds root. The
+  same works for an agent in a sandbox or a CI with no SSH key: a token in
+  its environment is all it needs. A token minted with *Manage secrets* also
+  sets, generates and removes its projects' secrets, never reading one back.
 
-In the dashboard, each of them has one place: a site's *Access* section for
-who may open that site and who may do what on it, the *People* page for
-everyone across projects, the owner's alone, and the *Tokens* page for the
-tokens.
+In the dashboard, a site's *Access* section holds who may open that site,
+and the *Tokens* page the tokens.
 
-## People with access, beside tokens
+## Who may open a site
 
-| | A person with access | A token |
-|---|---|---|
-| Is | someone, by email, with a role on each of their projects | a key, `sst_...`, held by a person or an agent |
-| Signs in | to a restricted site, with their company account or their password access; to the dashboard, with their company account, from Viewer up or with the right to create projects | nowhere: the CLI and the control API present it |
-| Sees | in the dashboard, the projects they are Viewer, Developer or Admin of | the projects it may deploy, through `sitesolide status` |
-| Does | by role, see below: from opening a site to looking after all of the project | deploys, reads logs, restarts the service, gives Can open on what it deploys; with *Manage secrets*, lists secret names and sets, generates and removes values and files, never reading one back |
-| Lasts | until they are removed; half a day per sign-in to the dashboard, an unlock ten minutes; password access until its expiry | until it expires or is revoked; a person's own, also until that person no longer signs in to the dashboard |
-| In the audit | their email | `token:<id>`, and the person's email for their own |
-
-The two meet in one place: **a person mints tokens of their own**, from the
-*Tokens* page, never stronger than their roles. See [Your own
-tokens](#your-own-tokens).
-
-A person holds one role on each of their projects. Can open is the lowest,
-Admin the highest, and each role includes the ones below it:
-
-| Role | On that project |
+| General access | Who opens the site |
 |---|---|
-| Can open (`can-open` in the CLI, `visitor` in the API) | opens its site when its general access is Restricted, and nothing in the dashboard |
-| Viewer | also sees the project in the dashboard: its state and activity |
-| Developer | also deploys it with a token of their own, restarts its service, and sets, generates, replaces and removes its secrets without ever reading one back: the dashboard shows them names, the server never hands them a value |
-| Admin | everything of the project but reading a secret back: restores its secrets' previous version, chooses its general access, Public, Restricted or Anyone with the code, and a new code, gives people access to it, a role at most their own, and restores its backups |
+| Public | anyone |
+| Restricted | the owner and the site's guests, through the portal's sign-in page |
+| Anyone with the code (the preview code) | anyone with the code, and the owner |
+
+**The owner** is whoever holds the dashboard's passkeys, or its password
+until the first one ([below](#the-owners-passkeys)), the first account, made
+by `setup`. The owner opens every site, signs in to the dashboard, and alone
+chooses a site's general access: from its *Access* section, *Make public*,
+*Restrict* or *Use a code*, or with `sitesolide lock` and `unlock` over SSH
+([commands.md](commands.md)). A code is drawn on the machine, ten characters
+without O, I, 0 or 1; *New code* stops the old one at once. A site that
+serves its own domain opens the same way on every address, the preview and
+the domain together, and takes no code.
+
+**A guest** has password access, "Can open": the machine draws a password
+for them, for that one site, shown once to the owner, who sends it on, with
+an expiry chosen then, 24 hours, 7 days (the default), 30 days or none
+([portal/README.md](../portal/README.md#password-access)). The owner gives
+it from the site's *Access* section, under the unlock, or with `sitesolide
+share <email>` from the project's folder over SSH
+([commands.md](commands.md#access-to-a-project)); removing it, from either,
+needs no unlock and holds from the guest's next request. The site learns
+`X-Sitesolide-Role: visitor` for a guest and `admin` for the owner, and no
+identity: the email was typed by the owner, never verified. A guest matters
+only while the site is Restricted: a Public site keeps its list for when it
+is restricted again.
 
 **Reading a secret back is the owner's alone**, in the dashboard, unlocked:
-no role, no token, no agent and no command over SSH gets a value from the
-server once it is set. An Admin who needs one asks the owner, or sets a new
-one.
+no token, no agent and no command over SSH gets a value from the server once
+it is set.
 
-**Every role opens the site** when its general access is Restricted: a
-Developer needs no Can open besides. A whole domain, written `@acme.com`, is
-Can open only. A person outside the company's domains, `OIDC_ALLOWED_DOMAINS`
-in the portal's settings, or anyone when signing in with a company account is
-not set up, is Can open only, with **password access**: a password the machine
-draws for them, for that one site, shown once to whoever gives it, until an
-expiry chosen then, 24 hours, 7 days (the default), 30 days or none
-([portal/README.md](../portal/README.md#password-access)).
-
-**Who signs in to the dashboard**: someone with a role above Can open on at
-least one project, or the right to create projects, with their company
-account. Someone with Can open alone, by name or through a domain, opens sites
-and nothing more: their sign-in is refused with `can-open-only`, "This account
-can open some sites, but the dashboard starts at Viewer. Ask an Admin of the
-project if you need more." Someone on no list is refused with
-`no-role`, "This account has no access to any project here. Ask the owner, or
-an Admin of the project, to add you."
-When their last role above Can open goes, removed or lowered, and they do not
-hold the right to create projects, their dashboard sessions close and their
-tokens are revoked at once.
-
-The machine itself stays the owner's: the platform's own projects, the
-dashboard and the portal among them, their settings, the tokens of others,
-and the roles people hold on projects they are not Admin of.
-
-**The owner** is whoever holds the dashboard's passkeys, or its password until the first one ([below](#the-owners-passkeys)), the first account,
-made by `setup`, and may do everything, on every project and on the machine.
-Their *People* page lists everyone across projects, their roles, their
-password access, who may create projects, the domains, and the admin emails,
-"Every site, as admin: set on the server in OIDC_ADMIN_EMAILS";
-`sitesolide people` prints the same from any folder
-([commands.md](commands.md#people)). Taking someone off there takes them off
-every project and revokes their tokens, which the confirmation lists;
-*Remove expired* clears every password access that has ended.
-
-**Creating projects is a right the owner grants per person**, beside their
-roles: from *People*, or `sitesolide people <email> --may-create`, taken back
-with `--no-create`. It may be all they hold, someone asked to create their own
-projects, none yet; it takes an address that signs in with a company account.
-Whoever holds it mints a token that may create, and becomes Admin of each
-project that token creates, once its first deployment has ended, provided
-nobody has been given access to the project meanwhile; otherwise, and for a
-creation not settled within a day, the owner gives its roles by hand.
-
-**Giving someone access** is the project's Admin's, or the owner's: from the
-site's *Access* section, or `sitesolide share <email> --role <role>` in the
-project's folder ([commands.md](commands.md#access-to-a-project)). An Admin
-gives at most their own role, on their project alone. A whole domain, whoever
-gives it, the owner included, is one of the company's domains when the owner
-listed them (`OIDC_ALLOWED_DOMAINS`); while that list is empty, any domain is
-given unlocked from the dashboard or by the owner over SSH, never with a
-token. No email is sent: the command prints the line to send, and a
-password once for password access. Removing someone, or lowering them, holds
-from their next request.
-
-Signing in to the dashboard goes through the portal: the dashboard sends the
-browser there, the portal runs its usual sign-in with the provider, and hands
-the dashboard a short assertion it signed, which the server checks before
-it opens the session ([dashboard/README.md](../dashboard/README.md#access)).
-A person sees Sites and Activity, each reduced to their projects, *Tokens*
-for their own tokens when a role or the create right lets them mint one, and
-in a project the sections their role opens:
-
-| Role | A project's sections |
-|---|---|
-| Viewer | Overview, Services, and Access read only: its general access, its people with access, and whom to ask to add someone |
-| Developer | the same, and Secrets, whose values they write and never read back |
-| Admin | everything: Overview, Services, Secrets, whose values they write and never read back either, Access, where they give people access, and Backups |
-
-The rest of the dashboard is the owner's, hidden and refused: People, and
-every project they hold no role on.
-
-**A site's Access section** reads like a "Share" dialog, in one column, with
-a link to its changes in Activity. First its general access, the three ways
-it may open, Public, Restricted or Anyone with the code, the current one
-marked; the owner and its Admins choose among the three there, *Make public*,
-*Restrict* or *Use a code*. A site that opens with a code shows it to them,
-with its link to copy, and *New code*, which stops the old one at once; a
-Viewer or a Developer reads that the site opens with one, and whom to ask.
-The code is drawn on the machine, ten characters without O, I, 0 or 1, and
-`sitesolide lock` from the project's folder reaches the same path. A site that
-serves its own domain opens the same way on every address, the preview and
-the domain together, and the section names both before anything changes. Then its
-people with access: an *Add people* field taking an email or a
-`@domain` and a role, which says before anything is sent whether the person
-signs in with their company account or gets password access, and every entry
-with its role, password access with its expiry. One line under the list names
-who also opens the site without being on it: the owner, and the admin emails
-set on the server. *What each role can do* opens under the field, the
-reader's own marked. A Viewer or a Developer reads all of it without a
-control, and whom to ask to add someone.
-
-**Unlocking, for a person, is signing in again.** Whatever writes a
-secret, makes a site public, opens it with a code or gives it a new one,
-restores data, mints a token, gives someone a role above Can open, or gives
-password access asks for the person's own unlock: pressed, the write sends them to the identity provider, which asks them
-to prove themselves once more even if they are signed in there, and brings
-them back unlocked for ten minutes, for their session alone. The owner
-unlocks with a passkey, or the dashboard's password while none is registered; neither unlock replaces the other, nor
-another person's. Restricting a site, giving Can open to a company account or
-to one of the company's listed domains, removing someone, lowering them and
-restarting a service never wait for an unlock. A whole domain does while the
-company's domains are not listed on the server, `OIDC_ALLOWED_DOMAINS` empty:
-anyone the provider vouches for would then come in. A token minted with
-*Manage secrets* sets secrets without one: minting it took the unlock, and
-that permission is the opt-in, see [Secrets with a token](#secrets-with-a-token).
+**Unlocking** is the owner proving themselves again: with a fresh passkey,
+or the dashboard's password while none is registered, for ten minutes. It
+guards what writes a secret, makes a site public, opens it with a code or
+gives it a new one, restores data, mints a token, or gives password access.
+Restricting a site, removing a guest and restarting a service never wait
+for it. A token minted with *Manage secrets* sets secrets without one:
+minting it took the unlock, and that permission is the opt-in, see [Secrets
+with a token](#secrets-with-a-token).
 
 ### The owner's passkeys
 
@@ -177,67 +81,17 @@ any, the last one included, which gives the password back. See
 [commands.md](commands.md#passkeys) and
 [dashboard/README.md](../dashboard/README.md#passkeys).
 
-## Your own tokens
+## Tokens
 
-Someone who signs in to the dashboard deploys with a token they mint
-themselves on its *Tokens* page: for their workstation's CLI, for an agent.
-The server judges it, never the dashboard, and **a person's token is never
-stronger than its person**:
-
-| A token of theirs | Takes |
-|---|---|
-| a project to deploy | Developer or Admin there |
-| creating projects | the create right the owner granted them; each project it creates makes them its Admin |
-| deploying public sites, declaring a domain, outbound network | Admin of every project the token reaches; with creating alone, what it creates is theirs to administer |
-| giving Can open, `sitesolide share` | Admin of that project |
-| managing secrets, `sitesolide secrets` | Developer or Admin there |
-| restarting the service, `sitesolide restart` | Developer or Admin there, as for deploying it |
-
-A Viewer everywhere, without the create right, mints nothing, and sees no
-*Tokens* page.
-
-- **Minted under their own unlock**, the forced sign-in at the provider that
-  every secret write asks for: *New token* asks for it, then opens. The
-  dialog offers the projects where they are Developer or Admin, creating
-  projects only with the right, *Manage secrets*, and the options only for
-  projects they administer. The token carries their email, whatever is sent, and is shown
-  once, as the owner's are. Its row on *Tokens* names each project with
-  their role there today, "calendar (Admin)", or "cms (paused: Viewer now)"
-  where it no longer deploys, and *Can manage secrets* when it may, "Can
-  manage secrets (paused: no project to deploy now)" once it reaches none.
-- **Narrowed live.** The server reads the access registry at every use of the
-  token, not only when it was minted: a role lowered to Viewer or Can open
-  stops that project's deployments at the next request, the create right taken
-  back stops new projects, and the options hold only while the person is Admin
-  of every project the token reaches; one lowered turns them off for the whole
-  token, and the person mints another for what they still administer.
-  *Manage secrets* holds project by project, wherever they are Developer or
-  Admin at that request. The installer reads the registry once more when it
-  starts.
-- **An existing project keeps its general access.** A deployed site's general
-  access, Public, Restricted or Anyone with the code, is chosen by its Admin or
-  the owner, never by a deployment: a Developer's token deploys a public project as it stands, and
-  opens nothing. A new project is restricted unless the token may deploy
-  public sites; leaving paths open to anyone (`portalExempt`) takes that
-  option too.
-- **Giving access**, `sitesolide share`, takes the person's own power: Can open
-  alone, on a project where they are Admin now.
-- **When they no longer sign in to the dashboard, their tokens go with them**:
-  revoked by the server at once, under whoever removed or lowered them, and
-  refused anyway, since the registry no longer gives them a role. Revoking one
-  needs no unlock, from their *Tokens* page, or the owner's, which lists every
-  token and who made it, "Made by alice@example.com" or "Made by you for
-  alice@example.com".
-- **Ten live tokens per person**, so that one person cannot fill the
-  machine's registry.
-
-Everything is audited under the person: the server journals `token.create`
-and `token.revoke` under their email, and `project.create` for a project
-their token created; the dashboard's deployments, under `token:<id>`, name the
-person in their detail, and so do the secrets their token set or removed and
-the restarts it made, which the steward journals under `token:<id>` with the
-person beside it. A token's sheet on the *Tokens* page lists both, its last
-ten lines, and *All activity* opens the rest in *Activity*.
+Only the owner mints a token, on the dashboard's *Tokens* page under the
+unlock, or the owner's own with `sitesolide login --owner`. It is shown once,
+and reaches either every project, as the owner (below), or the projects the
+owner picks, with the options ticked then: creating projects, which are then
+the token's own, deploying public sites, declaring a domain, outbound
+network, *Manage secrets*. A token never gives anyone access, and never opens
+a site. Revoking one needs no unlock. Everything a token does is audited
+under `token:<id>`: its sheet on the *Tokens* page lists its last ten lines,
+and *All activity* opens the rest in *Activity*.
 
 ## The owner's own token
 
@@ -250,7 +104,7 @@ token cap, and deploys under a name a removed project left. It alone carries
 two options: `--force`, which replaces a unit or a block edited by hand on the
 machine, and `--adopt`, which takes a name back from the token that holds it
 (`DELETE /api/v1/projects/<slug>/claim`), its store moved aside as previous
-versions. A person's token never has it: minting one for someone is refused.
+versions.
 
 It is minted in one of two ways, both the owner's alone:
 
@@ -272,19 +126,18 @@ It is the strongest credential after root SSH: whoever holds it deploys code
 to every project. Keep it on the owner's workstation; give an agent or a CI a
 token of the projects it works on instead, and revoke it from the *Tokens*
 page when a laptop is lost.
-
 ## What you get from the owner
 
 - the dashboard's address, `https://dashboard.<zone>`;
 - a token, `sst_...`, shown to the owner once when they created it on the
   dashboard's *Tokens* page. Keep it like a password: whoever holds it deploys
-  what it allows. Someone who signs in to the dashboard mints their own
-  instead, see [Your own tokens](#your-own-tokens).
+  what it allows.
 
-A token the owner creates deploys only what they allowed when creating it: the
-existing projects they granted, and, if they allowed it, new projects, which
-are then yours. It sets secrets only if they ticked *Manage secrets*. Everything is **private by default**: a project you create
-is Restricted, unless your token may deploy public sites.
+A token deploys only what the owner allowed when creating it: the existing
+projects they granted, and, if they allowed it, new projects, which are then
+the token's. It sets secrets only if they ticked *Manage secrets*. Everything
+is **private by default**: a project a token creates is Restricted, unless
+the token may deploy public sites.
 
 ## Sign in
 
@@ -318,10 +171,10 @@ certificate it signed: an agent's sandbox is set up by whoever trusts it.
 
 `deploy` always goes through the dashboard, whatever the configuration
 holds. A workstation with no `server` in its configuration uses the dashboard
-for `status`, `logs`, `share`, `secrets` and `restart` too. Every other
-command (`lock`, `unlock`, `domain`, `remove`, `rename`, `disable`, `enable`,
-`run`, `people`, `refresh`, `backups`) needs the owner's SSH access and says
-so.
+for `status`, `logs`, `secrets` and `restart` too. Every other
+command (`share`, `lock`, `unlock`, `domain`, `remove`, `rename`, `disable`,
+`enable`, `run`, `passkey`, `refresh`, `backups`) needs the owner's SSH
+access and says so.
 
 ### In an agent's sandbox
 
@@ -406,7 +259,7 @@ refused exactly where the deployment would be.
 | `"network": "outbound"` | the token may use outbound network | services reach only the loopback otherwise |
 | `egress` | the token may use outbound network | the hosts it lists are reached through the egress proxy, a way out all the same |
 | `domain` | the token may declare a domain | switching to it stays the owner's job: the machine's `active` stands whatever the manifest says, and a name or an alias it did not cover before stays inactive; on a domain switched on, a new name or alias is refused, since it would switch the whole domain off |
-| `lock` | the owner's token for every project | a preview code is chosen in the site's *Access* section, by its Admin or the owner, or with `sitesolide lock` over the owner's SSH |
+| `lock` | the owner's token for every project | a preview code is chosen by the owner in the site's *Access* section, or with `sitesolide lock` over the owner's SSH |
 | `memory` above 1G, more than 6 services | the owner's token for every project | one machine serves everyone |
 
 A manifest without `portal` is not refused: a new project a token creates
@@ -414,8 +267,7 @@ without the public permission is Restricted whatever the manifest says. A
 project that already exists keeps the general access the machine carries:
 it is switched from the dashboard, never from a deployment. A token without
 the public permission does not deploy an existing public site either, so that
-a stolen one publishes nothing; a person's own token does, general access
-being its Admin's choice, which the deployment leaves as it is.
+a stolen one publishes nothing.
 
 Every string of the manifest that lands in the project's Caddy block or systemd
 unit is judged for that, the same way for the owner and for a token: header
@@ -431,8 +283,7 @@ names `sitesolide.json` declares the project's store lacks; at a terminal,
 with a token that may manage secrets, it offers to set each now, typed
 without echo, or to generate it on the server, and otherwise warns. The
 machine's log says the same, and the deployment's `missingSecrets` lists
-them. The owner, or the project's Developer or Admin, sets them in the
-dashboard's *Secrets* section, or a token that may manage secrets with
+them. The owner sets them in the dashboard's *Secrets* section, or a token that may manage secrets with
 `sitesolide secrets set`, see [Secrets with a token](#secrets-with-a-token);
 the service reads them at its next restart. What still stops: a build
 secret missing on your workstation, before anything is sent, and a store the
@@ -466,8 +317,8 @@ value is typed once, goes to the machine, and never comes back out of it.
 with *Manage secrets* lists those names, sets, generates and removes any
 variable of its project's store, and sets and removes the files its services
 read whole. **It never reads a value back**: no route returns one, nor a
-file's content or size, nor a previous version, whoever holds the token, an
-Admin's own or the owner's included. Only the owner reads a value back, in
+file's content or size, nor a previous version, whoever holds the token, the
+owner's included. Only the owner reads a value back, in
 the dashboard, unlocked. From the project's folder:
 
 ```bash
@@ -558,11 +409,11 @@ yet may be set too; every service loads every file of the project's store.
 | list its projects' secret names, which the store holds and which not yet, what is missing, the files, the build's names, and whether a restart is pending | read a value, a file's content or size, or a previous version |
 | set, generate, replace and remove any variable of its project's store, declared in `sitesolide.json` or not | change `PASSWORD_HASH`, which the owner alone changes |
 | set and remove the store's files | set a variable the deployment or the unit already sets, `PORT` among them, or one that changes how the runtime behaves, `LD_PRELOAD` or `HTTPS_PROXY`: refused to anyone, from the dashboard too |
-| write the store of a project it may create, before its first deployment, and restart the service, with `--restart` or `sitesolide restart` | restore the store's previous version: the owner's, and an Admin's, from the dashboard |
+| write the store of a project it may create, before its first deployment, and restart the service, with `--restart` or `sitesolide restart` | restore the store's previous version: the owner's, from the dashboard |
 
 - **One change, one write, all or nothing.** Every name and value is judged
   before anything is written; the store keeps the previous version of its
-  variables and of each file, which the owner or an Admin restores from
+  variables and of each file, which the owner restores from
   *Secrets*. A value on one line, with no null byte, valid Unicode, 8 KiB at
   most, and no Unicode noncharacter, U+FDD0 to U+FDEF or the last two code
   points of a plane, for which systemd would read none of the project's
@@ -575,15 +426,15 @@ yet may be set too; every service loads every file of the project's store.
   `absent`, nothing done for it.
 - **Ahead of the first deployment.** A token that may create a project may
   set its secrets before deploying it, so that the first start finds them.
-  The first write records the project as the token's, and a person's own
-  token makes them its Admin, as a deployment that creates it does. A name
+  The first write records the project as the token's, as a deployment
+  that creates it does. A name
   the token may not create, or one whose store or snapshots the machine
   still keeps from a removed project, is refused as a deployment would be.
 - **Listing needs *Manage secrets* too**: a token without it is refused, and
   the refusal is journaled, as "Tried to list the secrets", never as a value
   read.
 - **Restarting** takes no permission of its own: any token that deploys the
-  project restarts it, a person's own while they are Developer or Admin there.
+  project restarts it.
   It is refused `busy` while a deployment of the project runs, which restarts
   it at its end, asked again once the restart's turn has come, and
   `not-found` for a static site. A token restarts one service at a time: a
@@ -595,39 +446,31 @@ yet may be set too; every service loads every file of the project's store.
 - **Bounds, per token and per hour**: 120 for changes, each variable name set
   or removed costing one, a generated value one, a file one, a request one at
   least, `{}` included, and a store it created one more; 30 restarts; and 60
-  refused requests, counted before the refusal is journaled, a refused change
-  of access among them (see
-  [Giving access](#giving-access-to-what-you-deployed)). Past any of them,
+  refused requests, counted before the refusal is journaled. Past any of them,
   `too-many-attempts` and the seconds to wait, and a refusal past its bound
   is journaled no more. One token writes 210 lines of the steward's journal
   an hour at most, and the journal keeps its latest 500 lines at least: a
   stolen token cannot push what it did in the last hour out of it by itself.
-- **No unlock.** A person's change in the dashboard asks for their unlock; a
-  token's does not. Minting it took the unlock, and *Manage secrets* is what its
-  maker opted into: whoever holds the token sets values until it expires or is
+- **No unlock.** The owner's change in the dashboard asks for the unlock; a
+  token's does not. Minting it took the unlock, and *Manage secrets* is what the
+  owner opted into: whoever holds the token sets values until it expires or is
   revoked, within the bounds above, every change in sight in the token's sheet
   and in *Activity*.
-- **An owner's token without the public permission** changes the secrets of a
+- **A token without the public permission** changes the secrets of a
   project only when it could deploy that project as the machine carries it,
   no path exempted from the portal, no domain or outbound network it could
   not declare itself, and the project is Restricted, the portal in place in
   front of it; and the store of a project it is creating, which will be
   Restricted: a stolen one changes nothing of a project in the open, nor of
-  one it could not deploy. What the people given access to a restricted
-  project reach, the values it changes still drive. It still lists and
-  restarts. A person's own token follows their role instead, as for a
-  deployment.
-- **A person's own token** needs them Developer or Admin of the project at each
-  request: lowered to Viewer, it is refused, the message naming their role. A
-  token revoked, or its person lowered, while the change waited its turn
-  writes nothing.
+  one it could not deploy. What the guests of a restricted project reach,
+  the values it changes still drive. It still lists and restarts.
+- **A token revoked while the change waited its turn** writes nothing.
 
 Every change is journaled by the steward, one line per name, never its value,
-under `token:<id>` and, for a person's own token, their email: the project's
-*Activity* reads "Set API_KEY" by "alice@example.com (token)", and the
-token's sheet on the *Tokens* page lists it beside its deployments. So is every refusal the steward decides, within the
-bound above: a person lowered, a token without *Manage secrets*, a reserved
-name. The dashboard refuses a malformed body alone before asking it.
+under `token:<id>`: the project's *Activity* reads "Set API_KEY" by the
+token, and the token's sheet on the *Tokens* page lists it beside its
+deployments. So is every refusal the steward decides, within the bound above:
+a token without *Manage secrets*, a reserved name. The dashboard refuses a malformed body alone before asking it.
 The sheet shows the token's last ten lines; *Activity*, narrowed to the
 token, reads further back, until the journal drops the line.
 
@@ -689,59 +532,11 @@ then the restart's: the dashboard keeps the connection open for both.
 
 ## Giving access to what you deployed
 
-A project you deploy with a token is Restricted, and opens to its people with
-access, the owner and the admin emails alone. Once the owner has set up
-signing in with a company account
-([portal/README.md](../portal/README.md#signing-in-with-a-company-account)),
-you give people Can open from its folder:
-
-```bash
-sitesolide share                              # its general access and its people with access
-sitesolide share alice@acme.com bob@acme.com  # Can open for them
-sitesolide share @acme.com                    # everyone at acme.com, one of the company's domains
-sitesolide share --remove bob@acme.com        # refused from their next request
-```
-
-```console
-$ sitesolide share alice@acme.com
--> access to notes, https://notes.example.com/, through https://dashboard.example.com
--> alice@acme.com: Can open on notes
-   general access: Restricted: visitors are asked to sign in.
-   people with access:
-     alice@acme.com  Can open
-     @acme.com       Can open
-   The owner also opens it.
-   send: Open https://notes.example.com/ and sign in with your company account.
-```
-
-The `send:` line comes only after a change that gives someone access with an
-account, never on a plain listing. A token never reads the admin emails, so
-the line before it names the owner alone. The server judges each change by
-the access rules, writes it, and records it under your token, `token:<id>`,
-never as the owner; it holds from the next request.
-What a token may do is narrower than what an Admin or the owner may:
-
-| You may | You may not |
-|---|---|
-| give Can open on a project your token reaches, your own or one granted to it; with a person's own token, one where that person is Admin now | touch another token's project, which reads as unknown |
-| give it to people who sign in with a company account, by their company email | give password access: someone outside the company's domains is refused, and an Admin or the owner gives it from the dashboard |
-| give it to one of the company's domains, `OIDC_ALLOWED_DOMAINS` | give another domain, or any domain at all when that list is empty |
-| take a Can open entry off | give, change or take off Viewer, Developer or Admin: those are given from the dashboard, or by the owner over SSH |
-| | change a site's general access, Public, Restricted or Anyone with the code: it is the dashboard's, its Admin's or the owner's |
-
-**Bounded per token and per hour.** Each change is counted among the token's
-60 refused requests of the hour before it is judged, and given back once
-accepted, or when it takes off someone who had no access: a refused change is
-a line of the steward's journal, and past 60 the token is refused
-`too-many-attempts`, journaled no more, so that a stolen token cannot push
-the hour's changes out of the journal. What a token lets in also stops once
-the access log is half full, see [When it goes wrong](#when-it-goes-wrong).
-
-Giving access never touches Caddy, and a project not deployed yet is refused
-with `not-found`. A project whose general access is Public keeps its list, and
-Can open matters once it is Restricted: the command says so, "notes is public,
-so anyone can open it. Viewer, Developer and Admin still apply; Can open
-matters once you restrict it."
+A token never gives anyone access. A project deployed with a token opens to
+the owner alone until the owner gives it guests, from its *Access* section or
+with `sitesolide share` over SSH, or changes its general access (see [Who
+may open a site](#who-may-open-a-site)). Ask the owner. `sitesolide share`
+on a workstation with a token is refused `needs-ssh`.
 
 ## The API, for an agent without the CLI
 
@@ -767,11 +562,6 @@ curl -s -H "$AUTH" -X PUT --data-binary @bundle.tar.gz \
 
 # 3. follow: `after` is the previous answer's `next`
 curl -s -H "$AUTH" "$API/api/v1/deployments/<id>?after=0"
-
-# 4. give Can open on it
-curl -s -H "$AUTH" -X PUT -H 'Content-Type: application/json' \
-  -d '{"who": "alice@acme.com"}' $API/api/v1/projects/<slug>/access
-# -> 201 { "entry": { "who": "alice@acme.com", "kind": "person", "role": "visitor", ... }, "change": "add", "access": { ... } }
 ```
 
 | Route | What it does |
@@ -785,9 +575,6 @@ curl -s -H "$AUTH" -X PUT -H 'Content-Type: application/json' \
 | `GET /api/v1/projects` | the projects the token reaches, with their status |
 | `GET /api/v1/projects/<slug>` | one of them |
 | `GET /api/v1/projects/<slug>/logs?lines=<n>&cursor=<c>` | the journal, and a cursor for the next call |
-| `GET /api/v1/projects/<slug>/access` | `{ access }`: `slug`, `host`, `url`, `general` (`access`: `public`, `restricted` or `code`, `modifiable`, `reason`; null for a project not deployed), `entries` (each `who`, `kind`: `person`, `domain` or `password`, `role`, `by`, `createdAt`, `updatedAt`, and `password`, `{ expiresAt, expired }` for password access, null otherwise), and `signIn` (`configured`, and `allowedDomains`, the only domains your token may give) |
-| `PUT /api/v1/projects/<slug>/access` `{ who, role }` | gives `who`, an email or a `@domain`, Can open: `role` is `visitor`, its default, and any other is refused; `{ entry, change, access }`, `change` being `add` (201) or `none` for someone who already had it |
-| `DELETE /api/v1/projects/<slug>/access` `{ who }` | takes a Can open entry off; `{ entry, change: "remove", access }` |
 | `GET /api/v1/projects/<slug>/store` | needs *Manage secrets*. `{ store }`: `slug`, `exists`, `state` (`managed`, `absent` or `unmanaged`, then with a `reason`), `variables` (each `name`, `source`: `store` or `none`, and `declared`), `missing` (declared names with no value), `files` (each `name`, `state`: `set`, `missing` or `unmanaged`, `declared`, `reason`, `modifiedAt`, `restartPending`; `bytes` null), `build` and `public` (the build's names, and `env` as written), `unitReadsStore`, `modifiedAt`, `restartPending`, `previous` and `may`. Never a value |
 | `PATCH /api/v1/projects/<slug>/store` `{ set, remove, restart }` | needs *Manage secrets*. `set`, an object of names and values, `remove`, a list of names, `restart`, true to restart once written: each optional, `{}` alone creates the store. One write, all or nothing: 200, or 201 when it created the store, `{ store, created, set, generated, removed, absent, files, restart }`, `restart` being null, `{ verdict }`, or `{ error, message, wait }` for a restart refused, `wait` there for `too-many-attempts` alone, the write's status kept |
 | `POST /api/v1/projects/<slug>/store/generate` `{ name, format, bytes, replace, restart }` | needs *Manage secrets*. A random value drawn on the server for `name`: `format` `hex`, the default, or `base64url`, `bytes` 16 to 64, 32 by default; a name already set is refused `already-present` unless `replace`. The same answer as a change, the name in `generated`, never the value |
@@ -797,24 +584,23 @@ curl -s -H "$AUTH" -X PUT -H 'Content-Type: application/json' \
 
 | Code | Status | What to do |
 |---|---|---|
-| `unauthenticated` | 401 | the token is missing, unknown, expired or revoked, or its person no longer signs in to the dashboard: ask the owner, or mint another if it is your own |
-| `too-many-attempts` | 429 | too many wrong tokens from your address: wait `wait` seconds; or, creating a project, your changes of access for this hour used up: try again later; or the token's hour of secrets, restarts or refusals used up, 120 changes, 30 restarts and 60 refused requests, refused changes of access included: wait `wait` seconds |
-| `out-of-scope` | 403 | the token may not do this: outside its scope, its person's role no longer allows it, or, for access, a role above Can open, someone who would need password access, a domain outside the company's, an entry above Can open to take off; for secrets, a token without *Manage secrets*, `PASSWORD_HASH`, a static site, which has no service to read a store, or, with an owner's token that does not deploy public sites, a project not Restricted on the machine or one it could not deploy as it stands; the message says whom to ask |
+| `unauthenticated` | 401 | the token is missing, unknown, expired or revoked, or a person's token from when people signed in with a company account: ask the owner for a new one |
+| `too-many-attempts` | 429 | too many wrong tokens from your address, or the token's hour of secrets, restarts or refusals used up, 120 changes, 30 restarts and 60 refused requests: wait `wait` seconds |
+| `out-of-scope` | 403 | the token may not do this: outside its scope; for secrets, a token without *Manage secrets*, `PASSWORD_HASH`, a static site, which has no service to read a store, or, with an owner's token that does not deploy public sites, a project not Restricted on the machine or one it could not deploy as it stands; the message says whom to ask |
 | `reserved` | 403 | the slug belongs to the platform, or, for a new project, starts with the name of one of its projects and a dash (`dashboard-*`, `portal-*`), which names the platform's own files, or is the name of a removed project the machine still keeps backup snapshots or a store of secrets of, which a project created under it would be handed: pick another, or ask the owner, who may deploy it over SSH or clear what was left |
 | `invalid-manifest` | 422 | fix every point of `details` |
-| `invalid` | 400 | the request itself is malformed: `who` neither an email nor a `@domain`, a domain given more than Can open, or a domain while signing in with a company account is not set up; for secrets, an unexpected field, a name that is not a variable's or one the machine keeps for itself, a value over one line, with a null byte, not valid Unicode, with a Unicode noncharacter or over 8 KiB, a name both set and removed, variables that would pass 256 KiB, a file name that is not letters, digits, `.`, `_` and `-`, or a file past its bounds; the message names a variable only when it has a variable name's shape, and never quotes a value |
-| `not-found` | 404 | no such deployment or project for this token, a project not deployed yet, or, taking someone off, someone with no access; a static site, which has no service to restart |
+| `invalid` | 400 | the request itself is malformed; for secrets, an unexpected field, a name that is not a variable's or one the machine keeps for itself, a value over one line, with a null byte, not valid Unicode, with a Unicode noncharacter or over 8 KiB, a name both set and removed, variables that would pass 256 KiB, a file name that is not letters, digits, `.`, `_` and `-`, or a file past its bounds; the message names a variable only when it has a variable name's shape, and never quotes a value |
+| `not-found` | 404 | no such deployment or project for this token, or a static site, which has no service to restart |
 | `busy` | 409 | a deployment of this project is already running, or, when the archive arrives, three deployments already run on the machine: send it again in a minute, the deployment waits for it until its 15 minutes are up; for secrets and restarts, a deployment of the project running, which restarts it at its end, the token's previous restart still under way, or the machine busy with other changes: ask again in a moment |
 | `unmanaged` | 409 | the store or one of its files is there in a form the steward does not rewrite: a link, the wrong owner or mode, lines written by hand; nothing was changed, the owner fixes it on the machine |
 | `already-present` | 409 | generating a name already set in the store: `replace` draws a new one, and the old value stops working at the next restart |
 | `too-large` | 413 | exclude dependencies and caches; a change of secrets over 512 KiB: split it |
 | `expired` | 410 | the archive arrived after 15 minutes: start again |
-| `not-available` | 503 | the machine does not carry the control API yet, or predates the access registry, secrets by token or the store of secrets: tell the owner, who runs `sitesolide upgrade`; or, creating a project or giving Can open, the access log is half full, the half a token may fill, or full: ask the owner, or someone who gives access from the dashboard |
+| `not-available` | 503 | the machine does not carry the control API yet, or predates secrets by token or the store of secrets: tell the owner, who runs `sitesolide upgrade` |
 | `failure` | 500, 502 | something broke on the machine, an access registry that does not read among others, or, creating a project, the backups' index that does not read, which never passes for nothing left under the name: the message says where the owner should look |
 
 `locked` never comes back from this API: it is the dashboard's answer to a
-change that needs its unlock, a role above Can open or password access, which
-a token never gives.
+change of the owner's that needs the unlock.
 
 A failed deployment carries its own `error.code`, the step that stopped it:
 `install-failed`, `edited-by-hand`, `system-unit`, `caddy-busy`,
@@ -878,23 +664,14 @@ reader, with each of the four JSON readers.
 
 - **`not-available`**: the owner has not installed the control API on this
   machine yet, see [dashboard/README.md](../dashboard/README.md), "The control
-  API"; or, for `share`, the machine predates the access registry, which
-  `sitesolide upgrade` brings.
-- **`out-of-scope` on `share`**: the message says which rule: a role above Can
-  open, someone outside the company's domains, who needs password access, or
-  a domain the company does not list. Ask an Admin of the project, or the
-  owner, to give it from the dashboard; never try another token.
-- **Too many changes, or the access log full**: the server keeps every change
-  of access 180 days and never pushes one out early, and counts, per person
-  or token and per hour, the changes that let more people in or more done:
-  adding someone, raising a role, creating a project. Past 120 in the hour it
-  refuses them: wait, then try again. Once the access log is full it refuses
-  them until older changes age out, while removing and lowering someone still
-  work: ask the owner, who still changes access from their workstation with
-  `sitesolide share` and `sitesolide people`. A token stops earlier, at half
-  the log, the rows its removals may still write counted: the other half
-  stays for the people who give access from the dashboard, so that no token
-  fills it for them.
+  API".
+- **`needs-ssh` on `share`**: a token gives no access. Ask the owner.
+- **Too many changes, or the access log full** (the owner's): the steward
+  keeps every change of access 180 days and never pushes one out early, and
+  counts the changes that let someone in, 120 an hour from the dashboard,
+  2000 over SSH. Past that it refuses them: wait, then try again. Once the
+  access log is full it refuses them until older changes age out, while
+  removing a guest still works, and so does `sitesolide share` over SSH.
 - **`out-of-scope` on `secrets`**: the token was minted without *Manage
   secrets*, or the project is a static site, whose values a build needs go
   under `secrets.build` and stay with whoever deploys. Mint a token with the
@@ -906,9 +683,9 @@ reader, with each of the four JSON readers.
   and the service starts without them. Set each with `sitesolide secrets set
   NAME`, or `sitesolide secrets generate NAME` for a random key, then
   `sitesolide restart`.
-- **A warning that the portal cannot read who may open a site**: nothing you
-  give opens the site until it can. What you give is kept; tell the owner of
-  the machine.
+- **A warning that the portal cannot read who may open a site**: only the
+  owner opens a restricted site until it can. Guests are kept; the owner
+  reads `journalctl -u portal`.
 - **`edited-by-hand`**: a file of your project on the machine, its unit or its
   Caddy block, was changed by hand. The owner reads it and deploys once with
   their own token for every project and `--force`; yours works again
@@ -923,6 +700,3 @@ reader, with each of the four JSON readers.
   is `reserved` to every token: a project created under it would list its
   predecessor's snapshots and restore them. The owner deploys it with their
   own token for every project, or clears what was left.
-  A person's own token answers to their role instead: a project they created
-  is theirs to deploy as long as they are its Developer or Admin, with any
-  token of theirs that names it.

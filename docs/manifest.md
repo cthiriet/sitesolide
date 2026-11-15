@@ -865,26 +865,27 @@ before every request. `portalExempt` lists the paths that stay open to anyone,
 guarded by the app alone: signed webhooks, mostly, which carry their own proof
 and have no cookie.
 
-**Who gets in** is not in the manifest: the owner's password, the admin emails,
-and the project's people with access, given from the dashboard's *Access*
-section or with `sitesolide share` ([commands.md](commands.md#access-to-a-project)),
-each signing in with their company account or with password access. **The
-service learns who came in** from three request headers the generated block
-sets on every request that went through the portal:
+**Who gets in** is not in the manifest: the owner, with a passkey or the
+owner's password, and the project's guests with password access, given from
+the dashboard's *Access* section or with `sitesolide share`
+([commands.md](commands.md#access-to-a-project)). **The service learns who
+came in** from one request header the generated block sets on every request
+that went through the portal:
 
 | Header | Value |
 |---|---|
-| `X-Sitesolide-User` | the verified email, lowercase; absent for the owner's password and for password access |
-| `X-Sitesolide-User-Name` | the display name, percent-encoded UTF-8; absent when unknown |
-| `X-Sitesolide-Role` | `admin` for the owner's password and the admin emails; the person's role otherwise, `visitor` (Can open), `viewer`, `developer` or `admin`; `visitor` for password access. Before the access registry it read `member` or `guest`: an app that compared it with either must be updated |
+| `X-Sitesolide-Role` | `admin` for the owner, `visitor` for a guest with password access. It once read `member` or `guest`, then also `viewer` or `developer`: an app that compared it with those must be updated |
+
+`X-Sitesolide-User` and `X-Sitesolide-User-Name`, which carried a company
+account's email and name, are no longer set.
 
 The block takes any `X-Sitesolide-*` header the visitor sends off every request
 first, exempted paths included, and their underscore spellings, so a protected
-service can trust them. A public service gets none: its
+service can trust the role. A public service gets none: its
 block, and its customer domain's, take them off too, so it is never handed a
 stranger's `X-Sitesolide-Role: admin`. A site deployed before these headers
 existed, protected or not, keeps working, takes nothing off, and gains them at
-its next `sitesolide deploy`. Reading them in a Bun service:
+its next `sitesolide deploy`. Reading it in a Bun service:
 [portal/README.md](../portal/README.md#who-came-in-the-identity-headers).
 
 **For a deployed project the machine is the source of truth.** General access

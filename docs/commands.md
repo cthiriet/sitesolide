@@ -2,7 +2,7 @@
 
 Every command runs from a project's folder, the one holding its
 `sitesolide.json`, except `setup`, `upgrade`, `refresh`, `init`, `status`,
-`login`, `machine`, `people`, `help` and `--version`. This is what `sitesolide --help` prints.
+`login`, `machine`, `passkey`, `help` and `--version`. This is what `sitesolide --help` prints.
 
 **Every deployment goes through the dashboard's API with a token, the
 owner's included: none goes over SSH.** `sitesolide deploy` builds here and
@@ -68,14 +68,10 @@ sitesolide status               what the server actually runs
 sitesolide logs [--follow]      journalctl for this project
    --lines <n>                  how many lines back, 50 by default
 sitesolide backups              this project's data snapshots, read only
-sitesolide share                this project's general access and people with access
-   <email|@domain>...           give them access, Can open by default
-   --role <role>                can-open, viewer, developer or admin
-   --expires <24h|7d|30d|never> for password access, 7d by default
-   --remove <email|@domain>...  take their access away; password access by the name it is listed under
-sitesolide people               everyone with access, their roles, who may create projects
-   <email> --may-create         let them create projects, Admin of what they create
-   <email> --no-create          take that right back
+sitesolide share                this project's general access and guests
+   <email>...                   give them password access to the site, nothing more
+   --expires <24h|7d|30d|never> how long it lasts, 7d by default
+   --remove <email>...          take it away; a guest of before by the name it is listed under
 sitesolide passkey              the owner's passkeys for the dashboard and protected sites
    link                         a one-time link that registers one, the way in without a passkey
    remove <id>                  remove one; the last one gives the dashboard's password back
@@ -224,7 +220,7 @@ run, the dashboard's *Rename* on the site's Overview doing the same thing:
   move, its units and Caddy block are generated again under the new name, the
   domain table follows when it has its own domain, Caddy is validated and
   reloaded, the services start, and every site is probed;
-- its people with access keep their roles, the token that created it still
+- its guests keep their password access, the token that created it still
   owns it, every token scoped to it reaches it under the new name;
 - the first step that fails puts everything back, the old name answering as
   before.
@@ -253,7 +249,7 @@ sitesolide enable
 ```
 
 **Turned off**, a project keeps everything: its code, data, secrets, account,
-units, people with access and tokens. Its services stop and stay stopped at
+units, guests and tokens. Its services stop and stay stopped at
 boot, and every address it has, its preview and its own domain, answers a
 503 that says it is turned off. Its manifest on the machine carries
 `disabled`; deploying it, changing its general access, renaming it,
@@ -265,8 +261,8 @@ both are in the "..." of its Overview.
 
 **Deleted** from the dashboard, *Delete project* in the same menu, the slug
 retyped, it goes as `sitesolide remove` takes it: its services, folder and
-data, store of secrets, account and block; its people with access and the
-token that created it let go of it; the domain table drops its names. Its
+data, store of secrets, account and block; its guests are dropped and the
+token that created it lets go of it; the domain table drops its names. Its
 backup snapshots stay. What can be undone comes first, Caddy reloaded
 without it and every other site probed, and nothing is deleted if that
 fails. A site that opens with a code is refused: choose Public or Restricted
@@ -469,131 +465,71 @@ and have no store: for them, `sitesolide secrets` points to the dashboard's
 
 ## Access to a project
 
-Who may open a project, and who may do what on it, is one list per project,
-its people with access, which the steward keeps: each entry an email or a
-whole domain, `@acme.com`, with a role, Can open (`can-open`), Viewer,
-Developer or Admin, each including the ones below it.
-[access.md](access.md#people-with-access-beside-tokens) says what each role does.
-`sitesolide share`, in the project's folder, reads the list and changes it;
-the dashboard's *Access* section is the other way.
+Who may open a project's site is its general access, Public, Restricted or
+Anyone with the code, and its guests: people given **password access** by the
+owner, who open the site and nothing more, no dashboard and no token. The
+steward keeps the list. `sitesolide share`, in the project's folder, reads it
+and changes it; the dashboard's *Access* section is the other way.
+[access.md](access.md#who-may-open-a-site) says who opens what.
 
 ```console
 $ sitesolide share
 -> access to notes, https://notes.example.com/, over SSH, as the owner
    general access: Restricted: visitors are asked to sign in.
-   people with access:
-     alice@acme.com      Developer
-     @acme.com           Can open
-     client@example.org  Can open, password access until 2026-11-07 09:00 UTC
-   Also open it without being listed: the owner, and owner@acme.com, set on the server to open every site.
-
-$ sitesolide share bob@acme.com carol@acme.com --role developer
--> access to notes, https://notes.example.com/, over SSH, as the owner
--> bob@acme.com: Developer on notes
--> carol@acme.com: Developer on notes
-   ...
-   send: Open https://notes.example.com/ and sign in with your Google account.
+   guests:
+     client@example.org  password access until 2026-11-07 09:00 UTC
+   The owner also opens it.
 
 $ sitesolide share dana@example.net --expires 30d
 -> access to notes, https://notes.example.com/, over SSH, as the owner
--> dana@example.net: Can open, password access until 2026-11-07 09:00 UTC on notes
+-> dana@example.net: password access until 2026-12-07 09:00 UTC on notes
    password for dana@example.net: Xith-G4r4-nRJs-uDMV
-   shown once: send it to them yourself, with the address; the machine keeps only its hash
+   shown once: send it to them yourself, with https://notes.example.com/; the machine keeps only its hash
    ...
 
-$ sitesolide share --remove @acme.com
+$ sitesolide share --remove client@example.org
 -> access to notes, https://notes.example.com/, over SSH, as the owner
--> @acme.com no longer has access to notes: refused from their next request
+-> client@example.org no longer has access to notes: refused from their next request
    ...
 ```
 
-With no argument it shows the project's general access, its people with
-access, each with their role and password access with its expiry, and who
-else opens it without being on the list. Emails and `@domain`s
-are given access, Can open unless `--role` names another; someone already on
-the list gets the role named, raised or lowered, and someone who has it
-already is left as they are. A domain is Can open only, and only once signing
-in with a company account is set up. Someone outside the company's domains, or
-anyone when that is not set up, is Can open only, with **password access**:
-the machine draws a password for them, which the command prints once, and the
-access lasts what `--expires` says, 7 days by default. `--remove` takes access
-away, from the person's next request. Several people are handled one by one:
-a refusal stops before the next, and says who was already given access.
+With no argument it shows the project's general access and its guests, each
+with the expiry of their password access. An email is given password access:
+the machine draws a password, which the command prints once and keeps only as
+a hash, and the access lasts what `--expires` says, 7 days by default. Someone
+who already has it is left as they are: remove them first to draw a new
+password. `--remove` takes access away, from the guest's next request; a guest
+of before, listed under a name rather than an email, is removed by that name.
+Several guests are handled one by one: a refusal stops before the next, and
+says who was already done.
 
-Nothing is sent to anyone: after giving someone access with an account, the
-command prints the line to send, `send:`, and for password access the
-password, once. Two things are never done here: general access, from the
-dashboard's *Access* section, and the preview code, `sitesolide lock`. `--domain` and `--only-admins`, from before, are refused
-with a pointer: a domain is written `@acme.com`.
+Nothing is sent to anyone: the owner sends the password. General access is
+never changed here: it is the dashboard's *Access* section, or
+`sitesolide lock` and `unlock` for the code. A whole domain, `@acme.com`, is
+refused, and so are `--role`, `--domain`, `--only-admins` and `--api`, with a
+pointer.
 
 With `--json`, the `result` carries `slug`, `url`, `general` (`public`,
-`restricted`, `code`, or null for a project not deployed), `entries`, `signIn`
-(`configured`, `allowedDomains`), `message` (the line to send, null until
-signing in with a company account is set up), `changed`, and after a change
-`changes`, each `{ who, change, role }`, `change` being `add`, `role`, `none`
-or `remove`, and `password` for password access just given:
+`restricted`, `code`, or null for a project not deployed), `entries` (each
+`who`, `by`, `createdAt`, `updatedAt`, `expiresAt`, `expired`), `changed`, and
+after a change `changes`, each `{ who, change }`, `change` being `add`, `none`
+or `remove`, with `password` for password access just given:
 
 ```console
 $ sitesolide share dana@example.net --json
 ...
-{"type":"result","ok":true,"command":"share","slug":"notes","url":"https://notes.example.com/","general":"restricted","entries":[...,{"who":"dana@example.net","kind":"password","role":"can-open","by":"owner","createdAt":1791450000000,"updatedAt":1791450000000,"password":{"expiresAt":1792054800000,"expired":false}}],"signIn":{"configured":true,"allowedDomains":["acme.com"]},"message":"Open https://notes.example.com/ and sign in with your Google account.","changed":true,"changes":[{"who":"dana@example.net","change":"add","role":"can-open","password":"Xith-G4r4-nRJs-uDMV"}]}
+{"type":"result","ok":true,"command":"share","slug":"notes","url":"https://notes.example.com/","general":"restricted","entries":[...,{"who":"dana@example.net","by":"owner","createdAt":1791450000000,"updatedAt":1791450000000,"expiresAt":1792054800000,"expired":false}],"changed":true,"changes":[{"who":"dana@example.net","change":"add","password":"Xith-G4r4-nRJs-uDMV"}]}
 ```
 
-The owner's `share` runs over SSH: root on the machine asks the steward on
-its owner socket, `/run/sitesolide-steward-owner/owner.sock`, which only root
-opens, the body on standard input so that no address goes through a shell.
-The steward judges the change by its access rules, writes the portal's
-projection and its registry, and records it in its journal under `owner`.
-Root is the owner: no unlock is asked. It touches nothing else, Caddy least of
-all. With a token, the command goes through the dashboard to the steward, and
-gives Can open alone: see [access.md](access.md#giving-access-to-what-you-deployed).
-While the portal on the machine cannot read the registry's projection, the
-command warns of it: nothing given opens a restricted site until it can.
-
-## People
-
-Everyone with access, machine-wide, for the owner, from any folder: their
-roles per project, their password access, who may create projects, the
-domains, and the admin emails, which open every site as admin, set on the
-server in `OIDC_ADMIN_EMAILS`. The dashboard's *People* page is the other way. Roles are given per
-project, with `sitesolide share`; `people` grants the right to create
-projects.
-
-```console
-$ sitesolide people
--> people of https://dashboard.example.com, over SSH, as the owner
-   alice@acme.com      notes: Developer, shop: Viewer
-   client@example.org  notes: Can open, password access until 2026-11-07 09:00 UTC
-   you@acme.com        no project; every site, as admin: set on the server in OIDC_ADMIN_EMAILS
-   @acme.com           Can open: blog, notes
-   the company's domains: acme.com; anyone else gets password access
-
-$ sitesolide people alice@acme.com --may-create
--> people of https://dashboard.example.com, over SSH, as the owner
--> alice@acme.com may create projects, Admin of each one they create: open https://dashboard.example.com and sign in with their company account
-   alice@acme.com  notes: Developer, shop: Viewer; may create projects
-```
-
-`--may-create` grants the right to create projects to someone who signs in
-with a company account, whatever their roles, none included: they sign in to
-the dashboard, mint a token that may create projects, and become Admin of each
-project it creates. `--no-create` takes it back and leaves their roles;
-someone then left with no role above Can open no longer signs in to the
-dashboard, their sessions closed and their tokens revoked.
-
-With `--json`, the listing's `result` carries `people` (each `who`, `roles` by
-project, `can-open` for Can open, `create`, `passwords`, each `slug`,
-`expiresAt`, `expired`, and `admin`), `domains` (each `slug`, `domain`),
-`signIn` and `changed: false`;
-`--may-create` and `--no-create`, `email`, `create`, `roles`, `change`
-(`create` or `none`) and `changed`.
-
-Root on the machine asks the steward on its owner socket, as for `share`, and
-the steward records the change in its journal under `owner`. With a token, the
-command is refused before anything is sent: it is the owner's. See
-[access.md](access.md#people-with-access-beside-tokens) for what each person sees,
-and [dashboard/README.md](../dashboard/README.md#access) for the machine's
-side.
+`share` runs over the owner's SSH alone: root on the machine asks the steward
+on its owner socket, `/run/sitesolide-steward-owner/owner.sock`, which only
+root opens, the body on standard input so that no address goes through a
+shell. The steward judges the change, writes its registry and the portal's
+projection, and records it in its journal under `owner`. Root is the owner: no
+unlock is asked. It touches nothing else, Caddy least of all. With a token,
+the command is refused (`needs-ssh`): a token never gives anyone access. While
+the portal on the machine cannot read the registry's projection, the command
+warns of it: nothing given opens a restricted site until it can.
 
 ## Passkeys
 
@@ -757,8 +693,8 @@ user asked. See [agents.md](agents.md).
 
 ## Deploying with a token
 
-Every deployment goes through a token: the owner's, a person's own, or an
-agent's. A workstation with no `server`, but the dashboard's address and a
+Every deployment goes through a token the owner minted: the owner's own,
+or one scoped to some projects, for an agent or a CI. A workstation with no `server`, but the dashboard's address and a
 token, never touches SSH; one with a server uses the token for `deploy`, and
 SSH for the owner's other commands. See [access.md](access.md).
 
@@ -794,9 +730,6 @@ sitesolide deploy                                 build here, upload, follow the
 sitesolide status                                 the projects this token may deploy
 sitesolide logs [--follow]                        the journal of this folder's project
    --lines <n>                                    how many lines back, 50 by default, 500 at most
-sitesolide share                                  this folder's project's general access and people with access
-   <email|@domain>...                             give them Can open: people inside the company's domains, or one of them
-   --remove <email|@domain>...                    take their Can open away
 sitesolide secrets                                this folder's project's secrets: names, sources, states, never a value
 sitesolide secrets set <NAME>                     set a variable in the project's store, typed at a prompt that does not echo it
    --stdin                                        the value from standard input, one trailing line break dropped
@@ -824,9 +757,8 @@ address `login` wrote beside it and to no other, and a `SITESOLIDE_API` or a
 `config.json` naming another is refused, `unauthenticated`, until `sitesolide
 login --url` checks the token there. A vault filled before `login` wrote the
 address sends its token to the `api` of the `config.json` beside it.
-A person's own token says so: `login` and `status` print whose roles bound
-it, and what it may do is the steward's reading of those roles at that
-moment. `share` gives Can open alone, and never password access, see
+A token is the owner's, minted on the Tokens page or with `login --owner`,
+and never gives anyone access: `share` with a token is refused, see
 [access.md](access.md#giving-access-to-what-you-deployed).
 
 `deploy` asks the machine for its plan first, `POST /api/v1/deployments/plan`,
@@ -885,8 +817,8 @@ over. `--json` prints the same events as over SSH, and one final `result` or
 `error`.
 
 The other commands need the owner's SSH access and say so: `lock`,
-`unlock`, `domain`, `remove`, `rename`, `disable`, `enable`, `run`, `people`,
-`refresh`, `backups`, `setup` and `upgrade`, and `share` beyond Can open. The
+`unlock`, `domain`, `remove`, `rename`, `disable`, `enable`, `run`, `share`,
+`passkey`, `refresh`, `backups`, `setup` and `upgrade`. The
 owner, whose configuration has a `server`, keeps SSH for those; `--api` makes
 one go through the dashboard instead, to see what a token's holder sees.
 
