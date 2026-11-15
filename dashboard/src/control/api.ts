@@ -566,7 +566,7 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
       if (store.countRunning() >= MAX_RUNNING) return failure("busy", "the machine is already running several deployments: try again in a minute");
 
       const id = newDeploymentId(random);
-      store.createDeployment({ id, tokenId: identity.id, email: identity.email, slug, creating, manifest: text, createdAt: now, force });
+      store.createDeployment({ id, tokenId: identity.id, email: identity.email, slug, creating, manifest: text, createdAt: now, force, label: identity.label });
       const row = store.deployment(id)!;
       return json({ deployment: view(row, null, 0) }, 201, { Location: `/api/v1/deployments/${id}` });
     },
@@ -648,7 +648,7 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
         actor: `token:${identity.id}`,
         action: "deploy.start",
         target: row.slug,
-        detail: { email: identity.email, deployment: row.id, creating: row.creating, bytes: receipt.bytes },
+        detail: { email: identity.email, label: identity.label, deployment: row.id, creating: row.creating, bytes: receipt.bytes },
       });
       return json({ deployment: view(store.deployment(row.id)!, null, 0) }, 202);
     },

@@ -515,22 +515,25 @@ export function auditWords(row: AuditRow, timeZone?: string): AuditWords {
 
     case "token.create":
     case "token.revoke": {
-      // A person's own token, journaled by the steward: its id and scope in the note.
+      // Journaled by the steward when tokens were minted from one: old lines
+      // alone, its id and scope in the note, said without whose it was.
       if (row.source === "steward") {
-        const refused = text(detail.result) === "rejects"
         if (row.action === "token.create") {
-          return refused
-            ? { summary: "Tried to create a token above their roles", note: text(detail.note), tone: "attention" }
-            : { summary: "Created a token of their own", note: text(detail.note), tone: "neutral" }
+          return text(detail.result) === "rejects"
+            ? { summary: "Tried to create a token", note: text(detail.note), tone: "attention" }
+            : { summary: "Created a token", note: text(detail.note), tone: "neutral" }
         }
-        return { summary: member === null ? "Revoked a token of their own" : `Revoked the tokens of ${member}`, note: text(detail.note), tone: "neutral" }
+        return { summary: "Revoked a token", note: text(detail.note), tone: "neutral" }
       }
+      // Every token is the owner's: its name says which, the address a row
+      // from before carries says nothing of it.
       const label = text(detail.label)
-      const holder = `${text(detail.email) ?? "someone"}${label === null ? "" : ` (${label})`}`
-      return { summary: row.action === "token.create" ? `Created a token for ${holder}` : `Revoked the token of ${holder}`, note: null, tone: "neutral" }
+      if (row.action === "token.create") return { summary: label === null ? "Created a token" : `Created the token ${label}`, note: null, tone: "neutral" }
+      return { summary: label === null ? "Revoked a token" : `Revoked the token ${label}`, note: null, tone: "neutral" }
     }
+    // Old lines alone: a project is created by its first deployment now.
     case "project.create":
-      return { summary: "Created the project with a token, Admin of it", note: text(detail.note), tone: "neutral" }
+      return { summary: "Created the project with a token", note: text(detail.note), tone: "neutral" }
     case "project.remove":
       return { summary: "Removed the project: its name free for another token", note: text(detail.note), tone: "neutral" }
     case "project.rename":
@@ -616,7 +619,9 @@ export function auditWords(row: AuditRow, timeZone?: string): AuditWords {
 }
 
 /**
- * Who acted, by name: the owner; a token's person when the row knows them;
+ * Who acted, by name: the owner; a token by its name, which a deployment's
+ * rows carry, or by the address a row from before people lost their tokens
+ * names;
  * a password access by the name it was given under, which the portal writes
  * beside its sign-ins; the server itself; someone not known yet.
  */
@@ -625,7 +630,12 @@ export function actorLabel(row: AuditRow): string {
   if (row.actor === "owner") return "Owner"
   if (row.actor === "system") return "The server"
   if (row.actor === "anonymous") return "Someone"
-  if (row.actor.startsWith("token:")) return email === null ? "A token" : `${email} (token)`
+  if (row.actor.startsWith("token:")) {
+    const label = text(row.detail?.label)
+    if (label !== null) return `Token ${label}`
+    // `owner` is every token's holder since: no name to tell one by.
+    return email === null || email === "owner" ? "A token" : `${email} (token)`
+  }
   if (row.actor.startsWith("password:") || row.actor.startsWith("guest:")) {
     const name = text(row.detail?.name)
     return name === null ? "Someone with password access" : `${name} (password access)`

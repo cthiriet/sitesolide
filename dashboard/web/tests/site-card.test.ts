@@ -587,6 +587,7 @@ describe("the Overview as a hub", () => {
       ...partial,
     })
     expect(deployedBy([row(deployed + 60_000)], deployed)).toBe("alice@example.com (token)")
+    expect(deployedBy([row(deployed + 60_000, { detail: { email: "owner", label: "shop-ci" } })], deployed)).toBe("Token shop-ci")
     expect(deployedBy([row(deployed + SAME_DEPLOYMENT_MS + 1)], deployed)).toBeNull()
     expect(deployedBy([row(deployed, { action: "deploy.failure" })], deployed)).toBeNull()
     expect(deployedBy([], deployed)).toBeNull()

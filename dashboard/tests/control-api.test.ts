@@ -172,6 +172,9 @@ describe("a deployment, from the manifest to the site", () => {
     await tick();
     const actions = store.listAudit(10, "deploy.").map((entry) => `${entry.action} ${entry.actor.startsWith("token:")} ${entry.target}`);
     expect(actions).toEqual(["deploy.success true shop", "deploy.start true shop"]);
+    // Each names the token by its name, which the Activity page shows as who deployed.
+    expect(store.listAudit(10, "deploy.").map((entry) => (entry.detail as { label?: unknown } | null)?.label)).toEqual(["Ada", "Ada"]);
+    expect(store.deployment(deployment.id)?.label).toBe("Ada");
     expect(existsSync(join(bench.spool, deployment.id))).toBe(false);
   });
 

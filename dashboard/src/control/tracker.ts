@@ -38,7 +38,7 @@ export function createTracker(dependencies: { store: ControlStore; steward: Cont
       actor: `token:${row.tokenId}`,
       action,
       target: row.slug,
-      detail: { email: row.email, deployment: row.id, ...detail },
+      detail: { email: row.email, ...(row.label === null ? {} : { label: row.label }), deployment: row.id, ...detail },
     });
   }
 

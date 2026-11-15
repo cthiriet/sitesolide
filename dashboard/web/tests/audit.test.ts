@@ -119,8 +119,11 @@ describe("reading the newest page again", () => {
 
 describe("a row in words", () => {
   test("the dashboard: tokens and deployments", () => {
-    expect(auditWords(row({ source: "dashboard", actor: "owner", action: "token.create", detail: { email: "ada@test-zone.invalid", label: "Ada" } })).summary).toBe("Created a token for ada@test-zone.invalid (Ada)")
-    expect(auditWords(row({ source: "dashboard", action: "token.revoke", detail: { email: "ada@test-zone.invalid" } })).summary).toBe("Revoked the token of ada@test-zone.invalid")
+    // Every token is the owner's: its name says which, never "owner" as if it were someone.
+    expect(auditWords(row({ source: "dashboard", actor: "owner", action: "token.create", detail: { email: "owner", label: "shop-ci" } })).summary).toBe("Created the token shop-ci")
+    expect(auditWords(row({ source: "dashboard", actor: "owner", action: "token.create", detail: { email: "ada@test-zone.invalid", label: "Ada" } })).summary).toBe("Created the token Ada")
+    expect(auditWords(row({ source: "dashboard", action: "token.revoke", detail: { email: "owner", label: "shop-ci" } })).summary).toBe("Revoked the token shop-ci")
+    expect(auditWords(row({ source: "dashboard", action: "token.revoke", detail: { email: "ada@test-zone.invalid" } })).summary).toBe("Revoked a token")
     expect(auditWords(row({ source: "dashboard", action: "deploy.start", detail: { creating: true } })).summary).toBe("Started deploying a new project")
     expect(auditWords(row({ source: "dashboard", action: "deploy.success", detail: { creating: false } })).summary).toBe("Deployed")
     expect(auditWords(row({ source: "dashboard", action: "deploy.failure", detail: { error: "install-failed" } }))).toEqual({ summary: "Deployment failed", note: "install-failed", tone: "error" })
@@ -357,17 +360,19 @@ describe("the days and the runs", () => {
   })
 })
 
-describe("a person's own tokens, in words", () => {
-  test("the steward's rows: a token created, refused above their roles, revoked, and a project created", () => {
+describe("the steward's token lines from before, in words", () => {
+  test("a token created, refused, revoked, and a project created: neutral, with no role and no person", () => {
     const steward = (action: string, detail: Record<string, unknown>, actor = "ada@acme.test") => row({ source: "steward", actor, action, target: null, detail })
-    expect(auditWords(steward("token.create", { result: "ok", note: "abc: alpha" }))).toMatchObject({ summary: "Created a token of their own", note: "abc: alpha" })
-    expect(auditWords(steward("token.create", { result: "rejects", note: "scope.slugs: ..." }))).toMatchObject({ summary: "Tried to create a token above their roles", tone: "attention" })
-    expect(auditWords(steward("token.revoke", { result: "ok", note: "abc" }))).toMatchObject({ summary: "Revoked a token of their own" })
-    expect(auditWords(steward("token.revoke", { result: "ok", member: "ada@acme.test", note: "abc: gone" }, "owner"))).toMatchObject({ summary: "Revoked the tokens of ada@acme.test" })
-    expect(auditWords(steward("project.create", { result: "ok", note: "admin, created with token abc" }))).toMatchObject({ summary: "Created the project with a token, Admin of it" })
+    expect(auditWords(steward("token.create", { result: "ok", note: "abc: alpha" }))).toMatchObject({ summary: "Created a token", note: "abc: alpha" })
+    expect(auditWords(steward("token.create", { result: "rejects", note: "scope.slugs: ..." }))).toMatchObject({ summary: "Tried to create a token", tone: "attention" })
+    expect(auditWords(steward("token.revoke", { result: "ok", note: "abc" }))).toMatchObject({ summary: "Revoked a token" })
+    expect(auditWords(steward("token.revoke", { result: "ok", member: "ada@acme.test", note: "abc: gone" }, "owner"))).toMatchObject({ summary: "Revoked a token" })
+    expect(auditWords(steward("project.create", { result: "ok", note: "admin, created with token abc" }))).toMatchObject({ summary: "Created the project with a token" })
   })
 
-  test("a deployment by a person's token names the person as whose it is", () => {
+  test("a deployment names its token by its name; a row from before by the address it carries", () => {
+    expect(actorLabel(row({ actor: "token:abc", action: "deploy.start", detail: { email: "owner", label: "shop-ci" } }))).toBe("Token shop-ci")
+    expect(actorLabel(row({ actor: "token:abc", action: "deploy.success", detail: { email: "owner" } }))).toBe("A token")
     expect(actorLabel(row({ actor: "token:abc", action: "deploy.start", detail: { email: "ada@acme.test", member: "ada@acme.test" } }))).toBe("ada@acme.test (token)")
   })
 })

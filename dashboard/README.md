@@ -941,8 +941,8 @@ server.ts          reads, merges, bounds; writes nothing
   link does.
 - **In words.** Each row reads as a sentence, "Gave dana@example.com
   password access to cms", "Restricted cms", "Signed in with the owner's password",
-  and names its actor: *Owner*, *The server*, *Someone*, `alice@example.com
-  (token)`, a password access by its name, `Example Accounting (password
+  and names its actor: *Owner*, *The server*, *Someone*, a token by its name,
+  `Token shop-ci`, a password access by its name, `Example Accounting (password
   access)` (web/src/lib/audit.ts).
 - **The exports**, CSV and JSON lines, are made in the browser from the rows
   already read, under the filters in force. A CSV field a spreadsheet would
@@ -1463,7 +1463,8 @@ the body. **No unlock**: minting the token took it, and *Manage secrets* is
 the opt-in. A token's sheet, on *Tokens*, shows its last ten lines of
 *Activity*, the steward's journal for the rows of `token:<id>` beside the
 deployments of `dashboard.db`; *Activity*
-shows the same rows, "Set API_KEY" by "alice@example.com (token)", and reads
+shows the same rows, "Set API_KEY" by "A token", a deployment by "Token
+shop-ci", the name it was created under, and reads
 further back, until the journal drops the line.
 
 A restart with the change is a second call to the steward once the write

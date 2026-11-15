@@ -56,6 +56,14 @@ export const CONTROL_SCHEMA = [
      id TEXT PRIMARY KEY,
      force INTEGER NOT NULL
    )`,
+  // The name of the token that asked for a deployment, which the Activity
+  // page shows as who deployed: every token is the owner's, so the email
+  // column says nothing of which one. A table of its own for the same
+  // reason as the options; a deployment made before it has no row.
+  `CREATE TABLE IF NOT EXISTS deployment_labels (
+     id TEXT PRIMARY KEY,
+     label TEXT NOT NULL
+   )`,
 ] as const;
 
 export type { AuditEntry };
@@ -74,6 +82,8 @@ export type DeploymentRow = {
   message: string | null;
   /** `sitesolide deploy --force`, asked by the owner's token for every project. */
   force: boolean;
+  /** The token's name, null for a deployment made before it was kept. */
+  label: string | null;
 };
 
 type RawRow = Omit<DeploymentRow, "creating" | "state" | "force"> & { creating: number; state: string; force: number | null };
@@ -82,10 +92,11 @@ type RawRow = Omit<DeploymentRow, "creating" | "state" | "force"> & { creating: 
 export type RawAuditRow = { id: number; at: string; actor: string; action: string; target: string | null; detail: string | null };
 
 const COLUMNS =
-  "deployments.id AS id, token_id AS tokenId, email, slug, state, creating, manifest, created_at AS createdAt, started_at AS startedAt, finished_at AS finishedAt, message, deployment_options.force AS force";
+  "deployments.id AS id, token_id AS tokenId, email, slug, state, creating, manifest, created_at AS createdAt, started_at AS startedAt, finished_at AS finishedAt, message, deployment_options.force AS force, deployment_labels.label AS label";
 
 /** Every reading of a deployment carries what it asked beyond its manifest. */
-const FROM = "deployments LEFT JOIN deployment_options ON deployment_options.id = deployments.id";
+const FROM =
+  "deployments LEFT JOIN deployment_options ON deployment_options.id = deployments.id LEFT JOIN deployment_labels ON deployment_labels.id = deployments.id";
 
 function row(raw: RawRow | null): DeploymentRow | null {
   if (raw === null) return null;
@@ -113,6 +124,7 @@ export function createControlStore(db: Database) {
       "INSERT INTO deployments (id, token_id, email, slug, state, creating, manifest, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     ),
     options: db.query<undefined, [string, number]>("INSERT INTO deployment_options (id, force) VALUES (?, ?)"),
+    label: db.query<undefined, [string, string]>("INSERT INTO deployment_labels (id, label) VALUES (?, ?)"),
     byId: db.query<RawRow, [string]>(`SELECT ${COLUMNS} FROM ${FROM} WHERE deployments.id = ?`),
     inState: db.query<RawRow, [string]>(`SELECT ${COLUMNS} FROM ${FROM} WHERE state = ? ORDER BY created_at`),
     activeForSlug: db.query<RawRow, [string]>(
@@ -174,9 +186,10 @@ export function createControlStore(db: Database) {
       return queries.pageAudit.all(before ?? Number.MAX_SAFE_INTEGER, limit);
     },
 
-    createDeployment(created: { id: string; tokenId: string; email: string; slug: string; creating: boolean; manifest: string; createdAt: number; force?: boolean }): void {
+    createDeployment(created: { id: string; tokenId: string; email: string; slug: string; creating: boolean; manifest: string; createdAt: number; force?: boolean; label?: string }): void {
       queries.create.run(created.id, created.tokenId, created.email, created.slug, "awaiting-bundle", created.creating ? 1 : 0, created.manifest, created.createdAt);
       if (created.force === true) queries.options.run(created.id, 1);
+      if (created.label !== undefined) queries.label.run(created.id, created.label);
     },
 
     deployment(id: string): DeploymentRow | null {
