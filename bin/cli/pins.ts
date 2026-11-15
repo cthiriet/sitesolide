@@ -20,15 +20,15 @@ import { dirname } from "node:path";
 import { APT, shellQuote } from "./harden";
 
 export const BUN = {
-  version: "1.3.11",
+  version: "1.3.14",
   /**
    * bun-linux-<build>.zip of the release. x64-baseline is for an x86-64
    * processor without AVX2, as Bun's own installer picks it.
    */
   sha256: {
-    x64: "8611ba935af886f05a6f38740a15160326c15e5d5d07adef966130b4493607ed",
-    "x64-baseline": "abe346f63414547cdf6b35b7a649a490c728b93d006226156923918a84c0e59b",
-    aarch64: "d13944da12a53ecc74bf6a720bd1d04c4555c038dfe422365356a7be47691fdf",
+    x64: "951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f",
+    "x64-baseline": "a063908ae08b7852ca10939bbdc6ceed3ddabce8fb9402dce83d65d73b36e6c7",
+    aarch64: "a27ffb63a8310375836e0d6f668ae17fa8d8d18b88c37c821c65331973a19a3b",
   },
 } as const;
 
