@@ -327,6 +327,36 @@ describe("refusals an agent can act on", () => {
     }
   });
 
+  test("a public project the token does not reach is out of its scope, not a door to ask for", async () => {
+    // crm is public on the machine and nobody granted it: judged on its door
+    // first, the token was told its manifest was refused, "this site is
+    // public on the machine", when llms.txt promises out-of-scope.
+    const manifest = { slug: "crm", start: "/usr/local/bin/bun server.ts", port: 3044 };
+    const folder = join(bench.sites, "crm");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "sitesolide.json"), JSON.stringify(manifest));
+    const snapshot: Raw = {
+      generated: Date.now(),
+      zone: ZONE,
+      folders: [{ slug: "crm", manifest: JSON.stringify(manifest), unit: null, bytes: 1024, deployed: Date.now() }],
+      codes: "{}",
+      domains: null,
+      ports: [],
+      blocks: { crm: "reverse_proxy 127.0.0.1:3044" },
+      machine: null,
+      previous: null,
+    };
+    writeFileSync(join(root, "state.json"), JSON.stringify(snapshot));
+    try {
+      const response = await api("/api/v1/deployments", { method: "POST", body: JSON.stringify({ manifest: { slug: "crm", start: "x" } }) });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ error: "out-of-scope", message: expect.stringContaining("crm already exists on the machine") });
+    } finally {
+      rmSync(join(root, "state.json"), { force: true });
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
   test("an upload that is not gzip, and a deployment that is another token's", async () => {
     const created = await api("/api/v1/deployments", { method: "POST", body: JSON.stringify({ manifest: { slug: "notes", start: "x", publicDir: "public" } }) });
     const id = ((await created.json()) as { deployment: DeploymentView }).deployment.id;

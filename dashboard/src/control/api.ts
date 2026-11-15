@@ -471,11 +471,17 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
   /**
    * A deployment's manifest as `POST /api/v1/deployments` and its plan
    * receive it, judged as far as the dashboard can: its shape, the CLI's
-   * validation on a copy whose missing ports are filled in, the scope and
-   * the door against the machine's snapshot. `force` only for the owner's
-   * token for every project, which the steward judges again.
+   * validation on a copy whose missing ports are filled in, then whether
+   * this token may touch the slug at all, as the steward's preflight judges
+   * it, then the scope and the door against the machine's snapshot. The
+   * slug first: a project the token does not reach is `out-of-scope`, as
+   * llms.txt promises, never a refusal of its manifest that would
+   * send it fixing a door it may not change anyway. `force` only for the
+   * owner's token for every project, which the steward judges again.
    */
-  async function judgedManifest(req: Request): Promise<{ identity: Identity; bearer: string; text: string; slug: string; force: boolean } | Response> {
+  async function judgedManifest(
+    req: Request,
+  ): Promise<{ identity: Identity; bearer: string; text: string; slug: string; force: boolean; preflight: Record<string, unknown> } | Response> {
       const auth = await authenticated(req);
       if (auth instanceof Response) return auth;
       const { identity, bearer } = auth;
@@ -511,6 +517,8 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
         return failure("invalid-manifest", "sitesolide.json is refused: fix every point in details, then deploy again", { details: errors });
       }
       const slug = manifest.slug;
+      const preflight = await reach(() => steward.preflight(bearer, slug), [bearer]);
+      if (preflight.kind !== "received" || preflight.status !== 200) return relayed(preflight);
       const { sites } = await snapshotSites();
       const site = sites.get(slug);
       const decision = decideManifest(manifest, identity.scope, site === undefined ? null : site.portal.wanted, dependencies.zone);
@@ -520,7 +528,7 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
           details: decision.details,
         });
       }
-      return { identity, bearer, text, slug, force };
+      return { identity, bearer, text, slug, force, preflight: preflight.body };
   }
 
   return {
@@ -533,13 +541,10 @@ export function createApiRoutes(dependencies: ApiDependencies): ApiRoutes {
     async createDeployment(req) {
       const judged = await judgedManifest(req);
       if (judged instanceof Response) return judged;
-      const { identity, bearer, text, slug, force } = judged;
+      const { identity, text, slug, force, preflight } = judged;
 
-
-      const preflight = await reach(() => steward.preflight(bearer, slug), [bearer]);
-      if (preflight.kind !== "received" || preflight.status !== 200) return relayed(preflight);
-      const creating = preflight.body.creating === true;
-      const said = preflight.body.placeholders;
+      const creating = preflight.creating === true;
+      const said = preflight.placeholders;
       if (isObject(said) && typeof said.zone === "string" && typeof said.contact === "string" && said.zone.length <= 253 && said.contact.length <= 254) {
         placeholders = { zone: said.zone, contact: said.contact };
       }
