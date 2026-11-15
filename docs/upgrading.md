@@ -166,6 +166,65 @@ first, with that release's binary and [its
 notes](https://github.com/cthiriet/sitesolide/blob/v0.16.0/docs/upgrading.md),
 which go back to 0.1; this release converts nothing an earlier one left.
 
+## The owner signs in with a passkey
+
+**What the release brings.** The owner signs in to the dashboard with a
+passkey, unlocks with a fresh one, and enters a restricted site as the
+owner with the same passkey, from its sign-in page, on a domain of its own
+too. Once a passkey exists, the dashboard's password neither signs in nor
+unlocks. The first one is registered through a one-time link root mints
+over SSH, `sitesolide passkey link`. The dashboard's sign-in failures are
+now counted per client rather than globally, and an owner's session closes
+after twelve hours without a request, within its seven days. Password
+access, company accounts and the portal's own password are unchanged. See
+[dashboard/README.md](../dashboard/README.md#passkeys) and
+[portal/README.md](../portal/README.md#the-owners-passkey).
+
+**What `sitesolide upgrade` brings**: the steward (the registry,
+`/var/lib/sitesolide-steward/passkeys.json`, created on the first
+registration, and its projection for the portal,
+`/etc/sitesolide-portal/passkeys.json`, laid at startup), the dashboard (the
+routes, the *Passkeys* panel on the *Server* page, the passkey on the
+sign-in page and in the unlock) and the portal (its passkey page, and three
+routes on its own host, `/passkey`, `/passkey/options` and
+`/passkey/verify`, which its redeployment adds to its Caddy block). The
+dashboard's database keeps its tables: the `essais` table is no longer
+read, and a flag is kept in `reglages` under `owner_passkeys`. No project is
+redeployed: every fragment already sends `/_portal/*` to the portal.
+
+**The steps, on the owner's workstation, in this order:**
+
+1. Install the new CLI, then `sitesolide upgrade --dry-run`, then
+   `sitesolide upgrade`. The steward is upgraded before the dashboard and
+   the portal, which is the order that matters: a dashboard ahead of its
+   steward finds no passkey route, says nothing of passkeys, and keeps the
+   password signing in, so no order locks you out. Until the first passkey,
+   the dashboard signs in with its password as before.
+2. Mint the link, from the workstation, over your SSH access:
+
+   ```bash
+   sitesolide passkey link
+   ```
+
+   Open the printed `https://dashboard.<zone>/#passkey=...` in your own
+   browser within fifteen minutes. It registers a passkey and signs you in;
+   from then on the password no longer does.
+3. Register a second passkey, on another device or a security key, from the
+   *Server* page, *Passkeys*, which asks for the unlock, now a passkey.
+   `sitesolide passkey` lists both.
+4. Check a restricted site: sign out of it, then *Sign in with a passkey* on
+   its sign-in page lets you in as the owner.
+
+**Recovery.** Every passkey lost: `sitesolide passkey link` again, over SSH.
+A link that cannot be used, the browser offering no passkey for instance:
+`sitesolide passkey` for the ids, then `sitesolide passkey remove <id>` for
+each, which gives the dashboard's password back once the last one is gone.
+
+**Going back.** The previous release's dashboard signs in with the password
+again, and its steward ignores the registry, which stays on disk, root's;
+the projection is ignored by a portal from before, and the cookies a passkey
+opened stop opening anything there, their form unknown to it.
+
 ## Every deployment goes through a token
 
 **What the release brings.** `sitesolide deploy` no longer goes over SSH, the
