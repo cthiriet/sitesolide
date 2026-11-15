@@ -1,6 +1,6 @@
 /**
- * The contract of the control API: deploying without root SSH, with a personal
- * token over HTTPS.
+ * The contract of the control API: deploying without root SSH, with a token
+ * the owner minted, over HTTPS.
  *
  * Four pieces speak it, and each one holds a different part of the trust:
  *

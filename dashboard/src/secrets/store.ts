@@ -127,7 +127,7 @@ export type NameList = "set" | "remove" | "generate" | "name";
 export function storeNameRefusal(list: NameList, name: unknown, setKeys: Iterable<string> | null): Refusal | null {
   if (!isVariableName(name)) return invalid(`${list}: not a variable name: ${NAME_SHAPE}`);
   // A key pasted where a name goes would become a name, journaled for good
-  // and listed to every Developer of the project; never quoted. The rule of
+  // and listed to every token of the project; never quoted. The rule of
   // the manifest's runtime names (bin/cli/manifest.ts), so that no name a
   // manifest could declare is refused here.
   if (VALUE_LIKE_PREFIXES.some((prefix) => name.startsWith(prefix))) {

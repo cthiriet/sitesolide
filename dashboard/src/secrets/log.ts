@@ -345,8 +345,7 @@ export function truncate(text: string, max: number = MAX_LINES, kept: number = K
  * days before the steward took them over: the same, here.
  *
  * **What goes there**: a line whose operation is a change of access and
- * whose result is `ok` (`isAccessChange`): people with access, the create
- * right, general access (`portal`), a new code (`code`), a project created or
+ * whose result is `ok` (`isAccessChange`): guests, general access (`portal`), a new code (`code`), a project created or
  * removed. A refusal is not a change: it stays in the journal, bounded per
  * minute, rotated with the rest.
  *

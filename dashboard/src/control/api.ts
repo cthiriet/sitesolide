@@ -26,7 +26,7 @@
  * read never travels further; the token, its project and its flag are the
  * steward's to judge, which journals its refusals within
  * the token's hourly bound. Every answer is built from the fields known
- * here, and a token's view of the store is a Developer's whatever the
+ * here, and a token's view of the store is the narrow one whatever the
  * steward sends: no file size, no previous version, never `reveal` nor
  * `restore`. A value set, a value drawn and a file's content never come
  * back: neither in an answer, nor in a refusal's message, nor anywhere this
@@ -223,10 +223,9 @@ function listOf<T>(value: unknown, read: (one: unknown) => T | null): T[] | null
 }
 
 /**
- * A project's store as a token reads it, from the fields known alone: a
- * Developer's view whatever the steward sends, its writes as the steward
- * says, never a reveal nor a restore, which are the owner's and an Admin's
- * in the dashboard. Null when it does not read.
+ * A project's store as a token reads it, from the fields known alone: the
+ * narrow view whatever the steward sends, its writes as the steward says,
+ * never a reveal nor a restore, which are the owner's in the dashboard. Null when it does not read.
  */
 export function storeViewOf(value: unknown): StoreView | null {
   if (!isObject(value)) return null;

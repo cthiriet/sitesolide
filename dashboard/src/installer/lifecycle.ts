@@ -22,7 +22,7 @@
  * taken out, the domain table written again, Caddy reloaded and every other
  * site probed, put back on failure; then what cannot, its unit files, its
  * folder and data, its store and its previous versions, its account. The
- * steward then lets its people with access and its token go.
+ * steward then lets its guests and its token go.
  *
  * NEVER `caddy stop`, `caddy start` or `caddy reload`: see the Production
  * section of CLAUDE.md. Only `systemctl reload caddy` applies a configuration.

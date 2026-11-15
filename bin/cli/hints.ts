@@ -255,7 +255,7 @@ export const REMOTE_HINTS: Readonly<Record<string, string>> = {
     "the slug belongs to the platform, or a removed project left its backups or its store of secrets under it: pick another one in sitesolide.json; only the owner of the machine frees such a name, never a token",
   "invalid-manifest": "fix every point of `details` in sitesolide.json (docs/manifest.md), then deploy again",
   invalid: "fix what the message names, then run the same command again",
-  "not-found": "nothing by that name: check the slug in sitesolide.json, and the address or @domain in the command (`sitesolide share` lists who has access); with a token, `sitesolide status` lists the projects it reaches",
+  "not-found": "nothing by that name: check the slug in sitesolide.json, and the address in the command (`sitesolide share` lists the guests); with a token, `sitesolide status` lists the projects it reaches",
   busy: "a deployment of this project is already running, the token's previous restart is still under way, or the machine is busy with other changes: wait for it to finish, then run the same command again once; never retry in a loop",
   unmanaged:
     "the file on the machine was written by hand, in a form the dashboard does not rewrite, and nothing was changed: tell the owner of the machine, who fixes it from the dashboard's Secrets section; never work around it",

@@ -54,7 +54,7 @@ const LIKE_A_KEY = "starts like a secret key, not a variable name: a value never
  * is written; which names a project may set (reserved, set by its unit, a
  * password hash) is the steward's to judge, on the machine.
  *
- * A store's names are listed to every Developer of the project and
+ * A store's names are listed to every token of the project and
  * journaled for good: a name that starts like a key is refused, as the
  * manifest refuses it (bin/cli/manifest.ts), since a value pasted in a
  * name's place would become a name. It is never quoted.
