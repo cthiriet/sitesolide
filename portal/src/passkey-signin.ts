@@ -42,12 +42,15 @@
  *   The flow names the host Caddy announced when it began; the code is
  *   redeemed once, within a minute, on that host, by the browser that holds
  *   the binding, and for the owner's cookie alone (`owner` audience).
- * - **Bounded**: challenges and verifications per minute for everyone, the
- *   failures recorded at most thirty a minute, and the codes in flight by
- *   the handoff store's own bounds.
+ * - **Bounded per client**: challenges and verifications per minute for each
+ *   address Caddy saw, with a far higher ceiling for everyone together, so
+ *   that one stranger's flood never keeps the owner out; the challenges in
+ *   flight bounded, the failures recorded at most thirty a minute, and the
+ *   codes in flight by the handoff store's own bounds.
  *
  * Built around its dependencies, like src/sso.ts.
  */
+import { clientKey } from "../borrowed/auth";
 import { recordQuietly, type AuditStore, type NewEvent } from "./database";
 import { FLOW_DURATION_S, isAcceptableUrl } from "./oidc";
 import {
@@ -298,9 +301,18 @@ export type PasskeySignIn = {
 /** The binding cookie of a passkey flow on the site, apart from a company account's. */
 export const PASSKEY_BINDING_SUFFIX = "-passkey";
 
-/** Challenges asked for and assertions verified, per minute, for everyone: a sign-in takes one of each. */
-export const OPTIONS_PER_MINUTE = 60;
-export const VERIFICATIONS_PER_MINUTE = 30;
+/**
+ * Challenges asked for and assertions verified, per minute and per client: a
+ * sign-in takes one of each. The ceilings for everyone together only bound
+ * the work, and take a flood from dozens of addresses to reach.
+ */
+export const OPTIONS_PER_CLIENT = 20;
+export const VERIFICATIONS_PER_CLIENT = 10;
+export const OPTIONS_PER_MINUTE = 1_200;
+export const VERIFICATIONS_PER_MINUTE = 600;
+
+/** Challenges in flight at once: enough that a flood within the bounds above does not evict the owner's. */
+const CHALLENGES_IN_FLIGHT = 2_000;
 
 /** Failures recorded in the audit per minute, at most, as for a company account. */
 const FAILURES_PER_MINUTE = 30;
@@ -342,9 +354,9 @@ async function readSmallJson(req: Request): Promise<Record<string, unknown> | nu
 
 export function createPasskeySignIn(options: PasskeySignInOptions, clock: () => number = Date.now): PasskeySignIn {
   const { online } = options;
-  const challenges = new Challenges();
-  const optionsRate = new RateLimit(OPTIONS_PER_MINUTE, OPTIONS_PER_MINUTE);
-  const verifyRate = new RateLimit(VERIFICATIONS_PER_MINUTE, VERIFICATIONS_PER_MINUTE);
+  const challenges = new Challenges(CHALLENGES_IN_FLIGHT);
+  const optionsRate = new RateLimit(OPTIONS_PER_CLIENT, OPTIONS_PER_MINUTE);
+  const verifyRate = new RateLimit(VERIFICATIONS_PER_CLIENT, VERIFICATIONS_PER_MINUTE);
   let failures = { minute: -1, count: 0 };
 
   function audit(event: NewEvent, now: number): void {
@@ -388,7 +400,7 @@ export function createPasskeySignIn(options: PasskeySignInOptions, clock: () => 
     if (options.key === null || options.place === null) return json({ error: "not-offered", message: "Passkeys aren't offered on this server." }, 404);
     if (req.headers.get("origin") !== options.place.origin) return json({ error: "origin-refused", message: "Origin not allowed." }, 403);
     const now = clock();
-    const wait = rate.hit("everyone", now);
+    const wait = rate.hit(clientKey(req.headers.get("x-forwarded-for")), now);
     if (wait > 0) return json({ error: "too-many-attempts", message: `Too many attempts. Try again in ${wait} s.` }, 429, { "Retry-After": String(wait) });
     const body = await readSmallJson(req);
     if (body === null) return json({ error: "invalid", message: REFUSED }, 400);

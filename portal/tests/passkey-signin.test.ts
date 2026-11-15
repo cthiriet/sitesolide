@@ -13,7 +13,7 @@ import {
   issuePasskeyFlow,
   passkeyPlace,
   readPasskeyFlow,
-  VERIFICATIONS_PER_MINUTE,
+  VERIFICATIONS_PER_CLIENT,
 } from "../src/passkey-signin";
 import { createRoutes } from "../src/routes";
 import { b64url, fromB64url, verifyRegistration } from "../src/webauthn";
@@ -281,17 +281,19 @@ describe("a passkey sign-in, site to portal and back", () => {
     }
   });
 
-  test("verifications are bounded per minute for everyone", async () => {
+  test("verifications are bounded per minute and per client: a stranger's flood leaves the owner's address free", async () => {
     const projection = projectionFile([]);
     try {
       let now = START;
       const b = bench(projection.file, () => now);
       const flow = issuePasskeyFlow(KEY, { host: HOST, returnTo: "/", binding: "e".repeat(43) }, START / 1000);
-      const verify = () => b.signIn.verify(new Request(`${PORTAL}/passkey/verify`, { method: "POST", headers: { Origin: PORTAL }, body: JSON.stringify({ flow }) }));
-      for (let i = 0; i < VERIFICATIONS_PER_MINUTE; i += 1) expect((await verify()).status).toBe(401);
-      expect((await verify()).status).toBe(429);
+      const verify = (from: string) =>
+        b.signIn.verify(new Request(`${PORTAL}/passkey/verify`, { method: "POST", headers: { Origin: PORTAL, "X-Forwarded-For": from }, body: JSON.stringify({ flow }) }));
+      for (let i = 0; i < VERIFICATIONS_PER_CLIENT; i += 1) expect((await verify("203.0.113.66")).status).toBe(401);
+      expect((await verify("203.0.113.66")).status).toBe(429);
+      expect((await verify("198.51.100.7")).status).toBe(401);
       now += 60_000;
-      expect((await verify()).status).toBe(401);
+      expect((await verify("203.0.113.66")).status).toBe(401);
     } finally {
       projection.done();
     }
