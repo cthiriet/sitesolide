@@ -121,10 +121,12 @@ esac
 # The password's hash opens every secret of the perimeter: the steward
 # refuses to unlock if it is not root's alone, without a single bit for the
 # group nor for the others. The script corrects nothing itself: changing the
-# permissions of a secret is a gesture to be made knowingly.
+# permissions of a secret is a gesture to be made knowingly. An empty file is
+# accepted: once the owner signs in with passkeys alone, the hash may be gone,
+# and stat names an empty file "regular empty file".
 dashboard_env="$(ssh -n "$SITESOLIDE_SERVER" "sudo stat -c '%u %a %F' /etc/sitesolide/dashboard.env 2>/dev/null || echo missing")"
 case "$dashboard_env" in
-  "0 600 regular file" | "0 400 regular file") ;;
+  "0 600 regular file" | "0 400 regular file" | "0 600 regular empty file" | "0 400 regular empty file") ;;
   *)
     echo "!! /etc/sitesolide/dashboard.env is '$dashboard_env', expected 0 600 regular file (root:root 0600)" >&2
     echo "   the steward would refuse any unlock. To run yourself:" >&2
