@@ -587,4 +587,82 @@ describe("against the control API", () => {
     expect(clear.stderr).toContain("SITESOLIDE_API must be the dashboard's address alone");
     expect(requests).toEqual([]);
   }, 30_000);
+
+  for (const reader of READERS) {
+    test(`--status and --logs: one GET each, nothing built nor sent, read with ${reader}`, async () => {
+      requests = [];
+      const journal = [
+        JSON.stringify({ __REALTIME_TIMESTAMP: "1788264000000000", _SYSTEMD_UNIT: "sitesolide-app.service", PRIORITY: "6", MESSAGE: "listening on 3007" }),
+        JSON.stringify({ __REALTIME_TIMESTAMP: "1788264001000000", _SYSTEMD_UNIT: "sitesolide-app-worker.service", PRIORITY: "3", MESSAGE: [104, 105] }),
+        "-- No entries --",
+      ];
+      answer = (request) => {
+        if (request.path === "/api/v1/projects/app")
+          return Response.json({
+            project: {
+              slug: "app",
+              access: "deploy",
+              deployed: true,
+              type: "app",
+              url: "https://app.test-zone.invalid/",
+              general: "restricted",
+              portal: { wanted: true, installed: true },
+              services: [
+                { name: null, state: "active", subState: "running", port: 3007, kind: "server" },
+                { name: "worker", state: "failed", subState: "failed", port: null, kind: "worker" },
+              ],
+            },
+          });
+        if (request.path === "/api/v1/projects/app/logs?lines=20") return Response.json({ lines: journal, cursor: "c1" });
+        return new Response("unexpected", { status: 500 });
+      };
+      const folder = project({ slug: "app", start: "/usr/local/bin/bun run server.ts", build: "touch build-ran", secrets: { build: ["CMS_TOKEN"] } }, { "server.ts": "Bun.serve({})", "node_modules/x/index.js": "" });
+      const env = { SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN };
+      const status = await run(folder, ["--status"], { reader, env });
+      expect(status.stderr).toBe("");
+      expect(status.code).toBe(0);
+      expect(status.stdout).toBe(
+        [
+          `-> project app, through ${api}`,
+          "   address https://app.test-zone.invalid/",
+          "   type app, general access restricted",
+          "   service main (server): active/running, port 3007",
+          "   service worker (worker): failed/failed",
+          "",
+        ].join("\n"),
+      );
+      const logs = await run(folder, ["--logs", "--lines", "20"], { reader, env });
+      expect(logs.stderr).toBe("");
+      expect(logs.code).toBe(0);
+      expect(logs.stdout).toBe(
+        [
+          "2026-09-01T12:00:00Z sitesolide-app.service [6] listening on 3007",
+          "2026-09-01T12:00:01Z sitesolide-app-worker.service [3] hi",
+          "-- No entries --",
+          "",
+        ].join("\n"),
+      );
+      expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual(["GET /api/v1/projects/app", "GET /api/v1/projects/app/logs?lines=20"]);
+      expect(requests.every((request) => request.authorization === `Bearer ${TOKEN}`)).toBe(true);
+      expect(existsSync(join(folder, "build-ran"))).toBe(false);
+    }, 30_000);
+  }
+
+  test("--status and --logs refuse what they would not do, before any request", async () => {
+    requests = [];
+    const env = { SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN };
+    expect((await run(app(), ["--status", "--logs"], { env })).stderr).toContain("one or the other");
+    expect((await run(app(), ["--status", "--dry-run"], { env })).stderr).toContain("only reads");
+    expect((await run(app(), ["--lines", "20"], { env })).stderr).toContain("--lines goes with --logs");
+    expect((await run(app(), ["--logs", "--lines", "501"], { env })).stderr).toContain("1 to 500");
+    expect((await run(project({ slug: "../x", start: "x" }, {}), ["--status"], { env })).stderr).toContain("the slug is lowercase");
+    expect(requests).toEqual([]);
+  }, 30_000);
+
+  test("--status of a project the token cannot see says what the API said", async () => {
+    answer = () => Response.json({ error: "not-found", message: "no such project for this token" }, { status: 404 });
+    const result = await run(app(), ["--status"], { env: { SITESOLIDE_API: api, SITESOLIDE_TOKEN: TOKEN } });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("no such project for this token (not-found, 404)");
+  }, 30_000);
 });

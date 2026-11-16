@@ -43,6 +43,7 @@ An app without `port` gets the lowest free one from `deploy`, in 3000 to 3099 an
 1. `curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/deploy.sh -o ~/deploy.sh`, outside the project, or the archive carries it;
 2. `bash ~/deploy.sh --dry-run` from the project's folder: the machine's plan, the manifest it would lay with its ports and door, nothing built nor sent but the manifest; show it to the user;
 3. `bash ~/deploy.sh` on their yes: the manifest, judged first; the build here; the archive; the machine's log to the end. It exits 0 only once the machine says `succeeded`, and names the ports it chose, which you then write into `sitesolide.json` (`"port"` after `start`) and commit. `--force` as the CLI's, the owner's token alone; `--archive <file>` builds and writes the archive without sending it.
+4. `bash ~/deploy.sh --status` then says the address and each service's state, and `bash ~/deploy.sh --logs --lines 100` the journal: one GET each, nothing built nor sent.
 
 It needs a `sitesolide.json` (write one with `sitesolide detect --write`, or by hand from docs/manifest.md), reads build secrets from the environment alone, and reads no store: the machine's log names the runtime secrets missing. Its calls and the archive's format: docs/access.md, "The API, for an agent without the CLI".
 

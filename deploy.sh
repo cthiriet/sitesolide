@@ -10,8 +10,12 @@
 #   bash deploy.sh --dry-run [folder]          the machine's plan, nothing built, sent nor changed
 #   bash deploy.sh --force [folder]            replace a unit or a block edited by hand (the owner's token)
 #   bash deploy.sh --archive <file> [folder]   build, write the archive, send nothing
+#   bash deploy.sh --status [folder]           the project as the machine sees it: address, services
+#   bash deploy.sh --logs [--lines n] [folder] the project's journal, the last n lines (100, at most 500)
 #
 # The folder is the one holding sitesolide.json, the current one by default.
+# --status and --logs read the slug there, and nothing else: they build,
+# send and change nothing.
 # The run is the CLI's, step for step: the manifest goes first, so that the
 # machine judges it and the token's scope before anything is built; then the
 # build, here, never on the machine; then the archive, the code in app/ and
@@ -110,6 +114,8 @@ Deploys the sitesolide project in [folder], the current one by default, with a t
   bash deploy.sh --dry-run [folder]          the machine's plan, nothing built, sent nor changed
   bash deploy.sh --force [folder]            replace a unit or a block edited by hand (the owner's token)
   bash deploy.sh --archive <file> [folder]   build, write the archive, send nothing
+  bash deploy.sh --status [folder]           the project as the machine sees it: address, services
+  bash deploy.sh --logs [--lines n] [folder] the project's journal, the last n lines (100, at most 500)
 
 SITESOLIDE_API   the dashboard's address, https://dashboard.<zone>
 SITESOLIDE_TOKEN the token, sst_ then 43 characters, from the dashboard's Tokens page
@@ -122,11 +128,23 @@ archive_to=""
 folder=""
 dry_run=""
 force=""
+read_mode=""
+lines=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h | --help)
       usage
       exit 0
+      ;;
+    --status | --logs)
+      [ -z "$read_mode" ] || [ "$read_mode" = "${1#--}" ] || fail "--status and --logs: one or the other"
+      read_mode="${1#--}"
+      shift
+      ;;
+    --lines)
+      [ "$#" -ge 2 ] || fail "--lines takes a number, 1 to 500"
+      lines="$2"
+      shift 2
       ;;
     --dry-run)
       dry_run=1
@@ -150,6 +168,14 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ -z "$dry_run" ] || [ -z "$archive_to" ] || fail "--dry-run sends the manifest alone, --archive sends nothing: one or the other"
+if [ -n "$read_mode" ]; then
+  [ -z "$dry_run$archive_to$force" ] || fail "--$read_mode only reads: without --dry-run, --force or --archive"
+fi
+if [ -n "$lines" ]; then
+  [ "$read_mode" = logs ] || fail "--lines goes with --logs"
+  [[ $lines =~ ^[1-9][0-9]{0,2}$ ]] && [ "$lines" -le 500 ] || fail "--lines takes a number, 1 to 500"
+fi
+lines="${lines:-100}"
 folder="${folder:-.}"
 [ -d "$folder" ] || fail "no such folder: $folder"
 folder="$(cd "$folder" && pwd -P)"
@@ -219,6 +245,15 @@ json_get() {
         | if . == null then empty
           elif $mode == "entries" then (if type == "object" then to_entries[] | select(.value | type == "string") | "\(.key)=\(.value)\u0000" else empty end)
           elif $mode == "type" then type + "\n"
+          elif $mode == "journal" then (if type == "array" then .[] | select(type == "string") | . as $line
+            | (try fromjson catch null) as $entry
+            | if ($entry | type) == "object" then
+                def text: if type == "string" then . elif type == "array" then (try implode catch "") else "" end;
+                ($entry.__REALTIME_TIMESTAMP | try (tonumber / 1000000 | floor | todate) catch "-") as $at
+                | (($entry._SYSTEMD_UNIT | text) as $unit | if $unit == "" then "-" else $unit end) as $unit
+                | "\($at) \($unit) [\($entry.PRIORITY // "-")] \($entry.MESSAGE | text)\n"
+              else $line + "\n" end
+            else empty end)
           elif type == "array" then .[] | (if type == "string" then . else tojson end) + "\n"
           elif type == "string" then . + "\n"
           else tojson + "\n" end')
@@ -240,6 +275,23 @@ json_get() {
           if (process.env.SITESOLIDE_JSON_MODE === "entries") {
             if (typeof value !== "object" || Array.isArray(value)) return;
             for (const [key, item] of Object.entries(value)) if (typeof item === "string") process.stdout.write(key + "=" + item + "\0");
+            return;
+          }
+          if (process.env.SITESOLIDE_JSON_MODE === "journal") {
+            if (!Array.isArray(value)) return;
+            const text = (item) => (typeof item === "string" ? item : Array.isArray(item) ? Buffer.from(item).toString("utf8") : "");
+            for (const line of value) {
+              if (typeof line !== "string") continue;
+              let entry = null;
+              try { entry = JSON.parse(line); } catch {}
+              if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+                process.stdout.write(line + "\n");
+                continue;
+              }
+              const microseconds = Number(entry.__REALTIME_TIMESTAMP);
+              const at = entry.__REALTIME_TIMESTAMP !== undefined && Number.isFinite(microseconds) ? new Date(Math.floor(microseconds / 1e6) * 1000).toISOString().replace(".000Z", "Z") : "-";
+              process.stdout.write(at + " " + (text(entry._SYSTEMD_UNIT) || "-") + " [" + (entry.PRIORITY ?? "-") + "] " + text(entry.MESSAGE) + "\n");
+            }
             return;
           }
           if (process.env.SITESOLIDE_JSON_MODE === "type") {
@@ -264,6 +316,32 @@ def kind(item):
 if value is not None and sys.argv[2] == "entries":
     if isinstance(value, dict):
         sys.stdout.buffer.write(b"".join((key + "=" + item + "\0").encode("utf-8") for key, item in value.items() if isinstance(item, str)))
+elif value is not None and sys.argv[2] == "journal":
+    import datetime
+    def text(item):
+        if isinstance(item, str):
+            return item
+        try:
+            return bytes(item).decode("utf-8", "replace") if isinstance(item, list) else ""
+        except (TypeError, ValueError):
+            return ""
+    out = []
+    for line in value if isinstance(value, list) else []:
+        if not isinstance(line, str):
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            entry = None
+        if not isinstance(entry, dict):
+            out.append(line)
+            continue
+        try:
+            at = datetime.datetime.fromtimestamp(int(entry["__REALTIME_TIMESTAMP"]) // 1000000, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            at = "-"
+        out.append(at + " " + (text(entry.get("_SYSTEMD_UNIT")) or "-") + " [" + str(entry.get("PRIORITY", "-")) + "] " + text(entry.get("MESSAGE")))
+    sys.stdout.buffer.write("".join(line + "\n" for line in out).encode("utf-8"))
 elif value is not None and sys.argv[2] == "type":
     sys.stdout.write(kind(value) + "\n")
 elif value is not None and value != []:
@@ -301,6 +379,7 @@ field() { json_get "$@" <"$manifest"; }
 field slug >/dev/null 2>&1 || fail "sitesolide.json is not valid JSON"
 slug="$(field slug)"
 [ -n "$slug" ] || fail "sitesolide.json has no slug"
+[ "${#slug}" -le 63 ] && [[ $slug =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || fail "sitesolide.json: the slug is lowercase letters, digits and dashes, 63 at most: $slug"
 build="$(field build)"
 public_dir="$(field publicDir)"
 source_dir="$(field source)"
@@ -319,6 +398,8 @@ for name in ${build_secrets[@]+"${build_secrets[@]}"}; do
   starting="_ss_env_$name"
   [ -n "${!starting+x}" ] || missing_secrets+=("$name")
 done
+# Reading the project's state or journal builds nothing: no build secret is needed.
+[ -z "$read_mode" ] || missing_secrets=()
 if [ "${#missing_secrets[@]}" -eq 1 ]; then
   fail "build secret ${missing_secrets[0]} is not in the environment: export it; nothing was sent"
 elif [ "${#missing_secrets[@]}" -gt 1 ]; then
@@ -356,7 +437,7 @@ if [ -n "$source_dir" ]; then
   inside "$code" "$root" || fail "source leads outside the repository holding sitesolide.json: $code is not under $root"
 fi
 
-if [ "$is_app" = 1 ]; then
+if [ "$is_app" = 1 ] && [ -z "$read_mode" ]; then
   forgotten=()
   for dependency in "${DEPENDENCIES[@]}"; do
     [ -e "$code/$dependency" ] || [ -L "$code/$dependency" ] || continue
@@ -427,10 +508,43 @@ succeeded() {
 
 # A field of an answer the API accepted, which must be its JSON.
 answer() {
-  json_get "$1" <"$work/answer" 2>/dev/null || fail "$API answered $STATUS with something that is not the control API"
+  json_get "$@" <"$work/answer" 2>/dev/null || fail "$API answered $STATUS with something that is not the control API"
 }
 
 # --- the run -------------------------------------------------------------------
+
+# The project as the machine sees it, or its journal: one GET, nothing
+# built, sent nor changed.
+if [ "$read_mode" = status ]; then
+  call GET "/api/v1/projects/$slug" --max-time 30 || fail "$API unreachable"
+  succeeded || refused
+  echo "-> project $slug, through $API"
+  if [ "$(answer project.deployed)" != true ]; then
+    echo "   not deployed"
+    exit 0
+  fi
+  echo "   address $(answer project.url)"
+  type="$(answer project.type)"
+  general="$(answer project.general)"
+  echo "   type ${type:--}, general access ${general:--}"
+  answer project.services >"$work/services"
+  while IFS= read -r service; do
+    [ -n "$service" ] || continue
+    name="$(printf '%s' "$service" | json_get name)"
+    kind="$(printf '%s' "$service" | json_get kind)"
+    state="$(printf '%s' "$service" | json_get state)"
+    sub="$(printf '%s' "$service" | json_get subState)"
+    port="$(printf '%s' "$service" | json_get port)"
+    echo "   service ${name:-main}${kind:+ ($kind)}: $state${sub:+/$sub}${port:+, port $port}"
+  done <"$work/services"
+  exit 0
+fi
+if [ "$read_mode" = logs ]; then
+  call GET "/api/v1/projects/$slug/logs?lines=$lines" --max-time 30 || fail "$API unreachable"
+  succeeded || refused
+  answer lines journal
+  exit 0
+fi
 
 # A dry run: the machine judges the manifest as a deployment would, and says
 # what it would lay, the ports it would choose and the door it keeps, writing

@@ -1,54 +1,82 @@
 ---
 name: sitesolide
-description: Deploy a project folder to the user's own sitesolide server, and check on it afterwards. Use when the user asks to deploy, publish, ship or put online a site, an app or a tool, to give colleagues access to it, to see whether it is up, or to read its logs, in a setup that has the sitesolide CLI.
+description: Deploy a project folder to the user's own sitesolide server, and check on it afterwards. Use when the user asks to deploy, publish, ship or put online a site, an app or a tool, to give colleagues access to it, to see whether it is up, or to read its logs. Needs a sitesolide token and nothing installed, deploy.sh doing it with bash and curl, or the sitesolide CLI when it is there.
 when_to_use: Requests such as "deploy this", "put it online", "publish the site", "run this every hour on the server", "keep this bot running", "share this tool with my colleagues", "give alice access", "is it up?", "why does the site return 500?" or "show me the logs", and any folder holding a sitesolide.json.
 ---
 
 # Deploying with sitesolide
 
 sitesolide serves every project of its owner from one machine they own. A
-project is a folder; `sitesolide deploy` builds it on this workstation, uploads
-it to the dashboard's API with a token, and the machine installs a confined
-service and its Caddy block and checks that the site answers over HTTPS.
-There is no staging: **what you deploy is live, for every visitor, at once.**
+project is a folder with a `sitesolide.json`; a deployment builds it on this
+workstation, uploads it over HTTPS to the dashboard's API with a token, and
+the machine installs a confined service and its Caddy block and checks that
+the site answers over HTTPS. There is no staging: **what you deploy is live,
+for every visitor, at once.**
 
-Run the CLI with `--json`: every line of standard output is one JSON event,
-the last one a `result` or an `error`.
+## In short
+
+```bash
+curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/deploy.sh -o ~/deploy.sh
+cd <the project's folder>          # the one holding sitesolide.json
+bash ~/deploy.sh --dry-run         # the machine's plan: nothing built, sent nor changed
+bash ~/deploy.sh                   # on the user's yes: build, send, follow to the end
+bash ~/deploy.sh --status          # the address, and the state of each service
+bash ~/deploy.sh --logs --lines 100
+```
+
+with `SITESOLIDE_API` and `SITESOLIDE_TOKEN` in the environment (below).
+`deploy.sh` needs bash, curl, tar, gzip and one of jq, node, bun or python3,
+which any machine that builds a project already has. Keep it outside the
+project, or the archive carries it. It exits 0 only once the machine says the
+deployment succeeded; on failure, its last line on standard error says why.
+
+When the `sitesolide` CLI is installed, it does the same with more help, and
+is then the one to use: run it with `--json`, every line of standard output
+one JSON event, the last a `result` or an `error` carrying a `hint`.
+
+| | deploy.sh | the CLI |
+|---|---|---|
+| plan | `bash ~/deploy.sh --dry-run` | `sitesolide deploy --dry-run --json` |
+| deploy | `bash ~/deploy.sh` | `sitesolide deploy --json` |
+| state | `bash ~/deploy.sh --status` | `sitesolide status --json` |
+| journal | `bash ~/deploy.sh --logs --lines 100` | `sitesolide logs --json --lines 100` |
+| write `sitesolide.json` | by hand | `sitesolide detect --json`, `--write` |
+| ports the machine chose | printed: write them into `sitesolide.json` | written back |
+| secrets, restart, access | the dashboard, or the CLI | `sitesolide secrets`, `restart`, `share` |
 
 ## The token
 
 Every deployment goes through a token, `sst_` then 43 characters, the
 owner's included: none goes over SSH. All you need is
 `SITESOLIDE_API=https://dashboard.<zone>` and `SITESOLIDE_TOKEN` in your
-environment, both together; or a token the user kept with
-`sitesolide login --url https://dashboard.<zone> --token-stdin`. Never ask
-the user to paste a token into the conversation, never read
+environment, both together, from wherever the user keeps them (a password
+manager's `op run`, a CI's secrets, a `read -rs` they type); with the CLI, a
+token the user kept with `sitesolide login --url https://dashboard.<zone>
+--token-stdin` does too. Never ask the user to paste a token into the
+conversation, never print it, never put it on a command line, never read
 `~/.config/sitesolide/secrets/`, never point `SITESOLIDE_API` at another
 address than the one the user gave.
 
 - The owner's own token covers every project and alone carries `--force`
-  and `--adopt`. The owner mints it with `sitesolide login --owner`, over
-  their SSH access, into the vault and never shown, or on the dashboard's
-  Tokens page ("Every project, as you"). Suggest it when a deploy on the
-  owner's workstation says it needs a token; minting is the user's to run.
+  and `--adopt`. The owner mints it on the dashboard's Tokens page ("Every
+  project, as you"), or with `sitesolide login --owner` over their SSH
+  access. Suggest it when a deploy on the owner's workstation says it needs a
+  token; minting is the user's to do.
 - Any other token covers the projects it was given, and what it may not do
   is refused `out-of-scope`: never work around it with another slug or token.
 
-Without the CLI, `deploy.sh` makes the same deployment with bash and curl:
-`curl -fsSL https://github.com/cthiriet/sitesolide/releases/latest/download/deploy.sh -o ~/deploy.sh`,
-then `bash ~/deploy.sh --dry-run` and, on the user's yes, `bash ~/deploy.sh`
-from the project's folder. It needs a `sitesolide.json` and prints the
-ports the machine chose, which you write into it.
-
 ## The workflow
 
-1. **Detect.** In a folder without `sitesolide.json`, run
-   `sitesolide detect --json`. It infers the manifest from the folder and
-   writes nothing. Read its `notes`: they name the secrets the code reads,
-   which it declares by name under `secrets`, and the calls it makes to the
-   network.
-2. **Review with the user.** Show the manifest and the notes. Decide with them,
-   never alone:
+1. **The manifest.** In a folder without `sitesolide.json`, write one: with
+   the CLI, `sitesolide detect --json` infers it and writes nothing, its
+   `notes` naming the secrets the code reads and the calls it makes to the
+   network; without it, by hand, from what the code does. The smallest ones:
+   a static site `{ "slug": "blog", "build": "bun run build", "publicDir":
+   "dist" }`; an app `{ "slug": "api", "start": "/usr/local/bin/bun run
+   server.ts", "exclude": ["node_modules"] }`, the machine choosing its port.
+   `docs/manifest.md` in the sitesolide repository has every key; an unknown
+   key is refused, never ignored.
+2. **Review with the user.** Show the manifest. Decide with them, never alone:
    - `"network": "outbound"` when the code calls another server: without it the
      service reaches only the loopback, DNS included;
    - where each value the code reads lives, the manifest naming it and never
@@ -60,6 +88,8 @@ ports the machine chose, which you write into it.
      `$CREDENTIALS_DIRECTORY/files_gcp.json`; `"secrets": { "build":
      ["CMS_TOKEN"] }` for a value only the build needs, taken from the
      environment of whoever deploys;
+   - a folder of dependencies (`node_modules`, `.venv`) under `exclude`: the
+     machine installs its own, and one present and not excluded is refused;
    - a `backup` command for a service that runs a server database in the
      data folder, PostgreSQL or MongoDB: without one, the hourly snapshot
      refuses the project (`docs/manifest.md`, "A service's backup command");
@@ -74,26 +104,30 @@ ports the machine chose, which you write into it.
      from the machine itself does not belong on the machine that serves every
      site: say so first (`docs/manifest.md`, "What fits on the machine");
    - the slug, which is the address: `<slug>.<their zone>`.
-   Write `sitesolide.json` (`detect --write`, or by hand) and edit it there.
-3. **Dry run.** `sitesolide deploy --dry-run --json`. The machine judges
-   the manifest as the deployment would and plans it, writing nothing: the
-   units and the block it would lay come as `file` events, the ports it
-   would choose as `info`, and a refusal comes back now. It does not run the
-   project's build either, which is the folder's own code (`--build` does).
-   Show the user what it plans.
-4. **Deploy**, once the user agrees: `sitesolide deploy --json`. A folder
-   still without a manifest needs `--yes`, which writes the inferred one.
-5. **Read the result.** On success, give the user the `url`; `status` is
-   what the address answers here. When `manifestWritten` is true,
-   `sitesolide.json` changed on disk (a port chosen, an inferred manifest,
-   general access set from the dashboard, a former name): commit it.
-   `missingSecrets` lists the declared names the server has no value for:
-   the deploy went through without them. For a key the project checks
-   itself, a session secret or an internal token, offer
+3. **Dry run.** `bash ~/deploy.sh --dry-run`, or `sitesolide deploy
+   --dry-run --json`. The machine judges the manifest as the deployment would
+   and plans it, writing nothing: whether the project is new, the ports it
+   would choose, the manifest it would keep, and a refusal comes back now,
+   with every reason. It does not run the project's build. Show the user what
+   it plans.
+4. **Deploy**, once the user agrees: `bash ~/deploy.sh`, or `sitesolide
+   deploy --json` (`--yes` for a folder still without a manifest, which
+   writes the inferred one). The build runs here, in a clean environment
+   without the token, then the archive goes up and the machine's log is
+   followed to the end.
+5. **Read the result.** On success, give the user the address
+   (`-> deployed: https://...` in deploy.sh's log, `url` in the CLI's
+   result), then check it with `--status`. A port the machine chose is
+   printed: write it into `sitesolide.json` (the CLI writes it itself,
+   `manifestWritten` true) and commit the manifest. The log names the
+   runtime secrets the server has no value for (`missingSecrets` in the
+   CLI's result): the deploy went through without them. For a key the
+   project checks itself, a session secret or an internal token, offer
    `sitesolide secrets generate NAME --json`, which draws it on the server
-   where nobody sees it; for a provider's key, ask the user to run
-   `sitesolide secrets set NAME` in their own terminal. Then restart, with
-   `--restart` on the last change or `sitesolide restart --json`.
+   where nobody sees it; for a provider's key, ask the user to set it in the
+   dashboard's *Secrets* section or with `sitesolide secrets set NAME` in
+   their own terminal. Then restart: `sitesolide restart --json`, the
+   dashboard, or a new deployment.
 6. **Give access to the people who need it.** A restricted site opens to the
    owner and its guests alone. Over the owner's SSH, read
    `sitesolide share --json` first, ask the user who should get in, then give
@@ -104,14 +138,17 @@ ports the machine chose, which you write into it.
    for their yes. The password comes back once, in the result's `changes`,
    for the user to send; never store or repeat it. `--remove <email>` takes
    access away. With a token, `share` is refused `needs-ssh`: a token never
-   gives anyone access.
+   gives anyone access; the owner gives it from the dashboard.
 
 ## When it fails
 
-Every error carries a `hint`: follow it. The usual ones:
+deploy.sh ends on one line that says what to do, the API's error code in
+parentheses; every error of the CLI carries a `hint`. Follow it. The usual
+ones:
 
-- **`unauthenticated`, "sitesolide deploy needs a token".** No token here:
-  the user sets `SITESOLIDE_API` and `SITESOLIDE_TOKEN`, or runs
+- **`unauthenticated`, "SITESOLIDE_TOKEN is not set", "sitesolide deploy
+  needs a token".** No token here, or one revoked: the user sets
+  `SITESOLIDE_API` and `SITESOLIDE_TOKEN`, or, with the CLI, runs
   `sitesolide login`; the owner mints theirs with `sitesolide login --owner`.
   Never look for a token elsewhere.
 - **`missing settings`.** Nothing is configured on this workstation. A new
@@ -165,7 +202,7 @@ Every error carries a `hint`: follow it. The usual ones:
 
 - Never touch the server by hand: no `ssh`, no `sudo`, no `systemctl`, no
   editing files there, and never `caddy stop` or `caddy start`, which stop every
-  site at once. Everything goes through the CLI.
+  site at once. Everything goes through deploy.sh, the CLI or the dashboard.
 - Never retry a refusal with `--force` or a workaround on your own.
 - Never remove a project, lock or unlock a preview, switch a domain, destroy a
   machine, upgrade it (`sitesolide upgrade`; `--dry-run` only reads), rewrite
@@ -191,7 +228,11 @@ Every error carries a `hint`: follow it. The usual ones:
 
 ## Status and other reads
 
-`sitesolide status --json` lists every project on the machine with its
+`bash ~/deploy.sh --status` says the project's address, its general access
+and the state of each service; `bash ~/deploy.sh --logs --lines 100` its
+journal, 500 lines at most. Both only read, and need nothing but the token.
+
+With the CLI, `sitesolide status --json` lists every project on the machine with its
 service state and memory; a scheduled service shows its schedule, its last
 run and how it ended, and its next run, and is `inactive` between two runs,
 which is not an outage. Its runs are in the logs, beside the other services.

@@ -634,7 +634,13 @@ bash ~/deploy.sh --dry-run                   # the machine's plan, nothing built
 bash ~/deploy.sh                             # from the project's folder, or name it
 bash ~/deploy.sh --force                     # over a unit or a block edited by hand, the owner's token alone
 bash ~/deploy.sh --archive bundle.tar.gz     # build and write the archive, send nothing
+bash ~/deploy.sh --status                    # the address, general access, each service's state
+bash ~/deploy.sh --logs --lines 100          # the journal, 500 lines at most
 ```
+
+`--status` and `--logs` read the slug in `sitesolide.json` and make one GET
+each, `/api/v1/projects/<slug>` and its `logs`: nothing built, sent nor
+changed, and no build secret needed.
 
 `--dry-run` posts the manifest to the plan route and prints what the machine
 would lay, the manifest it would keep with its ports and door, then stops.
