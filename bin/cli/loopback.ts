@@ -33,7 +33,7 @@
  * checks it and removes it on its own at the slightest deviation.
  */
 
-import { isServicePort, portRangeText, SERVICE_PORT_RANGES, servicesOf, hasServices, type Manifest, type PortRange } from "./manifest";
+import { CADDY_ADMIN_PORT, isServicePort, portRangeText, SERVICE_PORT_RANGES, servicesOf, hasServices, type Manifest, type PortRange } from "./manifest";
 import { PORTAL_PORT } from "./portal";
 
 export const LOOPBACK_TABLE = "sitesolide_boucle";
@@ -69,7 +69,8 @@ export const PROJECT_PORTS_FILE = "/etc/sitesolide-loopback-projects.nft";
  * bin/tests/cli-loopback.test.ts checks that the Caddyfile does not move it onto
  * a port the rule would no longer close.
  */
-export const CADDY_ADMIN_PORT = 2019;
+// Defined in ./manifest, which the validation of `publicPorts` needs, and re-exported where it always was.
+export { CADDY_ADMIN_PORT };
 
 /**
  * Caddy's HTTPS, which the tunnel's connector reaches from TUNNEL_ORIGIN.

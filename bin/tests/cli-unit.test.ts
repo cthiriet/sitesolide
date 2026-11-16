@@ -1380,6 +1380,43 @@ describe("the ports a service may listen on", () => {
   });
 });
 
+describe("a service's declared public ports", () => {
+  const PLACEHOLDERS = { slug: "shell", zone: "test-zone.invalid", contact: "" };
+  const SHELL = { slug: "shell", start: "/srv/sites/shell/app/run", port: 3021, network: "outbound" } as Manifest;
+  const unitOf = (manifest: Manifest) => generateUnits(manifest, PLACEHOLDERS)[0]!.text;
+
+  test("one SocketBindAllow each, ascending, after the service's own and before the deny lines", () => {
+    const lines = unitOf({ ...SHELL, publicPorts: [8443, 2222] }).split("\n");
+    const first = lines.findIndex((line) => line.startsWith("SocketBindAllow="));
+    expect(lines.slice(first - 1, first + 3)).toEqual([
+      "# Listens on its own port and its declared public ports, and on none of the machine's others.",
+      "SocketBindAllow=tcp:3021",
+      "SocketBindAllow=tcp:2222",
+      "SocketBindAllow=tcp:8443",
+    ]);
+    expect(lines[first + 3]).toBe("SocketBindDeny=2019");
+    expect(lines.filter((line) => line.startsWith("SocketBindAllow="))).toHaveLength(3);
+  });
+
+  test("a worker that declares one listens on it alone", () => {
+    const text = generateUnits({ slug: "shell", network: "outbound", services: { ssh: { start: "/x", internal: true, publicPorts: [2222] } } } as Manifest, PLACEHOLDERS)[0]!.text;
+    expect(text.split("\n").filter((line) => line.startsWith("SocketBindAllow="))).toEqual(["SocketBindAllow=tcp:2222"]);
+  });
+
+  test("a service without any keeps the unit the release before generated, comment included", () => {
+    const text = unitOf(SHELL);
+    expect(text).toContain("# Listens on its own port, and on none of the machine's others.\nSocketBindAllow=tcp:3021\nSocketBindDeny=2019");
+    expect(text).not.toInclude("public ports");
+  });
+
+  test("withoutBindLines strips the whole block, public ports included", () => {
+    const stripped = withoutBindLines(unitOf({ ...SHELL, publicPorts: [2222, 8443] }));
+    expect(stripped).not.toInclude("SocketBind");
+    expect(stripped).not.toInclude("# Listens on");
+    expect(stripped).toBe(withoutBindLines(unitOf(SHELL)));
+  });
+});
+
 describe("the system calls a service may make", () => {
   /**
    * Every service runs under systemd's `@system-service` set, as the

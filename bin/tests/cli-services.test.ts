@@ -23,6 +23,7 @@ import {
   readCurrentPairs,
   domainConflicts,
   portConflicts,
+  publicPortsChanged,
   laterBlockPorts,
   readLoopbackState,
   readSecondBlockState,
@@ -490,6 +491,35 @@ describe("ports taken on the machine", () => {
     expect(portConflicts(LAB, deposited)).toEqual([]);
     const clash = lab({ platform: { start: "/x", port: 3050 }, api: { start: "/y", port: 3022, routes: ["/v1/*"] } });
     expect(portConflicts(clash, deposited)).toEqual(["port 3022 (service api) is already declared by project budget"]);
+  });
+
+  test("a public port another project declares is refused, as a port or as a public port, and from either side", () => {
+    const ssh = { slug: "shell", start: "/x", port: 3030, network: "outbound", publicPorts: [2222] };
+    const others = new Map([["shell", JSON.stringify(ssh)]]);
+    const mine = { ...APP, slug: "other", port: 3050, network: "outbound" as const };
+    expect(portConflicts({ ...mine, publicPorts: [2222] }, others)).toEqual(["port 2222 is already declared by project shell (public port)"]);
+    expect(portConflicts({ ...mine, publicPorts: [2223] }, others)).toEqual([]);
+    // This project's public port is another project's `port`.
+    const holder = new Map([["holder", JSON.stringify({ slug: "holder", start: "/x", port: 3030, network: "outbound", publicPorts: [2300] })]]);
+    expect(portConflicts({ ...mine, publicPorts: [2300] }, holder)).toEqual(["port 2300 is already declared by project holder (public port)"]);
+    // The project's own earlier public ports are not a conflict.
+    expect(portConflicts({ ...ssh, publicPorts: [2222] } as Manifest, others)).toEqual([]);
+    // A service of this project is named in the message.
+    expect(
+      portConflicts(lab({ web: { start: "/x", port: 3050 }, ssh: { start: "/y", internal: true, publicPorts: [2222] } }), others),
+    ).toEqual(["port 2222 (service ssh) is already declared by project shell (public port)"]);
+  });
+
+  test("publicPortsChanged: added, removed, changed or moved to another service, but not reordered", () => {
+    const base = { ...APP, network: "outbound" as const };
+    expect(publicPortsChanged(null, base)).toBe(false);
+    expect(publicPortsChanged(base, base)).toBe(false);
+    expect(publicPortsChanged(null, { ...base, publicPorts: [2222] })).toBe(true);
+    expect(publicPortsChanged({ ...base, publicPorts: [2222] }, base)).toBe(true);
+    expect(publicPortsChanged({ ...base, publicPorts: [2222] }, { ...base, publicPorts: [2223] })).toBe(true);
+    expect(publicPortsChanged({ ...base, publicPorts: [2222, 2223] }, { ...base, publicPorts: [2223, 2222] })).toBe(false);
+    const on = (service: string) => lab({ web: { start: "/x", port: 3050, ...(service === "web" ? { publicPorts: [2222] } : {}) }, ssh: { start: "/y", internal: true, ...(service === "ssh" ? { publicPorts: [2222] } : {}) } });
+    expect(publicPortsChanged(on("web"), on("ssh"))).toBe(true);
   });
 
   test("the landing's and the shared service's ports are reserved", () => {

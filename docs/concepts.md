@@ -208,7 +208,9 @@ of them, a service's backup command neither; a bind refused fails with
 `EPERM`. Denying only 2019, both blocks and the egress proxy's 3128 and 3129
 was not enough: a service on 8080, or a database on its default port, was
 reached and read by any other project's account, so the unit denies every port
-(`SocketBindDeny=1-65535`) and lets its own through. Port 0 stays allowed,
+(`SocketBindDeny=1-65535`) and lets its own through, and the `publicPorts` the
+owner has let it declare for outside clients, an SSH server's, which the
+firewall opens by hand and the loopback rule does not guard. Port 0 stays allowed,
 since client sockets bind there, which leaves one limit: a program that listens
 on a port the kernel picks can still be reached by another account. systemd enforces the lines through BPF, and a
 systemd built without `+BPF_FRAMEWORK` ignores them silently.

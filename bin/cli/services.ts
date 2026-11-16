@@ -58,6 +58,11 @@ export function reservedPorts(slug: string): Map<number, string> {
  * project could bind first after a reboot, and Caddy would send the first
  * one's visitors to it.
  *
+ * Public ports count on both sides: one another project declares is taken, as
+ * a `port` or a `publicPorts`, and one of this manifest's is refused when
+ * another project declares it as either. Shared with the dashboard's
+ * installer, so that `deploy` and a token's deployment agree.
+ *
  * A deposited manifest that no longer reads is skipped: this check is not
  * where it gets repaired, and its ports are unknown anyway.
  */
@@ -69,18 +74,30 @@ export function portConflicts(manifest: Manifest, deposited: ReadonlyMap<string,
     if (other === undefined) continue;
     for (const service of servicesOf(other)) {
       if (typeof service.port === "number") taken.set(service.port, `project ${slug}`);
+      for (const port of service.publicPorts) taken.set(port, `project ${slug} (public port)`);
     }
   }
   const conflicts: string[] = [];
   for (const service of servicesOf(manifest)) {
-    if (service.port === null) continue;
-    const owner = taken.get(service.port);
-    if (owner !== undefined) {
-      const who = service.name === null ? "" : ` (service ${service.name})`;
-      conflicts.push(`port ${service.port}${who} is already declared by ${owner}`);
+    const who = service.name === null ? "" : ` (service ${service.name})`;
+    for (const port of [...(service.port === null ? [] : [service.port]), ...service.publicPorts]) {
+      const owner = taken.get(port);
+      if (owner !== undefined) conflicts.push(`port ${port}${who} is already declared by ${owner}`);
     }
   }
   return conflicts;
+}
+
+/**
+ * Do two manifests (the one deposited before, absent for a new project, and
+ * the one asked for) declare different `publicPorts`: added, removed or
+ * changed, on any service? Opening a port to the outside is the machine
+ * owner's decision, see publicPortsRefusal in the installer.
+ */
+export function publicPortsChanged(before: Manifest | null | undefined, asked: Manifest): boolean {
+  const declared = (manifest: Manifest | null | undefined) =>
+    manifest == null ? [] : servicesOf(manifest).flatMap((service) => service.publicPorts.map((port) => `${service.name ?? ""}:${port}`)).toSorted();
+  return JSON.stringify(declared(before)) !== JSON.stringify(declared(asked));
 }
 
 /**

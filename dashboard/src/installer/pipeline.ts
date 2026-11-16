@@ -104,7 +104,7 @@ import {
 import { credentialsFailure, CREDENTIALS_EXIT_STATUS } from "../../borrowed/store";
 import type { StoreMissing } from "../../borrowed/store-protocol";
 import { confirmDoorUnderLock, portalFromManifest, type DepositedRead } from "../../borrowed/portal-vm";
-import { domainConflicts, foreignUnit, laterBlockPorts, portConflicts, secondBlockRefusal, staleUnits, unguardedWarning, unstableUnits, type UnitStanding } from "../../borrowed/services";
+import { domainConflicts, foreignUnit, laterBlockPorts, portConflicts, publicPortsChanged, secondBlockRefusal, staleUnits, unguardedWarning, unstableUnits, type UnitStanding } from "../../borrowed/services";
 import { decideUnit, earlierGenerations, generatedAs, generateUnits, runningUnits, systemUser, unitArgument, unitFileName, unitNames, watchedUnits } from "../../borrowed/unit";
 import { compareDirectives, summariseDivergence } from "../../borrowed/comparison";
 import { FIRST_CERTIFICATE_MS, readZoneNamesAnswer, ZONE_NAMES_PATH } from "../../borrowed/zone-names";
@@ -312,6 +312,15 @@ export function finalManifest(
       );
     }
     text = setDomainActive(text, before?.active === true);
+  }
+  // A port opened to the outside is the machine owner's decision: sitesolide
+  // lets the unit bind it, and the owner opens the firewall by hand. Only the
+  // owner's token for every project adds, removes or changes one.
+  if (publicPortsChanged(previous, asked.manifest) && !everyProject({ scope: request.scope })) {
+    throw new Stop(
+      "out-of-scope",
+      "publicPorts: opening a port to the outside is the decision of the owner of the machine, who also opens the firewall by hand: a token's deployment neither adds, removes nor changes one. Deploy without the change, or ask the owner",
+    );
   }
   const final = readManifest(text);
   if (final.manifest === undefined || final.errors.length > 0) {

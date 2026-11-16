@@ -295,13 +295,55 @@ another project's account connects to whoever listens anywhere on the
 loopback. The unit therefore refuses the service every port but its own
 (`SocketBindAllow=`, `SocketBindDeny=`, ending with `SocketBindDeny=1-65535`).
 A worker and a scheduled service listen on none of them, nor does a backup
-command. A bind refused there fails with `EPERM`: a server that opened a
+command; a port the service declares in [`publicPorts`](#publicports) is let
+through too. A bind refused there fails with `EPERM`: a server that opened a
 second port or UDP on its own, a worker that listened, and a database on its
 default port, declare a service of their own, with its own `port`, or listen
 on a Unix socket. Port 0 stays allowed, so a program that listens on a port the
 kernel picks can still be reached by another account. systemd applies these
 lines only when it is built with `+BPF_FRAMEWORK`, which `systemctl --version`
 lists; without it, it ignores them without a word.
+
+### `publicPorts`
+
+A list of TCP ports the service listens on for clients outside the machine,
+not through Caddy: an SSH server, for one. It sits at the top level of a
+single-service manifest or in each entry of `services`, and the unit lets each
+one through (`SocketBindAllow=tcp:<port>`, after the service's own), where
+every other port stays refused.
+
+```json
+{
+  "slug": "shell",
+  "start": "/usr/local/bin/bun run server.ts",
+  "port": 3021,
+  "network": "outbound",
+  "publicPorts": [2222]
+}
+```
+
+Each port is a whole number from 1024 to 65535, outside the blocks of the
+services' ports, not 2019, 3128 or 3129, different from the service's own
+`port`, and declared once on the machine: no other project declares it, as a
+`port` or as a `publicPorts`. The project needs `"network": "outbound"`:
+otherwise `IPAddressDeny=any` refuses every client outside the machine, and
+only the machine's other accounts could connect. A scheduled service declares
+none.
+
+**Only the owner changes them.** Opening a port to the outside is the decision
+of the machine's owner. A deployment whose `publicPorts` differ from the
+manifest already on the machine, on any service, is refused unless it comes
+from the owner: `sitesolide deploy` over SSH, or a token that covers every
+project. An unchanged list deploys with any token.
+
+**sitesolide does not open the firewall.** `publicPorts` only lets the service
+bind the port. The owner opens it by hand, `ufw allow 2222/tcp`, or `ufw limit`
+to slow down guessing.
+
+**What it does not protect.** The loopback rule guards the blocks of the
+services' ports and nothing else, so the machine's other accounts can connect
+to a public port too, on loopback. The service must authenticate its clients,
+as an SSH server does.
 
 ### `routes`
 
@@ -326,8 +368,8 @@ the deployment, see [`start`](#start).
 Several processes instead of one `start`, or a process that is not a web
 server: a web front, the API it calls, a worker behind them, a digest sent
 every morning. Each entry names a service and takes `start`, and optionally
-`port`, `routes`, `internal`, `memory`, `cpu`, `env`, `backup`, `schedule` and
-`timeout`.
+`port`, `publicPorts`, `routes`, `internal`, `memory`, `cpu`, `env`, `backup`,
+`schedule` and `timeout`.
 
 What an entry declares makes it one of three kinds:
 
@@ -378,7 +420,7 @@ What an entry declares makes it one of three kinds:
   that saves it consistently: see [A service's backup command](#a-services-backup-command).
   Never a scheduled service, which keeps nothing live between its runs.
 
-`start`, `port` and `routes` are then refused at the top level. `install`,
+`start`, `port`, `publicPorts` and `routes` are then refused at the top level. `install`,
 `secrets`, `network`, `egress`, `exclude` and the directories
 stay the project's, shared by every service. A worker or a scheduled service
 is declared under `services` even alone: the single `start` is always a

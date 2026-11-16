@@ -285,6 +285,9 @@ export function takenPorts(deposited: ReadonlyMap<string, string>, slug: string)
     if (manifest === undefined) continue;
     for (const service of servicesOf(manifest)) {
       if (typeof service.port === "number") taken.add(service.port);
+      // Outside the service blocks, so never chosen anyway: listed so that the
+      // two agree if a block ever grows over one.
+      for (const port of service.publicPorts) taken.add(port);
     }
   }
   return taken;

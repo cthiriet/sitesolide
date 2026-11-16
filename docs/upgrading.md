@@ -211,7 +211,10 @@ line too.
 
 **What can break.** A service, worker or scheduled service that listened on an
 undeclared port now fails with `EPERM` when it binds. Declare a service of its
-own with its own `port`, or listen on a Unix socket. A program that only
+own with its own `port`, or listen on a Unix socket. A service that serves
+outside clients on another port (an SSH server) declares it in
+[`publicPorts`](manifest.md#publicports) before the refresh, with the owner's
+token, and the owner opens the firewall for it by hand. A program that only
 connects out is unaffected: DNS, TCP and UDP clients, `fetch` and the egress
 proxy bind on port 0, which stays allowed. (`SocketBindDeny=any` was tried and
 rejected: it also refuses port 0, which breaks a UDP send without an explicit

@@ -760,7 +760,8 @@ export function missingDeniedBinds(text: string): string[] {
  * page; on the egress proxy's ports, every project's outgoing requests; on a
  * neighbour's port between two of its restarts, that site's visitors. A
  * server listens on its own port alone, a worker and a scheduled service on
- * none of them.
+ * none of them, plus the `publicPorts` its manifest declares: one
+ * `SocketBindAllow=` each, in ascending order, right after the service's own.
  *
  * The ports outside those blocks are denied too, with UNDECLARED_BIND_LINE.
  * Left free, a database on its default port or a server on 8080 would be
@@ -777,14 +778,17 @@ export function missingDeniedBinds(text: string): string[] {
  * withoutUndeclaredBindLine for the units of the release before this line.
  */
 function bindLines(service: ServiceView): string[] {
-  return [
-    service.port === null
-      ? "# Listens on none of the machine's ports: not a neighbour's, nor the platform's."
-      : "# Listens on its own port, and on none of the machine's others.",
-    ...(service.port === null ? [] : [`SocketBindAllow=tcp:${service.port}`]),
-    ...deniedBindLines(),
-    UNDECLARED_BIND_LINE,
-  ];
+  const own = service.port === null ? [] : [service.port];
+  const publicPorts = service.publicPorts.toSorted((a, b) => a - b);
+  // A service without public ports keeps the comment it always had, so that
+  // its unit stays exactly what the release before this field generated.
+  const comment =
+    publicPorts.length > 0
+      ? "# Listens on its own port and its declared public ports, and on none of the machine's others."
+      : service.port === null
+        ? "# Listens on none of the machine's ports: not a neighbour's, nor the platform's."
+        : "# Listens on its own port, and on none of the machine's others.";
+  return [comment, ...[...own, ...publicPorts].map((port) => `SocketBindAllow=tcp:${port}`), ...deniedBindLines(), UNDECLARED_BIND_LINE];
 }
 
 /**

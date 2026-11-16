@@ -15,7 +15,7 @@
  * that every refusal from `validate()` is checkable without a server.
  */
 import { MACHINE_FOLDER } from "./backups";
-import { egressErrors, privateNetworksErrors } from "./egress";
+import { EGRESS_PROXY_PORT, EGRESS_STATUS_PORT, egressErrors, privateNetworksErrors } from "./egress";
 import {
   buildNameRefusal,
   checkKey,
@@ -45,6 +45,12 @@ export type Service = {
   start: string;
   /** The loopback port it listens on; absent for a worker or a scheduled service. */
   port?: number;
+  /**
+   * TCP ports it listens on for clients outside the machine, not through
+   * Caddy (an SSH server, for one). See publicPortErrors: the owner's to
+   * declare, and the firewall is opened by hand.
+   */
+  publicPorts?: number[];
   /** The paths Caddy sends to this service. Absent: every path no other service claims. */
   routes?: string[];
   /** Reached by the project's other services only, never by Caddy. */
@@ -97,6 +103,8 @@ export type Manifest = {
   install?: string;
   start?: string;
   port?: number;
+  /** Ports the service listens on for outside clients, see Service. Per service once `services` is present. */
+  publicPorts?: number[];
   routes?: string[];
   /** Several processes instead of one `start`, see Service. */
   services?: Record<string, Service>;
@@ -156,6 +164,7 @@ export const KNOWN_KEYS = [
   "install",
   "start",
   "port",
+  "publicPorts",
   "routes",
   "services",
   "env",
@@ -186,10 +195,16 @@ export const REMOVED_KEYS: Readonly<Record<string, string>> = {
 };
 
 /** The keys of one entry of `services`, refused beyond these for the same reason. */
-export const SERVICE_KEYS = ["start", "port", "routes", "internal", "memory", "cpu", "env", "backup", "schedule", "timeout"];
+export const SERVICE_KEYS = ["start", "port", "publicPorts", "routes", "internal", "memory", "cpu", "env", "backup", "schedule", "timeout"];
 
 /** The keys of a service's `backup`, refused beyond these for the same reason. */
 export const BACKUP_KEYS = ["folder", "command"];
+
+/** Caddy's admin API, on loopback: no project may listen there or be sent there. */
+export const CADDY_ADMIN_PORT = 2019;
+
+/** The lowest port an unprivileged account can bind: a public port starts here. */
+export const FIRST_UNPRIVILEGED_PORT = 1024;
 
 /** A range of ports, both ends included: a single port has `first` equal to `last`. */
 export type PortRange = { readonly first: number; readonly last: number };
@@ -512,6 +527,8 @@ export type ServiceView = {
   start: string;
   /** Null for a worker and a scheduled service, which listen on nothing. */
   port: number | null;
+  /** The TCP ports it listens on for outside clients, ascending, see Service. */
+  publicPorts: number[];
   routes?: string[];
   /** Never reached by Caddy: an internal server, a worker, a scheduled service. */
   internal: boolean;
@@ -530,6 +547,12 @@ export type ServiceView = {
 /** A `backup` that has the shape of a command's, as servicesOf reads one: the judging is validate()'s. */
 function asServiceBackup(value: unknown): ServiceBackup | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as ServiceBackup) : null;
+}
+
+/** The numbers of a `publicPorts`, ascending, read as written: validate() judges the rest. */
+function publicPortsOf(declared: { publicPorts?: unknown }): number[] {
+  const ports = declared.publicPorts;
+  return Array.isArray(ports) ? ports.filter((port): port is number => typeof port === "number").toSorted((a, b) => a - b) : [];
 }
 
 /** What a declared service is, see ServiceKind. Read as written: validate() judges it. */
@@ -571,6 +594,7 @@ export function servicesOf(manifest: Manifest): ServiceView[] {
         kind,
         start: service.start,
         port: typeof service.port === "number" ? service.port : null,
+        publicPorts: publicPortsOf(service),
         routes: service.routes,
         internal: service.internal === true || kind !== "server",
         memory: service.memory ?? manifest.memory ?? DEFAULT_MEMORY,
@@ -590,6 +614,7 @@ export function servicesOf(manifest: Manifest): ServiceView[] {
       kind: "server",
       start: manifest.start!,
       port: typeof manifest.port === "number" ? manifest.port : null,
+      publicPorts: publicPortsOf(manifest),
       routes: manifest.routes,
       internal: false,
       memory: manifest.memory ?? DEFAULT_MEMORY,
@@ -1141,6 +1166,7 @@ export function validate(manifest: Manifest, zone = servedZone()): string[] {
     errors.push("network: `localhost` or `outbound`");
   }
 
+  errors.push(...publicPortErrors(manifest, isApplication));
   errors.push(...egressErrors(manifest, isApplication));
   errors.push(...privateNetworksErrors(manifest, isApplication));
 
@@ -1558,6 +1584,74 @@ function buildNameErrors(manifest: Manifest, names: string[]): string[] {
 }
 
 /**
+ * The refusals of `publicPorts`, at the top level or in any entry of `services`.
+ *
+ * A public port is one the service listens on for clients outside the machine,
+ * which the unit lets through (SocketBindAllow, see bindLines in unit.ts) and
+ * the owner opens in the firewall by hand. Each is a whole number from 1024,
+ * below which an unprivileged account cannot bind anyway, outside the blocks
+ * and the platform's ports, and one project declares each number once, `port`s
+ * included. The project's `network` must be `outbound`: with `localhost`,
+ * IPAddressDeny=any refuses every outside client.
+ */
+function publicPortErrors(manifest: Manifest, isApplication: boolean): string[] {
+  const errors: string[] = [];
+  const declarers: { label: string; service: { port?: unknown; publicPorts?: unknown; schedule?: unknown } }[] = [];
+  const services = manifest.services as unknown;
+  if (typeof services === "object" && services !== null && !Array.isArray(services)) {
+    for (const [name, raw] of Object.entries(services)) {
+      if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) declarers.push({ label: `services.${name}`, service: raw });
+    }
+  } else if (services === undefined) {
+    declarers.push({ label: "", service: manifest });
+  }
+
+  // The `port`s sit in the blocks, which a public port may not: only the
+  // public ports of the manifest are left to tell apart.
+  const taken = new Map<number, string>();
+
+  let declared = false;
+  for (const { label, service } of declarers) {
+    if (service.publicPorts === undefined) continue;
+    declared = true;
+    const where = label === "" ? "publicPorts" : `${label}.publicPorts`;
+    const ports = service.publicPorts as unknown;
+    if (!Array.isArray(ports) || ports.length === 0) {
+      errors.push(`${where}: a non-empty list of port numbers, or absent`);
+      continue;
+    }
+    if (label === "" && !isApplication) {
+      errors.push(`${where}: useless without \`start\`, nothing runs to listen`);
+      continue;
+    }
+    if (service.schedule !== undefined) {
+      errors.push(`${where}: a scheduled service listens on nothing, between two runs nothing runs at all`);
+      continue;
+    }
+    for (const port of ports) {
+      if (typeof port !== "number" || !Number.isInteger(port) || port < FIRST_UNPRIVILEGED_PORT || port > 65535) {
+        errors.push(`${where}: ${JSON.stringify(port)} must be a whole number from ${FIRST_UNPRIVILEGED_PORT} to 65535, below which an unprivileged account cannot listen`);
+      } else if (port === service.port) {
+        errors.push(`${where}: ${port} is the service's own \`port\`, which Caddy reaches on loopback: a public port is another one`);
+      } else if (isServicePort(port) || port === CADDY_ADMIN_PORT || port === EGRESS_PROXY_PORT || port === EGRESS_STATUS_PORT) {
+        errors.push(`${where}: ${port} belongs to the platform or to the blocks of the services' ports (${servicePortsProse()}), pick another`);
+      } else if (taken.has(port)) {
+        errors.push(`${where}: ${port} is already declared by ${taken.get(port)}`);
+      } else {
+        taken.set(port, label === "" ? "the project" : label);
+      }
+    }
+  }
+
+  if (declared && manifest.network !== "outbound") {
+    errors.push(
+      "publicPorts: needs \"network\": \"outbound\", the default `localhost` denies every address but loopback, so no client outside the machine could reach the port, only the machine's other accounts",
+    );
+  }
+  return errors;
+}
+
+/**
  * The refusals of `services`.
  *
  * Every port sits in the range the loopback rule closes. Outside it, the
@@ -1577,7 +1671,7 @@ function serviceErrors(manifest: Manifest): string[] {
   if (typeof services !== "object" || services === null || Array.isArray(services) || Object.keys(services).length === 0) {
     return ['services: an object naming each service, such as { "web": { "start": "...", "port": 3040 } } or { "sync": { "start": "...", "schedule": "hourly" } }'];
   }
-  for (const key of ["start", "port", "routes"] as const) {
+  for (const key of ["start", "port", "publicPorts", "routes"] as const) {
     if (manifest[key] !== undefined) {
       errors.push(`${key}: declared per service once \`services\` is present`);
     }

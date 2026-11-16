@@ -210,6 +210,15 @@ describe("ports", () => {
     expect(takenPorts(new Map(), "portal").has(3026)).toBe(false);
   });
 
+  test("a port another project declares as public is taken, and never handed out", () => {
+    const withPublic = new Map([["shell", JSON.stringify({ slug: "shell", start: "x", port: 3002, network: "outbound", publicPorts: [2222, 3003] })]]);
+    expect(takenPorts(withPublic, "shop").has(2222)).toBe(true);
+    // Even inside a block, were one ever to grow over a public port.
+    expect(takenPorts(withPublic, "shop").has(3003)).toBe(true);
+    const allocated = allocatePorts({ slug: "shop", start: "x" }, takenPorts(withPublic, "shop"), null);
+    expect(allocated).toMatchObject({ allocated: [{ service: null, port: 3004 }] });
+  });
+
   test("a single service without a port gets the lowest free one", () => {
     const result = allocatePorts({ slug: "new", start: "x" }, takenPorts(deposited, "new"), null);
     expect(result).toEqual({ object: { slug: "new", start: "x", port: 3005 }, allocated: [{ service: null, port: 3005 }] });

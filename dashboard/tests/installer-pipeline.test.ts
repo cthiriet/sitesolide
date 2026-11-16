@@ -1313,6 +1313,52 @@ describe("finalManifest and replaceable, pure", () => {
     expect(() => finalManifest(request({ ...APP, slug: "cms" }), new Map())).toThrow("slug");
   });
 
+  test("publicPorts: refused for a limited token when added, changed or removed, accepted when unchanged or for every project", () => {
+    const OUTBOUND: Scope = { ...PUBLIC, outbound: true };
+    const EVERY: Scope = { ...OUTBOUND, all: true };
+    const SHELL = { ...APP, port: 3040, network: "outbound" };
+    const machine = (publicPorts?: number[]) => new Map([["shop", `${JSON.stringify({ ...SHELL, ...(publicPorts === undefined ? {} : { publicPorts }) })}\n`]]);
+    const refusal = (manifest: object, scope: Scope, deposited: Map<string, string>) => {
+      try {
+        finalManifest(request(manifest, scope), deposited);
+        return null;
+      } catch (error) {
+        return error as { code?: string; message: string };
+      }
+    };
+    // Added, to a new project and to an existing one.
+    for (const deposited of [new Map<string, string>(), machine()]) {
+      const refused = refusal({ ...SHELL, publicPorts: [2222] }, OUTBOUND, deposited);
+      expect(refused?.code).toBe("out-of-scope");
+      expect(refused?.message).toContain("the decision of the owner of the machine");
+      expect(refusal({ ...SHELL, publicPorts: [2222] }, EVERY, deposited)).toBeNull();
+    }
+    // Changed and removed.
+    expect(refusal({ ...SHELL, publicPorts: [2223] }, OUTBOUND, machine([2222]))?.code).toBe("out-of-scope");
+    expect(refusal(SHELL, OUTBOUND, machine([2222]))?.code).toBe("out-of-scope");
+    expect(refusal({ ...SHELL, publicPorts: [2223] }, EVERY, machine([2222]))).toBeNull();
+    expect(refusal(SHELL, EVERY, machine([2222]))).toBeNull();
+    // Unchanged: any token.
+    expect(refusal({ ...SHELL, publicPorts: [2222] }, OUTBOUND, machine([2222]))).toBeNull();
+    expect(finalManifest(request({ ...SHELL, publicPorts: [2222] }, EVERY), new Map()).manifest.publicPorts).toEqual([2222]);
+  });
+
+  test("a public port another project declares is refused with port-taken, whoever asks", () => {
+    const EVERY: Scope = { ...PUBLIC, outbound: true, all: true };
+    const other = (manifest: object) => new Map([["shell", JSON.stringify({ slug: "shell", start: "x", network: "outbound", ...manifest })]]);
+    for (const taken of [{ port: 3030, publicPorts: [2222] }, { port: 2222 }]) {
+      let caught: { code?: string; message: string } | null = null;
+      try {
+        finalManifest(request({ ...APP, port: 3040, network: "outbound", publicPorts: [2222] }, EVERY), other(taken));
+      } catch (error) {
+        caught = error as { code?: string; message: string };
+      }
+      // The second shape is a `port` outside the blocks, which a manifest read on the machine may still carry.
+      expect(caught?.code).toBe("port-taken");
+      expect(caught?.message).toContain("2222");
+    }
+  });
+
   test("an unreadable manifest on the machine decides nothing", () => {
     expect(() => finalManifest(request(APP), new Map([["shop", "{"]]))).toThrow("does not read");
   });

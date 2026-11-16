@@ -32,6 +32,7 @@ import {
   portRangeText,
   SERVICE_PORT_RANGES,
   servicePortsProse,
+  servicesOf,
   type Manifest,
 } from "../cli/manifest";
 import { RESERVED_ENV as VARIABLES_RESERVED_ENV } from "../cli/variables";
@@ -1035,6 +1036,64 @@ describe("the build's env", () => {
   test("tolerant of what validate refuses", () => {
     for (const env of [null, "x", ["A=b"], 3]) expect(buildEnvOf({ ...APP, env } as unknown as Manifest)).toEqual([]);
     expect(buildEnvOf({ ...APP, env: { A: "b", B: 3 } } as unknown as Manifest)).toEqual([["A", "b"]]);
+  });
+});
+
+describe("publicPorts", () => {
+  const SHELL: Manifest = { slug: "shell", start: "/srv/sites/shell/app/run", port: 3021, network: "outbound", publicPorts: [2222] };
+  const web = { start: "/srv/sites/lab/app/web", port: 3050 };
+  const lab = (services: Record<string, unknown>, extra: Partial<Manifest> = {}) =>
+    ({ slug: "lab", network: "outbound", ...extra, services }) as Manifest;
+
+  test("accepted at the top level and in a service, several at once", () => {
+    expect(validate(SHELL, ZONE)).toEqual([]);
+    expect(validate({ ...SHELL, publicPorts: [2222, 8443, 1024, 65535] }, ZONE)).toEqual([]);
+    expect(validate(lab({ web, ssh: { start: "/x", internal: true, publicPorts: [2222] } }), ZONE)).toEqual([]);
+    expect(validate(lab({ web: { ...web, publicPorts: [2222] }, other: { start: "/y", port: 3051, internal: true, publicPorts: [2223] } }), ZONE)).toEqual([]);
+  });
+
+  test("each port is a whole number from 1024 to 65535", () => {
+    for (const bad of [1023, 80, 0, 65536, -1, 2222.5, "2222", null]) {
+      expect(validate({ ...SHELL, publicPorts: [bad as number] }, ZONE).join("\n")).toContain("publicPorts");
+    }
+    expect(validate({ ...SHELL, publicPorts: [] }, ZONE)).toContainEqual(expect.stringContaining("non-empty list"));
+    expect(validate({ ...SHELL, publicPorts: 2222 as unknown as number[] }, ZONE)).toContainEqual(expect.stringContaining("non-empty list"));
+  });
+
+  test("outside the blocks, and not Caddy's or the egress proxy's", () => {
+    for (const port of [3050, 3099, 21000, 29999, CADDY_ADMIN_PORT, EGRESS_PROXY_PORT, EGRESS_STATUS_PORT]) {
+      expect(validate({ ...SHELL, publicPorts: [port] }, ZONE)).toContainEqual(expect.stringContaining("belongs to the platform"));
+    }
+    expect(validate({ ...SHELL, publicPorts: [3100, 30000] }, ZONE)).toEqual([]);
+  });
+
+  test("never the service's own port, nor one declared twice, nor another service's", () => {
+    expect(validate({ ...SHELL, publicPorts: [3021] }, ZONE)).toContainEqual(expect.stringContaining("own `port`"));
+    expect(validate({ ...SHELL, publicPorts: [2222, 2222] }, ZONE)).toContainEqual(expect.stringContaining("2222 is already declared by the project"));
+    // Another service's port sits in a block, which is refused all the same.
+    expect(validate(lab({ web: { ...web, publicPorts: [3051] }, api: { ...web, port: 3051 } }), ZONE)).toContainEqual(expect.stringContaining("services.web.publicPorts: 3051 belongs to the platform"));
+    expect(validate(lab({ web: { ...web, publicPorts: [2222] }, ssh: { start: "/x", internal: true, publicPorts: [2222] } }), ZONE)).toContainEqual(
+      expect.stringContaining("services.ssh.publicPorts: 2222 is already declared by services.web"),
+    );
+  });
+
+  test("the project must be outbound, or no outside client could reach the port", () => {
+    const { network: _network, ...local } = SHELL;
+    for (const manifest of [local, { ...SHELL, network: "localhost" as const }]) {
+      expect(validate(manifest, ZONE)).toContainEqual(expect.stringContaining('needs "network": "outbound"'));
+    }
+    expect(validate(lab({ ssh: { start: "/x", internal: true, publicPorts: [2222] } }, { network: "localhost" }), ZONE).join("\n")).toContain("outbound");
+  });
+
+  test("a scheduled service declares none, and a services manifest takes them per service", () => {
+    expect(validate(lab({ sync: { start: "/x", schedule: "hourly", publicPorts: [2222] } }), ZONE)).toContainEqual(expect.stringContaining("services.sync.publicPorts: a scheduled service"));
+    expect(validate(lab({ web }, { publicPorts: [2222] }), ZONE)).toContainEqual(expect.stringContaining("publicPorts: declared per service"));
+    expect(validate({ slug: "notes", publicDir: "dist", network: "outbound", publicPorts: [2222] } as Manifest, ZONE)).toContainEqual(expect.stringContaining("useless without `start`"));
+  });
+
+  test("servicesOf carries them, ascending", () => {
+    expect(servicesOf({ ...SHELL, publicPorts: [8443, 2222] })[0]!.publicPorts).toEqual([2222, 8443]);
+    expect(servicesOf(APP)[0]!.publicPorts).toEqual([]);
   });
 });
 
