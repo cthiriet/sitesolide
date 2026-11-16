@@ -33,7 +33,9 @@ import {
   withoutPrivateDenyLines,
   withoutStoreLines,
   withoutSyscallLines,
+  withoutUndeclaredBindLine,
   DENIED_BINDS,
+  UNDECLARED_BIND_LINE,
   BIND_LINES_FEATURE,
   earlierDeniedBinds,
   missingDeniedBinds,
@@ -162,7 +164,7 @@ describe("network", () => {
 
   test("an outbound unit of the release before is the generator's own, replaced without --force", () => {
     const text = generateUnit({ ...APP, network: "outbound" });
-    const before = withoutPrivateDenyLines(text);
+    const before = withoutPrivateDenyLines(withoutUndeclaredBindLine(text));
     expect(before).not.toInclude("IPAddressDeny");
     expect(before).toInclude("# network: outbound. This project reaches an outside API; the network\n# confinement is lifted, everything else holds.\n\n");
     expect(decideUnit({ installed: before, generated: text, replace: false })).toBe("install");
@@ -172,9 +174,9 @@ describe("network", () => {
   });
 
   test("a unit of the release before, for a manifest that adds privateNetworks, is the generator's own", () => {
-    const before = withoutPrivateDenyLines(generateUnit({ ...APP, network: "outbound" }));
+    const before = withoutPrivateDenyLines(withoutUndeclaredBindLine(generateUnit({ ...APP, network: "outbound" })));
     const text = generateUnit({ ...APP, network: "outbound", privateNetworks: ["10.0.1.0/24"] });
-    expect(withoutPrivateDenyLines(text)).toBe(before);
+    expect(withoutPrivateDenyLines(withoutUndeclaredBindLine(text))).toBe(before);
     expect(decideUnit({ installed: before, generated: text, replace: false })).toBe("install");
   });
 
@@ -344,7 +346,7 @@ describe("the project's store, in every service unit", () => {
 
   test.each(STORELESS)("%s keeps its flat file and its unit of 0.7, byte for byte but the second block's bind line (I10) and the private ranges refused", (name) => {
     const units = unitsOf(name);
-    expect(Object.fromEntries(units.map(({ unit, text }) => [unit, sha256(withoutLaterBlockLines(withoutPrivateDenyLines(text)))]))).toEqual(FINGERPRINTS_07[name]!);
+    expect(Object.fromEntries(units.map(({ unit, text }) => [unit, sha256(withoutLaterBlockLines(withoutPrivateDenyLines(withoutUndeclaredBindLine(text))))]))).toEqual(FINGERPRINTS_07[name]!);
     for (const { text } of units) {
       expect(text).not.toMatch(/\/projects\/|^(LoadCredential|ProtectProc|InaccessiblePaths)=/m);
       expect(text).toInclude(`\nEnvironmentFile=-/etc/sitesolide/${name}.env\n`);
@@ -533,18 +535,19 @@ describe("the units 0.7 laid, replaced without --force", () => {
         "LoadCredential=files:/etc/sitesolide/projects/shop/files",
         "ProtectProc=invisible",
         "SocketBindDeny=21000-29999",
+        "SocketBindDeny=1-65535",
       ],
     });
   });
 
   test.each(Object.keys(FINGERPRINTS_07))("%s: without the second block's line and the store's, each unit of 0.7 comes back byte for byte", (name) => {
-    expect(Object.fromEntries(unitsOf(name).map(({ unit, text }) => [unit, sha256(withoutStoreLines(withoutLaterBlockLines(withoutPrivateDenyLines(text))))]))).toEqual(FINGERPRINTS_07[name]!);
+    expect(Object.fromEntries(unitsOf(name).map(({ unit, text }) => [unit, sha256(withoutStoreLines(withoutLaterBlockLines(withoutPrivateDenyLines(withoutUndeclaredBindLine(text)))))]))).toEqual(FINGERPRINTS_07[name]!);
   });
 
   test.each(Object.keys(FINGERPRINTS_07))("%s: each unit of 0.7, of 0.6 and from before is the generator's own", (name) => {
     for (const { unit, text } of unitsOf(name)) {
       // Byte for byte the 0.7 text, by the fingerprints above.
-      const of07 = withoutStoreLines(withoutLaterBlockLines(withoutPrivateDenyLines(text)));
+      const of07 = withoutStoreLines(withoutLaterBlockLines(withoutPrivateDenyLines(withoutUndeclaredBindLine(text))));
       for (const earlier of [of07, withoutSyscallLines(of07), withoutBindLines(withoutSyscallLines(of07))]) {
         // Never diverged: present when nothing changed for this unit, a timer or an anchor.
         const action = decideUnit({ installed: earlier, generated: text, replace: false });
@@ -580,8 +583,10 @@ describe("the units 0.7 laid, replaced without --force", () => {
     const [shop] = unitsOf("none");
     const text = shop!.text;
     const generations = earlierGenerations(text);
-    const beforeBlock = withoutLaterBlockLines(text);
+    const beforeUndeclared = withoutUndeclaredBindLine(text);
+    const beforeBlock = withoutLaterBlockLines(beforeUndeclared);
     expect(generations).toEqual([
+      beforeUndeclared,
       beforeBlock,
       withoutStoreLines(beforeBlock),
       withoutSyscallLines(withoutStoreLines(beforeBlock)),
@@ -589,11 +594,13 @@ describe("the units 0.7 laid, replaced without --force", () => {
       withoutSyscallLines(beforeBlock),
       withoutBindLines(withoutSyscallLines(beforeBlock)),
     ]);
-    expect(generations[1]).toBe(SHOP_07);
-    for (const generation of generations) expect(generation).not.toInclude("SocketBindDeny=21000-29999");
+    expect(generations[2]).toBe(SHOP_07);
+    for (const generation of generations) expect(generation).not.toInclude(UNDECLARED_BIND_LINE);
+    for (const generation of generations.slice(1)) expect(generation).not.toInclude("SocketBindDeny=21000-29999");
     // An outbound unit's list starts with the one its project carries now.
     const outbound = generateUnit({ ...APP, network: "outbound" });
-    expect(earlierGenerations(outbound)).toEqual([withoutPrivateDenyLines(outbound), ...earlierGenerations(withoutPrivateDenyLines(outbound))]);
+    const outboundBefore = withoutUndeclaredBindLine(outbound);
+    expect(earlierGenerations(outbound)).toEqual([outboundBefore, withoutPrivateDenyLines(outboundBefore), ...earlierGenerations(withoutPrivateDenyLines(outboundBefore))]);
   });
 
   test("withoutStoreLines takes off the store's lines and nothing else, and once", () => {
@@ -928,6 +935,13 @@ describe("install over SSH, in the service's walls", () => {
     }
   });
 
+  test("an install listens on no port of the machine's, whatever its network, port 0 apart", () => {
+    for (const network of ["none", "proxy", "public"] as const) {
+      const bound = properties(systemdRunArguments({ ...RUN, network })).filter((property) => property.startsWith("SocketBindDeny="));
+      expect(bound).toEqual([...DENIED_BINDS.map((ports) => `SocketBindDeny=${ports}`), UNDECLARED_BIND_LINE]);
+    }
+  });
+
   test("proxy: the loopback alone, as a localhost service, its clients pointed at the egress proxy", () => {
     const line = systemdRunArguments({ ...RUN, network: "proxy" });
     const network = properties(line).filter((property) => /^(IPAddress|PrivateNetwork|RestrictAddressFamilies)/.test(property));
@@ -1182,7 +1196,7 @@ describe("the units of servers, as they were before workers existed", () => {
     const { manifest } = readManifest(readFileSync(join(REPO_ROOT, "bin", "tests", "e2e", "projects", fixture, "sitesolide.json"), "utf8"));
     const generated = generateUnits(manifest!, { slug: manifest!.slug, zone: "test-zone.invalid", contact: "sample@test-zone.invalid" });
     const fingerprints = Object.fromEntries(
-      generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(withoutBindLines(withoutSyscallLines(withoutStoreLines(text)))).digest("hex")]),
+      generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(withoutBindLines(withoutSyscallLines(withoutStoreLines(withoutUndeclaredBindLine(text))))).digest("hex")]),
     );
     expect(fingerprints).toEqual(FINGERPRINTS[fixture]!);
   });
@@ -1200,7 +1214,7 @@ describe("the units of servers, as they were before workers existed", () => {
   test.each(Object.keys(FINGERPRINTS_06))("projects/%s, without the store's lines and the system-call filter, is what 0.6 generated, to the byte", (fixture) => {
     const { manifest } = readManifest(readFileSync(join(REPO_ROOT, "bin", "tests", "e2e", "projects", fixture, "sitesolide.json"), "utf8"));
     const generated = generateUnits(manifest!, { slug: manifest!.slug, zone: "test-zone.invalid", contact: "sample@test-zone.invalid" });
-    const fingerprints = Object.fromEntries(generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(withoutSyscallLines(withoutStoreLines(withoutLaterBlockLines(withoutPrivateDenyLines(text))))).digest("hex")]));
+    const fingerprints = Object.fromEntries(generated.map(({ unit, text }) => [unit, new Bun.CryptoHasher("sha256").update(withoutSyscallLines(withoutStoreLines(withoutLaterBlockLines(withoutPrivateDenyLines(withoutUndeclaredBindLine(text)))))).digest("hex")]));
     expect(fingerprints).toEqual(FINGERPRINTS_06[fixture]!);
   });
 });
@@ -1231,17 +1245,47 @@ describe("the ports a service may listen on", () => {
   test("each block of the services' ports is its own line, in the order of the ports, the second block last", () => {
     expect(DENIED_BINDS).toEqual(["2019", "3000-3099", "3128-3129", "21000-29999"]);
     const web = units["lab"]!.split("\n");
-    expect(web.filter((line) => line.startsWith("SocketBindDeny="))).toEqual(DENIED);
+    expect(web.filter((line) => line.startsWith("SocketBindDeny="))).toEqual([...DENIED, "SocketBindDeny=1-65535"]);
     // A server of the second block listens there alone, its block denied to it but its own port.
     const late = generateUnit({ ...APP, port: 21042 });
     expect(late).toInclude("\nSocketBindAllow=tcp:21042\n");
     for (const line of DENIED) expect(late).toInclude(`\n${line}\n`);
   });
 
+  test("every unit denies the undeclared ports last, after the other deny lines: a server, a worker, a scheduled service", () => {
+    expect(UNDECLARED_BIND_LINE).toBe("SocketBindDeny=1-65535");
+    // Port 0 is left out of the range: client sockets bind there.
+    for (const name of ["lab", "lab.queue", "lab.sync"]) {
+      const text = units[name]!;
+      const denies = text.split("\n").filter((line) => line.startsWith("SocketBindDeny="));
+      expect(denies).toEqual([...DENIED, "SocketBindDeny=1-65535"]);
+      expect(text.split("\n").filter((line) => line === UNDECLARED_BIND_LINE).length).toBe(1);
+    }
+    // A server keeps its own port: SocketBindAllow wins over every deny.
+    expect(units["lab"]).toInclude("\nSocketBindAllow=tcp:3050\n");
+    expect(units["lab.queue"]).not.toInclude("SocketBindAllow=");
+    expect(units["lab.sync"]).not.toInclude("SocketBindAllow=");
+    // The line stays out of DENIED_BINDS, which the monitor and the loopback gate read.
+    expect(DENIED_BINDS).not.toContain("1-65535");
+  });
+
+  test("a unit of the release before, without the undeclared-ports line, is the generator's own and replaced without --force", () => {
+    for (const text of [generateUnit(APP), ...Object.values(units).filter((text) => text.includes(UNDECLARED_BIND_LINE))]) {
+      const before = withoutUndeclaredBindLine(text);
+      expect(before.split("\n").length).toBe(text.split("\n").length - 1);
+      expect(earlierGenerations(text)[0]).toBe(before);
+      expect(decideUnit({ installed: before, generated: text, replace: false })).toBe("install");
+      // The line is not in any unit of an older generation.
+      for (const generation of earlierGenerations(text)) expect(generation).not.toInclude(UNDECLARED_BIND_LINE);
+      // Anything else beside it is a hand edit.
+      expect(decideUnit({ installed: `${before}\nLimitNOFILE=4096\n`, generated: text, replace: false })).toBe("diverged");
+    }
+  });
+
   test("a unit of the release before, without the second block's line, is the generator's own and replaced without --force", () => {
     for (const text of [generateUnit(APP), ...Object.values(units).filter((text) => text.includes("SocketBindDeny="))]) {
-      const before = withoutLaterBlockLines(text);
-      expect(before.split("\n").length).toBe(text.split("\n").length - 1);
+      const before = withoutLaterBlockLines(withoutUndeclaredBindLine(text));
+      expect(before.split("\n").length).toBe(text.split("\n").length - 2);
       expect(decideUnit({ installed: before, generated: text, replace: false })).toBe("install");
       // That line alone taken off a unit of this release's, plus anything else, is a hand edit.
       expect(decideUnit({ installed: `${before}\nLimitNOFILE=4096\n`, generated: text, replace: false })).toBe("diverged");
@@ -1391,7 +1435,7 @@ describe("the system calls a service may make", () => {
 
   test("a unit 0.6 generated, with the bind lines and without the filter, is replaced without --force", () => {
     const generated = generateUnit(APP);
-    expect(decideUnit({ installed: withoutSyscallLines(withoutLaterBlockLines(generated)), generated, replace: false })).toBe("install");
+    expect(decideUnit({ installed: withoutSyscallLines(withoutLaterBlockLines(withoutUndeclaredBindLine(generated))), generated, replace: false })).toBe("install");
   });
 
   test("a unit from before 0.6, without either, is replaced without --force", () => {
@@ -1465,6 +1509,6 @@ describe("a unit the previous manifest generated is the generator's own", () => 
     expect(decideUnit({ installed: repeated, generated: previous, replace: false })).toBe("present");
     // Untouched, it is still the generator's own.
     expect(decideUnit({ installed: previous, generated, replace: false, previous })).toBe("install");
-    expect(decideUnit({ installed: withoutStoreLines(withoutLaterBlockLines(previous)), generated: previous, replace: false })).toBe("install");
+    expect(decideUnit({ installed: withoutStoreLines(withoutLaterBlockLines(withoutUndeclaredBindLine(previous))), generated: previous, replace: false })).toBe("install");
   });
 });

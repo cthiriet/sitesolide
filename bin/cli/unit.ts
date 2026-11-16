@@ -626,6 +626,16 @@ export function deniedBindLines(): string[] {
   return DENIED_BINDS.map((ports) => `SocketBindDeny=${ports}`);
 }
 
+/**
+ * Denies every port a project's program has not declared: the line comes after
+ * the DENIED_BINDS ones, and `SocketBindAllow=tcp:<port>` still wins over it.
+ * Port 0 is left out on purpose, see bindLines. It is deliberately not part of
+ * DENIED_BINDS, which the monitor, deploy-loopback.sh, BIND_LINES_FEATURE and
+ * unboundStates read: adding it there would flag every unit in service until
+ * its refresh. Nothing checks this line yet.
+ */
+export const UNDECLARED_BIND_LINE = "SocketBindDeny=1-65535";
+
 /** The lines of every block but the first, which no unit generated before them carries. */
 function laterBlockLines(): Set<string> {
   return new Set(SERVICE_PORT_RANGES.slice(1).map((range) => `SocketBindDeny=${portRangeText(range)}`));
@@ -750,12 +760,21 @@ export function missingDeniedBinds(text: string): string[] {
  * page; on the egress proxy's ports, every project's outgoing requests; on a
  * neighbour's port between two of its restarts, that site's visitors. A
  * server listens on its own port alone, a worker and a scheduled service on
- * none of them. Ports outside these stay free: what a project binds there
- * nobody else is sent to.
+ * none of them.
+ *
+ * The ports outside those blocks are denied too, with UNDECLARED_BIND_LINE.
+ * Left free, a database on its default port or a server on 8080 would be
+ * reached, and its answers read, by any other project's account: the loopback
+ * rule judges who connects, and only guards the blocks. Port 0 stays allowed,
+ * it is where a client socket binds (UDP, some TCP clients): with `any`, Node's
+ * `dgram.send` on an unbound socket fails with EPERM (measured on systemd 257),
+ * which is why the range starts at 1. The limit that remains: a program listening on a
+ * port the kernel picks (port 0) can still be reached by another account.
  *
  * SocketBindAllow wins over SocketBindDeny, which is what lets the server's
- * own port through the range. Every unit generated before carries none of
- * these lines, and is still the generator's own: see withoutBindLines.
+ * own port through every range. Every unit generated before carries none of
+ * these lines, and is still the generator's own: see withoutBindLines, and
+ * withoutUndeclaredBindLine for the units of the release before this line.
  */
 function bindLines(service: ServiceView): string[] {
   return [
@@ -764,7 +783,21 @@ function bindLines(service: ServiceView): string[] {
       : "# Listens on its own port, and on none of the machine's others.",
     ...(service.port === null ? [] : [`SocketBindAllow=tcp:${service.port}`]),
     ...deniedBindLines(),
+    UNDECLARED_BIND_LINE,
   ];
+}
+
+/**
+ * A generated unit as the generator wrote it before the line that denies the
+ * ports no project declares: the units written by the release before it.
+ * Recognised as the generator's own, it is replaced at the next deployment or
+ * `refresh` without `--force`.
+ */
+export function withoutUndeclaredBindLine(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => line !== UNDECLARED_BIND_LINE)
+    .join("\n");
 }
 
 /**
@@ -877,7 +910,8 @@ export function withoutStoreLines(text: string): string {
 
 /**
  * What earlier releases generated where this one generates `text`, newest
- * first: without the second block's bind line, as every release since the
+ * first: without the line that denies every undeclared port, as the release
+ * before it wrote it; then without the second block's bind line, as every release since the
  * store's lines wrote it; then also without the store's lines, as 0.7 did, then also
  * without the system-call filter, as 0.6 did, then also without the bind
  * lines, as every release before; and the two this list held before the
@@ -886,13 +920,20 @@ export function withoutStoreLines(text: string): string {
  * at the project's next deployment without `--force`, by `deploy`, `refresh`
  * and the installer alike.
  *
- * Every text but the first is taken without the second block's line: no
+ * Every text is taken without the undeclared-ports line: no release before
+ * this one wrote it. Every text but the first is taken without the second block's line: no
  * release before it wrote that line. And all of them without the private
  * ranges an `outbound` unit now refuses: for such a unit, the list starts
  * with the one every such project carries until its next deployment; for
  * any other, which those lines never touched, it is the list it was.
  */
 export function earlierGenerations(text: string): string[] {
+  const beforeUndeclared = withoutUndeclaredBindLine(text);
+  return [...(beforeUndeclared === text ? [] : [beforeUndeclared]), ...generationsBeforeUndeclared(beforeUndeclared)];
+}
+
+/** The generations earlierGenerations lists from the one before the undeclared-ports line: `text` is already without it. */
+function generationsBeforeUndeclared(text: string): string[] {
   const beforeDeny = withoutPrivateDenyLines(text);
   const beforeBlock = withoutLaterBlockLines(beforeDeny);
   const beforeStore = withoutStoreLines(beforeBlock);
@@ -1099,6 +1140,10 @@ export function systemdRunArguments(run: ProjectRun, systemdRun = "/usr/bin/syst
     // again (bindLines).
     ...networkProperties(run.network),
     ...deniedBindLines(),
+    // An install, or a program the installer extracts, listens on nothing: a
+    // postinstall script is a project's code like any other, and an undeclared
+    // port of it is one a neighbour's account could reach (bindLines).
+    UNDECLARED_BIND_LINE,
     ...(run.workingDirectory === null ? [] : [`WorkingDirectory=${run.workingDirectory}`]),
   ];
   return [

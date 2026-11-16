@@ -203,10 +203,14 @@ whoever listens there: an app waiting on the portal's port while the portal
 restarts would answer every `forward_auth` as it liked, and receive the
 owner's password typed on a sign-in page. So each generated unit says where
 its service may listen (`SocketBindAllow=`, `SocketBindDeny=`): a server on
-its own port alone among 2019, both blocks and the egress proxy's 3128 and
-3129, a worker and a scheduled service on none of them, a service's backup
-command neither; a bind refused fails with `EPERM`. Ports outside those stay
-free: nobody is sent there. systemd enforces the lines through BPF, and a
+its own port alone of the machine's, a worker and a scheduled service on none
+of them, a service's backup command neither; a bind refused fails with
+`EPERM`. Denying only 2019, both blocks and the egress proxy's 3128 and 3129
+was not enough: a service on 8080, or a database on its default port, was
+reached and read by any other project's account, so the unit denies every port
+(`SocketBindDeny=1-65535`) and lets its own through. Port 0 stays allowed,
+since client sockets bind there, which leaves one limit: a program that listens
+on a port the kernel picks can still be reached by another account. systemd enforces the lines through BPF, and a
 systemd built without `+BPF_FRAMEWORK` ignores them silently.
 
 **Two blocks, and why there.** 3000 to 3099 was the only block: with the

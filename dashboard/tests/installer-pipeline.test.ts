@@ -857,7 +857,7 @@ describe("workers, scheduled services and anchors", () => {
     const repeated = (text: string) => text.replace(STORE, `${STORE}${STORE}`);
     const added = (text: string) => text.replace(STORE, `${FLAT}${STORE}`);
     // The release before the system-call filter, its store line and all.
-    const beforeFilter = earlierGenerations(main!.text)[4]!;
+    const beforeFilter = earlierGenerations(main!.text)[5]!;
     expect(beforeFilter).toContain(STORE);
     for (const edited of [repeated(main!.text), added(main!.text), added(beforeFilter), repeated(beforeFilter)]) {
       const bench = createBench();

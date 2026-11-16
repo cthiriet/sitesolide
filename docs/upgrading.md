@@ -197,6 +197,43 @@ first, with that release's binary and [its
 notes](https://github.com/cthiriet/sitesolide/blob/v0.16.0/docs/upgrading.md),
 which go back to 0.1; this release converts nothing an earlier one left.
 
+## A service listens on its declared port alone
+
+**What the release brings.** Every generated unit gains one line, after its
+other `SocketBindDeny=` lines: `SocketBindDeny=1-65535`. `SocketBindAllow=`
+wins over it, so a server still binds its own port, and nothing else. Until
+now every port outside 2019, the two blocks and the egress proxy's two stayed
+free, and a service could listen on 8080, or a database on its default port
+(3306, 5432, 6379), where another project's account could connect and read its
+answers. The units written by `install` and by the installer's token-driven
+runs, and a backup command that reaches its service on the loopback, carry the
+line too.
+
+**What can break.** A service, worker or scheduled service that listened on an
+undeclared port now fails with `EPERM` when it binds. Declare a service of its
+own with its own `port`, or listen on a Unix socket. A program that only
+connects out is unaffected: DNS, TCP and UDP clients, `fetch` and the egress
+proxy bind on port 0, which stays allowed. (`SocketBindDeny=any` was tried and
+rejected: it also refuses port 0, which breaks a UDP send without an explicit
+bind.)
+
+**What you do.** `sitesolide refresh --all` writes every unit again with the
+line: a unit this release's predecessor generated is the generator's own, and
+is replaced without `--force`. A unit edited by hand is left as it is: add `SocketBindDeny=1-65535` after its other `SocketBindDeny=`
+lines, then `systemctl daemon-reload` and restart the unit.
+
+**What does not check it yet.** The monitor, `bin/deploy-loopback.sh` and the
+check of the second block read the list of ports a unit denies
+(`DENIED_BINDS`), and this line is not in it: adding it there would flag every
+unit in service as critical, and block `deploy-loopback.sh`, until each had
+been refreshed. A unit that lacks the line is therefore not reported until a
+later release asks for it.
+
+**What stays open.** A program that listens on a port the kernel picks (it binds
+port 0) can still be reached by another account on the machine: port 0 cannot
+be denied without breaking the clients that bind there. The rule remains one of
+who connects, not of who listens.
+
 ## Company sign-in removed
 
 **What the release brings.** Nobody signs in with a company account any more.

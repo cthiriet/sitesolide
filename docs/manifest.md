@@ -289,18 +289,19 @@ owner's steps are in
 [upgrading.md](upgrading.md#a-second-block-of-service-ports). The first block
 works as before on every machine.
 
-**A service listens on its own port alone of the machine's.** The rule judges
-who connects, not who listens, and Caddy connects to whoever listens on a
-port of the blocks: the unit therefore refuses the service Caddy's admin API,
-2019, every port of 3000 to 3099 and of 21000 to 29999 but its own, and the
-egress proxy's 3128 and 3129 (`SocketBindAllow=`, `SocketBindDeny=`). A
-worker and a scheduled service listen on none of them, nor does a backup
+**A service listens on its declared port alone.** The rule judges who connects,
+not who listens: Caddy connects to whoever listens on a port of the blocks, and
+another project's account connects to whoever listens anywhere on the
+loopback. The unit therefore refuses the service every port but its own
+(`SocketBindAllow=`, `SocketBindDeny=`, ending with `SocketBindDeny=1-65535`).
+A worker and a scheduled service listen on none of them, nor does a backup
 command. A bind refused there fails with `EPERM`: a server that opened a
-second port in the blocks, or UDP on its own, and a worker that listened
-inside them, declare a service of their own, with its own `port`. A port outside those stays free, nobody being sent
-there. systemd applies these lines only when it is built with
-`+BPF_FRAMEWORK`, which `systemctl --version` lists; without it, it ignores
-them without a word.
+second port or UDP on its own, a worker that listened, and a database on its
+default port, declare a service of their own, with its own `port`, or listen
+on a Unix socket. Port 0 stays allowed, so a program that listens on a port the
+kernel picks can still be reached by another account. systemd applies these
+lines only when it is built with `+BPF_FRAMEWORK`, which `systemctl --version`
+lists; without it, it ignores them without a word.
 
 ### `routes`
 

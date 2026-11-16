@@ -970,9 +970,9 @@ describe("a backup command and its project's store", () => {
       }
       return removed;
     };
-    // And the second block of the services' ports, denied since: the bench
-    // ran before it existed.
-    expect(added(["LoadCredential=files:/etc/sitesolide/projects/demo/files", "ProtectProc=invisible", "SocketBindDeny=21000-29999"])).toEqual(bench);
+    // And the second block of the services' ports, and every undeclared port,
+    // denied since: the bench ran before either existed.
+    expect(added(["LoadCredential=files:/etc/sitesolide/projects/demo/files", "ProtectProc=invisible", "SocketBindDeny=21000-29999", "SocketBindDeny=1-65535"])).toEqual(bench);
     // ${CREDENTIALS_DIRECTORY} on a command's line is systemd's to expand there:
     // the runner never turns that off, as the installer's line does.
     expect(line).not.toContain("--expand-environment=no");
